@@ -17,6 +17,7 @@ namespace CubeApp
         private readonly ChunkManager manager;
         private IRenderer? gpuRenderer;
         private MeshWorker? meshWorker;
+        private ChunkGenWorker? chunkGenWorker;
         private Sdl2Window? window;
         private GraphicsDevice? graphicsDevice;
 
@@ -27,7 +28,7 @@ namespace CubeApp
         private readonly InputProcessor input = new();
         private bool mouseLook;
 
-        private bool needsMeshUpdate = true;
+        private volatile bool needsMeshUpdate = true;
         private string baseTitle = "Chunk Mesh Example";
 
         private bool showFps;
@@ -83,6 +84,11 @@ namespace CubeApp
             PlaceCameraAtSafeSpawn();
             meshWorker = new MeshWorker(manager, () => gpuRenderer);
             _ = UpdateMesh();
+
+            // Generate chunks off the main thread so streaming new terrain doesn't stall the
+            // render loop. Leave a core for the render/mesh threads.
+            int genWorkers = Math.Max(1, Environment.ProcessorCount - 2);
+            chunkGenWorker = new ChunkGenWorker(manager, () => needsMeshUpdate = true, genWorkers);
         }
 
         public void Run()
@@ -294,10 +300,7 @@ namespace CubeApp
 
             int chunkX = WorldToChunkCoord(cameraPosition.X);
             int chunkZ = WorldToChunkCoord(cameraPosition.Z);
-            if (manager.EnsureChunksAround(chunkX, chunkZ, ChunkRenderRadius))
-            {
-                needsMeshUpdate = true;
-            }
+            manager.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, cameraPosition);
 
             var unloaded = manager.UnloadChunksOutside(chunkX, chunkZ, ChunkRenderRadius);
             if (gpuRenderer != null)
@@ -1057,17 +1060,66 @@ namespace CubeApp
 
         public void Dispose()
         {
+            try { chunkGenWorker?.Dispose(); } catch { }
             try { meshWorker?.Dispose(); } catch { }
             try { gpuRenderer?.Dispose(); } catch { }
             try { graphicsDevice?.Dispose(); } catch { }
             try { window?.Close(); } catch { }
         }
 
+        // In a single-file self-contained build the native libraries are unpacked to a
+        // temp directory that Veldrid's own name-based loader (NativeLibraryLoader / SDL2's
+        // LoadSdl2) does not search, so it fails with "Could not find ... SDL2.dll". The .NET
+        // runtime loader *does* search that directory, so pre-loading the natives by name here
+        // pins them into the process; Veldrid's later by-name loads then resolve to the already
+        // loaded modules. No-ops for a normal (non-single-file) build where the DLLs sit on disk.
+        private static void PreloadNativeLibraries()
+        {
+            string[] names =
+            {
+                "SDL2", "cimgui", "veldrid-spirv", "libveldrid-spirv",
+            };
+
+            var asm = Assembly.GetExecutingAssembly();
+            foreach (var name in names)
+            {
+                try
+                {
+                    System.Runtime.InteropServices.NativeLibrary.TryLoad(name, asm, null, out _);
+                }
+                catch
+                {
+                    // best-effort; ignore and let the normal loader try
+                }
+            }
+        }
+
         [STAThread]
         static void Main()
         {
-            using var app = new Program();
-            app.Run();
+            try
+            {
+                PreloadNativeLibraries();
+                using var app = new Program();
+                app.Run();
+            }
+            catch (Exception ex)
+            {
+                // A single-file/self-contained build has no console attached, so a startup
+                // crash would otherwise vanish silently. Persist it next to the exe so it
+                // can be diagnosed.
+                try
+                {
+                    string logPath = System.IO.Path.Combine(AppContext.BaseDirectory, "cubeapp-crash.log");
+                    System.IO.File.WriteAllText(logPath, DateTime.Now + Environment.NewLine + ex);
+                }
+                catch
+                {
+                    // ignore logging failures
+                }
+
+                throw;
+            }
         }
 
         private readonly struct PickBlockResult
