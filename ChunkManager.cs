@@ -12,6 +12,7 @@ namespace CubeApp
         private readonly ConcurrentDictionary<ChunkCoordinates, Chunk> loadedChunks = new();
         private readonly PriorityQueue<ChunkRequest, double> queue = new();
         private readonly object queueLock = new();
+        private readonly ConcurrentDictionary<ChunkCoordinates, byte> pendingGeneration = new();
         private readonly IChunkProvider chunkProvider;
 
         public ChunkManager(IChunkProvider? chunkProvider = null)
@@ -144,6 +145,56 @@ namespace CubeApp
             return addedNewChunk;
         }
 
+        /// <summary>
+        /// Queue any not-yet-loaded chunks within <paramref name="radius"/> for background
+        /// generation, closest-first. Cheap to call every tick: already-loaded or already-queued
+        /// chunks are skipped. Actual generation happens off the main thread via
+        /// <see cref="TryGenerateNext"/>.
+        /// </summary>
+        public void RequestChunksAround(int centerChunkX, int centerChunkZ, int radius, Point3D cameraPosition)
+        {
+            for (int dz = -radius; dz <= radius; dz++)
+            {
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    int chunkX = centerChunkX + dx;
+                    int chunkZ = centerChunkZ + dz;
+                    var key = new ChunkCoordinates(chunkX, chunkZ);
+                    if (loadedChunks.ContainsKey(key))
+                    {
+                        continue;
+                    }
+
+                    // pendingGeneration dedupes so a chunk is only queued once at a time.
+                    if (pendingGeneration.TryAdd(key, 0))
+                    {
+                        EnqueueChunk(chunkX, chunkZ, cameraPosition);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Pull the next queued chunk request and generate it (on a background worker). Returns
+        /// true only when a chunk was actually created, so callers can trigger a remesh.
+        /// </summary>
+        public bool TryGenerateNext()
+        {
+            if (!TryDequeueNext(out var request))
+            {
+                return false;
+            }
+
+            var key = new ChunkCoordinates(request.X, request.Z);
+            bool created = !loadedChunks.ContainsKey(key);
+
+            // GetOrCreateChunk generates + inserts + dirties existing neighbors (idempotent if
+            // another path loaded it in the meantime).
+            GetOrCreateChunk(request.X, request.Z);
+            pendingGeneration.TryRemove(key, out _);
+            return created;
+        }
+
         public List<ChunkCoordinates> UnloadChunksOutside(int centerChunkX, int centerChunkZ, int radius)
         {
             var removed = new List<ChunkCoordinates>();
@@ -156,6 +207,7 @@ namespace CubeApp
                     if (loadedChunks.TryRemove(key, out var _))
                     {
                         removed.Add(key);
+                        pendingGeneration.TryRemove(key, out _);
 
                         // A removed chunk can expose faces on adjacent loaded chunks.
                         // Mark those neighbors dirty so border faces get rebuilt.
