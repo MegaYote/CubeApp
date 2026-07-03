@@ -1,0 +1,80 @@
+SESSION SUMMARY
+Date: 2026-07-03
+Project: CubeApp
+
+Overview
+- This session focused on player controls/physics, mouse capture/look, face highlighting behavior, texture mapping correction, and world/system stability.
+- The project builds successfully after each major change.
+
+What Was Implemented
+
+1) Rendering and texture mapping
+- Grass texture mapping changed so Grass uses the top texture on all faces.
+- The side tile that looked like grass_growth is no longer used for Grass.
+- File changed: Mesher.cs
+
+2) Input, mouse capture, and look
+- Mouse capture and relative mode behavior were stabilized using SDL calls and compatible property fallbacks.
+- ESC behavior was changed to free cursor.
+- Clicking when not captured re-captures mouse (without placing/breaking on that click).
+- Look input processing was moved to per-frame application to remove 20 Hz look stutter.
+- Mouse sensitivity was increased during tuning.
+- Files changed: Program.cs, InputProcessor.cs
+
+3) Player movement and physics (Minecraft-like feel)
+- Replaced fixed-20 Hz capped player motion with frame-delta movement.
+- Added grounded movement model with:
+  - walk speed
+  - jump impulse
+  - gravity
+  - terminal fall speed
+  - axis-separated AABB collision against blocks
+- Jump tuning was increased so 1-block climbs are achievable via jumping.
+- Spawn logic and collision handling were improved for player-body dimensions.
+- Files changed: Program.cs, InputProcessor.cs
+
+4) Player/world interaction safety
+- Prevented placing a block into the player body to avoid self-trapping.
+- Added safer spawn search logic to reduce spawning inside blocks.
+- Yaw normalization added to avoid long-run turn-lock behavior from unbounded yaw accumulation.
+- File changed: Program.cs
+
+5) Face highlighter updates
+- Yellow outline was removed; highlight now uses fill only.
+- Multiple projection/order stability fixes were attempted to address twist/slide artifacts while turning/strafe.
+- Projection now uses renderer-equivalent view/projection math in Program side calculations.
+- An occlusion-gating attempt was added and then rolled back because it hid highlight too aggressively.
+- Current state:
+  - Yellow outline is removed (as requested).
+  - Filled face highlight remains visible.
+  - Occlusion suppression is currently disabled to avoid highlight disappearance.
+- Files changed: Program.cs, Renderer/VeldridRenderer.cs
+
+6) Architecture and runtime status
+- Build pipeline remains stable.
+- dotnet build currently succeeds with existing nullable warnings (no new blocking errors).
+
+Current Gameplay/Behavior Snapshot
+- Mouse lock/unlock behavior is functional with ESC free cursor flow.
+- Camera look is much smoother than initial fixed-step behavior.
+- Player movement uses frame-time physics and block collision.
+- Grass texture appears uniform across all faces.
+- Highlight outline is removed; fill highlight is active.
+- Highlight still has open quality concerns under some camera motions (twist/slide behavior was reduced but not declared fully perfect).
+
+Known Open Items / Follow-up Suggestions
+1. Finalize highlighter correctness by moving face highlight rendering into 3D world pass with depth testing instead of 2D HUD quad projection.
+2. If needed, add conservative occlusion check based on center-point only (not corner suppression) to avoid over-hiding.
+3. Optional movement polish: step-up handling for low ledges and jump arc tuning to exact target feel.
+4. Optional world stability: coordinate rebasing strategy for extremely large travel distances.
+
+Files Touched This Session (primary)
+- Program.cs
+- InputProcessor.cs
+- Mesher.cs
+- Renderer/VeldridRenderer.cs
+
+Notes for Resume
+- Start from current HEAD in working tree.
+- First validation command: dotnet build
+- Primary unresolved UX area to revisit first: block face highlighter visual consistency with camera movement.
