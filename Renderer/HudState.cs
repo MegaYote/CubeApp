@@ -20,10 +20,12 @@ namespace CubeApp.Renderer
         public int SelectedSlot;
 
         /// <summary>
-        /// Four screen-space corners (top-left, top-right, bottom-right, bottom-left) of the
-        /// targeted block face highlight, or null if nothing is currently targeted.
+        /// Four world-space corners of the targeted block face, or null if nothing is currently
+        /// targeted. The renderer draws these as a depth-tested 3D quad so the highlight is
+        /// occluded per-pixel by any block in front of it (matching the rest of the scene),
+        /// instead of always painting over everything as a 2D overlay would.
         /// </summary>
-        public Vector2[]? HighlightQuad;
+        public Vector3[]? HighlightWorldQuad;
 
         public static HudState Empty => new HudState
         {
@@ -36,7 +38,7 @@ namespace CubeApp.Renderer
             FacingText = string.Empty,
             SelectedBlockText = string.Empty,
             SelectedSlot = 0,
-            HighlightQuad = null,
+            HighlightWorldQuad = null,
         };
     }
 }
