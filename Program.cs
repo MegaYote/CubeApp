@@ -1066,8 +1066,28 @@ namespace CubeApp
         [STAThread]
         static void Main()
         {
-            using var app = new Program();
-            app.Run();
+            try
+            {
+                using var app = new Program();
+                app.Run();
+            }
+            catch (Exception ex)
+            {
+                // A single-file/self-contained build has no console attached, so a startup
+                // crash would otherwise vanish silently. Persist it next to the exe so it
+                // can be diagnosed.
+                try
+                {
+                    string logPath = System.IO.Path.Combine(AppContext.BaseDirectory, "cubeapp-crash.log");
+                    System.IO.File.WriteAllText(logPath, DateTime.Now + Environment.NewLine + ex);
+                }
+                catch
+                {
+                    // ignore logging failures
+                }
+
+                throw;
+            }
         }
 
         private readonly struct PickBlockResult
