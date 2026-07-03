@@ -670,10 +670,10 @@ namespace CubeApp
             var forward = GetCameraForward();
             var pickResult = TryPickBlock(cameraPosition, forward);
 
-            Vector2[]? highlightQuad = null;
+            Vector3[]? highlightQuad = null;
             if (pickResult.HasValue)
             {
-                highlightQuad = ComputeHighlightScreenQuad(pickResult.Value, forward);
+                highlightQuad = ComputeHighlightWorldQuad(pickResult.Value);
             }
 
             return new HudState
@@ -687,15 +687,12 @@ namespace CubeApp
                 FacingText = $"{GetCompassDirection(cameraYaw)} ({NormalizeYaw(cameraYaw):0.0} deg)",
                 SelectedBlockText = $"Selected: {selectedBlock}",
                 SelectedSlot = selectedSlot,
-                HighlightQuad = highlightQuad,
+                HighlightWorldQuad = highlightQuad,
             };
         }
 
-        private Vector2[]? ComputeHighlightScreenQuad(PickBlockResult hit, Point3D forward)
+        private Vector3[]? ComputeHighlightWorldQuad(PickBlockResult hit)
         {
-            int width = window != null ? Math.Max(1, window.Width) : 900;
-            int height = window != null ? Math.Max(1, window.Height) : 720;
-
             var remove = hit.Remove;
             var n = hit.Normal;
 
@@ -727,151 +724,20 @@ namespace CubeApp
 
             faceCorners = CanonicalizeFaceCornersByAxes(faceCorners, n);
 
-            var proj = Matrix4x4.CreatePerspectiveFieldOfView((float)(Math.PI / 2.0), (float)width / height, 0.1f, 100f);
-            var cameraPos = new Vector3((float)cameraPosition.X, (float)cameraPosition.Y, (float)cameraPosition.Z);
-            var cameraForward = new Vector3((float)forward.X, (float)forward.Y, (float)forward.Z);
-            var target = cameraPos + cameraForward;
-            var view = Matrix4x4.CreateLookAt(cameraPos, target, Vector3.UnitY);
-            var viewProj = Matrix4x4.Multiply(view, proj);
+            // Nudge the quad a hair off the block face along its outward normal so it wins the
+            // depth test against the coplanar block face (avoids z-fighting) while still being
+            // occluded by any nearer block, which is what gives correct per-pixel occlusion.
+            const double faceEpsilon = 0.002;
+            var offset = n * faceEpsilon;
 
-            var result = new Vector2[4];
+            var result = new Vector3[4];
             for (int i = 0; i < 4; i++)
             {
-                var pos = faceCorners[i];
-                var world = new Vector4((float)pos.X, (float)pos.Y, (float)pos.Z, 1f);
-                var clip = Vector4.Transform(world, viewProj);
-                if (clip.W <= 0f)
-                {
-                    return null;
-                }
-
-                float ndcX = clip.X / clip.W;
-                float ndcY = clip.Y / clip.W;
-                var pt = new Vector2(
-                    (ndcX * 0.5f + 0.5f) * width,
-                    (1f - (ndcY * 0.5f + 0.5f)) * height);
-                if (float.IsNaN(pt.X) || float.IsInfinity(pt.X) || float.IsNaN(pt.Y) || float.IsInfinity(pt.Y))
-                {
-                    return null;
-                }
-
-                result[i] = pt;
+                var pos = faceCorners[i] + offset;
+                result[i] = new Vector3((float)pos.X, (float)pos.Y, (float)pos.Z);
             }
 
             return result;
-        }
-
-        private bool IsHighlightFaceOccluded((int x, int y, int z) targetBlock, Point3D normal, Point3D[] faceCorners)
-        {
-            if (faceCorners.Length != 4)
-            {
-                return false;
-            }
-
-            var center = new Point3D(
-                (faceCorners[0].X + faceCorners[1].X + faceCorners[2].X + faceCorners[3].X) * 0.25,
-                (faceCorners[0].Y + faceCorners[1].Y + faceCorners[2].Y + faceCorners[3].Y) * 0.25,
-                (faceCorners[0].Z + faceCorners[1].Z + faceCorners[2].Z + faceCorners[3].Z) * 0.25);
-
-            // Push sample points slightly outward from the block so edge/boundary hits are stable.
-            var sampleOffset = normal * 0.001;
-
-            if (IsPointOccluded(targetBlock, center + sampleOffset))
-            {
-                return true;
-            }
-
-            for (int i = 0; i < 4; i++)
-            {
-                if (IsPointOccluded(targetBlock, faceCorners[i] + sampleOffset))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private bool IsPointOccluded((int x, int y, int z) targetBlock, Point3D targetPoint)
-        {
-            var delta = targetPoint - cameraPosition;
-            var dist = delta.Length;
-            if (dist <= 0.0001)
-            {
-                return false;
-            }
-
-            var direction = delta / dist;
-
-            int blockX = (int)Math.Floor(cameraPosition.X);
-            int blockY = (int)Math.Floor(cameraPosition.Y);
-            int blockZ = (int)Math.Floor(cameraPosition.Z);
-
-            int stepX = Math.Sign(direction.X);
-            int stepY = Math.Sign(direction.Y);
-            int stepZ = Math.Sign(direction.Z);
-
-            double tDeltaX = stepX != 0 ? Math.Abs(1.0 / direction.X) : double.PositiveInfinity;
-            double tDeltaY = stepY != 0 ? Math.Abs(1.0 / direction.Y) : double.PositiveInfinity;
-            double tDeltaZ = stepZ != 0 ? Math.Abs(1.0 / direction.Z) : double.PositiveInfinity;
-
-            double tMaxX = stepX > 0 ? (blockX + 1.0 - cameraPosition.X) * tDeltaX : (cameraPosition.X - blockX) * tDeltaX;
-            double tMaxY = stepY > 0 ? (blockY + 1.0 - cameraPosition.Y) * tDeltaY : (cameraPosition.Y - blockY) * tDeltaY;
-            double tMaxZ = stepZ > 0 ? (blockZ + 1.0 - cameraPosition.Z) * tDeltaZ : (cameraPosition.Z - blockZ) * tDeltaZ;
-
-            double maxDistance = dist + 0.01;
-
-            for (int iteration = 0; iteration < 256; iteration++)
-            {
-                if (manager.TryGetLoadedBlock(blockX, blockY, blockZ, out var block) && block != BlockType.Air)
-                {
-                    if (blockX == targetBlock.x && blockY == targetBlock.y && blockZ == targetBlock.z)
-                    {
-                        return false;
-                    }
-
-                    return true;
-                }
-
-                double tNext;
-                if (tMaxX < tMaxY)
-                {
-                    if (tMaxX < tMaxZ)
-                    {
-                        blockX += stepX;
-                        tNext = tMaxX;
-                        tMaxX += tDeltaX;
-                    }
-                    else
-                    {
-                        blockZ += stepZ;
-                        tNext = tMaxZ;
-                        tMaxZ += tDeltaZ;
-                    }
-                }
-                else
-                {
-                    if (tMaxY < tMaxZ)
-                    {
-                        blockY += stepY;
-                        tNext = tMaxY;
-                        tMaxY += tDeltaY;
-                    }
-                    else
-                    {
-                        blockZ += stepZ;
-                        tNext = tMaxZ;
-                        tMaxZ += tDeltaZ;
-                    }
-                }
-
-                if (tNext > maxDistance)
-                {
-                    break;
-                }
-            }
-
-            return false;
         }
 
         private static Point3D[] CanonicalizeFaceCornersByAxes(Point3D[] corners, Point3D normal)

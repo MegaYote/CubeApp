@@ -37,6 +37,10 @@ namespace CubeApp.Renderer
         private Sampler _atlasSampler;
         private ResourceSet _textureSet;
         private Pipeline _pipeline;
+        private Pipeline _highlightPipeline;
+        private DeviceBuffer _highlightVertexBuffer;
+        private DeviceBuffer _highlightIndexBuffer;
+        private readonly float[] _highlightVertexScratch = new float[12];
         private CommandList _commandList;
         private ImGuiRenderer _imguiRenderer;
         private HudState _hud = HudState.Empty;
@@ -203,6 +207,54 @@ void main() {
 
             // Reuse a single command list across frames instead of allocating one per frame.
             _commandList = factory.CreateCommandList();
+
+            CreateHighlightPipeline();
+        }
+
+        // Pipeline for the targeted block-face highlight: a translucent quad drawn in world space
+        // that shares the scene's projection/view and depth buffer. Depth testing (LessEqual) makes
+        // any nearer block occlude it per-pixel, so a partially hidden face is only shown where it
+        // is actually visible. Depth writes are disabled so it doesn't perturb subsequent draws.
+        private void CreateHighlightPipeline()
+        {
+            var factory = _gd.ResourceFactory;
+
+            string vsCode = @"#version 450
+layout(location=0) in vec3 aPosition;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() { gl_Position = projView * vec4(aPosition, 1.0); }";
+
+            string fsCode = @"#version 450
+layout(location=0) out vec4 outColor;
+void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
+
+            var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var fsSpirv = SpirvCompilation.CompileGlslToSpirv(fsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var shaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, vsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main"));
+
+            var vertexLayout = new VertexLayoutDescription(
+                new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3));
+
+            var pipelineDesc = new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleAlphaBlend,
+                DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout },
+                ShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { shaders[0], shaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            };
+
+            _highlightPipeline = factory.CreateGraphicsPipeline(pipelineDesc);
+
+            _highlightVertexBuffer = factory.CreateBuffer(new BufferDescription(
+                (uint)(_highlightVertexScratch.Length * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            _highlightIndexBuffer = factory.CreateBuffer(new BufferDescription(
+                6 * sizeof(ushort), BufferUsage.IndexBuffer));
+            _gd.UpdateBuffer(_highlightIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3 });
         }
 
         public void Resize(int width, int height)
@@ -272,6 +324,8 @@ void main() {
                 cl.DrawIndexed(c.IndexCount, 1, 0, 0, 0);
             }
 
+            DrawHighlight(cl);
+
             _imguiRenderer.Update(1f / 60f, NullInputSnapshot.Instance);
             BuildHudUi();
             _imguiRenderer.Render(_gd, cl);
@@ -279,6 +333,30 @@ void main() {
             cl.End();
             _gd.SubmitCommands(cl);
             _gd.SwapBuffers(_sc);
+        }
+
+        private void DrawHighlight(CommandList cl)
+        {
+            var quad = _hud.HighlightWorldQuad;
+            if (quad == null || quad.Length != 4 || _highlightPipeline == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < 4; i++)
+            {
+                _highlightVertexScratch[i * 3 + 0] = quad[i].X;
+                _highlightVertexScratch[i * 3 + 1] = quad[i].Y;
+                _highlightVertexScratch[i * 3 + 2] = quad[i].Z;
+            }
+
+            _gd.UpdateBuffer(_highlightVertexBuffer, 0, _highlightVertexScratch);
+
+            cl.SetPipeline(_highlightPipeline);
+            cl.SetGraphicsResourceSet(0, _projViewSet);
+            cl.SetVertexBuffer(0, _highlightVertexBuffer);
+            cl.SetIndexBuffer(_highlightIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed(6, 1, 0, 0, 0);
         }
 
         private void BuildHudUi()
@@ -296,13 +374,8 @@ void main() {
             drawList.AddLine(new Vector2(center.X, center.Y + 2), new Vector2(center.X, center.Y + 8), crosshairColor, 2f);
             drawList.AddCircleFilled(center, 2f, crosshairColor);
 
-            // Targeted block face highlight (screen-space quad computed by Program).
-            var highlight = _hud.HighlightQuad;
-            if (highlight != null && highlight.Length == 4)
-            {
-                uint fill = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 0.35f));
-                drawList.AddQuadFilled(highlight[0], highlight[1], highlight[2], highlight[3], fill);
-            }
+            // The targeted block face highlight is drawn as a depth-tested 3D quad in Render(),
+            // not here, so that blocks in front of it occlude it correctly.
 
             // Hotbar
             const int slotSize = 48;
@@ -414,6 +487,9 @@ void main() {
             _projViewBuffer?.Dispose();
             _commandList?.Dispose();
             _imguiRenderer?.Dispose();
+            _highlightVertexBuffer?.Dispose();
+            _highlightIndexBuffer?.Dispose();
+            _highlightPipeline?.Dispose();
             _pipeline?.Dispose();
             _sc?.Dispose();
             _gd?.Dispose();
