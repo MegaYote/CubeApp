@@ -17,6 +17,7 @@ namespace CubeApp
         private readonly ChunkManager manager;
         private IRenderer? gpuRenderer;
         private MeshWorker? meshWorker;
+        private ChunkGenWorker? chunkGenWorker;
         private Sdl2Window? window;
         private GraphicsDevice? graphicsDevice;
 
@@ -27,7 +28,7 @@ namespace CubeApp
         private readonly InputProcessor input = new();
         private bool mouseLook;
 
-        private bool needsMeshUpdate = true;
+        private volatile bool needsMeshUpdate = true;
         private string baseTitle = "Chunk Mesh Example";
 
         private bool showFps;
@@ -83,6 +84,11 @@ namespace CubeApp
             PlaceCameraAtSafeSpawn();
             meshWorker = new MeshWorker(manager, () => gpuRenderer);
             _ = UpdateMesh();
+
+            // Generate chunks off the main thread so streaming new terrain doesn't stall the
+            // render loop. Leave a core for the render/mesh threads.
+            int genWorkers = Math.Max(1, Environment.ProcessorCount - 2);
+            chunkGenWorker = new ChunkGenWorker(manager, () => needsMeshUpdate = true, genWorkers);
         }
 
         public void Run()
@@ -294,10 +300,7 @@ namespace CubeApp
 
             int chunkX = WorldToChunkCoord(cameraPosition.X);
             int chunkZ = WorldToChunkCoord(cameraPosition.Z);
-            if (manager.EnsureChunksAround(chunkX, chunkZ, ChunkRenderRadius))
-            {
-                needsMeshUpdate = true;
-            }
+            manager.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, cameraPosition);
 
             var unloaded = manager.UnloadChunksOutside(chunkX, chunkZ, ChunkRenderRadius);
             if (gpuRenderer != null)
@@ -1057,6 +1060,7 @@ namespace CubeApp
 
         public void Dispose()
         {
+            try { chunkGenWorker?.Dispose(); } catch { }
             try { meshWorker?.Dispose(); } catch { }
             try { gpuRenderer?.Dispose(); } catch { }
             try { graphicsDevice?.Dispose(); } catch { }
