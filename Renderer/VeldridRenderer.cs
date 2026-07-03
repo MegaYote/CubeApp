@@ -89,13 +89,14 @@ namespace CubeApp.Renderer
                 new ResourceLayoutElementDescription("ProjectionView", ResourceKind.UniformBuffer, ShaderStages.Vertex)));
             _projViewSet = _gd.ResourceFactory.CreateResourceSet(new ResourceSetDescription(_projViewLayout, _projViewBuffer));
 
-            // Load atlas texture from disk into a GPU texture (no GDI+/System.Drawing dependency).
+            // Load atlas texture into a GPU texture (no GDI+/System.Drawing dependency).
+            // Prefer the copy embedded in the assembly so a single self-contained .exe needs no
+            // loose files; fall back to terrain.png next to the executable for local dev.
             try
             {
-                string path = System.IO.File.Exists("terrain.png") ? "terrain.png" : System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "terrain.png");
-                if (System.IO.File.Exists(path))
+                byte[]? fileBytes = LoadAtlasBytes();
+                if (fileBytes != null)
                 {
-                    var fileBytes = System.IO.File.ReadAllBytes(path);
                     var image = StbImageSharp.ImageResult.FromMemory(fileBytes, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
                     int w = image.Width;
                     int h = image.Height;
@@ -131,6 +132,31 @@ namespace CubeApp.Renderer
                 _sc.Framebuffer.OutputDescription,
                 Math.Max(1, (int)_sc.Framebuffer.Width),
                 Math.Max(1, (int)_sc.Framebuffer.Height));
+        }
+
+        private static byte[]? LoadAtlasBytes()
+        {
+            // Embedded copy first, so a single self-contained .exe carries the atlas with it.
+            var asm = System.Reflection.Assembly.GetExecutingAssembly();
+            foreach (var name in asm.GetManifestResourceNames())
+            {
+                if (name.EndsWith("terrain.png", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var stream = asm.GetManifestResourceStream(name);
+                    if (stream != null)
+                    {
+                        using var ms = new System.IO.MemoryStream();
+                        stream.CopyTo(ms);
+                        return ms.ToArray();
+                    }
+                }
+            }
+
+            // Fall back to a loose terrain.png next to the executable (local dev).
+            string path = System.IO.File.Exists("terrain.png")
+                ? "terrain.png"
+                : System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "terrain.png");
+            return System.IO.File.Exists(path) ? System.IO.File.ReadAllBytes(path) : null;
         }
 
         private void CreatePipeline()
