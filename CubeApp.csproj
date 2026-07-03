@@ -4,7 +4,16 @@
     <TargetFramework>net9.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Produce a single, self-contained .exe (runtime + native libs baked in). -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- Bake the texture atlas into the assembly so no loose files need to ship. -->
+    <EmbeddedResource Include="terrain.png" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Veldrid" Version="4.9.0" />
     <PackageReference Include="Veldrid.StartupUtilities" Version="4.9.0" />
