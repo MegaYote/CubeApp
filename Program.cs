@@ -1063,11 +1063,39 @@ namespace CubeApp
             try { window?.Close(); } catch { }
         }
 
+        // In a single-file self-contained build the native libraries are unpacked to a
+        // temp directory that Veldrid's own name-based loader (NativeLibraryLoader / SDL2's
+        // LoadSdl2) does not search, so it fails with "Could not find ... SDL2.dll". The .NET
+        // runtime loader *does* search that directory, so pre-loading the natives by name here
+        // pins them into the process; Veldrid's later by-name loads then resolve to the already
+        // loaded modules. No-ops for a normal (non-single-file) build where the DLLs sit on disk.
+        private static void PreloadNativeLibraries()
+        {
+            string[] names =
+            {
+                "SDL2", "cimgui", "veldrid-spirv", "libveldrid-spirv",
+            };
+
+            var asm = Assembly.GetExecutingAssembly();
+            foreach (var name in names)
+            {
+                try
+                {
+                    System.Runtime.InteropServices.NativeLibrary.TryLoad(name, asm, null, out _);
+                }
+                catch
+                {
+                    // best-effort; ignore and let the normal loader try
+                }
+            }
+        }
+
         [STAThread]
         static void Main()
         {
             try
             {
+                PreloadNativeLibraries();
                 using var app = new Program();
                 app.Run();
             }
