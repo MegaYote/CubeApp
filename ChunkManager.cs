@@ -22,12 +22,32 @@ namespace CubeApp
         public Chunk GetOrCreateChunk(int chunkX, int chunkZ)
         {
             var key = new ChunkCoordinates(chunkX, chunkZ);
-            return loadedChunks.GetOrAdd(key, _ =>
+            bool created = false;
+            var result = loadedChunks.GetOrAdd(key, _ =>
             {
                 var chunk = chunkProvider.GenerateChunk(chunkX, chunkZ, ChunkSize, ChunkHeight);
                 chunk.NeedsRemesh = true;
+                created = true;
                 return chunk;
             });
+
+            if (created)
+            {
+                // A newly loaded chunk can expose faces on adjacent, already-meshed chunks
+                // (border faces are culled against neighbors, and an absent neighbor is treated
+                // as air). Mark those neighbors dirty so their border faces get rebuilt now,
+                // instead of staying wrong until some unrelated edit/unload triggers a remesh.
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(chunkX - 1, chunkZ), out var left))
+                    left.NeedsRemesh = true;
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(chunkX + 1, chunkZ), out var right))
+                    right.NeedsRemesh = true;
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ - 1), out var back))
+                    back.NeedsRemesh = true;
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ + 1), out var front))
+                    front.NeedsRemesh = true;
+            }
+
+            return result;
         }
 
         public bool TrySetBlock(int worldX, int worldY, int worldZ, BlockType blockType)
