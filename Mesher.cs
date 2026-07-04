@@ -64,6 +64,10 @@ namespace CubeApp
             int height = chunk.Height;
             int depth = chunk.Depth;
 
+            // Flood-fill light levels (0..15) across the target chunk and its neighbours so each
+            // face can be shaded by how much light reaches the empty block it's exposed to.
+            var lighting = new ChunkLighting(chunkLookup.Keys, ChunkManager.ChunkSize, height, (x, y, z) => GetBlockAtWorld(chunkLookup, x, y, z));
+
             int[] dims = new[] { width, height, depth };
 
             for (int d = 0; d < 3; d++)
@@ -75,7 +79,7 @@ namespace CubeApp
                 int dimU = dims[u];
                 int dimV = dims[v];
 
-                var mask = new (BlockType type, bool positive)?[dimU, dimV];
+                var mask = new (BlockType type, bool positive, int light)?[dimU, dimV];
 
                 for (int slice = 0; slice < dimD; slice++)
                 {
@@ -124,11 +128,13 @@ namespace CubeApp
 
                             if (IsOpaque(A) && !IsOpaque(B))
                             {
-                                mask[iu, jv] = (A, true);
+                                // Face on A's +d side; it's exposed to the empty block B.
+                                mask[iu, jv] = (A, true, lighting.GetLight(worldXB, worldYB, worldZB));
                             }
                             else if (!IsOpaque(A) && IsOpaque(B))
                             {
-                                mask[iu, jv] = (B, false);
+                                // Face on B's -d side; it's exposed to the empty block A.
+                                mask[iu, jv] = (B, false, lighting.GetLight(worldXA, worldYA, worldZA));
                             }
                             else
                             {
@@ -148,7 +154,7 @@ namespace CubeApp
 
                             // compute width
                             int w;
-                            for (w = 1; i + w < dimU && mask[i + w, j] != null && mask[i + w, j]?.type == entry?.type && mask[i + w, j]?.positive == entry?.positive; w++) { }
+                            for (w = 1; i + w < dimU && mask[i + w, j] != null && mask[i + w, j]?.type == entry?.type && mask[i + w, j]?.positive == entry?.positive && mask[i + w, j]?.light == entry?.light; w++) { }
 
                             // compute height
                             int h;
@@ -158,7 +164,7 @@ namespace CubeApp
                                 for (int k = 0; k < w; k++)
                                 {
                                     var m = mask[i + k, j + h];
-                                    if (m == null || m?.type != entry?.type || m?.positive != entry?.positive)
+                                    if (m == null || m?.type != entry?.type || m?.positive != entry?.positive || m?.light != entry?.light)
                                     {
                                         done = true;
                                         break;
@@ -263,10 +269,14 @@ namespace CubeApp
                             else if (axisNormal.Y < -0.5) shade = 0.5; // bottom
                             else if (Math.Abs(axisNormal.X) > 0.5) shade = 0.6; // east/west
 
+                            // Combine the directional shade with the flood-filled light level so
+                            // faces exposed to darkness (caves, undersides, shadowed areas) dim.
+                            double brightness = shade * ChunkLighting.Brightness(entry.Value.light);
+
                             // compute atlas src rect for this block face
                             var src = GetAtlasSrcRect(entry.Value.type, axisNormal);
                             // pass tile span so renderers tile textures along face-local U/V axes.
-                            mesh.Add(new MeshFace(corners, src, axisNormal, blockPos, (float)shade, tileWidth, tileHeight));
+                            mesh.Add(new MeshFace(corners, src, axisNormal, blockPos, (float)brightness, tileWidth, tileHeight));
 
                             // zero-out mask
                             for (int aOff = 0; aOff < w; aOff++)
