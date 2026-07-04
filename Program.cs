@@ -88,6 +88,10 @@ namespace CubeApp
         private const int HotbarSlots = 10;
         private bool inventoryOpen;
 
+        // Duck test mobs (press G to spawn). Static model + gravity + ground collision for now.
+        private readonly List<Duck> ducks = new();
+        private readonly List<DuckInstance> duckInstances = new();
+
         public Program()
         {
             manager = new ChunkManager(new InfdevChunkProvider(20100630));
@@ -231,6 +235,7 @@ namespace CubeApp
                     {
                         gpuRenderer.UpdateCamera(cameraPosition, cameraYaw, cameraPitch);
                         gpuRenderer.SetHud(BuildHud());
+                        gpuRenderer.SetEntities(BuildDuckInstances());
                         gpuRenderer.Render();
                     }
                     var t5 = stageStopwatch.ElapsedTicks;
@@ -279,6 +284,11 @@ namespace CubeApp
                 CycleRenderDistance();
             }
 
+            if (frameInput.SpawnMobPressed)
+            {
+                SpawnDuck();
+            }
+
             if (frameInput.SelectedSlot.HasValue)
             {
                 SetSelectedSlot(frameInput.SelectedSlot.Value);
@@ -293,6 +303,45 @@ namespace CubeApp
             {
                 PlaceSelectedBlock();
             }
+        }
+
+        // Spawn a duck a couple of blocks ahead of and above the player so it drops in and lands
+        // on the ground in view. It faces back toward the player.
+        private void SpawnDuck()
+        {
+            float yawRad = cameraYaw * (float)Math.PI / 180f;
+            double fx = Math.Sin(yawRad);
+            double fz = Math.Cos(yawRad);
+
+            double spawnX = Math.Floor(cameraPosition.X + fx * 2.0) + 0.5;
+            double spawnZ = Math.Floor(cameraPosition.Z + fz * 2.0) + 0.5;
+            double feetY = cameraPosition.Y - EyeHeight;
+            double spawnY = Math.Floor(feetY) + 3.0;
+
+            double toPlayerX = cameraPosition.X - spawnX;
+            double toPlayerZ = cameraPosition.Z - spawnZ;
+            float duckYaw = (float)Math.Atan2(-toPlayerX, -toPlayerZ);
+
+            ducks.Add(new Duck(new Point3D(spawnX, spawnY, spawnZ), duckYaw));
+        }
+
+        private void UpdateDucks(float deltaSeconds)
+        {
+            foreach (var duck in ducks)
+            {
+                duck.Update(deltaSeconds, manager);
+            }
+        }
+
+        private IReadOnlyList<DuckInstance> BuildDuckInstances()
+        {
+            duckInstances.Clear();
+            foreach (var duck in ducks)
+            {
+                duckInstances.Add(duck.ToInstance());
+            }
+
+            return duckInstances;
         }
 
         private void CycleRenderDistance()
@@ -320,6 +369,7 @@ namespace CubeApp
         private void StepSimulation(TickInputState tickInput, float deltaSeconds)
         {
             UpdatePlayerMovement(tickInput, deltaSeconds);
+            UpdateDucks(deltaSeconds);
 
             int chunkX = WorldToChunkCoord(cameraPosition.X);
             int chunkZ = WorldToChunkCoord(cameraPosition.Z);

@@ -11,5 +11,6 @@ namespace CubeApp.Renderer
         void UpdateCamera(CubeApp.Point3D position, float yaw, float pitch);
         void SetRenderDistance(int chunkRadius);
         void SetHud(HudState hud);
+        void SetEntities(System.Collections.Generic.IReadOnlyList<CubeApp.DuckInstance> ducks);
     }
 }
