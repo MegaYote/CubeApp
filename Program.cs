@@ -606,8 +606,7 @@ namespace CubeApp
             var remove = pickResult.Value.Remove;
             if (!manager.TrySetBlock(remove.x, remove.y, remove.z, BlockType.Air)) return;
 
-            _ = UpdateMesh();
-            needsMeshUpdate = true;
+            RemeshEditedBlock(remove.x, remove.z);
         }
 
         private void PlaceSelectedBlock()
@@ -619,8 +618,43 @@ namespace CubeApp
             if (WouldBlockIntersectPlayer(place.x, place.y, place.z)) return;
             if (!manager.TrySetBlock(place.x, place.y, place.z, selectedBlock)) return;
 
-            _ = UpdateMesh();
-            needsMeshUpdate = true;
+            RemeshEditedBlock(place.x, place.z);
+        }
+
+        /// <summary>
+        /// Rebuilds the mesh for the chunk containing an edited block (and any neighbour chunk the
+        /// edit dirtied) immediately on the main thread, rather than queueing it behind the
+        /// background streaming/meshing backlog. This keeps block breaking/placing responsive.
+        /// </summary>
+        private void RemeshEditedBlock(int worldX, int worldZ)
+        {
+            int centerX = WorldToChunkCoord(worldX);
+            int centerZ = WorldToChunkCoord(worldZ);
+
+            (int dx, int dz)[] around = { (0, 0), (-1, 0), (1, 0), (0, -1), (0, 1) };
+            foreach (var (dx, dz) in around)
+            {
+                var coord = new ChunkCoordinates(centerX + dx, centerZ + dz);
+                if (manager.TryGetLoadedChunk(coord, out var chunk) && chunk.NeedsRemesh)
+                {
+                    RemeshChunkNow(coord, chunk);
+                }
+            }
+        }
+
+        private void RemeshChunkNow(ChunkCoordinates coord, Chunk chunk)
+        {
+            var chunksToPass = new List<Chunk> { chunk };
+            if (manager.TryGetLoadedChunk(new ChunkCoordinates(coord.X - 1, coord.Z), out var left)) chunksToPass.Add(left);
+            if (manager.TryGetLoadedChunk(new ChunkCoordinates(coord.X + 1, coord.Z), out var right)) chunksToPass.Add(right);
+            if (manager.TryGetLoadedChunk(new ChunkCoordinates(coord.X, coord.Z - 1), out var back)) chunksToPass.Add(back);
+            if (manager.TryGetLoadedChunk(new ChunkCoordinates(coord.X, coord.Z + 1), out var front)) chunksToPass.Add(front);
+
+            var faces = Mesher.GenerateMesh(chunksToPass);
+            chunk.MeshFaces = new List<MeshFace>(faces);
+            System.Threading.Interlocked.Increment(ref chunk.MeshVersion);
+            chunk.NeedsRemesh = false;
+            gpuRenderer?.UploadChunk(coord, chunk.MeshFaces);
         }
 
         private bool WouldBlockIntersectPlayer(int x, int y, int z)
