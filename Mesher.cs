@@ -256,10 +256,12 @@ namespace CubeApp
 
                             var blockPos = new Point3D(bx, by, bz);
 
-                            // Simple face shading like Cubuild/rd-131655: top = brightest, sides = mid, bottom = darkest
-                            double shade = 0.8;
+                            // Directional face shading matching Cubuild's faceShade:
+                            // top 1.0, bottom 0.5, east/west (X) 0.6, north/south (Z) 0.8.
+                            double shade = 0.8; // north/south (Z faces)
                             if (axisNormal.Y > 0.5) shade = 1.0; // top
-                            else if (axisNormal.Y < -0.5) shade = 0.6; // bottom
+                            else if (axisNormal.Y < -0.5) shade = 0.5; // bottom
+                            else if (Math.Abs(axisNormal.X) > 0.5) shade = 0.6; // east/west
 
                             // compute atlas src rect for this block face
                             var src = GetAtlasSrcRect(entry.Value.type, axisNormal);
