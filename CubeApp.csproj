@@ -13,6 +13,8 @@
   <ItemGroup>
     <!-- Bake the texture atlas into the assembly so no loose files need to ship. -->
     <EmbeddedResource Include="terrain.png" />
+    <!-- Bake the duck test-mob texture in as well. -->
+    <EmbeddedResource Include="duck.png" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Veldrid" Version="4.9.0" />

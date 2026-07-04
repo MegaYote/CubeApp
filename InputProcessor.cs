@@ -10,6 +10,7 @@ namespace CubeApp
         public bool ToggleDebugPressed { get; }
         public bool ToggleInventoryPressed { get; }
         public bool CycleRenderDistancePressed { get; }
+        public bool SpawnMobPressed { get; }
         public bool BreakBlockPressed { get; }
         public bool PlaceBlockPressed { get; }
         public int? SelectedSlot { get; }
@@ -19,6 +20,7 @@ namespace CubeApp
             bool toggleDebugPressed,
             bool toggleInventoryPressed,
             bool cycleRenderDistancePressed,
+            bool spawnMobPressed,
             bool breakBlockPressed,
             bool placeBlockPressed,
             int? selectedSlot)
@@ -27,6 +29,7 @@ namespace CubeApp
             ToggleDebugPressed = toggleDebugPressed;
             ToggleInventoryPressed = toggleInventoryPressed;
             CycleRenderDistancePressed = cycleRenderDistancePressed;
+            SpawnMobPressed = spawnMobPressed;
             BreakBlockPressed = breakBlockPressed;
             PlaceBlockPressed = placeBlockPressed;
             SelectedSlot = selectedSlot;
@@ -74,6 +77,7 @@ namespace CubeApp
         private bool toggleDebugPressed;
         private bool toggleInventoryPressed;
         private bool cycleRenderDistancePressed;
+        private bool spawnMobPressed;
         private bool breakBlockPressed;
         private bool placeBlockPressed;
         private int? selectedSlot;
@@ -87,6 +91,7 @@ namespace CubeApp
             toggleDebugPressed = false;
             toggleInventoryPressed = false;
             cycleRenderDistancePressed = false;
+            spawnMobPressed = false;
             breakBlockPressed = false;
             placeBlockPressed = false;
             selectedSlot = null;
@@ -131,6 +136,9 @@ namespace CubeApp
                         break;
                     case Key.F:
                         if (down) cycleRenderDistancePressed = true;
+                        break;
+                    case Key.G:
+                        if (down) spawnMobPressed = true;
                         break;
                     case Key.Number1:
                         if (down) selectedSlot = 0;
@@ -243,6 +251,7 @@ namespace CubeApp
                 toggleDebugPressed,
                 toggleInventoryPressed,
                 cycleRenderDistancePressed,
+                spawnMobPressed,
                 breakBlockPressed,
                 placeBlockPressed,
                 selectedSlot);
@@ -251,6 +260,7 @@ namespace CubeApp
             toggleDebugPressed = false;
             toggleInventoryPressed = false;
             cycleRenderDistancePressed = false;
+            spawnMobPressed = false;
             breakBlockPressed = false;
             placeBlockPressed = false;
             selectedSlot = null;
