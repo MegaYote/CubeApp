@@ -44,6 +44,7 @@ namespace CubeApp.Renderer
         private CommandList _commandList;
         private ImGuiRenderer _imguiRenderer;
         private HudState _hud = HudState.Empty;
+        private float _farPlane = 100f;
         private float _atlasWidth = 256f;
         private float _atlasHeight = 256f;
 
@@ -467,6 +468,10 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
                 Line($"Upload: {_hud.UploadMs:0.0} ms");
                 Line($"Render: {_hud.RenderMs:0.0} ms");
                 Line($"Facing: {_hud.FacingText}");
+                if (!string.IsNullOrEmpty(_hud.RenderDistanceText))
+                {
+                    Line(_hud.RenderDistanceText);
+                }
             }
         }
 
@@ -731,7 +736,7 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
 
         public void UpdateCamera(CubeApp.Point3D position, float yaw, float pitch)
         {
-            var proj = Matrix4x4.CreatePerspectiveFieldOfView((float)(Math.PI / 2.0), (float)_sc.Framebuffer.Width / _sc.Framebuffer.Height, 0.1f, 100f);
+            var proj = Matrix4x4.CreatePerspectiveFieldOfView((float)(Math.PI / 2.0), (float)_sc.Framebuffer.Width / _sc.Framebuffer.Height, 0.1f, _farPlane);
             var yawRad = yaw * (float)Math.PI / 180f;
             var pitchRad = pitch * (float)Math.PI / 180f;
             var forward = new Vector3((float)(Math.Cos(pitchRad) * Math.Sin(yawRad)), (float)Math.Sin(pitchRad), (float)(Math.Cos(pitchRad) * Math.Cos(yawRad)));
@@ -740,6 +745,13 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
             var view = Matrix4x4.CreateLookAt(cameraPos, target, Vector3.UnitY);
             var viewProj = Matrix4x4.Multiply(view, proj);
             _gd.UpdateBuffer(_projViewBuffer, 0, ref viewProj);
+        }
+
+        public void SetRenderDistance(int chunkRadius)
+        {
+            // Push the far clip past the farthest visible chunk corner so distant terrain isn't
+            // clipped when the render distance grows. 16 blocks/chunk, ~1.5x for the diagonal + margin.
+            _farPlane = Math.Max(100f, chunkRadius * 16f * 1.5f + 32f);
         }
     }
 }

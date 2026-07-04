@@ -55,8 +55,19 @@ namespace CubeApp
         private const double CollisionStep = 0.05;
         private const float BlockReach = 6.5f;
         private const float MouseSensitivity = 0.5f;
-        private const int ChunkRenderRadius = 2;
         private const double MaxFrameDeltaSeconds = 0.25;
+
+        // Render-distance presets matching Minecraft's named settings (radius in chunks). The F key
+        // cycles through them in Minecraft's order: Far -> Normal -> Short -> Tiny -> Far.
+        private static readonly int[] RenderDistances = { 16, 8, 4, 2 };
+        private static readonly string[] RenderDistanceNames = { "Far", "Normal", "Short", "Tiny" };
+        private int renderDistanceIndex = 1; // default Normal (8 chunks)
+        private int ChunkRenderRadius => RenderDistances[renderDistanceIndex];
+        private string RenderDistanceName => RenderDistanceNames[renderDistanceIndex];
+
+        // Chunks generated synchronously at startup so spawn placement sees real terrain; the rest
+        // of the render distance streams in on the background worker pool.
+        private const int SpawnSyncRadius = 2;
 
         private static readonly BlockType[] HotbarBlockTypes =
         {
@@ -225,13 +236,12 @@ namespace CubeApp
                     var t5 = stageStopwatch.ElapsedTicks;
                     lastRenderMs = (t5 - t4) * 1000f / Stopwatch.Frequency;
 
-                    if (showFps && window != null)
+                    if (window != null)
                     {
-                        window.Title = $"{baseTitle} - FPS: {lastFps:0.0}";
-                    }
-                    else if (window != null)
-                    {
-                        window.Title = baseTitle;
+                        string rd = $"Render: {RenderDistanceName} ({ChunkRenderRadius})";
+                        window.Title = showFps
+                            ? $"{baseTitle} - FPS: {lastFps:0.0} - {rd}"
+                            : $"{baseTitle} - {rd}";
                     }
                 }
                 catch (Exception ex)
@@ -264,6 +274,11 @@ namespace CubeApp
                 inventoryOpen = !inventoryOpen;
             }
 
+            if (frameInput.CycleRenderDistancePressed)
+            {
+                CycleRenderDistance();
+            }
+
             if (frameInput.SelectedSlot.HasValue)
             {
                 SetSelectedSlot(frameInput.SelectedSlot.Value);
@@ -278,6 +293,14 @@ namespace CubeApp
             {
                 PlaceSelectedBlock();
             }
+        }
+
+        private void CycleRenderDistance()
+        {
+            renderDistanceIndex = (renderDistanceIndex + 1) % RenderDistances.Length;
+            gpuRenderer?.SetRenderDistance(ChunkRenderRadius);
+            // Newly requested chunks stream in; nudge a mesh pass so the change is reflected promptly.
+            needsMeshUpdate = true;
         }
 
         private void SetSelectedSlot(int slot)
@@ -478,7 +501,9 @@ namespace CubeApp
         {
             int chunkX = WorldToChunkCoord(cameraPosition.X);
             int chunkZ = WorldToChunkCoord(cameraPosition.Z);
-            return manager.EnsureChunksAround(chunkX, chunkZ, ChunkRenderRadius);
+            // Only the immediate spawn area is generated synchronously; the full render distance
+            // streams in asynchronously so a large distance doesn't stall startup.
+            return manager.EnsureChunksAround(chunkX, chunkZ, SpawnSyncRadius);
         }
 
         private void PlaceCameraAtSafeSpawn()
@@ -643,6 +668,7 @@ namespace CubeApp
             {
                 gpuRenderer = new VeldridRenderer();
                 gpuRenderer.Initialize(gd, sc);
+                gpuRenderer.SetRenderDistance(ChunkRenderRadius);
                 if (window != null)
                 {
                     gpuRenderer.Resize(window.Width, window.Height);
@@ -689,6 +715,7 @@ namespace CubeApp
                 RenderMs = lastRenderMs,
                 FacingText = $"{GetCompassDirection(cameraYaw)} ({NormalizeYaw(cameraYaw):0.0} deg)",
                 SelectedBlockText = $"Selected: {selectedBlock}",
+                RenderDistanceText = $"Render dist: {RenderDistanceName} ({ChunkRenderRadius})",
                 SelectedSlot = selectedSlot,
                 HighlightWorldQuad = highlightQuad,
             };
