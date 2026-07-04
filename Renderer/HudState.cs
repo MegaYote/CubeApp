@@ -17,6 +17,7 @@ namespace CubeApp.Renderer
         public float RenderMs;
         public string FacingText;
         public string SelectedBlockText;
+        public string RenderDistanceText;
         public int SelectedSlot;
 
         /// <summary>
@@ -37,6 +38,7 @@ namespace CubeApp.Renderer
             RenderMs = 0f,
             FacingText = string.Empty,
             SelectedBlockText = string.Empty,
+            RenderDistanceText = string.Empty,
             SelectedSlot = 0,
             HighlightWorldQuad = null,
         };
