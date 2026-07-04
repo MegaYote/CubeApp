@@ -27,7 +27,6 @@ namespace CubeApp
             var result = loadedChunks.GetOrAdd(key, _ =>
             {
                 var chunk = chunkProvider.GenerateChunk(chunkX, chunkZ, ChunkSize, ChunkHeight);
-                chunk.NeedsRemesh = true;
                 created = true;
                 return chunk;
             });
@@ -39,13 +38,13 @@ namespace CubeApp
                 // as air). Mark those neighbors dirty so their border faces get rebuilt now,
                 // instead of staying wrong until some unrelated edit/unload triggers a remesh.
                 if (loadedChunks.TryGetValue(new ChunkCoordinates(chunkX - 1, chunkZ), out var left))
-                    left.NeedsRemesh = true;
+                    left.MarkDirty();
                 if (loadedChunks.TryGetValue(new ChunkCoordinates(chunkX + 1, chunkZ), out var right))
-                    right.NeedsRemesh = true;
+                    right.MarkDirty();
                 if (loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ - 1), out var back))
-                    back.NeedsRemesh = true;
+                    back.MarkDirty();
                 if (loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ + 1), out var front))
-                    front.NeedsRemesh = true;
+                    front.MarkDirty();
             }
 
             return result;
@@ -65,17 +64,17 @@ namespace CubeApp
 
             chunk[localX, worldY, localZ] = blockType;
             // mark this chunk dirty so it will be remeshed
-            chunk.NeedsRemesh = true;
+            chunk.MarkDirty();
 
             // if modification touches chunk boundaries, mark neighbor chunks dirty as well
             if (localX == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX - 1, chunkZ), out var left))
-                left.NeedsRemesh = true;
+                left.MarkDirty();
             if (localX == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX + 1, chunkZ), out var right))
-                right.NeedsRemesh = true;
+                right.MarkDirty();
             if (localZ == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ - 1), out var back))
-                back.NeedsRemesh = true;
+                back.MarkDirty();
             if (localZ == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ + 1), out var front))
-                front.NeedsRemesh = true;
+                front.MarkDirty();
 
             return true;
         }
@@ -212,13 +211,13 @@ namespace CubeApp
                         // A removed chunk can expose faces on adjacent loaded chunks.
                         // Mark those neighbors dirty so border faces get rebuilt.
                         if (loadedChunks.TryGetValue(new ChunkCoordinates(key.X - 1, key.Z), out var left))
-                            left.NeedsRemesh = true;
+                            left.MarkDirty();
                         if (loadedChunks.TryGetValue(new ChunkCoordinates(key.X + 1, key.Z), out var right))
-                            right.NeedsRemesh = true;
+                            right.MarkDirty();
                         if (loadedChunks.TryGetValue(new ChunkCoordinates(key.X, key.Z - 1), out var back))
-                            back.NeedsRemesh = true;
+                            back.MarkDirty();
                         if (loadedChunks.TryGetValue(new ChunkCoordinates(key.X, key.Z + 1), out var front))
-                            front.NeedsRemesh = true;
+                            front.MarkDirty();
                     }
                 }
             }
