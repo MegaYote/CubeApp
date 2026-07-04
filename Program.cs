@@ -296,7 +296,10 @@ namespace CubeApp
 
             if (frameInput.BreakBlockPressed)
             {
-                DeleteHighlightedBlock();
+                if (!TryAttackDuck())
+                {
+                    DeleteHighlightedBlock();
+                }
             }
 
             if (frameInput.PlaceBlockPressed)
@@ -327,10 +330,104 @@ namespace CubeApp
 
         private void UpdateDucks(float deltaSeconds)
         {
+            for (int i = ducks.Count - 1; i >= 0; i--)
+            {
+                var duck = ducks[i];
+                duck.Update(deltaSeconds, manager);
+                if (duck.Removed)
+                {
+                    ducks.RemoveAt(i);
+                }
+            }
+        }
+
+        // Left-click melee: if the crosshair ray hits a duck no farther than the block it would
+        // break, damage that duck instead of mining. Mirrors Cubuild's entity-priority targeting.
+        private bool TryAttackDuck()
+        {
+            var forward = GetCameraForward();
+            var duck = TryPickDuck(cameraPosition, forward, out double duckDistance);
+            if (duck == null)
+            {
+                return false;
+            }
+
+            _ = TryPickBlock(cameraPosition, forward, out double blockDistance);
+            if (duckDistance > blockDistance + 0.02)
+            {
+                return false;
+            }
+
+            duck.Damage(1, cameraPosition.X, cameraPosition.Z, true);
+            return true;
+        }
+
+        // Nearest duck whose collision box the ray enters within reach. Returns null if none.
+        private Duck? TryPickDuck(Point3D origin, Point3D direction, out double hitDistance)
+        {
+            hitDistance = double.PositiveInfinity;
+            Duck? best = null;
+            var dir = direction.Normalized();
+            float half = Duck.Width * 0.5f;
+
             foreach (var duck in ducks)
             {
-                duck.Update(deltaSeconds, manager);
+                if (duck.IsDead) continue;
+
+                double minX = duck.Position.X - half;
+                double maxX = duck.Position.X + half;
+                double minY = duck.Position.Y;
+                double maxY = duck.Position.Y + Duck.Height;
+                double minZ = duck.Position.Z - half;
+                double maxZ = duck.Position.Z + half;
+
+                if (RayBox(origin, dir, minX, minY, minZ, maxX, maxY, maxZ, out double t)
+                    && t <= BlockReach && t < hitDistance)
+                {
+                    hitDistance = t;
+                    best = duck;
+                }
             }
+
+            return best;
+        }
+
+        // Slab-method ray/AABB intersection; outputs the entry distance along the (unit) ray.
+        private static bool RayBox(
+            Point3D origin, Point3D dir,
+            double minX, double minY, double minZ,
+            double maxX, double maxY, double maxZ,
+            out double tEntry)
+        {
+            tEntry = 0;
+            double tMin = double.NegativeInfinity;
+            double tMax = double.PositiveInfinity;
+
+            for (int axis = 0; axis < 3; axis++)
+            {
+                double o = axis == 0 ? origin.X : (axis == 1 ? origin.Y : origin.Z);
+                double d = axis == 0 ? dir.X : (axis == 1 ? dir.Y : dir.Z);
+                double lo = axis == 0 ? minX : (axis == 1 ? minY : minZ);
+                double hi = axis == 0 ? maxX : (axis == 1 ? maxY : maxZ);
+
+                if (Math.Abs(d) < 1e-9)
+                {
+                    if (o < lo || o > hi) return false;
+                }
+                else
+                {
+                    double t1 = (lo - o) / d;
+                    double t2 = (hi - o) / d;
+                    if (t1 > t2) (t1, t2) = (t2, t1);
+                    if (t1 > tMin) tMin = t1;
+                    if (t2 < tMax) tMax = t2;
+                    if (tMin > tMax) return false;
+                }
+            }
+
+            if (tMax < 0) return false;
+            tEntry = tMin < 0 ? 0 : tMin;
+            return true;
         }
 
         private IReadOnlyList<DuckInstance> BuildDuckInstances()
@@ -1089,6 +1186,12 @@ namespace CubeApp
 
         private PickBlockResult? TryPickBlock(Point3D origin, Point3D direction)
         {
+            return TryPickBlock(origin, direction, out _);
+        }
+
+        private PickBlockResult? TryPickBlock(Point3D origin, Point3D direction, out double hitDistance)
+        {
+            hitDistance = double.PositiveInfinity;
             direction = direction.Normalized();
             var blockX = (int)Math.Floor(origin.X);
             var blockY = (int)Math.Floor(origin.Y);
@@ -1123,6 +1226,7 @@ namespace CubeApp
                 {
                     var remove = (currentX, currentY, currentZ);
                     var place = (lastX, lastY, lastZ);
+                    hitDistance = distance;
                     return new PickBlockResult(remove, place, normal);
                 }
 

@@ -48,8 +48,9 @@ namespace CubeApp.Renderer
         private TextureView _duckView;
         private Sampler _duckSampler;
         private ResourceSet _duckTextureSet;
-        private DuckModel.Vertex[] _duckLocalMesh = Array.Empty<DuckModel.Vertex>();
-        private ushort[] _duckBaseIndices = Array.Empty<ushort>();
+        private DuckModel.Bone[] _duckBones = Array.Empty<DuckModel.Bone>();
+        private int _duckVertsPerInstance;
+        private int _duckIndicesPerInstance;
         private DeviceBuffer? _duckVertexBuffer;
         private DeviceBuffer? _duckIndexBuffer;
         private uint _duckVertexCapacity;
@@ -204,8 +205,14 @@ namespace CubeApp.Renderer
 
         private void LoadDuckResources()
         {
-            _duckLocalMesh = DuckModel.Vertices;
-            _duckBaseIndices = DuckModel.Indices;
+            _duckBones = DuckModel.Bones;
+            _duckVertsPerInstance = 0;
+            _duckIndicesPerInstance = 0;
+            foreach (var bone in _duckBones)
+            {
+                _duckVertsPerInstance += bone.Vertices.Length;
+                _duckIndicesPerInstance += bone.Indices.Length;
+            }
 
             try
             {
@@ -534,15 +541,13 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
         {
             var instances = _duckInstances;
             if (instances.Count == 0 || _modelPipeline == null || _duckTextureSet == null
-                || _duckLocalMesh.Length == 0 || _duckBaseIndices.Length == 0)
+                || _duckBones.Length == 0 || _duckVertsPerInstance == 0)
             {
                 return;
             }
 
-            int vertsPerDuck = _duckLocalMesh.Length;
-            int indicesPerDuck = _duckBaseIndices.Length;
-            int totalVertexFloats = instances.Count * vertsPerDuck * DuckFloatsPerVertex;
-            int totalIndices = instances.Count * indicesPerDuck;
+            int totalVertexFloats = instances.Count * _duckVertsPerInstance * DuckFloatsPerVertex;
+            int totalIndices = instances.Count * _duckIndicesPerInstance;
 
             if (_duckVertexScratch.Length < totalVertexFloats)
             {
@@ -558,34 +563,7 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
             ushort baseVertex = 0;
             foreach (var inst in instances)
             {
-                float cos = (float)Math.Cos(inst.Yaw);
-                float sin = (float)Math.Sin(inst.Yaw);
-                float px = (float)inst.Position.X;
-                float py = (float)inst.Position.Y;
-                float pz = (float)inst.Position.Z;
-
-                foreach (var v in _duckLocalMesh)
-                {
-                    // Rotate about +Y by yaw, then translate to the duck's world position.
-                    float wx = v.X * cos + v.Z * sin;
-                    float wz = -v.X * sin + v.Z * cos;
-
-                    _duckVertexScratch[vf++] = px + wx;
-                    _duckVertexScratch[vf++] = py + v.Y;
-                    _duckVertexScratch[vf++] = pz + wz;
-                    _duckVertexScratch[vf++] = v.U;
-                    _duckVertexScratch[vf++] = v.V;
-                    _duckVertexScratch[vf++] = v.Shade;
-                    _duckVertexScratch[vf++] = v.Shade;
-                    _duckVertexScratch[vf++] = v.Shade;
-                    _duckVertexScratch[vf++] = 1f;
-                }
-
-                for (int k = 0; k < indicesPerDuck; k++)
-                {
-                    _duckIndexScratch[ii++] = (ushort)(_duckBaseIndices[k] + baseVertex);
-                }
-                baseVertex += (ushort)vertsPerDuck;
+                WriteDuck(inst, ref vf, ref ii, ref baseVertex);
             }
 
             EnsureDuckBuffers((uint)(totalVertexFloats * sizeof(float)), (uint)(totalIndices * sizeof(ushort)));
@@ -598,6 +576,101 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
             cl.SetVertexBuffer(0, _duckVertexBuffer);
             cl.SetIndexBuffer(_duckIndexBuffer, IndexFormat.UInt16);
             cl.DrawIndexed((uint)totalIndices, 1, 0, 0, 0);
+        }
+
+        // Poses one duck's bones (walk/flap/head-turn) and bakes them, with the body yaw, in-air /
+        // death tilt and hurt-flash tint, into the shared vertex/index scratch buffers. Mirrors
+        // Cubuild's updateDuckEntityVisual ('blockbench_duck' branch).
+        private void WriteDuck(in CubeApp.DuckInstance inst, ref int vf, ref int ii, ref ushort baseVertex)
+        {
+            bool isDead = inst.IsDead;
+            float walkPhase = inst.WalkPhase;
+            float walkAmount = inst.WalkAmount;
+            float flapPhase = inst.FlapPhase;
+
+            float wingSwing = isDead ? 0f : (inst.OnGround ? (float)Math.Sin(walkPhase) * 0.55f * walkAmount : (float)Math.Sin(flapPhase) * 0.95f);
+            float swing = isDead ? 0f : (float)Math.Sin(walkPhase) * 0.55f * walkAmount;
+            float bob = isDead ? 0f : (Math.Abs((float)Math.Sin(walkPhase * 2.0f)) * 0.06f * walkAmount
+                + (!inst.OnGround ? 0.03f + Math.Abs((float)Math.Sin(flapPhase * 0.5f)) * 0.03f : 0f));
+            float hurtTilt = isDead ? 0f : (inst.HurtTimer > 0f ? (float)Math.Sin(inst.HurtTimer * 60.0f) * 0.06f : 0f);
+            float deathRoll = isDead ? inst.DeathRollDir * (float)(Math.PI * 0.5) * (float)Math.Pow(inst.DeathT, 0.9) : 0f;
+
+            float tiltZ = isDead ? deathRoll : ((inst.OnGround ? 0f : Math.Clamp(-inst.VelocityY * 0.03f, -0.2f, 0.2f)) + hurtTilt);
+            float cosR = (float)Math.Cos(tiltZ), sinR = (float)Math.Sin(tiltZ);
+
+            float renderYaw = inst.Yaw + (float)Math.PI;
+            float cosY = (float)Math.Cos(renderYaw), sinY = (float)Math.Sin(renderYaw);
+
+            float px = (float)inst.Position.X;
+            float py = (float)inst.Position.Y;
+            float pz = (float)inst.Position.Z;
+
+            // Hurt / death flash: red channel unchanged, green/blue driven toward the tint.
+            float blink = isDead ? 1f : (inst.HurtTimer > 0f ? ((float)Math.Sin(inst.HurtTimer * 95.0f) > 0f ? 1f : 0.72f) : 0f);
+            float flashBlend = isDead ? 1f : (inst.HurtTimer > 0f ? Math.Clamp((inst.HurtTimer / 0.20f) * blink, 0f, 1f) : 0f);
+            float gbMul = 1f - 0.82f * flashBlend;
+
+            foreach (var bone in _duckBones)
+            {
+                float angle = bone.BaseAngle + BoneAnimDelta(bone.Id, wingSwing, swing, walkAmount, inst.HeadYawLocal);
+                float ca = (float)Math.Cos(angle), sa = (float)Math.Sin(angle);
+                float headExtraBob = bone.Id == DuckBoneId.Head ? bob * 0.15f : 0f;
+
+                foreach (var v in bone.Vertices)
+                {
+                    // Rotate the vertex about the bone pivot on the bone's animation axis.
+                    float lx = v.X - bone.PivotX;
+                    float ly = v.Y - bone.PivotY;
+                    float lz = v.Z - bone.PivotZ;
+                    float rx = lx, ry = ly, rz = lz;
+                    switch (bone.Axis)
+                    {
+                        case DuckBoneAxis.X: ry = ly * ca - lz * sa; rz = ly * sa + lz * ca; break;
+                        case DuckBoneAxis.Y: rx = lx * ca + lz * sa; rz = -lx * sa + lz * ca; break;
+                        case DuckBoneAxis.Z: rx = lx * ca - ly * sa; ry = lx * sa + ly * ca; break;
+                    }
+                    float mx = bone.PivotX + rx;
+                    float my = bone.PivotY + ry + bob + headExtraBob;
+                    float mz = bone.PivotZ + rz;
+
+                    // Body roll (Z) then body yaw (Y), matching three.js Euler 'XYZ' order.
+                    float ax = mx * cosR - my * sinR;
+                    float ay = mx * sinR + my * cosR;
+                    float az = mz;
+                    float fx = ax * cosY + az * sinY;
+                    float fz = -ax * sinY + az * cosY;
+
+                    _duckVertexScratch[vf++] = px + fx;
+                    _duckVertexScratch[vf++] = py + ay;
+                    _duckVertexScratch[vf++] = pz + fz;
+                    _duckVertexScratch[vf++] = v.U;
+                    _duckVertexScratch[vf++] = v.V;
+                    _duckVertexScratch[vf++] = v.Shade;
+                    _duckVertexScratch[vf++] = v.Shade * gbMul;
+                    _duckVertexScratch[vf++] = v.Shade * gbMul;
+                    _duckVertexScratch[vf++] = 1f;
+                }
+
+                for (int k = 0; k < bone.Indices.Length; k++)
+                {
+                    _duckIndexScratch[ii++] = (ushort)(bone.Indices[k] + baseVertex);
+                }
+                baseVertex += (ushort)bone.Vertices.Length;
+            }
+        }
+
+        private static float BoneAnimDelta(DuckBoneId id, float wingSwing, float swing, float walkAmount, float headYawLocal)
+        {
+            switch (id)
+            {
+                case DuckBoneId.Head: return headYawLocal;
+                case DuckBoneId.LeftWing: return -0.16f - wingSwing * 0.35f;
+                case DuckBoneId.RightWing: return 0.16f + wingSwing * 0.35f;
+                case DuckBoneId.LeftFoot: return swing * 1.25f;
+                case DuckBoneId.RightFoot: return -swing * 1.25f;
+                case DuckBoneId.Tail: return -0.12f * walkAmount;
+                default: return 0f;
+            }
         }
 
         private void EnsureDuckBuffers(uint vbSize, uint ibSize)
