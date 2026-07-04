@@ -41,6 +41,23 @@ namespace CubeApp.Renderer
         private DeviceBuffer _highlightVertexBuffer;
         private DeviceBuffer _highlightIndexBuffer;
         private readonly float[] _highlightVertexScratch = new float[12];
+
+        // Textured entity-model pipeline (currently just the duck test mob).
+        private Pipeline _modelPipeline;
+        private Texture _duckTexture;
+        private TextureView _duckView;
+        private Sampler _duckSampler;
+        private ResourceSet _duckTextureSet;
+        private DuckModel.Vertex[] _duckLocalMesh = Array.Empty<DuckModel.Vertex>();
+        private ushort[] _duckBaseIndices = Array.Empty<ushort>();
+        private DeviceBuffer? _duckVertexBuffer;
+        private DeviceBuffer? _duckIndexBuffer;
+        private uint _duckVertexCapacity;
+        private uint _duckIndexCapacity;
+        private IReadOnlyList<CubeApp.DuckInstance> _duckInstances = Array.Empty<CubeApp.DuckInstance>();
+        private float[] _duckVertexScratch = Array.Empty<float>();
+        private ushort[] _duckIndexScratch = Array.Empty<ushort>();
+        private const int DuckFloatsPerVertex = 9; // pos(3) + uv(2) + color(4)
         private CommandList _commandList;
         private ImGuiRenderer _imguiRenderer;
         private HudState _hud = HudState.Empty;
@@ -126,6 +143,7 @@ namespace CubeApp.Renderer
                 // ignore; texture optional
             }
 
+            LoadDuckResources();
             CreatePipeline();
 
             _imguiRenderer = new ImGuiRenderer(
@@ -158,6 +176,66 @@ namespace CubeApp.Renderer
                 ? "terrain.png"
                 : System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "terrain.png");
             return System.IO.File.Exists(path) ? System.IO.File.ReadAllBytes(path) : null;
+        }
+
+        private static byte[]? LoadImageBytes(string fileName)
+        {
+            // Embedded copy first, so the single self-contained .exe carries the texture with it.
+            var asm = System.Reflection.Assembly.GetExecutingAssembly();
+            foreach (var name in asm.GetManifestResourceNames())
+            {
+                if (name.EndsWith(fileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    using var stream = asm.GetManifestResourceStream(name);
+                    if (stream != null)
+                    {
+                        using var ms = new System.IO.MemoryStream();
+                        stream.CopyTo(ms);
+                        return ms.ToArray();
+                    }
+                }
+            }
+
+            string path = System.IO.File.Exists(fileName)
+                ? fileName
+                : System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fileName);
+            return System.IO.File.Exists(path) ? System.IO.File.ReadAllBytes(path) : null;
+        }
+
+        private void LoadDuckResources()
+        {
+            _duckLocalMesh = DuckModel.Vertices;
+            _duckBaseIndices = DuckModel.Indices;
+
+            try
+            {
+                byte[]? bytes = LoadImageBytes(DuckModel.TextureResourceName);
+                if (bytes == null)
+                {
+                    return;
+                }
+
+                var image = StbImageSharp.ImageResult.FromMemory(bytes, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                var texDesc = TextureDescription.Texture2D((uint)image.Width, (uint)image.Height, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
+                _duckTexture = _gd.ResourceFactory.CreateTexture(texDesc);
+                _gd.UpdateTexture(_duckTexture, image.Data, 0, 0, 0, (uint)image.Width, (uint)image.Height, 1, 0, 0);
+                _duckView = _gd.ResourceFactory.CreateTextureView(_duckTexture);
+                _duckSampler = _gd.ResourceFactory.CreateSampler(new SamplerDescription(
+                    SamplerAddressMode.Clamp,
+                    SamplerAddressMode.Clamp,
+                    SamplerAddressMode.Clamp,
+                    SamplerFilter.MinPoint_MagPoint_MipPoint,
+                    null,
+                    1,
+                    0,
+                    0,
+                    0,
+                    SamplerBorderColor.TransparentBlack));
+            }
+            catch
+            {
+                // ignore; duck rendering is skipped if the texture fails to load
+            }
         }
 
         private void CreatePipeline()
@@ -236,6 +314,66 @@ void main() {
             _commandList = factory.CreateCommandList();
 
             CreateHighlightPipeline();
+            CreateModelPipeline();
+        }
+
+        // Pipeline for textured entity models (the duck). Vertices are supplied in world space each
+        // frame (transformed on the CPU per instance), so it shares the scene projection/view and
+        // samples a dedicated per-entity texture rather than the block atlas.
+        private void CreateModelPipeline()
+        {
+            var factory = _gd.ResourceFactory;
+
+            string vsCode = @"#version 450
+layout(location=0) in vec3 aPosition;
+layout(location=1) in vec2 aUV;
+layout(location=2) in vec4 aColor;
+layout(location=0) out vec2 vUV;
+layout(location=1) out vec4 vColor;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() { vUV = aUV; vColor = aColor; gl_Position = projView * vec4(aPosition, 1.0); }";
+
+            string fsCode = @"#version 450
+layout(location=0) in vec2 vUV;
+layout(location=1) in vec4 vColor;
+layout(set=1, binding=0) uniform sampler2D uTex;
+layout(location=0) out vec4 outColor;
+void main() {
+    vec4 tex = texture(uTex, vUV);
+    if (tex.a < 0.5) discard;
+    outColor = tex * vColor;
+}";
+
+            var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var fsSpirv = SpirvCompilation.CompileGlslToSpirv(fsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var shaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, vsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main"));
+
+            var vertexLayout = new VertexLayoutDescription(
+                new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                new VertexElementDescription("aUV", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float2),
+                new VertexElementDescription("aColor", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
+
+            var pipelineDesc = new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleOverrideBlend,
+                DepthStencilState = new DepthStencilStateDescription(true, true, ComparisonKind.LessEqual),
+                // Cull nothing: the model has thin, single-quad parts (legs/feet) whose winding
+                // isn't consistently front-facing, and an opaque duck looks fine drawn double-sided.
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout },
+                ShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { shaders[0], shaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            };
+
+            _modelPipeline = factory.CreateGraphicsPipeline(pipelineDesc);
+
+            if (_duckView != null && _duckSampler != null)
+            {
+                _duckTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _duckView, _duckSampler));
+            }
         }
 
         // Pipeline for the targeted block-face highlight: a translucent quad drawn in world space
@@ -295,6 +433,11 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
             _hud = hud;
         }
 
+        public void SetEntities(IReadOnlyList<CubeApp.DuckInstance> ducks)
+        {
+            _duckInstances = ducks ?? Array.Empty<CubeApp.DuckInstance>();
+        }
+
         public void Render()
         {
             // Process pending removals/uploads on render thread
@@ -351,6 +494,7 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
                 cl.DrawIndexed(c.IndexCount, 1, 0, 0, 0);
             }
 
+            DrawDucks(cl);
             DrawHighlight(cl);
 
             _imguiRenderer.Update(1f / 60f, NullInputSnapshot.Instance);
@@ -384,6 +528,92 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
             cl.SetVertexBuffer(0, _highlightVertexBuffer);
             cl.SetIndexBuffer(_highlightIndexBuffer, IndexFormat.UInt16);
             cl.DrawIndexed(6, 1, 0, 0, 0);
+        }
+
+        private void DrawDucks(CommandList cl)
+        {
+            var instances = _duckInstances;
+            if (instances.Count == 0 || _modelPipeline == null || _duckTextureSet == null
+                || _duckLocalMesh.Length == 0 || _duckBaseIndices.Length == 0)
+            {
+                return;
+            }
+
+            int vertsPerDuck = _duckLocalMesh.Length;
+            int indicesPerDuck = _duckBaseIndices.Length;
+            int totalVertexFloats = instances.Count * vertsPerDuck * DuckFloatsPerVertex;
+            int totalIndices = instances.Count * indicesPerDuck;
+
+            if (_duckVertexScratch.Length < totalVertexFloats)
+            {
+                _duckVertexScratch = new float[totalVertexFloats];
+            }
+            if (_duckIndexScratch.Length < totalIndices)
+            {
+                _duckIndexScratch = new ushort[totalIndices];
+            }
+
+            int vf = 0;
+            int ii = 0;
+            ushort baseVertex = 0;
+            foreach (var inst in instances)
+            {
+                float cos = (float)Math.Cos(inst.Yaw);
+                float sin = (float)Math.Sin(inst.Yaw);
+                float px = (float)inst.Position.X;
+                float py = (float)inst.Position.Y;
+                float pz = (float)inst.Position.Z;
+
+                foreach (var v in _duckLocalMesh)
+                {
+                    // Rotate about +Y by yaw, then translate to the duck's world position.
+                    float wx = v.X * cos + v.Z * sin;
+                    float wz = -v.X * sin + v.Z * cos;
+
+                    _duckVertexScratch[vf++] = px + wx;
+                    _duckVertexScratch[vf++] = py + v.Y;
+                    _duckVertexScratch[vf++] = pz + wz;
+                    _duckVertexScratch[vf++] = v.U;
+                    _duckVertexScratch[vf++] = v.V;
+                    _duckVertexScratch[vf++] = v.Shade;
+                    _duckVertexScratch[vf++] = v.Shade;
+                    _duckVertexScratch[vf++] = v.Shade;
+                    _duckVertexScratch[vf++] = 1f;
+                }
+
+                for (int k = 0; k < indicesPerDuck; k++)
+                {
+                    _duckIndexScratch[ii++] = (ushort)(_duckBaseIndices[k] + baseVertex);
+                }
+                baseVertex += (ushort)vertsPerDuck;
+            }
+
+            EnsureDuckBuffers((uint)(totalVertexFloats * sizeof(float)), (uint)(totalIndices * sizeof(ushort)));
+            _gd.UpdateBuffer(_duckVertexBuffer, 0, ref _duckVertexScratch[0], (uint)(totalVertexFloats * sizeof(float)));
+            _gd.UpdateBuffer(_duckIndexBuffer, 0, ref _duckIndexScratch[0], (uint)(totalIndices * sizeof(ushort)));
+
+            cl.SetPipeline(_modelPipeline);
+            cl.SetGraphicsResourceSet(0, _projViewSet);
+            cl.SetGraphicsResourceSet(1, _duckTextureSet);
+            cl.SetVertexBuffer(0, _duckVertexBuffer);
+            cl.SetIndexBuffer(_duckIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed((uint)totalIndices, 1, 0, 0, 0);
+        }
+
+        private void EnsureDuckBuffers(uint vbSize, uint ibSize)
+        {
+            if (_duckVertexBuffer == null || _duckVertexCapacity < vbSize)
+            {
+                _duckVertexBuffer?.Dispose();
+                _duckVertexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(vbSize, BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+                _duckVertexCapacity = vbSize;
+            }
+            if (_duckIndexBuffer == null || _duckIndexCapacity < ibSize)
+            {
+                _duckIndexBuffer?.Dispose();
+                _duckIndexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(ibSize, BufferUsage.IndexBuffer | BufferUsage.Dynamic));
+                _duckIndexCapacity = ibSize;
+            }
         }
 
         private void BuildHudUi()
@@ -521,6 +751,13 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
             _highlightVertexBuffer?.Dispose();
             _highlightIndexBuffer?.Dispose();
             _highlightPipeline?.Dispose();
+            _duckVertexBuffer?.Dispose();
+            _duckIndexBuffer?.Dispose();
+            _duckTextureSet?.Dispose();
+            _duckSampler?.Dispose();
+            _duckView?.Dispose();
+            _duckTexture?.Dispose();
+            _modelPipeline?.Dispose();
             _pipeline?.Dispose();
             _sc?.Dispose();
             _gd?.Dispose();
