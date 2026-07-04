@@ -50,6 +50,11 @@ namespace CubeApp
 
                             try
                             {
+                                // Snapshot the dirty version BEFORE reading blocks. Any edit that
+                                // lands while we mesh bumps DirtyVersion past this, so the chunk
+                                // stays dirty and we don't clear a remesh we never applied.
+                                int builtVersion = chunk.DirtyVersion;
+
                                 // include adjacent chunks so faces on chunk borders are culled correctly
                                 var chunksToPass = new System.Collections.Generic.List<Chunk> { chunk };
                                 var chunkX = chunk.OriginX / ChunkManager.ChunkSize;
@@ -62,7 +67,7 @@ namespace CubeApp
                                 var faces = Mesher.GenerateMesh(chunksToPass);
                                 chunk.MeshFaces = new System.Collections.Generic.List<MeshFace>(faces);
                                 System.Threading.Interlocked.Increment(ref chunk.MeshVersion);
-                                chunk.NeedsRemesh = false;
+                                chunk.MarkMeshed(builtVersion);
                             }
                             finally
                             {
@@ -73,6 +78,14 @@ namespace CubeApp
                             if (renderer != null && chunk.MeshFaces != null && chunk.MeshFaces.Count > 0)
                             {
                                 renderer.UploadChunk(coords, chunk.MeshFaces);
+                            }
+
+                            // If an edit landed while we were meshing, the chunk is still dirty
+                            // (DirtyVersion moved past the version we built). Requeue it ourselves
+                            // so the update isn't stranded waiting on an unrelated remesh trigger.
+                            if (chunk.NeedsRemesh)
+                            {
+                                Enqueue(coords);
                             }
                         }
 

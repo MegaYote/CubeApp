@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace CubeApp
 {
@@ -29,7 +30,25 @@ namespace CubeApp
         public int OriginZ { get; }
         // Cached mesh for this chunk (regenerated when NeedsRemesh is true)
         public List<MeshFace> MeshFaces { get; set; } = new List<MeshFace>();
-        public bool NeedsRemesh { get; set; } = true;
+
+        // Mesh dirty-tracking via monotonic version counters instead of a single bool. A chunk
+        // needs remeshing whenever it has been dirtied (block edit, neighbor load/unload, ...) more
+        // recently than it was last meshed. This closes the lost-remesh race: if a dirty lands
+        // while a background mesh is in flight, DirtyVersion moves past the version the mesh was
+        // built from, so the chunk stays dirty and is re-meshed instead of being wrongly cleared.
+        private int _dirtyVersion = 1;
+        private int _meshedVersion = 0;
+
+        // Monotonic counter bumped every time the chunk is dirtied. Safe to call from any thread.
+        public int DirtyVersion => Volatile.Read(ref _dirtyVersion);
+        public void MarkDirty() => Interlocked.Increment(ref _dirtyVersion);
+
+        // Record that the current MeshFaces were built from block state as of builtFromVersion
+        // (captured before meshing began). Called by the mesher on the worker thread.
+        public void MarkMeshed(int builtFromVersion) => Volatile.Write(ref _meshedVersion, builtFromVersion);
+
+        public bool NeedsRemesh => DirtyVersion != Volatile.Read(ref _meshedVersion);
+
         // Prevent duplicate enqueueing while meshing is pending
         public bool IsMeshingQueued { get; set; } = false;
         // Incremented each time MeshFaces is updated by the mesher

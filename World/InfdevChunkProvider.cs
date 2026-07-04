@@ -67,7 +67,8 @@ namespace CubeApp.World
                 }
             }
 
-            chunk.NeedsRemesh = true;
+            // A freshly generated chunk is dirty by default (DirtyVersion starts ahead of
+            // MeshedVersion), so it will be meshed on first pass without an explicit flag here.
             return chunk;
         }
 
