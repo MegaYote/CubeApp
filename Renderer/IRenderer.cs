@@ -9,6 +9,7 @@ namespace CubeApp.Renderer
         void UploadChunk(CubeApp.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces);
         void RemoveChunk(CubeApp.ChunkCoordinates coords);
         void UpdateCamera(CubeApp.Point3D position, float yaw, float pitch);
+        void SetRenderDistance(int chunkRadius);
         void SetHud(HudState hud);
     }
 }
