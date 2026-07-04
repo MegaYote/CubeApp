@@ -56,6 +56,7 @@ namespace CubeApp
         public const float Height = 1.35f;
         public const float Gravity = 22f;   // blocks / s^2 (matches Cubuild's test mob)
         private const float StepHeight = 0.45f;
+        private const double GroundProbe = 0.06; // ground-contact tolerance below the feet (blocks)
 
         // Movement / drag (Cubuild test-mob data block).
         private const float MaxSpeed = 4f;
@@ -519,6 +520,16 @@ namespace CubeApp
             MoveAxis(manager, Axis.X, _velX * dt);
             MoveAxis(manager, Axis.Z, _velZ * dt);
             MoveAxis(manager, Axis.Y, _velY * dt);
+
+            // Frame-rate-independent ground contact: a slow (high-FPS) descent settles a hair above
+            // the block, so the per-tick fall never re-touches it and OnGround would stay false
+            // (making the duck flap/bob as if airborne). Probe a small distance below the feet.
+            if (!OnGround && _velY <= 0
+                && IntersectsSolid(manager, Position.X, Position.Y - GroundProbe, Position.Z))
+            {
+                OnGround = true;
+                _velY = 0;
+            }
 
             double horizontalDrag = Math.Pow(OnGround ? DragGround : DragAir, dt * 60);
             double verticalDrag = Math.Pow(DragVertical, dt * 60);
