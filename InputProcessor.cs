@@ -9,6 +9,7 @@ namespace CubeApp
         public bool ToggleMouseCapturePressed { get; }
         public bool ToggleDebugPressed { get; }
         public bool ToggleInventoryPressed { get; }
+        public bool CycleRenderDistancePressed { get; }
         public bool BreakBlockPressed { get; }
         public bool PlaceBlockPressed { get; }
         public int? SelectedSlot { get; }
@@ -17,6 +18,7 @@ namespace CubeApp
             bool toggleMouseCapturePressed,
             bool toggleDebugPressed,
             bool toggleInventoryPressed,
+            bool cycleRenderDistancePressed,
             bool breakBlockPressed,
             bool placeBlockPressed,
             int? selectedSlot)
@@ -24,6 +26,7 @@ namespace CubeApp
             ToggleMouseCapturePressed = toggleMouseCapturePressed;
             ToggleDebugPressed = toggleDebugPressed;
             ToggleInventoryPressed = toggleInventoryPressed;
+            CycleRenderDistancePressed = cycleRenderDistancePressed;
             BreakBlockPressed = breakBlockPressed;
             PlaceBlockPressed = placeBlockPressed;
             SelectedSlot = selectedSlot;
@@ -70,6 +73,7 @@ namespace CubeApp
         private bool toggleMouseCapturePressed;
         private bool toggleDebugPressed;
         private bool toggleInventoryPressed;
+        private bool cycleRenderDistancePressed;
         private bool breakBlockPressed;
         private bool placeBlockPressed;
         private int? selectedSlot;
@@ -82,6 +86,7 @@ namespace CubeApp
             toggleMouseCapturePressed = false;
             toggleDebugPressed = false;
             toggleInventoryPressed = false;
+            cycleRenderDistancePressed = false;
             breakBlockPressed = false;
             placeBlockPressed = false;
             selectedSlot = null;
@@ -123,6 +128,9 @@ namespace CubeApp
                         break;
                     case Key.E:
                         if (down) toggleInventoryPressed = true;
+                        break;
+                    case Key.F:
+                        if (down) cycleRenderDistancePressed = true;
                         break;
                     case Key.Number1:
                         if (down) selectedSlot = 0;
@@ -234,6 +242,7 @@ namespace CubeApp
                 toggleMouseCapturePressed,
                 toggleDebugPressed,
                 toggleInventoryPressed,
+                cycleRenderDistancePressed,
                 breakBlockPressed,
                 placeBlockPressed,
                 selectedSlot);
@@ -241,6 +250,7 @@ namespace CubeApp
             toggleMouseCapturePressed = false;
             toggleDebugPressed = false;
             toggleInventoryPressed = false;
+            cycleRenderDistancePressed = false;
             breakBlockPressed = false;
             placeBlockPressed = false;
             selectedSlot = null;
