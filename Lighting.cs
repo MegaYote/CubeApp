@@ -158,7 +158,8 @@ namespace CubeApp
 
         /// <summary>
         /// Light level (0..15) of the block at the given world coordinates. Blocks outside the
-        /// computed region are assumed fully lit so unmeshed frontier faces don't render black.
+        /// computed region return a low ambient light level to avoid harsh lighting artifacts
+        /// at chunk borders, especially when underground.
         /// </summary>
         public int GetLight(int worldX, int y, int worldZ)
         {
@@ -166,7 +167,9 @@ namespace CubeApp
             int lz = worldZ - minZ;
             if (lx < 0 || lx >= dimX || lz < 0 || lz >= dimZ || y < 0 || y >= height)
             {
-                return MaxLight;
+                // Return low ambient light instead of MaxLight to avoid harsh lighting
+                // artifacts at chunk borders, particularly when underground
+                return 5;
             }
 
             return light[Index(lx, y, lz)];

@@ -21,6 +21,7 @@ namespace CubeApp
     public sealed class Chunk
     {
         private readonly BlockType[,,] blocks;
+        private readonly object _meshLock = new();
 
         public int Width { get; }
         public int Height { get; }
@@ -34,6 +35,8 @@ namespace CubeApp
         public bool IsMeshingQueued { get; set; } = false;
         // Incremented each time MeshFaces is updated by the mesher
         public int MeshVersion = 0;
+
+        public object MeshLock => _meshLock;
 
         public Chunk(int width, int height, int depth, int originX, int originZ)
         {

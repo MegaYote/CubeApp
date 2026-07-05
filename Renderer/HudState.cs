@@ -28,6 +28,13 @@ namespace CubeApp.Renderer
         /// </summary>
         public Vector3[]? HighlightWorldQuad;
 
+        /// <summary>
+        /// Player's current chunk coordinates for rendering chunk borders when debug is enabled.
+        /// </summary>
+        public int PlayerChunkX;
+        public int PlayerChunkZ;
+        public int RenderDistance;
+
         public static HudState Empty => new HudState
         {
             ShowDebug = false,
@@ -41,6 +48,9 @@ namespace CubeApp.Renderer
             RenderDistanceText = string.Empty,
             SelectedSlot = 0,
             HighlightWorldQuad = null,
+            PlayerChunkX = 0,
+            PlayerChunkZ = 0,
+            RenderDistance = 0,
         };
     }
 }

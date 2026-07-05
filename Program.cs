@@ -14,13 +14,22 @@ namespace CubeApp
 {
     public sealed class Program : IDisposable
     {
+
+
+
         private readonly ChunkManager manager;
         private IRenderer? gpuRenderer;
         private MeshWorker? meshWorker;
+
+        private MeshScheduler meshScheduler;
         private ChunkGenWorker? chunkGenWorker;
+
+
+
+
+
         private Sdl2Window? window;
         private GraphicsDevice? graphicsDevice;
-
         private Point3D cameraPosition = new Point3D(24.0, 12.0, -24.0);
         private float cameraYaw = 0f;
         private float cameraPitch = 0f;
@@ -98,7 +107,9 @@ namespace CubeApp
             EnsureVisibleChunks();
             PlaceCameraAtSafeSpawn();
             meshWorker = new MeshWorker(manager, () => gpuRenderer);
-            _ = UpdateMesh();
+            meshScheduler = new MeshScheduler(manager, meshWorker);
+
+            meshScheduler.Update();
 
             // Generate chunks off the main thread so streaming new terrain doesn't stall the
             // render loop. Leave a core for the render/mesh threads.
@@ -200,35 +211,15 @@ namespace CubeApp
                     var t1 = stageStopwatch.ElapsedTicks;
                     lastUpdateMs = (t1 - t0) * 1000f / Stopwatch.Frequency;
 
-                    float uploadMs = 0f;
                     var t2 = stageStopwatch.ElapsedTicks;
                     if (needsMeshUpdate)
                     {
-                        var remeshed = UpdateMesh();
-                        var t3 = stageStopwatch.ElapsedTicks;
-                        lastMeshMs = (t3 - t2) * 1000f / Stopwatch.Frequency;
-
-                        if (gpuRenderer != null && remeshed != null)
-                        {
-                            var upStart = stageStopwatch.ElapsedTicks;
-                            foreach (var coord in remeshed)
-                            {
-                                if (manager.TryGetLoadedChunk(coord, out var ch) && ch.MeshFaces != null && ch.MeshFaces.Count > 0)
-                                {
-                                    gpuRenderer.UploadChunk(coord, ch.MeshFaces);
-                                }
-                            }
-                            var upEnd = stageStopwatch.ElapsedTicks;
-                            uploadMs = (upEnd - upStart) * 1000f / Stopwatch.Frequency;
-                        }
-
+                        meshScheduler.Update();
                         needsMeshUpdate = false;
                     }
-                    else
-                    {
-                        lastMeshMs = 0f;
-                    }
-                    lastUploadMs = uploadMs;
+                    var t3 = stageStopwatch.ElapsedTicks;
+                    lastMeshMs = (t3 - t2) * 1000f / Stopwatch.Frequency;
+                    lastUploadMs = 0f; // mesh building + GPU upload now happen entirely on the background mesh thread
 
                     var t4 = stageStopwatch.ElapsedTicks;
                     if (gpuRenderer != null)
@@ -719,26 +710,7 @@ namespace CubeApp
             return null;
         }
 
-        private List<ChunkCoordinates> UpdateMesh()
-        {
-            var remeshed = new List<ChunkCoordinates>();
-            var chunks = manager.GetLoadedChunks();
-            foreach (var c in chunks)
-            {
-                if (c.NeedsRemesh)
-                {
-                    var coord = new ChunkCoordinates(c.OriginX / ChunkManager.ChunkSize, c.OriginZ / ChunkManager.ChunkSize);
-                    if (!c.IsMeshingQueued)
-                    {
-                        c.IsMeshingQueued = true;
-                        meshWorker?.Enqueue(coord);
-                    }
-                    remeshed.Add(coord);
-                }
-            }
 
-            return remeshed;
-        }
 
         private static int WorldToChunkCoord(double value)
         {
@@ -753,9 +725,26 @@ namespace CubeApp
             var remove = pickResult.Value.Remove;
             if (!manager.TrySetBlock(remove.x, remove.y, remove.z, BlockType.Air)) return;
 
-            _ = UpdateMesh();
+            var editedChunk = new ChunkCoordinates(WorldToChunkCoord(remove.x), WorldToChunkCoord(remove.z));
+            meshScheduler.RequestImmediateRemesh(editedChunk);
+
+            // Also request immediate remesh for neighbor chunks if edit was at a boundary
+            int localX = remove.x - (editedChunk.X * ChunkManager.ChunkSize);
+            int localZ = remove.z - (editedChunk.Z * ChunkManager.ChunkSize);
+            if (localX == 0)
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X - 1, editedChunk.Z));
+            if (localX == ChunkManager.ChunkSize - 1)
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X + 1, editedChunk.Z));
+            if (localZ == 0)
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X, editedChunk.Z - 1));
+            if (localZ == ChunkManager.ChunkSize - 1)
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X, editedChunk.Z + 1));
+
             needsMeshUpdate = true;
         }
+
+
+
 
         private void PlaceSelectedBlock()
         {
@@ -766,7 +755,21 @@ namespace CubeApp
             if (WouldBlockIntersectPlayer(place.x, place.y, place.z)) return;
             if (!manager.TrySetBlock(place.x, place.y, place.z, selectedBlock)) return;
 
-            _ = UpdateMesh();
+            var editedChunk = new ChunkCoordinates(WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));
+            meshScheduler.RequestImmediateRemesh(editedChunk);
+
+            // Also request immediate remesh for neighbor chunks if edit was at a boundary
+            int localX = place.x - (editedChunk.X * ChunkManager.ChunkSize);
+            int localZ = place.z - (editedChunk.Z * ChunkManager.ChunkSize);
+            if (localX == 0)
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X - 1, editedChunk.Z));
+            if (localX == ChunkManager.ChunkSize - 1)
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X + 1, editedChunk.Z));
+            if (localZ == 0)
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X, editedChunk.Z - 1));
+            if (localZ == ChunkManager.ChunkSize - 1)
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X, editedChunk.Z + 1));
+
             needsMeshUpdate = true;
         }
 
@@ -865,6 +868,9 @@ namespace CubeApp
                 RenderDistanceText = $"Render dist: {RenderDistanceName} ({ChunkRenderRadius})",
                 SelectedSlot = selectedSlot,
                 HighlightWorldQuad = highlightQuad,
+                PlayerChunkX = WorldToChunkCoord(cameraPosition.X),
+                PlayerChunkZ = WorldToChunkCoord(cameraPosition.Z),
+                RenderDistance = ChunkRenderRadius,
             };
         }
 

@@ -1,0 +1,215 @@
+using System;
+using System.Collections.Generic;
+using CubeApp.World;
+
+namespace CubeApp
+{
+    /// <summary>
+    /// HUD state passed from the player controller / game simulation to the renderer for overlay drawing.
+    /// </summary>
+    public struct GameHudState
+    {
+        public bool ShowDebug { get; set; }
+        public float Fps { get; set; }
+        public float UpdateMs { get; set; }
+        public float MeshMs { get; set; }
+        public float UploadMs { get; set; }
+        public float RenderMs { get; set; }
+        public string FacingText { get; set; }
+        public string SelectedBlockText { get; set; }
+        public string RenderDistanceText { get; set; }
+        public int SelectedSlot { get; set; }
+        public Vector3[]? HighlightWorldQuad { get; set; }
+    }
+
+    /// <summary>
+    /// Builds the HUD overlay state each frame. Extracted from Program.BuildHud() so the main loop
+    /// stays thin and rendering systems can consume a plain data struct rather than coupling to Program.cs.
+    /// </summary>
+    public sealed class HudBuilder : IDisposable
+    {
+        private readonly PlayerController _player;
+        private readonly ChunkManager _manager;
+
+        // State that changes per-frame (wired up by the caller).
+        public bool ShowFps { get; set; }
+        public float FpsValue { get; set; }
+        public float UpdateMs { get; set; }
+        public float MeshMs { get; set; }
+        public float UploadMs { get; set; }
+        public float RenderMs { get; set; }
+        public int SelectedSlot { get; set; }
+        public BlockType SelectedBlock { get; set; }
+        public int RenderDistanceIndex { get; set; }
+        public string[] RenderDistanceNames { get; set; }
+        public int ChunkRenderRadius { get; set; }
+
+        // The pick result (set by the caller from TryPickBlock). Null when nothing is highlighted.
+        public PickBlockResult? HighlightedBlock { get; set; }
+
+        private static readonly BlockType[] HotbarBlockTypes =
+        {
+            BlockType.Grass,
+            BlockType.Dirt,
+            BlockType.Stone,
+            BlockType.Cobblestone,
+            BlockType.Sand,
+            BlockType.Planks,
+            BlockType.Bedrock,
+            BlockType.Gravel,
+            BlockType.Obsidian,
+            BlockType.MossyCobblestone,
+        };
+
+        public HudBuilder(PlayerController player, ChunkManager manager)
+        {
+            _player = player;
+            _manager = manager;
+        }
+
+        /// <summary>
+        /// Produces the HUD state for the current frame. Call once per tick before rendering.
+        /// </summary>
+        public GameHudState Build()
+        {
+            var forward = _player.GetForward();
+            Vector3[]? highlightQuad = ComputeHighlightQuad();
+
+            return new GameHudState
+            {
+                ShowDebug = ShowFps,
+                Fps = FpsValue,
+                UpdateMs = UpdateMs,
+                MeshMs = MeshMs,
+                UploadMs = UploadMs,
+                RenderMs = RenderMs,
+                FacingText = $"{GetCompassDirection(_player.State.Yaw)} ({NormalizeYaw(_player.State.Yaw):0.0} deg)",
+                SelectedBlockText = $"Selected: {SelectedBlock}",
+                RenderDistanceText = $"Render dist: {RenderDistanceNames[RenderDistanceIndex]} ({ChunkRenderRadius})",
+                SelectedSlot = SelectedSlot,
+                HighlightWorldQuad = highlightQuad,
+            };
+        }
+
+        private Vector3[]? ComputeHighlightQuad()
+        {
+            var hit = HighlightedBlock;
+            if (!hit.HasValue) return null;
+
+            var remove = hit.Value.Remove;
+            var n = hit.Value.Normal;
+
+            Point3D[] faceCorners = new Point3D[4];
+            if (Math.Abs(n.X) > 0.5)
+            {
+                double xplane = remove.x + (n.X > 0 ? 1.0 : 0.0);
+                faceCorners[0] = new Point3D(xplane, remove.y, remove.z);
+                faceCorners[1] = new Point3D(xplane, remove.y, remove.z + 1.0);
+                faceCorners[2] = new Point3D(xplane, remove.y + 1.0, remove.z + 1.0);
+                faceCorners[3] = new Point3D(xplane, remove.y + 1.0, remove.z);
+            }
+            else if (Math.Abs(n.Y) > 0.5)
+            {
+                double yplane = remove.y + (n.Y > 0 ? 1.0 : 0.0);
+                faceCorners[0] = new Point3D(remove.x, yplane, remove.z);
+                faceCorners[1] = new Point3D(remove.x + 1.0, yplane, remove.z);
+                faceCorners[2] = new Point3D(remove.x + 1.0, yplane, remove.z + 1.0);
+                faceCorners[3] = new Point3D(remove.x, yplane, remove.z + 1.0);
+            }
+            else
+            {
+                double zplane = remove.z + (n.Z > 0 ? 1.0 : 0.0);
+                faceCorners[0] = new Point3D(remove.x, remove.y, zplane);
+                faceCorners[1] = new Point3D(remove.x + 1.0, remove.y, zplane);
+                faceCorners[2] = new Point3D(remove.x + 1.0, remove.y + 1.0, zplane);
+                faceCorners[3] = new Point3D(remove.x, remove.y + 1.0, zplane);
+            }
+
+            faceCorners = CanonicalizeFaceCornersByAxes(faceCorners, n);
+
+            const double faceEpsilon = 0.002;
+            var offset = n * faceEpsilon;
+
+            var result = new Vector3[4];
+            for (int i = 0; i < 4; i++)
+            {
+                var pos = faceCorners[i] + offset;
+                result[i] = new Vector3((float)pos.X, (float)pos.Y, (float)pos.Z);
+            }
+
+            return result;
+        }
+
+        private static Point3D[] CanonicalizeFaceCornersByAxes(Point3D[] corners, Point3D normal)
+        {
+            if (corners.Length != 4) return corners;
+            if (!TryGetHighlightFaceAxes(normal, out var uAxis, out var vAxis)) return corners;
+
+            Span<(double U, double V)> uv = stackalloc (double U, double V)[4];
+            double minU = double.PositiveInfinity, maxU = double.NegativeInfinity;
+            double minV = double.PositiveInfinity, maxV = double.NegativeInfinity;
+
+            for (int i = 0; i < 4; i++)
+            {
+                var c = corners[i];
+                uv[i] = (Dot(c, uAxis), Dot(c, vAxis));
+                minU = Math.Min(minU, uv[i].U); maxU = Math.Max(maxU, uv[i].U);
+                minV = Math.Min(minV, uv[i].V); maxV = Math.Max(maxV, uv[i].V);
+            }
+
+            bool[] used = new bool[4];
+            var result = new Point3D[4];
+            result[0] = PickClosestByUv(corners, uv, minU, minV, used);
+            result[1] = PickClosestByUv(corners, uv, maxU, minV, used);
+            result[2] = PickClosestByUv(corners, uv, maxU, maxV, used);
+            result[3] = PickClosestByUv(corners, uv, minU, maxV, used);
+            return result;
+        }
+
+        private static Point3D PickClosestByUv(Point3D[] corners, Span<(double U, double V)> uv, double targetU, double targetV, bool[] used)
+        {
+            int best = -1;
+            double bestDist = double.PositiveInfinity;
+            for (int i = 0; i < corners.Length; i++)
+            {
+                if (used[i]) continue;
+                double d = (uv[i].U - targetU) * (uv[i].U - targetU) + (uv[i].V - targetV) * (uv[i].V - targetV);
+                if (d < bestDist) { bestDist = d; best = i; }
+            }
+            if (best < 0) return corners[0];
+            used[best] = true;
+            return corners[best];
+        }
+
+        private static bool TryGetHighlightFaceAxes(Point3D normal, out Point3D uAxis, out Point3D vAxis)
+        {
+            if (normal.X > 0.5)  { uAxis = new(0, 0, -1); vAxis = new(0, 1, 0); return true; }
+            if (normal.X < -0.5) { uAxis = new(0, 0, 1);  vAxis = new(0, 1, 0); return true; }
+            if (normal.Y > 0.5)  { uAxis = new(1, 0, 0);  vAxis = new(0, 0, 1); return true; }
+            if (normal.Y < -0.5) { uAxis = new(1, 0, 0);  vAxis = new(0, 0,-1); return true; }
+            if (normal.Z > 0.5)  { uAxis = new(1, 0, 0);  vAxis = new(0, 1, 0); return true; }
+            if (normal.Z < -0.5) { uAxis = new(-1,0, 0);  vAxis = new(0, 1, 0); return true; }
+            uAxis = Point3D.Zero; vAxis = Point3D.Zero; return false;
+        }
+
+        private static double Dot(Point3D a, Point3D b) => a.X * b.X + a.Y * b.Y + a.Z * b.Z;
+
+        private static string GetCompassDirection(float yaw)
+        {
+            float n = NormalizeYaw(yaw);
+            if (n >= 315f || n < 45f) return "South (+Z)";
+            if (n < 135f)           return "East (+X)";
+            if (n < 225f)           return "North (-Z)";
+            return "West (-X)";
+        }
+
+        private static float NormalizeYaw(float yaw)
+        {
+            float r = yaw % 360f;
+            if (r < 0f) r += 360f;
+            return r;
+        }
+
+        public void Dispose() { }
+    }
+}

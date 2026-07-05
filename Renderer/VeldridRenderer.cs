@@ -42,6 +42,12 @@ namespace CubeApp.Renderer
         private DeviceBuffer _highlightIndexBuffer;
         private readonly float[] _highlightVertexScratch = new float[12];
 
+        // Pipeline for chunk border wireframe rendering (F3 debug)
+        private Pipeline _chunkBorderPipeline;
+        private DeviceBuffer _chunkBorderVertexBuffer;
+        private DeviceBuffer _chunkBorderIndexBuffer;
+        private readonly float[] _chunkBorderVertexScratch = new float[768]; // 24 edges * 2 vertices * 3 coords * 4 chunks (max for small radius)
+
         // Textured entity-model pipeline (currently just the duck test mob).
         private Pipeline _modelPipeline;
         private Texture _duckTexture;
@@ -321,6 +327,7 @@ void main() {
             _commandList = factory.CreateCommandList();
 
             CreateHighlightPipeline();
+            CreateChunkBorderPipeline();
             CreateModelPipeline();
         }
 
@@ -429,6 +436,48 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
             _gd.UpdateBuffer(_highlightIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3 });
         }
 
+        // Pipeline for chunk border wireframe rendering (F3 debug)
+        private void CreateChunkBorderPipeline()
+        {
+            var factory = _gd.ResourceFactory;
+
+            string vsCode = @"#version 450
+layout(location=0) in vec3 aPosition;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() { gl_Position = projView * vec4(aPosition, 1.0); }";
+
+            string fsCode = @"#version 450
+layout(location=0) out vec4 outColor;
+void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
+
+            var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var fsSpirv = SpirvCompilation.CompileGlslToSpirv(fsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var shaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, vsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main"));
+
+            var vertexLayout = new VertexLayoutDescription(
+                new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3));
+
+            var pipelineDesc = new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleAlphaBlend,
+                DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.LineList,
+                ResourceLayouts = new[] { _projViewLayout },
+                ShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { shaders[0], shaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            };
+
+            _chunkBorderPipeline = factory.CreateGraphicsPipeline(pipelineDesc);
+
+            _chunkBorderVertexBuffer = factory.CreateBuffer(new BufferDescription(
+                (uint)(_chunkBorderVertexScratch.Length * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            _chunkBorderIndexBuffer = factory.CreateBuffer(new BufferDescription(
+                256 * sizeof(ushort), BufferUsage.IndexBuffer | BufferUsage.Dynamic));
+        }
+
         public void Resize(int width, int height)
         {
             _sc?.Resize((uint)Math.Max(1, width), (uint)Math.Max(1, height));
@@ -503,6 +552,7 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
 
             DrawDucks(cl);
             DrawHighlight(cl);
+            DrawChunkBorders(cl);
 
             _imguiRenderer.Update(1f / 60f, NullInputSnapshot.Instance);
             BuildHudUi();
@@ -535,6 +585,77 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
             cl.SetVertexBuffer(0, _highlightVertexBuffer);
             cl.SetIndexBuffer(_highlightIndexBuffer, IndexFormat.UInt16);
             cl.DrawIndexed(6, 1, 0, 0, 0);
+        }
+
+        private void DrawChunkBorders(CommandList cl)
+        {
+            if (!_hud.ShowDebug || _chunkBorderPipeline == null)
+            {
+                return;
+            }
+
+            int vertexIndex = 0;
+            int chunkSize = ChunkManager.ChunkSize;
+            int chunkHeight = ChunkManager.ChunkHeight;
+
+            // Draw chunk borders for loaded chunks around player
+            for (int dz = -_hud.RenderDistance; dz <= _hud.RenderDistance; dz++)
+            {
+                for (int dx = -_hud.RenderDistance; dx <= _hud.RenderDistance; dx++)
+                {
+                    int chunkX = _hud.PlayerChunkX + dx;
+                    int chunkZ = _hud.PlayerChunkZ + dz;
+
+                    // Calculate chunk world bounds
+                    float minX = chunkX * chunkSize;
+                    float maxX = minX + chunkSize;
+                    float minZ = chunkZ * chunkSize;
+                    float maxZ = minZ + chunkSize;
+                    float minY = 0;
+                    float maxY = chunkHeight;
+
+                    // Add vertical edges (4 corners)
+                    AddLine(minX, minY, minZ, minX, maxY, minZ, ref vertexIndex);
+                    AddLine(maxX, minY, minZ, maxX, maxY, minZ, ref vertexIndex);
+                    AddLine(minX, minY, maxZ, minX, maxY, maxZ, ref vertexIndex);
+                    AddLine(maxX, minY, maxZ, maxX, maxY, maxZ, ref vertexIndex);
+
+                    // Add horizontal edges at bottom
+                    AddLine(minX, minY, minZ, maxX, minY, minZ, ref vertexIndex);
+                    AddLine(minX, minY, maxZ, maxX, minY, maxZ, ref vertexIndex);
+                    AddLine(minX, minY, minZ, minX, minY, maxZ, ref vertexIndex);
+                    AddLine(maxX, minY, minZ, maxX, minY, maxZ, ref vertexIndex);
+
+                    // Add horizontal edges at top
+                    AddLine(minX, maxY, minZ, maxX, maxY, minZ, ref vertexIndex);
+                    AddLine(minX, maxY, maxZ, maxX, maxY, maxZ, ref vertexIndex);
+                    AddLine(minX, maxY, minZ, minX, maxY, maxZ, ref vertexIndex);
+                    AddLine(maxX, maxY, minZ, maxX, maxY, maxZ, ref vertexIndex);
+                }
+            }
+
+            if (vertexIndex > 0)
+            {
+                _gd.UpdateBuffer(_chunkBorderVertexBuffer, 0, _chunkBorderVertexScratch);
+
+                cl.SetPipeline(_chunkBorderPipeline);
+                cl.SetGraphicsResourceSet(0, _projViewSet);
+                cl.SetVertexBuffer(0, _chunkBorderVertexBuffer);
+                cl.Draw((uint)vertexIndex / 3, 1, 0, 0);
+            }
+        }
+
+        private void AddLine(float x1, float y1, float z1, float x2, float y2, float z2, ref int vertexIndex)
+        {
+            if (vertexIndex + 6 > _chunkBorderVertexScratch.Length)
+                return;
+
+            _chunkBorderVertexScratch[vertexIndex++] = x1;
+            _chunkBorderVertexScratch[vertexIndex++] = y1;
+            _chunkBorderVertexScratch[vertexIndex++] = z1;
+            _chunkBorderVertexScratch[vertexIndex++] = x2;
+            _chunkBorderVertexScratch[vertexIndex++] = y2;
+            _chunkBorderVertexScratch[vertexIndex++] = z2;
         }
 
         private void DrawDucks(CommandList cl)
