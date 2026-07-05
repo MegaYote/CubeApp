@@ -1,0 +1,102 @@
+using System;
+using System.Collections.Generic;
+using Veldrid.Sdl2;
+using CubeApp.World;
+
+namespace CubeApp
+{
+    /// <summary>
+    /// Events dispatched when the player performs significant actions.
+    /// Decoupled from raw input so downstream systems can react to intent rather than button presses.
+    /// </summary>
+    public struct PlayerAction
+    {
+        public bool ToggleMouseLookRequested;
+        public bool ToggleDebugRequested;
+        public bool ToggleInventoryRequested;
+        public bool CycleRenderDistanceRequested;
+        public bool SpawnMobRequested;
+        public int? SelectedSlotChangedTo;
+        public bool BreakBlockRequested;
+        public bool PlaceBlockRequested;
+    }
+
+    /// <summary>
+    /// Reads raw input state and produces PlayerAction events.
+    /// Intended to replace the sprawling ApplyFrameInput() method in Program.cs.
+    /// </summary>
+    public sealed class InputManager : IDisposable
+    {
+        private readonly InputProcessor _input = new();
+        private bool _mouseLook;
+
+        // Exposed so the player controller / step simulation can query raw movement deltas.
+        public TickInputState TickInput => _input.CaptureTickInput();
+        public Vector2 LookDelta => _input.CaptureLookDelta();
+        public MouseCaptureState FrameInput => _input.CaptureFrameInput();
+
+        public void BeginFrame() => _input.BeginFrame();
+        public void ProcessSnapshot(WindowEventSnapshot snapshot, bool mouseLook, float mouseSensitivity)
+            => _input.ProcessSnapshot(snapshot, mouseLook, mouseSensitivity);
+
+        /// <summary>
+        /// Translates raw frame input into higher-level PlayerAction events.
+        /// Returns null if no significant action was taken this frame.
+        /// </summary>
+        public PlayerAction? CaptureActions(
+            Sdl2Window window,
+            bool needsMouseLookOnInteract,
+            System.Action disableMouseLook,
+            System.Action enableMouseLook)
+        {
+            var fi = FrameInput;
+            if (!fi.HasAny())
+                return null;
+
+            var action = new PlayerAction();
+
+            // --- Mouse capture toggle (usually ESC or Right-Ctrl) ---
+            if (fi.ToggleMouseCapturePressed)
+            {
+                disableMouseLook();
+            }
+
+            // Auto-enroll mouse look when the player tries to interact with blocks.
+            if (!_mouseLook && needsMouseLookOnInteract &&
+                (fi.BreakBlockPressed || fi.PlaceBlockPressed))
+            {
+                enableMouseLook();
+                return null; // defer other processing until mouse lock engages
+            }
+
+            if (fi.ToggleDebugPressed)      action.ToggleDebugRequested = true;
+            if (fi.ToggleInventoryPressed)  action.ToggleInventoryRequested = true;
+            if (fi.CycleRenderDistancePressed) action.CycleRenderDistanceRequested = true;
+            if (fi.SpawnMobPressed)         action.SpawnMobRequested = true;
+            if (fi.SelectedSlot.HasValue)   action.SelectedSlotChangedTo = fi.SelectedSlot.Value;
+
+            // Break/Place are handled by downstream systems once mouse look is active.
+            if (_mouseLook && fi.BreakBlockPressed)  action.BreakBlockRequested = true;
+            if (_mouseLook && fi.PlaceBlockPressed)  action.PlaceBlockRequested = true;
+
+            return action;
+        }
+
+        public void ResetMouseTracking() => _input.ResetMouseTracking();
+
+        /// <summary>
+        /// Convenience: returns true when at least one frame-input flag is set.
+        /// </summary>
+        private static bool HasAny(this MouseCaptureState fi) =>
+            fi.ToggleMouseCapturePressed
+            || fi.ToggleDebugPressed
+            || fi.ToggleInventoryPressed
+            || fi.CycleRenderDistancePressed
+            || fi.SpawnMobPressed
+            || fi.SelectedSlot.HasValue
+            || fi.BreakBlockPressed
+            || fi.PlaceBlockPressed;
+
+        public void Dispose() => _input.Dispose();
+    }
+}
