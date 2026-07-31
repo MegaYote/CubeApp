@@ -9,12 +9,22 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- Copy content files to output for runtime loading -->
+    <CopyOutputDirectoryItemsToPublishDirectoryStyle>PreserveNewest</CopyOutputDirectoryItemsToPublishDirectoryStyle>
   </PropertyGroup>
   <ItemGroup>
     <!-- Bake the texture atlas into the assembly so no loose files need to ship. -->
     <EmbeddedResource Include="terrain.png" />
     <!-- Bake the duck test-mob texture in as well. -->
     <EmbeddedResource Include="duck.png" />
+    <!-- Player skin for the Minecraft-style player model. -->
+    <EmbeddedResource Include="player.png" />
+    <!-- Data-driven block definitions (texture tiles, flags, hotbar, map colours). -->
+    <EmbeddedResource Include="blocks.json" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Copy GLB models to output -->
+    <None Include="MobEntities\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Veldrid" Version="4.9.0" />
@@ -23,5 +33,6 @@
     <PackageReference Include="Veldrid.ImGui" Version="5.89.2-ga121087cad" />
     <PackageReference Include="Veldrid.SDL2" Version="4.9.0" />
     <PackageReference Include="StbImageSharp" Version="2.30.15" />
+    <PackageReference Include="SharpGLTF" Version="1.0.0-alpha0001" />
   </ItemGroup>
 </Project>

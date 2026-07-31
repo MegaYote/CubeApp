@@ -9,8 +9,9 @@ namespace CubeApp
         public float Shade { get; }
         public int TileWidth { get; }
         public int TileHeight { get; }
+        public float Alpha { get; }
 
-        public MeshFace(Point3D[] vertices, TextureRect srcRect, Point3D normal, Point3D blockPosition, float shade, int tileWidth, int tileHeight)
+        public MeshFace(Point3D[] vertices, TextureRect srcRect, Point3D normal, Point3D blockPosition, float shade, int tileWidth, int tileHeight, float alpha = 1f)
         {
             Vertices = vertices;
             SrcRect = srcRect;
@@ -19,6 +20,7 @@ namespace CubeApp
             Shade = shade;
             TileWidth = tileWidth;
             TileHeight = tileHeight;
+            Alpha = alpha;
         }
     }
 }

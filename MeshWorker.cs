@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -13,20 +14,22 @@ namespace CubeApp
         private readonly ConcurrentQueue<ChunkCoordinates> _queue = new();          // normal terrain-streaming remeshes
         private readonly ConcurrentDictionary<ChunkCoordinates, byte> _pending = new();
         private readonly ConcurrentDictionary<ChunkCoordinates, byte> _processing = new(); // chunk a worker has "claimed" right now
+        private readonly SemaphoreSlim _workAvailable = new(0); // signals workers that work is queued
+        private readonly int _workerCount;
         private readonly CancellationTokenSource _cts = new();
         private readonly Task[] _workerTasks;
 
         // workerCount = how many mesh jobs can run truly at the same time. 2 is a good starting
         // point: enough that one slow chunk can't block everything else, without stealing so many
-        // cores that chunk generation or the render loop start to feel starved.
+        // cores that chunk generation or the render thread start to feel starved.
         public MeshWorker(ChunkManager manager, Func<Renderer.IRenderer?> getRenderer, int workerCount = 2)
         {
             _manager = manager ?? throw new ArgumentNullException(nameof(manager));
             _getRenderer = getRenderer ?? throw new ArgumentNullException(nameof(getRenderer));
+            _workerCount = Math.Max(1, workerCount);
 
-            int count = Math.Max(1, workerCount);
-            _workerTasks = new Task[count];
-            for (int i = 0; i < count; i++)
+            _workerTasks = new Task[_workerCount];
+            for (int i = 0; i < _workerCount; i++)
             {
                 _workerTasks[i] = Task.Run(WorkerLoop, _cts.Token);
             }
@@ -37,6 +40,7 @@ namespace CubeApp
             if (_pending.TryAdd(coords, 0))
             {
                 _queue.Enqueue(coords);
+                _workAvailable.Release();
             }
         }
 
@@ -50,6 +54,8 @@ namespace CubeApp
         {
             _pending.TryAdd(coords, 0);
             _priorityQueue.Enqueue(coords);
+            // Wake workers immediately for player edits - no delay waiting for polling.
+            _workAvailable.Release();
         }
 
         private async Task WorkerLoop()
@@ -59,77 +65,113 @@ namespace CubeApp
             {
                 while (!token.IsCancellationRequested)
                 {
-                    if (_priorityQueue.TryDequeue(out var coords) || _queue.TryDequeue(out coords))
+                    // Check priority queue first, then regular queue
+                    ChunkCoordinates coords = default;
+                    bool isPriority = false;
+                    bool hasWork = false;
+                    
+                    if (_priorityQueue.TryDequeue(out coords))
+                    {
+                        isPriority = true;
+                        hasWork = true;
+                    }
+                    else if (_queue.TryDequeue(out coords))
+                    {
+                        isPriority = false;
+                        hasWork = true;
+                    }
+
+                    if (hasWork)
                     {
                         _pending.TryRemove(coords, out _);
 
-                        // With more than one worker now running, two of them could both grab the
-                        // same chunk coordinate around the same moment. Only the worker that wins
-                        // this atomic "claim" processes it; the other skips it as a harmless
-                        // duplicate, since the winner is about to remesh it anyway.
+                        // Prevent duplicate processing by multiple workers
                         if (!_processing.TryAdd(coords, 0))
                         {
                             continue;
                         }
 
+                        // Track whether we need to clear IsMeshingQueued
+                        bool needsFlagReset = false;
+                        Chunk? chunk = null;
                         try
                         {
-                            if (_manager.TryGetLoadedChunk(coords, out var chunk))
+                            if (_manager.TryGetLoadedChunk(coords, out chunk))
                             {
+                                needsFlagReset = true;
+                                
                                 // double-check chunk still needs remesh
                                 if (!chunk.NeedsRemesh)
                                 {
-                                    chunk.IsMeshingQueued = false;
                                     continue;
                                 }
 
-                                // mark as being processed to avoid duplicate enqueues
-                                chunk.IsMeshingQueued = true;
+                                // Do the meshing work
+                                var chunksToPass = new List<Chunk> { chunk };
+                                var chunkX = chunk.OriginX / ChunkManager.ChunkSize;
+                                var chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
+                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(chunkX - 1, chunkZ), out var left)) chunksToPass.Add(left);
+                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(chunkX + 1, chunkZ), out var right)) chunksToPass.Add(right);
+                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(chunkX, chunkZ - 1), out var back)) chunksToPass.Add(back);
+                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(chunkX, chunkZ + 1), out var front)) chunksToPass.Add(front);
 
-                                try
+                                var renderer = _getRenderer();
+                                var faces = Mesher.GenerateMesh(chunksToPass);
+
+                                // Lock to ensure atomic mesh update
+                                IReadOnlyList<MeshFace> facesToUpload;
+                                lock (chunk.MeshLock)
                                 {
-                                    // include adjacent chunks so faces on chunk borders are culled correctly
-                                    var chunksToPass = new System.Collections.Generic.List<Chunk> { chunk };
-                                    var chunkX = chunk.OriginX / ChunkManager.ChunkSize;
-                                    var chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
-                                    if (_manager.TryGetLoadedChunk(new ChunkCoordinates(chunkX - 1, chunkZ), out var left)) chunksToPass.Add(left);
-                                    if (_manager.TryGetLoadedChunk(new ChunkCoordinates(chunkX + 1, chunkZ), out var right)) chunksToPass.Add(right);
-                                    if (_manager.TryGetLoadedChunk(new ChunkCoordinates(chunkX, chunkZ - 1), out var back)) chunksToPass.Add(back);
-                                    if (_manager.TryGetLoadedChunk(new ChunkCoordinates(chunkX, chunkZ + 1), out var front)) chunksToPass.Add(front);
-
-                                    var faces = Mesher.GenerateMesh(chunksToPass);
-
-                                    // Lock to ensure atomic mesh update - renderer won't see inconsistent state
-                                    System.Collections.Generic.IReadOnlyList<MeshFace> facesToUpload;
-                                    lock (chunk.MeshLock)
-                                    {
-                                        chunk.MeshFaces = new System.Collections.Generic.List<MeshFace>(faces);
-                                        chunk.MeshVersion++;
-                                        chunk.NeedsRemesh = false;
-                                        facesToUpload = chunk.MeshFaces;
-                                    }
-
-                                    var renderer = _getRenderer();
-                                    if (renderer != null && facesToUpload != null && facesToUpload.Count > 0)
-                                    {
-                                        renderer.UploadChunk(coords, facesToUpload);
-                                    }
+                                    chunk.MeshFaces = new List<MeshFace>(faces);
+                                    chunk.MeshVersion++;
+                                    chunk.NeedsRemesh = false;
+                                    facesToUpload = chunk.MeshFaces;
                                 }
-                                finally
+
+                                if (renderer != null && facesToUpload != null)
                                 {
-                                    chunk.IsMeshingQueued = false;
+                                    if (facesToUpload.Count > 0)
+                                    {
+                                        if (isPriority)
+                                        {
+                                            renderer.UploadChunkPriority(coords, facesToUpload);
+                                        }
+                                        else
+                                        {
+                                            renderer.UploadChunk(coords, facesToUpload);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // A chunk that meshes to nothing (e.g. the last block was
+                                        // removed) must release its GPU buffers, otherwise the stale
+                                        // mesh keeps rendering forever.
+                                        renderer.RemoveChunk(coords);
+                                    }
                                 }
                             }
                         }
                         finally
                         {
                             _processing.TryRemove(coords, out _);
+                            if (needsFlagReset && chunk != null)
+                            {
+                                chunk.IsMeshingQueued = false;
+                            }
                         }
 
                         continue;
                     }
 
-                    await Task.Delay(8, token).ConfigureAwait(false);
+                    // Wait for signal that work is available
+                    try
+                    {
+                        await _workAvailable.WaitAsync(100, token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Timeout expired - loop back and re-check queues
+                    }
                 }
             }
             catch (OperationCanceledException) { }
@@ -140,6 +182,7 @@ namespace CubeApp
             _cts.Cancel();
             try { Task.WaitAll(_workerTasks, 1000); } catch { }
             _cts.Dispose();
+            _workAvailable.Dispose();
         }
     }
 }

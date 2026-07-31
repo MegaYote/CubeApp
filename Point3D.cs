@@ -8,6 +8,8 @@ namespace CubeApp
         public double Y { get; }
         public double Z { get; }
 
+        public static readonly Point3D Zero = new(0, 0, 0);
+
         public Point3D(double x, double y, double z)
         {
             X = x;

@@ -10,9 +10,9 @@ namespace CubeApp
     {
         private readonly Action<int> _onRadiusChanged;
 
-        // Minecraft's named presets in their cycle order: Far → Normal → Short → Tiny → Far...
-        private static readonly int[] Presets = { 16, 8, 4, 2 };
-        private static readonly string[] Names    = { "Far", "Normal", "Short", "Tiny" };
+        // presets in their cycle order: Super Far → Far → Normal → Short → Tiny → Super Far...
+        private static readonly int[] Presets = { 32, 16, 8, 4, 2 };
+        private static readonly string[] Names    = { "Super Far", "Far", "Normal", "Short", "Tiny" };
 
         private int _index;
 

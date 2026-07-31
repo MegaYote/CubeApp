@@ -1,0 +1,8 @@
+{
+  "id": "coyote",
+  "displayName": "Coyote",
+  "width": 0.9,
+  "height": 1.2,
+  "maxHealth": 10,
+  "speed": 4.0
+}

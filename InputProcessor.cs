@@ -11,6 +11,9 @@ namespace CubeApp
         public bool ToggleInventoryPressed { get; }
         public bool CycleRenderDistancePressed { get; }
         public bool SpawnMobPressed { get; }
+        public bool SpawnCoyotePressed { get; }
+        public bool SpawnStevePressed { get; }
+        public bool ToggleThirdPersonPressed { get; }
         public bool BreakBlockPressed { get; }
         public bool PlaceBlockPressed { get; }
         public int? SelectedSlot { get; }
@@ -21,6 +24,9 @@ namespace CubeApp
             bool toggleInventoryPressed,
             bool cycleRenderDistancePressed,
             bool spawnMobPressed,
+            bool spawnCoyotePressed,
+            bool spawnStevePressed,
+            bool toggleThirdPersonPressed,
             bool breakBlockPressed,
             bool placeBlockPressed,
             int? selectedSlot)
@@ -30,6 +36,9 @@ namespace CubeApp
             ToggleInventoryPressed = toggleInventoryPressed;
             CycleRenderDistancePressed = cycleRenderDistancePressed;
             SpawnMobPressed = spawnMobPressed;
+            SpawnCoyotePressed = spawnCoyotePressed;
+            SpawnStevePressed = spawnStevePressed;
+            ToggleThirdPersonPressed = toggleThirdPersonPressed;
             BreakBlockPressed = breakBlockPressed;
             PlaceBlockPressed = placeBlockPressed;
             SelectedSlot = selectedSlot;
@@ -78,6 +87,9 @@ namespace CubeApp
         private bool toggleInventoryPressed;
         private bool cycleRenderDistancePressed;
         private bool spawnMobPressed;
+        private bool spawnCoyotePressed;
+        private bool spawnStevePressed;
+        private bool toggleThirdPersonPressed;
         private bool breakBlockPressed;
         private bool placeBlockPressed;
         private int? selectedSlot;
@@ -92,6 +104,9 @@ namespace CubeApp
             toggleInventoryPressed = false;
             cycleRenderDistancePressed = false;
             spawnMobPressed = false;
+            spawnCoyotePressed = false;
+            spawnStevePressed = false;
+            toggleThirdPersonPressed = false;
             breakBlockPressed = false;
             placeBlockPressed = false;
             selectedSlot = null;
@@ -139,6 +154,15 @@ namespace CubeApp
                         break;
                     case Key.G:
                         if (down) spawnMobPressed = true;
+                        break;
+                    case Key.H:
+                        if (down) spawnCoyotePressed = true;
+                        break;
+                    case Key.P:
+                        if (down) spawnStevePressed = true;
+                        break;
+                    case Key.F5:
+                        if (down) toggleThirdPersonPressed = true;
                         break;
                     case Key.Number1:
                         if (down) selectedSlot = 0;
@@ -252,6 +276,9 @@ namespace CubeApp
                 toggleInventoryPressed,
                 cycleRenderDistancePressed,
                 spawnMobPressed,
+                spawnCoyotePressed,
+                spawnStevePressed,
+                toggleThirdPersonPressed,
                 breakBlockPressed,
                 placeBlockPressed,
                 selectedSlot);
@@ -261,6 +288,9 @@ namespace CubeApp
             toggleInventoryPressed = false;
             cycleRenderDistancePressed = false;
             spawnMobPressed = false;
+            spawnCoyotePressed = false;
+            spawnStevePressed = false;
+            toggleThirdPersonPressed = false;
             breakBlockPressed = false;
             placeBlockPressed = false;
             selectedSlot = null;

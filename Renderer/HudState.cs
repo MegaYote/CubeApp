@@ -29,6 +29,13 @@ namespace CubeApp.Renderer
         public Vector3[]? HighlightWorldQuad;
 
         /// <summary>
+        /// Player's current world position for the debug overlay.
+        /// </summary>
+        public double PlayerX;
+        public double PlayerY;
+        public double PlayerZ;
+
+        /// <summary>
         /// Player's current chunk coordinates for rendering chunk borders when debug is enabled.
         /// </summary>
         public int PlayerChunkX;

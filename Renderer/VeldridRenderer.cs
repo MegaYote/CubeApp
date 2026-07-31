@@ -11,20 +11,6 @@ namespace CubeApp.Renderer
     // No GDI+/System.Drawing is used anywhere in this renderer.
     public sealed class VeldridRenderer : IRenderer, IDisposable
     {
-        private static readonly BlockType[] HotbarBlockTypes =
-        {
-            BlockType.Grass,
-            BlockType.Dirt,
-            BlockType.Stone,
-            BlockType.Cobblestone,
-            BlockType.Sand,
-            BlockType.Planks,
-            BlockType.Bedrock,
-            BlockType.Gravel,
-            BlockType.Obsidian,
-            BlockType.MossyCobblestone,
-        };
-
         private GraphicsDevice _gd;
         private Swapchain _sc;
 
@@ -65,6 +51,31 @@ namespace CubeApp.Renderer
         private float[] _duckVertexScratch = Array.Empty<float>();
         private ushort[] _duckIndexScratch = Array.Empty<ushort>();
         private const int DuckFloatsPerVertex = 9; // pos(3) + uv(2) + color(4)
+
+        // Minecraft-style player model (shares the model pipeline; own texture + buffers).
+        private Texture _playerTexture;
+        private TextureView _playerView;
+        private Sampler _playerSampler;
+        private ResourceSet _playerTextureSet;
+        private PlayerModel.Bone[] _playerBones = Array.Empty<PlayerModel.Bone>();
+        private int _playerVertsPerInstance;
+        private int _playerIndicesPerInstance;
+        private DeviceBuffer? _playerVertexBuffer;
+        private DeviceBuffer? _playerIndexBuffer;
+        private uint _playerVertexCapacity;
+        private uint _playerIndexCapacity;
+        private IReadOnlyList<CubeApp.DuckInstance> _playerInstances = Array.Empty<CubeApp.DuckInstance>();
+        private float[] _playerVertexScratch = Array.Empty<float>();
+        private ushort[] _playerIndexScratch = Array.Empty<ushort>();
+
+        // Current camera (so chunk frustum culling and the mob meshing can read it) and the six
+        // view-frustum planes refreshed each frame from the view-projection matrix.
+        private CubeApp.Point3D? _cameraPosition;
+        private System.Numerics.Matrix4x4? _viewProjection;
+        public CubeApp.Point3D? CameraPosition => _cameraPosition;
+        public System.Numerics.Matrix4x4? ViewProjection => _viewProjection;
+        private readonly Vector4[] _frustumPlanes = new Vector4[6];
+
         private CommandList _commandList;
         private ImGuiRenderer _imguiRenderer;
         private HudState _hud = HudState.Empty;
@@ -72,23 +83,47 @@ namespace CubeApp.Renderer
         private float _atlasWidth = 256f;
         private float _atlasHeight = 256f;
 
-        private struct GpuChunk
+        // Chunk world mesh: one shared growable vertex/index buffer pair drawn with a single
+        // DrawIndexedIndirect call (one IndirectDrawIndexedArguments per live chunk). Chunk-local
+        // 16-bit indices stay zero-based; each draw command supplies the absolute FirstIndex
+        // (index-buffer offset in index units) and VertexOffset (base vertex into the merged VB),
+        // so chunks never need their indices remapped. Removed/re-meshed chunks leave reusable
+        // holes tracked in _freeBlocks. Buffer growth is a GPU CopyBuffer into a 2x buffer,
+        // recorded after Begin() and before the world draw; the old buffer is released via
+        // DisposeWhenIdle once the GPU is done with it.
+        private const uint VertexStrideBytes = 52;   // 13 floats * 4 bytes per vertex
+        private const uint IndirectCommandStride = 20; // sizeof(IndirectDrawIndexedArguments)
+        private DeviceBuffer? _megaVertexBuffer;
+        private DeviceBuffer? _megaIndexBuffer;
+        private DeviceBuffer? _indirectBuffer;
+        private uint _vbTailBytes;
+        private uint _ibTailBytes;
+        private uint _vbCapacityBytes;
+        private uint _ibCapacityBytes;
+        private uint _indirectCapacityCommands;
+
+        private struct ChunkRange
         {
-            public DeviceBuffer VertexBuffer;
-            public DeviceBuffer IndexBuffer;
+            public uint VbOffsetBytes;
+            public uint VbBytes;
+            public uint IbOffsetBytes;
             public uint IndexCount;
-            public uint VertexCapacity;
-            public uint IndexCapacity;
         }
-        private readonly Dictionary<CubeApp.ChunkCoordinates, GpuChunk> _chunks = new();
+        private readonly Dictionary<CubeApp.ChunkCoordinates, ChunkRange> _chunkRanges = new();
+        private readonly List<(uint VbOffset, uint VbBytes, uint IbOffset, uint IbBytes)> _freeBlocks = new();
+        private readonly List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _drawCommands = new();
+        private IndirectDrawIndexedArguments[] _indirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
+        private bool _drawCommandsDirty = true;
+
+        // Pending GPU-side buffer growth copies (old -> new, recorded after cl.Begin()).
+        private readonly List<(DeviceBuffer Old, DeviceBuffer New, uint SizeBytes)> _pendingBufferCopies = new();
+
         private readonly System.Collections.Concurrent.ConcurrentQueue<PendingUpload> _pendingUploads = new();
+        private readonly System.Collections.Concurrent.ConcurrentQueue<PendingUpload> _pendingPriorityUploads = new(); // player edits jump the line
         private readonly System.Collections.Concurrent.ConcurrentQueue<CubeApp.ChunkCoordinates> _pendingRemovals = new();
+        private ChunkManager? _chunkManager; // set via SetChunkManager, used by MeshChunkImmediate
         // Upload budget per frame to avoid large spikes
         private int _maxUploadsPerFrame = 4;
-
-        // Simple buffer pools (render-thread only)
-        private readonly List<(DeviceBuffer Buffer, uint Capacity)> _vbPool = new();
-        private readonly List<(DeviceBuffer Buffer, uint Capacity)> _ibPool = new();
 
         private readonly struct PendingUpload
         {
@@ -151,6 +186,7 @@ namespace CubeApp.Renderer
             }
 
             LoadDuckResources();
+            LoadPlayerResources();
             CreatePipeline();
 
             _imguiRenderer = new ImGuiRenderer(
@@ -251,6 +287,48 @@ namespace CubeApp.Renderer
             }
         }
 
+        private void LoadPlayerResources()
+        {
+            _playerBones = PlayerModel.Bones;
+            _playerVertsPerInstance = 0;
+            _playerIndicesPerInstance = 0;
+            foreach (var bone in _playerBones)
+            {
+                _playerVertsPerInstance += bone.Vertices.Length;
+                _playerIndicesPerInstance += bone.Indices.Length;
+            }
+
+            try
+            {
+                byte[]? bytes = LoadImageBytes(PlayerModel.TextureResourceName);
+                if (bytes == null)
+                {
+                    return;
+                }
+
+                var image = StbImageSharp.ImageResult.FromMemory(bytes, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                var texDesc = TextureDescription.Texture2D((uint)image.Width, (uint)image.Height, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
+                _playerTexture = _gd.ResourceFactory.CreateTexture(texDesc);
+                _gd.UpdateTexture(_playerTexture, image.Data, 0, 0, 0, (uint)image.Width, (uint)image.Height, 1, 0, 0);
+                _playerView = _gd.ResourceFactory.CreateTextureView(_playerTexture);
+                _playerSampler = _gd.ResourceFactory.CreateSampler(new SamplerDescription(
+                    SamplerAddressMode.Clamp,
+                    SamplerAddressMode.Clamp,
+                    SamplerAddressMode.Clamp,
+                    SamplerFilter.MinPoint_MagPoint_MipPoint,
+                    null,
+                    1,
+                    0,
+                    0,
+                    0,
+                    SamplerBorderColor.TransparentBlack));
+            }
+            catch
+            {
+                // ignore; player rendering is skipped if the texture fails to load
+            }
+        }
+
         private void CreatePipeline()
         {
             var factory = _gd.ResourceFactory;
@@ -306,7 +384,9 @@ void main() {
 
             var pipelineDesc = new GraphicsPipelineDescription()
             {
-                BlendState = BlendStateDescription.SingleOverrideBlend,
+                // Alpha blend so blocks flagged transparent (water) tint see-through; opaque tiles
+                // have alpha 1 so they look identical to the old override-blend behaviour.
+                BlendState = BlendStateDescription.SingleAlphaBlend,
                 DepthStencilState = new DepthStencilStateDescription(true, true, ComparisonKind.LessEqual),
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
@@ -387,6 +467,11 @@ void main() {
             if (_duckView != null && _duckSampler != null)
             {
                 _duckTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _duckView, _duckSampler));
+            }
+
+            if (_playerView != null && _playerSampler != null)
+            {
+                _playerTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _playerView, _playerSampler));
             }
         }
 
@@ -489,9 +574,38 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             _hud = hud;
         }
 
-        public void SetEntities(IReadOnlyList<CubeApp.DuckInstance> ducks)
+        public void SetEntities(IReadOnlyList<CubeApp.MobRenderData> mobRenderData)
         {
-            _duckInstances = ducks ?? Array.Empty<CubeApp.DuckInstance>();
+            // Route the unified MobRenderData snapshots to per-model instance lists. DuckInstance
+            // carries exactly the fields both models need, so it doubles as the player instance.
+            if (mobRenderData == null || mobRenderData.Count == 0)
+            {
+                _duckInstances = Array.Empty<CubeApp.DuckInstance>();
+                _playerInstances = Array.Empty<CubeApp.DuckInstance>();
+                return;
+            }
+
+            List<CubeApp.DuckInstance>? ducks = null;
+            List<CubeApp.DuckInstance>? players = null;
+            for (int i = 0; i < mobRenderData.Count; i++)
+            {
+                var md = mobRenderData[i];
+                bool isDuck = string.Equals(md.MobType, "duck", StringComparison.OrdinalIgnoreCase);
+                bool isPlayer = !isDuck && string.Equals(md.MobType, "player", StringComparison.OrdinalIgnoreCase);
+                if (!isDuck && !isPlayer) continue;
+
+                var inst = new CubeApp.DuckInstance(
+                    md.Position, md.Yaw, md.HeadYawLocal,
+                    md.WalkPhase, md.WalkAmount, md.FlapPhase,
+                    md.VelocityY, md.OnGround,
+                    md.IsDead, md.DeathT, md.DeathRollDir, md.HurtTimer);
+
+                if (isDuck) (ducks ??= new List<CubeApp.DuckInstance>()).Add(inst);
+                else (players ??= new List<CubeApp.DuckInstance>()).Add(inst);
+            }
+
+            _duckInstances = (IReadOnlyList<CubeApp.DuckInstance>?)ducks ?? Array.Empty<CubeApp.DuckInstance>();
+            _playerInstances = (IReadOnlyList<CubeApp.DuckInstance>?)players ?? Array.Empty<CubeApp.DuckInstance>();
         }
 
         public void Render()
@@ -499,36 +613,26 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             // Process pending removals/uploads on render thread
             while (_pendingRemovals.TryDequeue(out var rem))
             {
-                if (_chunks.TryGetValue(rem, out var existing))
-                {
-                    existing.VertexBuffer.Dispose();
-                    existing.IndexBuffer.Dispose();
-                    _chunks.Remove(rem);
-                }
+                FreeChunkRange(rem);
+            }
+
+            // Process priority uploads (player edits) first - no limit for instant feedback
+            while (_pendingPriorityUploads.TryDequeue(out var pu))
+            {
+                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices);
             }
 
             int uploadsThisFrame = 0;
             while (uploadsThisFrame < _maxUploadsPerFrame && _pendingUploads.TryDequeue(out var pu))
             {
-                // dispose existing if present
-                if (_chunks.TryGetValue(pu.Coord, out var existing))
-                {
-                    // return previous buffers to pool
-                    ReturnVertexBuffer(existing.VertexBuffer, existing.VertexCapacity);
-                    ReturnIndexBuffer(existing.IndexBuffer, existing.IndexCapacity);
-                    _chunks.Remove(pu.Coord);
-                }
-
-                uint vbSize = (uint)(pu.Vertices.Length * sizeof(float));
-                uint ibSize = (uint)(pu.Indices.Length * sizeof(ushort));
-
-                var vb = AcquireVertexBuffer(vbSize);
-                _gd.UpdateBuffer(vb, 0, pu.Vertices);
-                var ib = AcquireIndexBuffer(ibSize);
-                _gd.UpdateBuffer(ib, 0, pu.Indices);
-
-                _chunks[pu.Coord] = new GpuChunk { VertexBuffer = vb, IndexBuffer = ib, IndexCount = (uint)pu.Indices.Length, VertexCapacity = vbSize, IndexCapacity = ibSize };
+                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices);
                 uploadsThisFrame++;
+            }
+
+            if (_drawCommandsDirty)
+            {
+                RebuildDrawCommands();
+                _drawCommandsDirty = false;
             }
 
             var cl = _commandList;
@@ -542,15 +646,48 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             if (_textureSet != null)
                 cl.SetGraphicsResourceSet(1, _textureSet);
 
-            foreach (var kv in _chunks)
+            // Record any GPU-side mega-buffer growth copies before drawing so the world draw
+            // always sees the fully populated replacement buffer.
+            foreach (var cp in _pendingBufferCopies)
             {
-                var c = kv.Value;
-                cl.SetVertexBuffer(0, c.VertexBuffer);
-                cl.SetIndexBuffer(c.IndexBuffer, IndexFormat.UInt16);
-                cl.DrawIndexed(c.IndexCount, 1, 0, 0, 0);
+                cl.CopyBuffer(cp.Old, 0, cp.New, 0, cp.SizeBytes);
+                _gd.DisposeWhenIdle(cp.Old);
+            }
+            _pendingBufferCopies.Clear();
+
+            // One draw call for the visible chunk world via multi-draw indirect. Commands are
+            // frustum-culled per frame, so chunks behind/off-screen never reach the GPU.
+            if (_megaVertexBuffer != null && _megaIndexBuffer != null && _drawCommands.Count > 0)
+            {
+                uint visibleCount = CullDrawCommands();
+                if (visibleCount > 0)
+                {
+                    cl.SetVertexBuffer(0, _megaVertexBuffer);
+                    cl.SetIndexBuffer(_megaIndexBuffer, IndexFormat.UInt16);
+                    if (_gd.Features.DrawIndirect)
+                    {
+                        EnsureIndirectCapacity(visibleCount);
+                        // D3D11 indirect-args buffers are USAGE_DEFAULT (no Dynamic flag), so the
+                        // contents are pushed via CommandList.UpdateBuffer (UpdateSubresource).
+                        // The visible set changes with the camera, so refresh it each frame
+                        // (~20 bytes per visible chunk - negligible).
+                        cl.UpdateBuffer(_indirectBuffer, 0, ref _indirectScratch[0], visibleCount * IndirectCommandStride);
+                        cl.DrawIndexedIndirect(_indirectBuffer, 0, visibleCount, IndirectCommandStride);
+                    }
+                    else
+                    {
+                        // Fallback for backends without indirect draws (D3D11 has it).
+                        for (int i = 0; i < visibleCount; i++)
+                        {
+                            var cmd = _indirectScratch[i];
+                            cl.DrawIndexed(cmd.IndexCount, cmd.InstanceCount, cmd.FirstIndex, (int)cmd.VertexOffset, cmd.FirstInstance);
+                        }
+                    }
+                }
             }
 
             DrawDucks(cl);
+            DrawPlayers(cl);
             DrawHighlight(cl);
             DrawChunkBorders(cl);
 
@@ -810,6 +947,339 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             }
         }
 
+        // Uploads one chunk's vertices/indices into a region of the shared mega vertex/index buffers,
+        // pooling the previous buffers for reuse.
+        // Uploads one chunk's vertices/indices into a region of the shared mega vertex/index buffers,
+// reusing freed holes or appending at the tail. The previous range (if any) is recycled.
+private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushort[] indices)
+        {
+            if (_chunkRanges.TryGetValue(coord, out var prev))
+            {
+                FreeRange(prev);
+            }
+
+            uint vbBytes = (uint)(verts.Length * sizeof(float));
+            uint ibBytes = (uint)(indices.Length * sizeof(ushort));
+            var (vbo, _, ibo, _) = AllocateRange(vbBytes, ibBytes);
+
+            _gd.UpdateBuffer(_megaVertexBuffer, vbo, verts);
+            _gd.UpdateBuffer(_megaIndexBuffer, ibo, indices);
+
+            _chunkRanges[coord] = new ChunkRange { VbOffsetBytes = vbo, VbBytes = vbBytes, IbOffsetBytes = ibo, IndexCount = (uint)indices.Length };
+            _drawCommandsDirty = true;
+        }
+
+        // First-fit allocator: reuse a freed hole if one's big enough, else append at the tail
+        // (growing the GPU buffers 2x if the tail would overflow).
+        private (uint vbo, uint vbBytes, uint ibo, uint ibBytes) AllocateRange(uint vbBytes, uint ibBytes)
+        {
+            for (int i = 0; i < _freeBlocks.Count; i++)
+            {
+                var b = _freeBlocks[i];
+                if (b.VbBytes >= vbBytes && b.IbBytes >= ibBytes)
+                {
+                    _freeBlocks.RemoveAt(i);
+                    return (b.VbOffset, vbBytes, b.IbOffset, ibBytes);
+                }
+            }
+
+            EnsureVertexCapacity(_vbTailBytes + vbBytes);
+            EnsureIndexCapacity(_ibTailBytes + ibBytes);
+            uint vbo = _vbTailBytes;
+            uint ibo = _ibTailBytes;
+            _vbTailBytes += vbBytes;
+            _ibTailBytes += ibBytes;
+            return (vbo, vbBytes, ibo, ibBytes);
+        }
+
+        private void FreeRange(ChunkRange r)
+        {
+            _freeBlocks.Add((r.VbOffsetBytes, r.VbBytes, r.IbOffsetBytes, r.IndexCount * sizeof(ushort)));
+            _drawCommandsDirty = true;
+        }
+
+        private void FreeChunkRange(CubeApp.ChunkCoordinates coord)
+        {
+            if (_chunkRanges.TryGetValue(coord, out var r))
+            {
+                FreeRange(r);
+                _chunkRanges.Remove(coord);
+            }
+        }
+
+        // Grows the mega vertex buffer to 2x (or to the needed size) when the tail would overflow.
+        // Records a GPU CopyBuffer of the live region [0, tail) so the old data survives the swap;
+        // the old buffer is disposed once the GPU is finished with it.
+        private void EnsureVertexCapacity(uint needed)
+        {
+            if (_megaVertexBuffer != null && _vbCapacityBytes >= needed) return;
+            uint newCap = Math.Max(needed, Math.Max(1024, _vbCapacityBytes * 2));
+            var newBuf = _gd.ResourceFactory.CreateBuffer(new BufferDescription(newCap, BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            if (_megaVertexBuffer != null)
+            {
+                _pendingBufferCopies.Add((_megaVertexBuffer, newBuf, _vbTailBytes));
+            }
+            _megaVertexBuffer = newBuf;
+            _vbCapacityBytes = newCap;
+        }
+
+        private void EnsureIndexCapacity(uint needed)
+        {
+            if (_megaIndexBuffer != null && _ibCapacityBytes >= needed) return;
+            uint newCap = Math.Max(needed, Math.Max(1024, _ibCapacityBytes * 2));
+            var newBuf = _gd.ResourceFactory.CreateBuffer(new BufferDescription(newCap, BufferUsage.IndexBuffer | BufferUsage.Dynamic));
+            if (_megaIndexBuffer != null)
+            {
+                _pendingBufferCopies.Add((_megaIndexBuffer, newBuf, _ibTailBytes));
+            }
+            _megaIndexBuffer = newBuf;
+            _ibCapacityBytes = newCap;
+        }
+
+        // Creates (or grows) the indirect argument buffer. D3D11 requires indirect-args buffers
+        // to be USAGE_DEFAULT (no Dynamic flag), so contents are refreshed via CommandList.UpdateBuffer.
+        private void EnsureIndirectCapacity(uint commandCount)
+        {
+            if (_indirectBuffer != null && _indirectCapacityCommands >= commandCount) return;
+
+            uint newCap = _indirectCapacityCommands == 0
+                ? Math.Max(256, commandCount * 2)
+                : Math.Max(_indirectCapacityCommands * 2, commandCount);
+            var newBuf = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                newCap * IndirectCommandStride, BufferUsage.IndirectBuffer));
+            if (_indirectBuffer != null)
+            {
+                _gd.DisposeWhenIdle(_indirectBuffer);
+            }
+            _indirectBuffer = newBuf;
+            _indirectCapacityCommands = newCap;
+        }
+
+        private void RebuildDrawCommands()
+        {
+            _drawCommands.Clear();
+            foreach (var kv in _chunkRanges)
+            {
+                var r = kv.Value;
+                _drawCommands.Add((kv.Key, new IndirectDrawIndexedArguments
+                {
+                    IndexCount = r.IndexCount,
+                    InstanceCount = 1,
+                    FirstIndex = r.IbOffsetBytes / 2,           // ushort index units
+                    VertexOffset = (int)(r.VbOffsetBytes / VertexStrideBytes),
+                    FirstInstance = 0,
+                }));
+            }
+            if (_indirectScratch.Length < _drawCommands.Count)
+            {
+                _indirectScratch = new IndirectDrawIndexedArguments[Math.Max(256, _drawCommands.Count * 2)];
+            }
+        }
+
+        // Fills the indirect scratch array with the commands for chunks inside the current view
+        // frustum. Returns the visible count; falls back to "everything" when no camera is set.
+        private uint CullDrawCommands()
+        {
+            int n = 0;
+            if (_viewProjection.HasValue)
+            {
+                ExtractFrustumPlanes(_viewProjection.Value);
+                for (int i = 0; i < _drawCommands.Count; i++)
+                {
+                    if (ChunkInFrustum(_drawCommands[i].Coord))
+                    {
+                        _indirectScratch[n++] = _drawCommands[i].Cmd;
+                    }
+                }
+            }
+            else
+            {
+                for (int i = 0; i < _drawCommands.Count; i++)
+                {
+                    _indirectScratch[n++] = _drawCommands[i].Cmd;
+                }
+            }
+            return (uint)n;
+        }
+
+        // Extracts the six clip planes from a row-vector view-projection matrix (0..1 depth range).
+        private void ExtractFrustumPlanes(in Matrix4x4 m)
+        {
+            _frustumPlanes[0] = new Vector4(m.M14 + m.M11, m.M24 + m.M21, m.M34 + m.M31, m.M44 + m.M41); // left
+            _frustumPlanes[1] = new Vector4(m.M14 - m.M11, m.M24 - m.M21, m.M34 - m.M31, m.M44 - m.M41); // right
+            _frustumPlanes[2] = new Vector4(m.M14 + m.M12, m.M24 + m.M22, m.M34 + m.M32, m.M44 + m.M42); // bottom
+            _frustumPlanes[3] = new Vector4(m.M14 - m.M12, m.M24 - m.M22, m.M34 - m.M32, m.M44 - m.M42); // top
+            _frustumPlanes[4] = new Vector4(m.M13, m.M23, m.M33, m.M43);                                 // near
+            _frustumPlanes[5] = new Vector4(m.M14 - m.M13, m.M24 - m.M23, m.M34 - m.M33, m.M44 - m.M43); // far
+        }
+
+        // AABB-vs-frustum via the positive-vertex trick. The chunk AABB covers the full world
+        // height, so this culls by horizontal footprint only - still rejects everything off-screen.
+        private bool ChunkInFrustum(CubeApp.ChunkCoordinates coord)
+        {
+            float minX = coord.X * ChunkManager.ChunkSize;
+            float maxX = minX + ChunkManager.ChunkSize;
+            float minZ = coord.Z * ChunkManager.ChunkSize;
+            float maxZ = minZ + ChunkManager.ChunkSize;
+            const float minY = 0f;
+            const float maxY = ChunkManager.ChunkHeight;
+
+            for (int i = 0; i < 6; i++)
+            {
+                var p = _frustumPlanes[i];
+                float px = p.X >= 0f ? maxX : minX;
+                float py = p.Y >= 0f ? maxY : minY;
+                float pz = p.Z >= 0f ? maxZ : minZ;
+                if (p.X * px + p.Y * py + p.Z * pz + p.W < 0f)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private void DrawPlayers(CommandList cl)
+        {
+            var instances = _playerInstances;
+            if (instances.Count == 0 || _modelPipeline == null || _playerTextureSet == null
+                || _playerBones.Length == 0 || _playerVertsPerInstance == 0)
+            {
+                return;
+            }
+
+            int totalVertexFloats = instances.Count * _playerVertsPerInstance * DuckFloatsPerVertex;
+            int totalIndices = instances.Count * _playerIndicesPerInstance;
+
+            if (_playerVertexScratch.Length < totalVertexFloats)
+            {
+                _playerVertexScratch = new float[totalVertexFloats];
+            }
+            if (_playerIndexScratch.Length < totalIndices)
+            {
+                _playerIndexScratch = new ushort[totalIndices];
+            }
+
+            int vf = 0;
+            int ii = 0;
+            ushort baseVertex = 0;
+            foreach (var inst in instances)
+            {
+                WritePlayer(inst, ref vf, ref ii, ref baseVertex);
+            }
+
+            EnsurePlayerBuffers((uint)(totalVertexFloats * sizeof(float)), (uint)(totalIndices * sizeof(ushort)));
+            _gd.UpdateBuffer(_playerVertexBuffer, 0, ref _playerVertexScratch[0], (uint)(totalVertexFloats * sizeof(float)));
+            _gd.UpdateBuffer(_playerIndexBuffer, 0, ref _playerIndexScratch[0], (uint)(totalIndices * sizeof(ushort)));
+
+            cl.SetPipeline(_modelPipeline);
+            cl.SetGraphicsResourceSet(0, _projViewSet);
+            cl.SetGraphicsResourceSet(1, _playerTextureSet);
+            cl.SetVertexBuffer(0, _playerVertexBuffer);
+            cl.SetIndexBuffer(_playerIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed((uint)totalIndices, 1, 0, 0, 0);
+        }
+
+        // Poses one player's bones (limb swing / head turn) and bakes them, with the body yaw,
+        // hurt-flash tint and death roll, into the shared scratch buffers. Same scheme as WriteDuck
+        // but with Minecraft-style limb animation and no in-air body tilt.
+        private void WritePlayer(in CubeApp.DuckInstance inst, ref int vf, ref int ii, ref ushort baseVertex)
+        {
+            bool isDead = inst.IsDead;
+            float swing = isDead ? 0f : (float)Math.Sin(inst.WalkPhase) * inst.WalkAmount;
+            float bob = isDead ? 0f : Math.Abs((float)Math.Sin(inst.WalkPhase * 2.0f)) * 0.03f * inst.WalkAmount;
+            float hurtTilt = isDead ? 0f : (inst.HurtTimer > 0f ? (float)Math.Sin(inst.HurtTimer * 60.0f) * 0.06f : 0f);
+            float deathRoll = isDead ? inst.DeathRollDir * (float)(Math.PI * 0.5) * (float)Math.Pow(inst.DeathT, 0.9) : 0f;
+
+            float tiltZ = isDead ? deathRoll : hurtTilt;
+            float cosR = (float)Math.Cos(tiltZ), sinR = (float)Math.Sin(tiltZ);
+
+            float renderYaw = inst.Yaw + (float)Math.PI;
+            float cosY = (float)Math.Cos(renderYaw), sinY = (float)Math.Sin(renderYaw);
+
+            float px = (float)inst.Position.X;
+            float py = (float)inst.Position.Y;
+            float pz = (float)inst.Position.Z;
+
+            float blink = isDead ? 1f : (inst.HurtTimer > 0f ? ((float)Math.Sin(inst.HurtTimer * 95.0f) > 0f ? 1f : 0.72f) : 0f);
+            float flashBlend = isDead ? 1f : (inst.HurtTimer > 0f ? Math.Clamp((inst.HurtTimer / 0.20f) * blink, 0f, 1f) : 0f);
+            float gbMul = 1f - 0.82f * flashBlend;
+
+            foreach (var bone in _playerBones)
+            {
+                float angle = PlayerBoneAnimDelta(bone.Id, swing, inst.HeadYawLocal);
+                float ca = (float)Math.Cos(angle), sa = (float)Math.Sin(angle);
+
+                foreach (var v in bone.Vertices)
+                {
+                    float lx = v.X - bone.PivotX;
+                    float ly = v.Y - bone.PivotY;
+                    float lz = v.Z - bone.PivotZ;
+                    float rx = lx, ry = ly, rz = lz;
+                    switch (bone.Axis)
+                    {
+                        case DuckBoneAxis.X: ry = ly * ca - lz * sa; rz = ly * sa + lz * ca; break;
+                        case DuckBoneAxis.Y: rx = lx * ca + lz * sa; rz = -lx * sa + lz * ca; break;
+                        case DuckBoneAxis.Z: rx = lx * ca - ly * sa; ry = lx * sa + ly * ca; break;
+                    }
+                    float mx = bone.PivotX + rx;
+                    float my = bone.PivotY + ry + bob;
+                    float mz = bone.PivotZ + rz;
+
+                    float ax = mx * cosR - my * sinR;
+                    float ay = mx * sinR + my * cosR;
+                    float az = mz;
+                    float fx = ax * cosY + az * sinY;
+                    float fz = -ax * sinY + az * cosY;
+
+                    _playerVertexScratch[vf++] = px + fx;
+                    _playerVertexScratch[vf++] = py + ay;
+                    _playerVertexScratch[vf++] = pz + fz;
+                    _playerVertexScratch[vf++] = v.U;
+                    _playerVertexScratch[vf++] = v.V;
+                    _playerVertexScratch[vf++] = v.Shade;
+                    _playerVertexScratch[vf++] = v.Shade * gbMul;
+                    _playerVertexScratch[vf++] = v.Shade * gbMul;
+                    _playerVertexScratch[vf++] = 1f;
+                }
+
+                for (int k = 0; k < bone.Indices.Length; k++)
+                {
+                    _playerIndexScratch[ii++] = (ushort)(bone.Indices[k] + baseVertex);
+                }
+                baseVertex += (ushort)bone.Vertices.Length;
+            }
+        }
+
+        // Minecraft-style limb swing: opposite arm/leg pairs, head follows the local head yaw.
+        private static float PlayerBoneAnimDelta(PlayerBoneId id, float swing, float headYawLocal)
+        {
+            switch (id)
+            {
+                case PlayerBoneId.Head: return headYawLocal;
+                case PlayerBoneId.RightArm: return swing * 0.9f;
+                case PlayerBoneId.LeftArm: return -swing * 0.9f;
+                case PlayerBoneId.RightLeg: return -swing * 1.2f;
+                case PlayerBoneId.LeftLeg: return swing * 1.2f;
+                default: return 0f;
+            }
+        }
+
+        private void EnsurePlayerBuffers(uint vbSize, uint ibSize)
+        {
+            if (_playerVertexBuffer == null || _playerVertexCapacity < vbSize)
+            {
+                _playerVertexBuffer?.Dispose();
+                _playerVertexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(vbSize, BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+                _playerVertexCapacity = vbSize;
+            }
+            if (_playerIndexBuffer == null || _playerIndexCapacity < ibSize)
+            {
+                _playerIndexBuffer?.Dispose();
+                _playerIndexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(ibSize, BufferUsage.IndexBuffer | BufferUsage.Dynamic));
+                _playerIndexCapacity = ibSize;
+            }
+        }
+
         private void BuildHudUi()
         {
             var io = ImGui.GetIO();
@@ -854,10 +1324,9 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                     drawList.AddRect(topLeft + new Vector2(4, 4), bottomRight - new Vector2(4, 4), activeBorder, 0f, ImDrawFlags.None, 2f);
                 }
 
-                if (i < HotbarBlockTypes.Length)
+                if (i < BlockRegistry.Hotbar.Count)
                 {
-                    var blockType = HotbarBlockTypes[i];
-                    uint iconColor = GetBlockRgba(blockType);
+                    uint iconColor = BlockRegistry.MapColorOf(BlockRegistry.Hotbar[i]);
                     drawList.AddRectFilled(topLeft + new Vector2(8, 8), topLeft + new Vector2(40, 40), iconColor);
                 }
 
@@ -899,43 +1368,14 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             }
         }
 
-        private static uint GetBlockRgba(BlockType blockType)
-        {
-            return blockType switch
-            {
-                BlockType.Grass => ImGui.ColorConvertFloat4ToU32(new Vector4(34 / 255f, 139 / 255f, 34 / 255f, 1f)),
-                BlockType.Dirt => ImGui.ColorConvertFloat4ToU32(new Vector4(139 / 255f, 69 / 255f, 19 / 255f, 1f)),
-                BlockType.Stone => ImGui.ColorConvertFloat4ToU32(new Vector4(128 / 255f, 128 / 255f, 128 / 255f, 1f)),
-                BlockType.Cobblestone => ImGui.ColorConvertFloat4ToU32(new Vector4(112 / 255f, 112 / 255f, 112 / 255f, 1f)),
-                BlockType.Sand => ImGui.ColorConvertFloat4ToU32(new Vector4(210 / 255f, 196 / 255f, 140 / 255f, 1f)),
-                BlockType.Planks => ImGui.ColorConvertFloat4ToU32(new Vector4(160 / 255f, 120 / 255f, 70 / 255f, 1f)),
-                BlockType.Bedrock => ImGui.ColorConvertFloat4ToU32(new Vector4(78 / 255f, 78 / 255f, 78 / 255f, 1f)),
-                BlockType.Gravel => ImGui.ColorConvertFloat4ToU32(new Vector4(132 / 255f, 132 / 255f, 132 / 255f, 1f)),
-                BlockType.Obsidian => ImGui.ColorConvertFloat4ToU32(new Vector4(60 / 255f, 45 / 255f, 90 / 255f, 1f)),
-                BlockType.MossyCobblestone => ImGui.ColorConvertFloat4ToU32(new Vector4(94 / 255f, 108 / 255f, 94 / 255f, 1f)),
-                _ => ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0f)),
-            };
-        }
-
         public void Dispose()
         {
-            foreach (var kv in _chunks)
-            {
-                kv.Value.VertexBuffer.Dispose();
-                kv.Value.IndexBuffer.Dispose();
-            }
-            _chunks.Clear();
-
-            foreach (var vb in _vbPool)
-            {
-                vb.Buffer.Dispose();
-            }
-            _vbPool.Clear();
-            foreach (var ib in _ibPool)
-            {
-                ib.Buffer.Dispose();
-            }
-            _ibPool.Clear();
+            _chunkRanges.Clear();
+            _freeBlocks.Clear();
+            _drawCommands.Clear();
+            _megaVertexBuffer?.Dispose();
+            _megaIndexBuffer?.Dispose();
+            _indirectBuffer?.Dispose();
 
             _projViewSet?.Dispose();
             _projViewLayout?.Dispose();
@@ -951,6 +1391,12 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             _duckSampler?.Dispose();
             _duckView?.Dispose();
             _duckTexture?.Dispose();
+            _playerVertexBuffer?.Dispose();
+            _playerIndexBuffer?.Dispose();
+            _playerTextureSet?.Dispose();
+            _playerSampler?.Dispose();
+            _playerView?.Dispose();
+            _playerTexture?.Dispose();
             _modelPipeline?.Dispose();
             _pipeline?.Dispose();
             _sc?.Dispose();
@@ -959,14 +1405,30 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
 
         public void UploadChunk(CubeApp.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces)
         {
+            BuildMesh(faces, out var vArr, out var iArr);
+            _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr));
+        }
+
+        // Player edits jump the line: same vertex data, but enqueued on the priority queue that
+        // ProcessPendingPriorityMeshes drains every frame for instant feedback.
+        public void UploadChunkPriority(CubeApp.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces)
+        {
+            BuildMesh(faces, out var vArr, out var iArr);
+            _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr));
+        }
+
+        // Builds the 13-float-per-vertex chunk mesh (pos + localUV + tileRect + color) from greedy
+        // faces. Per-face alpha comes from MeshFace.Alpha so transparent blocks (water) can blend.
+        private void BuildMesh(System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces, out float[] vertsArr, out ushort[] indicesArr)
+        {
             // vertex layout: position(3) + localUV(2) + tileRect(4) + color(4) = 13 floats per vertex
-            var verts = new List<float>(faces.Count * 4 * 13);
-            var indices = new List<ushort>(faces.Count * 6);
+            var verts = new System.Collections.Generic.List<float>(faces.Count * 4 * 13);
+            var indices = new System.Collections.Generic.List<ushort>(faces.Count * 6);
             ushort vi = 0;
+            float atlasW = Math.Max(1f, _atlasWidth);
+            float atlasH = Math.Max(1f, _atlasHeight);
             foreach (var f in faces)
             {
-                float atlasW = Math.Max(1f, _atlasWidth);
-                float atlasH = Math.Max(1f, _atlasHeight);
                 int tileW = Math.Max(1, f.SrcRect.Width);
                 int tileH = Math.Max(1, f.SrcRect.Height);
                 int spanU = Math.Max(1, f.TileWidth);
@@ -997,15 +1459,12 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                     spanV = Math.Max(1, (int)Math.Round(maxV - minV));
                 }
 
-                // color tint from shade
                 float shade = f.Shade;
                 float rf = shade;
                 float gf = shade;
                 float bf = shade;
+                float alpha = f.Alpha;
 
-                // Tile origin and size in atlas UV space; same for all 4 vertices of this face.
-                // The fragment shader uses fract(localUV) * tileSize + tileOrigin so the
-                // same tile repeats across greedy-merged multi-block faces.
                 float tileOriginX = f.SrcRect.X / atlasW;
                 float tileOriginY = f.SrcRect.Y / atlasH;
                 float tileSzX = tileW / atlasW;
@@ -1024,7 +1483,6 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                     double dv;
                     if (hasAxes)
                     {
-                        // Continuous tile-unit coordinates; fract() in shader tiles the texture.
                         du = Dot(vv, uAxis) - minU;
                         dv = Dot(vv, vAxis) - minV;
                         du = Math.Clamp(du, 0.0, spanU);
@@ -1042,13 +1500,13 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                     verts.Add((float)vv.X);
                     verts.Add((float)vv.Y);
                     verts.Add((float)vv.Z);
-                    verts.Add((float)du);    // localUV.x  (0..spanU per-face tile units)
-                    verts.Add((float)dv);    // localUV.y  (0..spanV per-face tile units)
-                    verts.Add(tileOriginX);  // tileRect.x
-                    verts.Add(tileOriginY);  // tileRect.y
-                    verts.Add(tileSzX);      // tileRect.z
-                    verts.Add(tileSzY);      // tileRect.w
-                    verts.Add(rf); verts.Add(gf); verts.Add(bf); verts.Add(1f);
+                    verts.Add((float)du);
+                    verts.Add((float)dv);
+                    verts.Add(tileOriginX);
+                    verts.Add(tileOriginY);
+                    verts.Add(tileSzX);
+                    verts.Add(tileSzY);
+                    verts.Add(rf); verts.Add(gf); verts.Add(bf); verts.Add(alpha);
                 }
 
                 indices.Add((ushort)(vi + 0));
@@ -1060,9 +1518,8 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                 vi += 4;
             }
 
-            var vArr = verts.ToArray();
-            var iArr = indices.ToArray();
-            _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr));
+            vertsArr = verts.ToArray();
+            indicesArr = indices.ToArray();
         }
 
         public void RemoveChunk(CubeApp.ChunkCoordinates coords)
@@ -1125,46 +1582,6 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             return a.X * b.X + a.Y * b.Y + a.Z * b.Z;
         }
 
-        private DeviceBuffer AcquireVertexBuffer(uint sizeBytes)
-        {
-            for (int i = 0; i < _vbPool.Count; i++)
-            {
-                if (_vbPool[i].Capacity >= sizeBytes)
-                {
-                    var buf = _vbPool[i].Buffer;
-                    _vbPool.RemoveAt(i);
-                    return buf;
-                }
-            }
-
-            return _gd.ResourceFactory.CreateBuffer(new BufferDescription(sizeBytes, BufferUsage.VertexBuffer | BufferUsage.Dynamic));
-        }
-
-        private void ReturnVertexBuffer(DeviceBuffer buf, uint capacity)
-        {
-            _vbPool.Add((buf, capacity));
-        }
-
-        private DeviceBuffer AcquireIndexBuffer(uint sizeBytes)
-        {
-            for (int i = 0; i < _ibPool.Count; i++)
-            {
-                if (_ibPool[i].Capacity >= sizeBytes)
-                {
-                    var buf = _ibPool[i].Buffer;
-                    _ibPool.RemoveAt(i);
-                    return buf;
-                }
-            }
-
-            return _gd.ResourceFactory.CreateBuffer(new BufferDescription(sizeBytes, BufferUsage.IndexBuffer | BufferUsage.Dynamic));
-        }
-
-        private void ReturnIndexBuffer(DeviceBuffer buf, uint capacity)
-        {
-            _ibPool.Add((buf, capacity));
-        }
-
         public void UpdateCamera(CubeApp.Point3D position, float yaw, float pitch)
         {
             var proj = Matrix4x4.CreatePerspectiveFieldOfView((float)(Math.PI / 2.0), (float)_sc.Framebuffer.Width / _sc.Framebuffer.Height, 0.1f, _farPlane);
@@ -1175,6 +1592,10 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             var target = cameraPos + forward;
             var view = Matrix4x4.CreateLookAt(cameraPos, target, Vector3.UnitY);
             var viewProj = Matrix4x4.Multiply(view, proj);
+            // Cache the camera and view-projection so chunk frustum culling and the mob meshing
+            // can read them without re-deriving.
+            _cameraPosition = position;
+            _viewProjection = viewProj;
             _gd.UpdateBuffer(_projViewBuffer, 0, ref viewProj);
         }
 
@@ -1183,6 +1604,47 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             // Push the far clip past the farthest visible chunk corner so distant terrain isn't
             // clipped when the render distance grows. 16 blocks/chunk, ~1.5x for the diagonal + margin.
             _farPlane = Math.Max(100f, chunkRadius * 16f * 1.5f + 32f);
+        }
+
+        public void SetChunkManager(CubeApp.ChunkManager manager)
+        {
+            _chunkManager = manager;
+        }
+
+        // Drains priority (player-edit) uploads every frame so edits appear immediately, ahead of
+        // the budget-limited background streaming uploads.
+        public void ProcessPendingPriorityMeshes()
+        {
+            while (_pendingPriorityUploads.TryDequeue(out var pu))
+            {
+                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices);
+            }
+        }
+
+        // Synchronously re-mesh one chunk (used for instant player edits). The greedy mesh from the
+        // mesher is uploaded via the priority path; the background worker later refines neighbours.
+        public void MeshChunkImmediate(CubeApp.ChunkCoordinates coords)
+        {
+            if (_chunkManager == null) return;
+            if (!_chunkManager.TryGetLoadedChunk(coords, out var chunk)) return;
+
+            var chunksToPass = new System.Collections.Generic.List<CubeApp.Chunk> { chunk };
+            int chunkX = chunk.OriginX / ChunkManager.ChunkSize;
+            int chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
+            if (_chunkManager.TryGetLoadedChunk(new CubeApp.ChunkCoordinates(chunkX - 1, chunkZ), out var left)) chunksToPass.Add(left);
+            if (_chunkManager.TryGetLoadedChunk(new CubeApp.ChunkCoordinates(chunkX + 1, chunkZ), out var right)) chunksToPass.Add(right);
+            if (_chunkManager.TryGetLoadedChunk(new CubeApp.ChunkCoordinates(chunkX, chunkZ - 1), out var back)) chunksToPass.Add(back);
+            if (_chunkManager.TryGetLoadedChunk(new CubeApp.ChunkCoordinates(chunkX, chunkZ + 1), out var front)) chunksToPass.Add(front);
+
+            var faces = Mesher.GenerateMesh(chunksToPass);
+            if (faces != null && faces.Count > 0)
+            {
+                UploadChunkPriority(coords, faces);
+            }
+            else
+            {
+                RemoveChunk(coords);
+            }
         }
     }
 }
