@@ -11,11 +11,24 @@ namespace CubeApp.World
             this.seed = seed;
         }
 
-        public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeight)
+public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeight)
         {
             int originX = chunkX * chunkSize;
             int originZ = chunkZ * chunkSize;
-            var chunk = new Chunk(chunkSize, chunkHeight, chunkSize, originX, originZ);
+            // World Y spans -64..191. Local Y 0..255 with OriginY = -64.
+            const int originY = -64;
+            var chunk = new Chunk(chunkSize, chunkHeight, chunkSize, originX, originY, originZ);
+
+            // Sea level at world Y=0 (local Y=64).
+            const int seaLevelLocalY = 64;
+
+            // Resolve block ids once from the data-driven registry (air=0 reserved).
+            int idBedrock = BlockRegistry.GetId("bedrock");
+            int idWater = BlockRegistry.GetId("water");
+            int idAir = BlockRegistry.AirId;
+            int idGrass = BlockRegistry.GetId("grass");
+            int idDirt = BlockRegistry.GetId("dirt");
+            int idStone = BlockRegistry.GetId("stone");
 
             for (int lx = 0; lx < chunk.Width; lx++)
             {
@@ -25,43 +38,55 @@ namespace CubeApp.World
                     int worldZ = originZ + lz;
 
                     // Heightfield uses layered value-noise to mimic classic rolling terrain.
+                    // Surface height centered around Y=60-80 with natural variation.
                     double baseNoise = Fbm2D(worldX * 0.035, worldZ * 0.035, 4, 0.5);
                     double detailNoise = Fbm2D(worldX * 0.09, worldZ * 0.09, 2, 0.5);
-                    int height = (int)Math.Round((chunkHeight * 0.36) + baseNoise * 7.0 + detailNoise * 2.0);
-                    height = Math.Clamp(height, 1, chunkHeight - 1);
+                    int surfaceWorldY = 64 + (int)Math.Round(baseNoise * 16.0 + detailNoise * 8.0);
+                    int surfaceLocalY = surfaceWorldY - originY;  // local Y = world Y - originY
+                    surfaceLocalY = Math.Clamp(surfaceLocalY, 0, chunkHeight - 1);
 
                     for (int y = 0; y < chunk.Height; y++)
                     {
-                        if (y == 0)
+                        int worldY = y + originY; // convert local Y to world Y
+
+if (y == 0)
                         {
-                            chunk[lx, y, lz] = BlockType.Stone;
+                            chunk[lx, y, lz] = idBedrock;
                             continue;
                         }
 
-                        if (y > height)
+                        if (y > surfaceLocalY)
                         {
-                            chunk[lx, y, lz] = BlockType.Air;
+                            // Below sea level fill with water, above sea level fill with air
+                            if (worldY <= 0)
+                            {
+                                chunk[lx, y, lz] = idWater;
+                            }
+                            else
+                            {
+                                chunk[lx, y, lz] = idAir;
+                            }
                             continue;
                         }
 
-                        bool carveCave = y < height - 3 && SampleCave(worldX, y, worldZ) > 0.63;
+                        bool carveCave = y < surfaceLocalY - 3 && SampleCave(worldX, worldY, worldZ) > 0.63;
                         if (carveCave)
                         {
-                            chunk[lx, y, lz] = BlockType.Air;
+                            chunk[lx, y, lz] = idAir;
                             continue;
                         }
 
-                        if (y == height)
+                        if (y == surfaceLocalY)
                         {
-                            chunk[lx, y, lz] = BlockType.Grass;
+                            chunk[lx, y, lz] = idGrass;
                         }
-                        else if (y >= height - 3)
+                        else if (y >= surfaceLocalY - 3)
                         {
-                            chunk[lx, y, lz] = BlockType.Dirt;
+                            chunk[lx, y, lz] = idDirt;
                         }
                         else
                         {
-                            chunk[lx, y, lz] = BlockType.Stone;
+                            chunk[lx, y, lz] = idStone;
                         }
                     }
                 }

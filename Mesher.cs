@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 
 namespace CubeApp
 {
@@ -66,7 +67,19 @@ namespace CubeApp
 
             // Flood-fill light levels (0..15) across the target chunk and its neighbours so each
             // face can be shaded by how much light reaches the empty block it's exposed to.
-            var lighting = new ChunkLighting(chunkLookup.Keys, ChunkManager.ChunkSize, height, (x, y, z) => GetBlockAtWorld(chunkLookup, x, y, z));
+            // Occupancy is read straight from each chunk's raw block storage.
+            var lighting = new ChunkLighting(chunkLookup, ChunkManager.ChunkSize, height);
+
+            // Direct block storage for the target chunk and its +X/+Z neighbours. All mask samples
+            // hit the target chunk except the final slice's B sample, which crosses into exactly
+            // one of these neighbours - so the hot loop never touches the dictionary.
+            byte[] raw = chunk.RawBlocks;
+            int targetCX = FloorDiv(chunk.OriginX, ChunkManager.ChunkSize);
+            int targetCZ = FloorDiv(chunk.OriginZ, ChunkManager.ChunkSize);
+            chunkLookup.TryGetValue(new ChunkCoordinates(targetCX + 1, targetCZ), out var neighborPosX);
+            chunkLookup.TryGetValue(new ChunkCoordinates(targetCX, targetCZ + 1), out var neighborPosZ);
+            byte[]? rawPosX = neighborPosX?.RawBlocks;
+            byte[]? rawPosZ = neighborPosZ?.RawBlocks;
 
             int[] dims = new[] { width, height, depth };
 
@@ -79,239 +92,238 @@ namespace CubeApp
                 int dimU = dims[u];
                 int dimV = dims[v];
 
-                var mask = new (BlockType type, bool positive, int light)?[dimU, dimV];
+                // Flat integer mask: 0 = no face, otherwise bit0 = set, bits1-8 = block type,
+                // Two integer masks per slice: a "+d" face owned by block A (at slice) facing B,
+                // and a "-d" face owned by B (at slice+1) facing A. They're independent under
+                // transparency: water|air emits water's +d face only; stone|water emits stone's
+                // +d face only; stone|air emits stone's +d face; glass|stone emits glass's +d face,
+                // etc. Each cell is 0 (no face) or bit-packed: bit0=set, bits1-8=block id,
+                // bit9=positive normal, bits10-13=light. Merge equality is a single int compare.
+                var maskPos = new int[dimU * dimV];
+                var maskNeg = new int[dimU * dimV];
 
                 for (int slice = 0; slice < dimD; slice++)
                 {
-                    // build mask comparing slice and slice+1 in world coords
-                    for (int iu = 0; iu < dimU; iu++)
+                    Array.Clear(maskPos, 0, maskPos.Length);
+                    Array.Clear(maskNeg, 0, maskNeg.Length);
+
+                    // Build the masks comparing slice and slice+1. A is always inside the target
+                    // chunk; B only leaves it on the final slice (into +X/+Z neighbour, or open air
+                    // above the world for the Y axis). Face light samples the adjacent empty cell the
+                    // face is exposed to, matching classic Minecraft's neighbor sampling.
+                    bool lastSlice = slice + 1 >= dimD;
+                    if (d == 0)
                     {
-                        for (int jv = 0; jv < dimV; jv++)
+                        // X slices: u = local Y, v = local Z.
+                        for (int iu = 0; iu < dimU; iu++)
                         {
-                            // compute world coordinates for A (slice) and B (slice+1)
-                            int worldXA, worldYA, worldZA;
-                            int worldXB, worldYB, worldZB;
-
-                            if (d == 0)
+                            for (int jv = 0; jv < dimV; jv++)
                             {
-                                // X slice: u=Y, v=Z
-                                worldXA = chunk.OriginX + slice;
-                                worldXB = chunk.OriginX + slice + 1;
-                                worldYA = iu;
-                                worldYB = iu;
-                                worldZA = chunk.OriginZ + jv;
-                                worldZB = chunk.OriginZ + jv;
+                                int A = raw[(slice * depth + jv) * height + iu];
+                                int B = lastSlice
+                                    ? (rawPosX != null ? rawPosX[jv * height + iu] : BlockRegistry.AirId)
+                                    : raw[((slice + 1) * depth + jv) * height + iu];
+                                int cell = iu * dimV + jv;
+                                if (RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + slice + 1, iu, chunk.OriginZ + jv));
+                                if (RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + slice, iu, chunk.OriginZ + jv));
                             }
-                            else if (d == 1)
+                        }
+                    }
+                    else if (d == 1)
+                    {
+                        // Y slices: u = local Z, v = local X. B above the world top is always air.
+                        for (int iu = 0; iu < dimU; iu++)
+                        {
+                            for (int jv = 0; jv < dimV; jv++)
                             {
-                                // Y slice: u=Z, v=X
-                                worldYA = slice;
-                                worldYB = slice + 1;
-                                worldZA = chunk.OriginZ + iu;
-                                worldZB = chunk.OriginZ + iu;
-                                worldXA = chunk.OriginX + jv;
-                                worldXB = chunk.OriginX + jv;
+                                int baseIdx = (jv * depth + iu) * height + slice;
+                                int A = raw[baseIdx];
+                                int B = lastSlice ? BlockRegistry.AirId : raw[baseIdx + 1];
+                                int cell = iu * dimV + jv;
+                                if (RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu));
+                                if (RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + jv, slice, chunk.OriginZ + iu));
                             }
-                            else
+                        }
+                    }
+                    else
+                    {
+                        // Z slices: u = local X, v = local Y.
+                        for (int iu = 0; iu < dimU; iu++)
+                        {
+                            for (int jv = 0; jv < dimV; jv++)
                             {
-                                // Z slice: u=X, v=Y
-                                worldZA = chunk.OriginZ + slice;
-                                worldZB = chunk.OriginZ + slice + 1;
-                                worldXA = chunk.OriginX + iu;
-                                worldXB = chunk.OriginX + iu;
-                                worldYA = jv;
-                                worldYB = jv;
-                            }
-
-                            BlockType A = GetBlockAtWorld(chunkLookup, worldXA, worldYA, worldZA);
-                            BlockType B = GetBlockAtWorld(chunkLookup, worldXB, worldYB, worldZB);
-
-                            if (IsOpaque(A) && !IsOpaque(B))
-                            {
-                                // Face on A's +d side; it's exposed to the empty block B.
-                                mask[iu, jv] = (A, true, lighting.GetLight(worldXB, worldYB, worldZB));
-                            }
-                            else if (!IsOpaque(A) && IsOpaque(B))
-                            {
-                                // Face on B's -d side; it's exposed to the empty block A.
-                                mask[iu, jv] = (B, false, lighting.GetLight(worldXA, worldYA, worldZA));
-                            }
-                            else
-                            {
-                                mask[iu, jv] = null;
+                                int A = raw[(iu * depth + slice) * height + jv];
+                                int B = lastSlice
+                                    ? (rawPosZ != null ? rawPosZ[iu * depth * height + jv] : BlockRegistry.AirId)
+                                    : raw[(iu * depth + slice + 1) * height + jv];
+                                int cell = iu * dimV + jv;
+                                if (RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice + 1));
+                                if (RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice));
                             }
                         }
                     }
 
-                    // greedy merge mask into rectangles
-                    for (int i = 0; i < dimU; i++)
-                    {
-                        for (int j = 0; j < dimV; j++)
-                        {
-                            var entry = mask[i, j];
-                            if (entry == null)
-                                continue;
-
-                            // compute width
-                            int w;
-                            for (w = 1; i + w < dimU && mask[i + w, j] != null && mask[i + w, j]?.type == entry?.type && mask[i + w, j]?.positive == entry?.positive && mask[i + w, j]?.light == entry?.light; w++) { }
-
-                            // compute height
-                            int h;
-                            bool done = false;
-                            for (h = 1; j + h < dimV; h++)
-                            {
-                                for (int k = 0; k < w; k++)
-                                {
-                                    var m = mask[i + k, j + h];
-                                    if (m == null || m?.type != entry?.type || m?.positive != entry?.positive || m?.light != entry?.light)
-                                    {
-                                        done = true;
-                                        break;
-                                    }
-                                }
-
-                                if (done) break;
-                            }
-
-                            // Faces lie on the boundary between slice and slice+1, independent of normal sign.
-                            int boundary = slice + 1;
-
-                            // build four corners in world coordinates
-                            var corners = new Point3D[4];
-                            for (int cornerIdx = 0; cornerIdx < 4; cornerIdx++)
-                            {
-                                int iu = (cornerIdx == 0 || cornerIdx == 3) ? i : i + w;
-                                int jv2 = (cornerIdx == 0 || cornerIdx == 1) ? j : j + h;
-
-                                int wx, wy, wz;
-                                // map back to world coords
-                                switch (d)
-                                {
-                                    case 0:
-                                        // X is slice axis
-                                        wx = chunk.OriginX + boundary;
-                                        wy = iu;
-                                        wz = jv2 + chunk.OriginZ;
-                                        break;
-                                    case 1:
-                                        // Y is slice axis (u=Z, v=X)
-                                        // iu == Z, jv2 == X
-                                        wx = chunk.OriginX + jv2;
-                                        wy = boundary;
-                                        wz = chunk.OriginZ + iu;
-                                        break;
-                                    default:
-                                        // Z is slice axis
-                                        wx = chunk.OriginX + iu;
-                                        wy = jv2;
-                                        wz = chunk.OriginZ + boundary;
-                                        break;
-                                }
-
-                                corners[cornerIdx] = new Point3D(wx, wy, wz);
-                            }
-
-                            // desired normal direction for this face (axis-aligned)
-                            var desiredNormal = d switch
-                            {
-                                0 => new Point3D(entry?.positive == true ? 1 : -1, 0, 0),
-                                1 => new Point3D(0, entry?.positive == true ? 1 : -1, 0),
-                                2 => new Point3D(0, 0, entry?.positive == true ? 1 : -1),
-                                _ => new Point3D(0, 0, 0)
-                            };
-
-                            // Use exact axis-aligned normal to avoid floating rounding causing mismatches.
-                            var axisNormal = desiredNormal.Normalized();
-
-                            // Canonicalize corner ordering to stable Cubuild-like face axes.
-                            int tileWidth = Math.Max(1, w);
-                            int tileHeight = Math.Max(1, h);
-                            if (TryGetCubuildFaceAxes(axisNormal, out var uAxis, out var vAxis))
-                            {
-                                CanonicalizeQuadByAxes(corners, uAxis, vAxis);
-
-                                var canonicalCross = Cross(corners[1] - corners[0], corners[2] - corners[0]);
-                                if (Dot(canonicalCross, axisNormal) < 0)
-                                {
-                                    var tmp = corners[1];
-                                    corners[1] = corners[3];
-                                    corners[3] = tmp;
-                                }
-
-                                tileWidth = Math.Max(1, (int)Math.Round(GetAxisSpan(corners, uAxis)));
-                                tileHeight = Math.Max(1, (int)Math.Round(GetAxisSpan(corners, vAxis)));
-                            }
-                            else
-                            {
-                                // Fallback: ensure vertex winding produces a normal that matches desiredNormal.
-                                Point3D edge1 = corners[1] - corners[0];
-                                Point3D edge2 = corners[2] - corners[0];
-                                if (Dot(Cross(edge1, edge2), desiredNormal) < 0)
-                                {
-                                    var tmp = corners[1];
-                                    corners[1] = corners[3];
-                                    corners[3] = tmp;
-                                }
-                            }
-
-                            // Compute canonical block position the face belongs to (integer block coords)
-                            int bx = (int)Math.Floor(corners[0].X) - (axisNormal.X > 0 ? 1 : 0);
-                            int by = (int)Math.Floor(corners[0].Y) - (axisNormal.Y > 0 ? 1 : 0);
-                            int bz = (int)Math.Floor(corners[0].Z) - (axisNormal.Z > 0 ? 1 : 0);
-
-                            var blockPos = new Point3D(bx, by, bz);
-
-                            // Directional face shading matching Cubuild's faceShade:
-                            // top 1.0, bottom 0.5, east/west (X) 0.6, north/south (Z) 0.8.
-                            double shade = 0.8; // north/south (Z faces)
-                            if (axisNormal.Y > 0.5) shade = 1.0; // top
-                            else if (axisNormal.Y < -0.5) shade = 0.5; // bottom
-                            else if (Math.Abs(axisNormal.X) > 0.5) shade = 0.6; // east/west
-
-                            // Combine the directional shade with the flood-filled light level so
-                            // faces exposed to darkness (caves, undersides, shadowed areas) dim.
-                            double brightness = shade * ChunkLighting.Brightness(entry.Value.light);
-
-                            // compute atlas src rect for this block face
-                            var src = GetAtlasSrcRect(entry.Value.type, axisNormal);
-                            // pass tile span so renderers tile textures along face-local U/V axes.
-                            mesh.Add(new MeshFace(corners, src, axisNormal, blockPos, (float)brightness, tileWidth, tileHeight));
-
-                            // zero-out mask
-                            for (int aOff = 0; aOff < w; aOff++)
-                            {
-                                for (int bOff = 0; bOff < h; bOff++)
-                                {
-                                    mask[i + aOff, j + bOff] = null;
-                                }
-                            }
-                        }
-                    }
+                    // Greedy-merge each mask into rectangles (cells merge only on exact-pack equality).
+                    EmitMergedFaces(maskPos, dimU, dimV, slice, d, chunk, mesh);
+                    EmitMergedFaces(maskNeg, dimU, dimV, slice, d, chunk, mesh);
                 }
             }
 
             return mesh;
         }
 
-        private static BlockType GetBlockAtWorld(Dictionary<ChunkCoordinates, Chunk> chunkLookup, int worldX, int y, int worldZ)
+        /// <summary>
+        /// A block X renders a face toward neighbour N when X is non-air, the neighbour doesn't
+        /// fully occlude it (neighbour is air or visually transparent), and it isn't an internal
+        /// face between the same transparent block (water|water, glass|glass). Opaque neighbours
+        /// hide the face; air and transparent neighbours show it.
+        /// </summary>
+        private static bool RendersToward(int xId, int nId)
+            => xId != BlockRegistry.AirId
+               && (nId == BlockRegistry.AirId || BlockRegistry.IsTransparent(nId))
+               && !(BlockRegistry.IsTransparent(nId) && nId == xId);
+
+        private static int Pack(int blockId, bool positive, int light)
+            => 1 | (blockId << 1) | (positive ? 0x200 : 0) | (light << 10);
+
+        /// <summary>
+        /// Greedy-merges a mask of packed face codes into rectangles and appends them as
+        /// <see cref="MeshFace"/>s. The normal sign (and thus which face tile is used) is read
+        /// from each cell's positive bit, so the same routine serves the +d and -d masks.
+        /// </summary>
+        private static void EmitMergedFaces(int[] mask, int dimU, int dimV, int slice, int d, Chunk chunk, List<MeshFace> mesh)
         {
-            int chunkX = FloorDiv(worldX, ChunkManager.ChunkSize);
-            int chunkZ = FloorDiv(worldZ, ChunkManager.ChunkSize);
-            if (!chunkLookup.TryGetValue(new ChunkCoordinates(chunkX, chunkZ), out var chunk))
-                return BlockType.Air;
+            int height = chunk.Height;
+            for (int i = 0; i < dimU; i++)
+            {
+                for (int j = 0; j < dimV; j++)
+                {
+                    int entry = mask[i * dimV + j];
+                    if (entry == 0)
+                        continue;
 
-            int localX = worldX - chunk.OriginX;
-            int localZ = worldZ - chunk.OriginZ;
-            if (!chunk.IsInBounds(localX, y, localZ))
-                return BlockType.Air;
+                    int entryType = (entry >> 1) & 0xFF;
+                    bool entryPositive = (entry & 0x200) != 0;
+                    int entryLight = (entry >> 10) & 0xF;
 
-            return chunk[localX, y, localZ];
-        }
+                    // compute width
+                    int w;
+                    for (w = 1; i + w < dimU && mask[(i + w) * dimV + j] == entry; w++) { }
 
-        private static bool IsOpaque(BlockType t)
-        {
-            return t != BlockType.Air;
+                    // compute height
+                    int h;
+                    bool done = false;
+                    for (h = 1; j + h < dimV; h++)
+                    {
+                        for (int k = 0; k < w; k++)
+                        {
+                            if (mask[(i + k) * dimV + j + h] != entry)
+                            {
+                                done = true;
+                                break;
+                            }
+                        }
+                        if (done) break;
+                    }
+
+                    // Faces lie on the boundary between slice and slice+1, independent of normal sign.
+                    int boundary = slice + 1;
+
+                    // build four corners in world coordinates
+                    var corners = new Point3D[4];
+                    for (int cornerIdx = 0; cornerIdx < 4; cornerIdx++)
+                    {
+                        int cu = (cornerIdx == 0 || cornerIdx == 3) ? i : i + w;
+                        int cv = (cornerIdx == 0 || cornerIdx == 1) ? j : j + h;
+
+                        int wx, wy, wz;
+                        switch (d)
+                        {
+                            case 0:
+                                wx = chunk.OriginX + boundary;
+                                wy = chunk.OriginY + cu;
+                                wz = chunk.OriginZ + cv;
+                                break;
+                            case 1:
+                                wx = chunk.OriginX + cv;
+                                wy = chunk.OriginY + boundary;
+                                wz = chunk.OriginZ + cu;
+                                break;
+                            default:
+                                wx = chunk.OriginX + cu;
+                                wy = chunk.OriginY + cv;
+                                wz = chunk.OriginZ + boundary;
+                                break;
+                        }
+                        corners[cornerIdx] = new Point3D(wx, wy, wz);
+                    }
+
+                    var desiredNormal = d switch
+                    {
+                        0 => new Point3D(entryPositive ? 1 : -1, 0, 0),
+                        1 => new Point3D(0, entryPositive ? 1 : -1, 0),
+                        2 => new Point3D(0, 0, entryPositive ? 1 : -1),
+                        _ => new Point3D(0, 0, 0)
+                    };
+                    var axisNormal = desiredNormal.Normalized();
+
+                    int tileWidth = Math.Max(1, w);
+                    int tileHeight = Math.Max(1, h);
+                    if (TryGetCubuildFaceAxes(axisNormal, out var uAxis, out var vAxis))
+                    {
+                        CanonicalizeQuadByAxes(corners, uAxis, vAxis);
+                        var canonicalCross = Cross(corners[1] - corners[0], corners[2] - corners[0]);
+                        if (Dot(canonicalCross, axisNormal) < 0)
+                        {
+                            var tmp = corners[1];
+                            corners[1] = corners[3];
+                            corners[3] = tmp;
+                        }
+                        tileWidth = Math.Max(1, (int)Math.Round(GetAxisSpan(corners, uAxis)));
+                        tileHeight = Math.Max(1, (int)Math.Round(GetAxisSpan(corners, vAxis)));
+                    }
+                    else
+                    {
+                        Point3D edge1 = corners[1] - corners[0];
+                        Point3D edge2 = corners[2] - corners[0];
+                        if (Dot(Cross(edge1, edge2), desiredNormal) < 0)
+                        {
+                            var tmp = corners[1];
+                            corners[1] = corners[3];
+                            corners[3] = tmp;
+                        }
+                    }
+
+                    int bx = (int)Math.Floor(corners[0].X) - (axisNormal.X > 0 ? 1 : 0);
+                    int by = (int)Math.Floor(corners[0].Y) - (axisNormal.Y > 0 ? 1 : 0);
+                    int bz = (int)Math.Floor(corners[0].Z) - (axisNormal.Z > 0 ? 1 : 0);
+                    var blockPos = new Point3D(bx, by, bz);
+
+                    // Directional face shading matching classic Minecraft:
+                    // top 1.0, bottom 0.5, east/west (X) 0.6, north/south (Z) 0.8.
+                    double shade = 0.8;
+                    if (axisNormal.Y > 0.5) shade = 1.0;
+                    else if (axisNormal.Y < -0.5) shade = 0.5;
+                    else if (Math.Abs(axisNormal.X) > 0.5) shade = 0.6;
+
+                    // combine directional shade with the flood-filled light level
+                    double brightness = shade * ChunkLighting.Brightness(entryLight);
+
+                    // per-block atlas tile (honouring top/bottom/side overrides) and render alpha
+                    var src = BlockRegistry.FaceTexture(entryType, axisNormal);
+                    float alpha = BlockRegistry.Alpha(entryType);
+                    mesh.Add(new MeshFace(corners, src, axisNormal, blockPos, (float)brightness, tileWidth, tileHeight, alpha));
+
+                    // zero-out mask
+                    for (int aOff = 0; aOff < w; aOff++)
+                    {
+                        for (int bOff = 0; bOff < h; bOff++)
+                        {
+                            mask[(i + aOff) * dimV + j + bOff] = 0;
+                        }
+                    }
+                }
+            }
         }
 
         private static double Dot(Point3D a, Point3D b)
@@ -451,72 +463,6 @@ namespace CubeApp
 
             used[bestIndex] = true;
             return corners[bestIndex];
-        }
-
-        private static BlockType GetBlockAt(Dictionary<ChunkCoordinates, Chunk> chunkLookup, int localX, int y, int localZ, Chunk originChunk)
-        {
-            // convert localX/localZ relative to originChunk
-            int worldX = originChunk.OriginX + localX;
-            int worldZ = originChunk.OriginZ + localZ;
-            int chunkX = FloorDiv(worldX, ChunkManager.ChunkSize);
-            int chunkZ = FloorDiv(worldZ, ChunkManager.ChunkSize);
-            if (!chunkLookup.TryGetValue(new ChunkCoordinates(chunkX, chunkZ), out var chunk))
-            {
-                return BlockType.Air;
-            }
-
-            int lx = worldX - chunk.OriginX;
-            int lz = worldZ - chunk.OriginZ;
-            if (!chunk.IsInBounds(lx, y, lz))
-                return BlockType.Air;
-            return chunk[lx, y, lz];
-        }
-
-        private static TextureRect GetAtlasSrcRect(BlockType blockType, Point3D normal)
-        {
-            // Cubuild mapping (see local Cubuild reference): tile(row, col) with top-left origin.
-            // Atlas coords here are tx=col, ty=row.
-            const int tile = 16;
-            int tx = 0, ty = 0;
-
-            switch (blockType)
-            {
-                case BlockType.Grass:
-                    // Use the grass top texture on every face.
-                    tx = 0; ty = 0;
-                    break;
-                case BlockType.Dirt:
-                    // Cubuild DIRT: tile(0,2)
-                    tx = 2; ty = 0; break;
-                case BlockType.Stone:
-                    // Cubuild STONE: tile(0,1)
-                    tx = 1; ty = 0; break;
-                case BlockType.Cobblestone:
-                    // Cubuild COBBLESTONE: tile(1,0)
-                    tx = 0; ty = 1; break;
-                case BlockType.Sand:
-                    // Cubuild SAND: tile(1,2)
-                    tx = 2; ty = 1; break;
-                case BlockType.Planks:
-                    // Cubuild PLANKS: tile(0,4)
-                    tx = 4; ty = 0; break;
-                case BlockType.Bedrock:
-                    // Cubuild BEDROCK: tile(1,1)
-                    tx = 1; ty = 1; break;
-                case BlockType.Gravel:
-                    // Cubuild GRAVEL: tile(1,3)
-                    tx = 3; ty = 1; break;
-                case BlockType.Obsidian:
-                    // Cubuild OBSIDIAN: tile(2,5)
-                    tx = 5; ty = 2; break;
-                case BlockType.MossyCobblestone:
-                    // Cubuild MOSSYCOBBLESTONE: tile(2,4)
-                    tx = 4; ty = 2; break;
-                default:
-                    tx = 15; ty = 15; break;
-            }
-
-            return new TextureRect(tx * tile, ty * tile, tile, tile);
         }
     }
 }

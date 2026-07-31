@@ -1,6 +1,5 @@
 using System;
 using System.Numerics;
-using CubeApp.World;
 
 namespace CubeApp
 {
@@ -16,19 +15,21 @@ namespace CubeApp
         private const float BlockReach = 6.5f;
 
         /// <summary>
-        /// Result of a block/entity pick operation. Used by both break and place systems.
+        /// Result of a block pick operation. Used by both break and place systems.
         /// </summary>
-        public struct PickResult
+        public readonly struct PickBlockResult
         {
-            public (int x, int y, int z) RemoveBlock { get; }
-            public (int x, int y, int z) PlaceBlock { get; }
+            public (int x, int y, int z) Remove { get; }
+            public (int x, int y, int z) Place { get; }
             public Point3D Normal { get; }
+            public double Distance { get; }
 
-            public PickResult((int x, int y, int z) remove, (int x, int y, int z) place, Point3D normal)
+            public PickBlockResult((int x, int y, int z) remove, (int x, int y, int z) place, Point3D normal, double distance)
             {
-                RemoveBlock = remove;
-                PlaceBlock = place;
+                Remove = remove;
+                Place = place;
                 Normal = normal;
+                Distance = distance;
             }
         }
 
@@ -37,7 +38,7 @@ namespace CubeApp
         /// <summary>
         /// Performs a block hit-test along a ray. Returns null if nothing is within reach or all blocks are Air.
         /// </summary>
-        public PickResult? TryPickBlock(Point3D origin, Point3D direction)
+        public PickBlockResult? TryPickBlock(Point3D origin, Point3D direction)
         {
             direction = direction.Normalized();
             var blockX = (int)Math.Floor(origin.X);
@@ -56,30 +57,40 @@ namespace CubeApp
             var tMaxY = stepY > 0 ? (blockY + 1.0 - origin.Y) * tDeltaY : (origin.Y - blockY) * tDeltaY;
             var tMaxZ = stepZ > 0 ? (blockZ + 1.0 - origin.Z) * tDeltaZ : (origin.Z - blockZ) * tDeltaZ;
 
-            var currentX = blockX, currentY = blockY, currentZ = blockZ;
+            var currentX = blockX;
+            var currentY = blockY;
+            var currentZ = blockZ;
             var distance = 0.0;
-            var lastX = currentX, lastY = currentY, lastZ = currentZ;
+            var lastX = currentX;
+            var lastY = currentY;
+            var lastZ = currentZ;
             var normal = Point3D.Zero;
 
             for (int iteration = 0; iteration < 200 && distance <= BlockReach; iteration++)
             {
-                if (_manager.TryGetLoadedBlock(currentX, currentY, currentZ, out var block) && block != BlockType.Air)
+                if (_manager.TryGetLoadedBlock(currentX, currentY, currentZ, out var block) && block != BlockRegistry.AirId)
                 {
-                    return new PickResult((currentX, currentY, currentZ), (lastX, lastY, lastZ), normal);
+                    return new PickBlockResult((currentX, currentY, currentZ), (lastX, lastY, lastZ), normal, distance);
                 }
 
-                lastX = currentX; lastY = currentY; lastZ = currentZ;
+                lastX = currentX;
+                lastY = currentY;
+                lastZ = currentZ;
 
                 if (tMaxX < tMaxY)
                 {
                     if (tMaxX < tMaxZ)
                     {
-                        currentX += stepX; distance = tMaxX; tMaxX += tDeltaX;
+                        currentX += stepX;
+                        distance = tMaxX;
+                        tMaxX += tDeltaX;
                         normal = new Point3D(-stepX, 0, 0);
                     }
                     else
                     {
-                        currentZ += stepZ; distance = tMaxZ; tMaxZ += tDeltaZ;
+                        currentZ += stepZ;
+                        distance = tMaxZ;
+                        tMaxZ += tDeltaZ;
                         normal = new Point3D(0, 0, -stepZ);
                     }
                 }
@@ -87,12 +98,16 @@ namespace CubeApp
                 {
                     if (tMaxY < tMaxZ)
                     {
-                        currentY += stepY; distance = tMaxY; tMaxY += tDeltaY;
+                        currentY += stepY;
+                        distance = tMaxY;
+                        tMaxY += tDeltaY;
                         normal = new Point3D(0, -stepY, 0);
                     }
                     else
                     {
-                        currentZ += stepZ; distance = tMaxZ; tMaxZ += tDeltaZ;
+                        currentZ += stepZ;
+                        distance = tMaxZ;
+                        tMaxZ += tDeltaZ;
                         normal = new Point3D(0, 0, -stepZ);
                     }
                 }
@@ -119,6 +134,32 @@ namespace CubeApp
             bool overlapsZ = (z + 1.0) > minZ && z < maxZ;
 
             return overlapsX && overlapsY && overlapsZ;
+        }
+
+        /// <summary>
+        /// Requests immediate remesh for the chunk containing the block and its neighbors if at a boundary.
+        /// Used after block modifications to ensure correct mesh updates.
+        /// </summary>
+        public void RequestNeighborRemesh(int x, int y, int z, MeshScheduler meshScheduler)
+        {
+            var editedChunk = new ChunkCoordinates(WorldToChunkCoord(x), WorldToChunkCoord(z));
+            meshScheduler.RequestImmediateRemesh(editedChunk);
+
+            int localX = x - (editedChunk.X * ChunkManager.ChunkSize);
+            int localZ = z - (editedChunk.Z * ChunkManager.ChunkSize);
+            if (localX == 0)
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X - 1, editedChunk.Z));
+            if (localX == ChunkManager.ChunkSize - 1)
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X + 1, editedChunk.Z));
+            if (localZ == 0)
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X, editedChunk.Z - 1));
+            if (localZ == ChunkManager.ChunkSize - 1)
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X, editedChunk.Z + 1));
+        }
+
+        private static int WorldToChunkCoord(double value)
+        {
+            return (int)Math.Floor(value / ChunkManager.ChunkSize);
         }
 
         public void Dispose() { }

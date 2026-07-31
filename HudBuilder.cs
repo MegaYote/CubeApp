@@ -1,27 +1,9 @@
 using System;
-using System.Collections.Generic;
-using CubeApp.World;
+using System.Numerics;
+using CubeApp.Renderer;
 
 namespace CubeApp
 {
-    /// <summary>
-    /// HUD state passed from the player controller / game simulation to the renderer for overlay drawing.
-    /// </summary>
-    public struct GameHudState
-    {
-        public bool ShowDebug { get; set; }
-        public float Fps { get; set; }
-        public float UpdateMs { get; set; }
-        public float MeshMs { get; set; }
-        public float UploadMs { get; set; }
-        public float RenderMs { get; set; }
-        public string FacingText { get; set; }
-        public string SelectedBlockText { get; set; }
-        public string RenderDistanceText { get; set; }
-        public int SelectedSlot { get; set; }
-        public Vector3[]? HighlightWorldQuad { get; set; }
-    }
-
     /// <summary>
     /// Builds the HUD overlay state each frame. Extracted from Program.BuildHud() so the main loop
     /// stays thin and rendering systems can consume a plain data struct rather than coupling to Program.cs.
@@ -39,27 +21,13 @@ namespace CubeApp
         public float UploadMs { get; set; }
         public float RenderMs { get; set; }
         public int SelectedSlot { get; set; }
-        public BlockType SelectedBlock { get; set; }
+        public int SelectedBlock { get; set; }
         public int RenderDistanceIndex { get; set; }
-        public string[] RenderDistanceNames { get; set; }
+        public string[] RenderDistanceNames { get; set; } = Array.Empty<string>();
         public int ChunkRenderRadius { get; set; }
 
         // The pick result (set by the caller from TryPickBlock). Null when nothing is highlighted.
-        public PickBlockResult? HighlightedBlock { get; set; }
-
-        private static readonly BlockType[] HotbarBlockTypes =
-        {
-            BlockType.Grass,
-            BlockType.Dirt,
-            BlockType.Stone,
-            BlockType.Cobblestone,
-            BlockType.Sand,
-            BlockType.Planks,
-            BlockType.Bedrock,
-            BlockType.Gravel,
-            BlockType.Obsidian,
-            BlockType.MossyCobblestone,
-        };
+        public BlockInteractionSystem.PickBlockResult? HighlightedBlock { get; set; }
 
         public HudBuilder(PlayerController player, ChunkManager manager)
         {
@@ -70,12 +38,12 @@ namespace CubeApp
         /// <summary>
         /// Produces the HUD state for the current frame. Call once per tick before rendering.
         /// </summary>
-        public GameHudState Build()
+        public HudState Build()
         {
             var forward = _player.GetForward();
             Vector3[]? highlightQuad = ComputeHighlightQuad();
 
-            return new GameHudState
+            return new HudState
             {
                 ShowDebug = ShowFps,
                 Fps = FpsValue,
@@ -83,11 +51,14 @@ namespace CubeApp
                 MeshMs = MeshMs,
                 UploadMs = UploadMs,
                 RenderMs = RenderMs,
-                FacingText = $"{GetCompassDirection(_player.State.Yaw)} ({NormalizeYaw(_player.State.Yaw):0.0} deg)",
+                FacingText = $"{GetCompassDirection(_player.Yaw)} ({NormalizeYaw(_player.Yaw):0.0} deg)",
                 SelectedBlockText = $"Selected: {SelectedBlock}",
                 RenderDistanceText = $"Render dist: {RenderDistanceNames[RenderDistanceIndex]} ({ChunkRenderRadius})",
                 SelectedSlot = SelectedSlot,
                 HighlightWorldQuad = highlightQuad,
+                PlayerChunkX = WorldToChunkCoord(_player.Position.X),
+                PlayerChunkZ = WorldToChunkCoord(_player.Position.Z),
+                RenderDistance = ChunkRenderRadius,
             };
         }
 
@@ -208,6 +179,11 @@ namespace CubeApp
             float r = yaw % 360f;
             if (r < 0f) r += 360f;
             return r;
+        }
+
+        private static int WorldToChunkCoord(double value)
+        {
+            return (int)Math.Floor(value / ChunkManager.ChunkSize);
         }
 
         public void Dispose() { }

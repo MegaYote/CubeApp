@@ -1,0 +1,225 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Text.Json;
+
+namespace CubeApp
+{
+    /// <summary>
+    /// Central, data-driven catalogue of every block, loaded once at startup from blocks.json.
+    /// Blocks are addressed by string id in code/data (e.g. <c>BlockRegistry.GetId("grass")</c>)
+    /// and by numeric id in hot storage (the chunk's <c>byte[]</c>); air is reserved numeric id 0.
+    /// Hot-path lookups are array-indexed by numeric id so the mesher/lighting/collision code never
+    /// pays for a dictionary or an enum switch.
+    /// </summary>
+    public static class BlockRegistry
+    {
+        public const int AirId = 0;
+        public const int TileSize = 16; // atlas tiles are 16x16 (terrain.png is a 16x16 tile grid)
+
+        private static Dictionary<string, BlockDefinition> _byName = new();
+        private static BlockDefinition[] _defs = Array.Empty<BlockDefinition>();
+        // Array-indexed fast flags keyed by numeric id, sized to Count (so any valid id is in range).
+        private static bool[] _solid = Array.Empty<bool>();
+        private static bool[] _opaque = Array.Empty<bool>();
+        private static bool[] _transparent = Array.Empty<bool>();
+        private static float[] _alpha = Array.Empty<float>();
+        private static uint[] _mapColor = Array.Empty<uint>();
+        private static int[] _hotbar = Array.Empty<int>();
+        public static bool Loaded { get; private set; }
+        public static int Count { get; private set; }
+
+        // ---- Deserialization DTOs ------------------------------------------------
+
+        private sealed class BlocksFile
+        {
+            public List<string> Hotbar { get; set; } = new();
+            public List<BlockDefDto> Blocks { get; set; } = new();
+        }
+
+        private sealed class BlockDefDto
+        {
+            public string Id { get; set; } = "";
+            public string? DisplayName { get; set; }
+            public string? Texture { get; set; }
+            public string? Top { get; set; }
+            public string? Bottom { get; set; }
+            public string? Side { get; set; }
+            public bool Solid { get; set; } = true;
+            public bool Opaque { get; set; } = true;
+            public bool Transparent { get; set; } = false;
+            public double Alpha { get; set; } = 1.0;
+            public int LightEmission { get; set; } = 0;
+            public string? MapColor { get; set; } = "#000000";
+        }
+
+        /// <summary>Loads the catalogue from a JSON string. Throws on the first malformed block
+        /// (unknown tile reference, missing air, duplicate id) so bad data fails loudly at startup.</summary>
+        public static void LoadFromJson(string json)
+        {
+            var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var file = JsonSerializer.Deserialize<BlocksFile>(json, opts)
+                ?? throw new InvalidDataException("blocks.json is empty or malformed.");
+
+            if (file.Blocks.Count == 0)
+                throw new InvalidDataException("blocks.json defines no blocks.");
+            if (file.Blocks.Count > 256)
+                throw new InvalidDataException($"blocks.json defines {file.Blocks.Count} blocks; max is 256 (byte storage).");
+            if (!string.Equals(file.Blocks[0].Id, "air", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The first block in blocks.json must be \"air\" (numeric id 0).");
+
+            var defs = new BlockDefinition[file.Blocks.Count];
+            _byName = new Dictionary<string, BlockDefinition>(file.Blocks.Count, StringComparer.OrdinalIgnoreCase);
+
+            for (int i = 0; i < file.Blocks.Count; i++)
+            {
+                var dto = file.Blocks[i];
+                if (string.IsNullOrWhiteSpace(dto.Id))
+                    throw new InvalidDataException($"Block at index {i} has no id.");
+                if (_byName.ContainsKey(dto.Id))
+                    throw new InvalidDataException($"Duplicate block id \"{dto.Id}\".");
+
+                var def = new BlockDefinition
+                {
+                    Id = dto.Id,
+                    NumericId = i,
+                    DisplayName = dto.DisplayName ?? dto.Id,
+                    Solid = dto.Solid,
+                    Opaque = dto.Opaque,
+                    Transparent = dto.Transparent,
+                    Alpha = (float)dto.Alpha,
+                    LightEmission = dto.LightEmission,
+                    MapColor = ParseMapColor(dto.MapColor ?? "#000000"),
+                };
+
+                // air has no faces; everything else must define at least an "all" tile.
+                if (i != 0)
+                {
+                    def.AllTexture = dto.Texture != null ? ParseTile(dto.Texture) : throw new InvalidDataException($"Block \"{dto.Id}\" has no texture.");
+                    if (dto.Top != null) def.TopTexture = ParseTile(dto.Top);
+                    if (dto.Bottom != null) def.BottomTexture = ParseTile(dto.Bottom);
+                    if (dto.Side != null) def.SideTexture = ParseTile(dto.Side);
+                }
+
+                defs[i] = def;
+                _byName[dto.Id] = def;
+            }
+
+            _defs = defs;
+            Count = defs.Length;
+            _solid = new bool[Count];
+            _opaque = new bool[Count];
+            _transparent = new bool[Count];
+            _alpha = new float[Count];
+            _mapColor = new uint[Count];
+            for (int i = 0; i < Count; i++)
+            {
+                _solid[i] = defs[i].Solid;
+                _opaque[i] = defs[i].Opaque;
+                _transparent[i] = defs[i].Transparent;
+                _alpha[i] = defs[i].Alpha;
+                _mapColor[i] = defs[i].MapColor;
+            }
+
+            _hotbar = new int[Math.Min(file.Hotbar.Count, 10)];
+            for (int i = 0; i < _hotbar.Length; i++)
+            {
+                if (!_byName.TryGetValue(file.Hotbar[i], out var def))
+                    throw new InvalidDataException($"Hotbar references unknown block \"{file.Hotbar[i]}\".");
+                _hotbar[i] = def.NumericId;
+            }
+
+            Loaded = true;
+        }
+
+        /// <summary>Loads blocks.json the same way other resources load: embedded resource first
+        /// (so the self-contained .exe carries it), then a loose file next to the executable.</summary>
+        public static void LoadDefault()
+        {
+            byte[]? bytes = LoadResourceBytes("blocks.json");
+            if (bytes == null)
+                throw new FileNotFoundException("blocks.json not found as an embedded resource or loose file.");
+            LoadFromJson(System.Text.Encoding.UTF8.GetString(bytes));
+        }
+
+        private static byte[]? LoadResourceBytes(string fileName)
+        {
+            var asm = System.Reflection.Assembly.GetExecutingAssembly();
+            foreach (var name in asm.GetManifestResourceNames())
+            {
+                if (name.EndsWith(fileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    using var stream = asm.GetManifestResourceStream(name);
+                    if (stream != null)
+                    {
+                        using var ms = new MemoryStream();
+                        stream.CopyTo(ms);
+                        return ms.ToArray();
+                    }
+                }
+            }
+
+            string path = File.Exists(fileName) ? fileName : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fileName);
+            return File.Exists(path) ? File.ReadAllBytes(path) : null;
+        }
+
+        // ---- Lookups -------------------------------------------------------------
+
+        public static BlockDefinition Get(string name) => _byName[name];
+        public static bool TryGet(string name, out BlockDefinition def) => _byName.TryGetValue(name, out def!);
+        public static int GetId(string name) => _byName[name].NumericId;
+        public static BlockDefinition GetById(int id) => _defs[id];
+        public static string GetName(int id) => _defs[id].Id;
+
+        // Array-indexed hot lookups (NUMERIC id in range 0..Count-1).
+        public static bool IsSolid(int id) => id > 0 && id < Count && _solid[id];
+        public static bool IsOpaque(int id) => id >= 0 && id < Count && _opaque[id];
+        public static bool IsTransparent(int id) => id >= 0 && id < Count && _transparent[id];
+        public static float Alpha(int id) => _alpha[id];
+        public static uint MapColorOf(int id) => _mapColor[id];
+        public static TextureRect FaceTexture(int id, Point3D normal) => _defs[id].FaceTexture(normal);
+
+        public static IReadOnlyList<int> Hotbar => _hotbar;
+
+        // ---- Parsers -------------------------------------------------------------
+
+        /// <summary>Parses a "col,row" atlas tile string into a TextureRect at (col*16, row*16, 16, 16).</summary>
+        private static TextureRect ParseTile(string s)
+        {
+            var parts = s.Split(',');
+            if (parts.Length != 2 || !int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int col)
+                || !int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int row))
+            {
+                throw new InvalidDataException($"Bad tile \"{s}\" (expected \"col,row\").");
+            }
+            return new TextureRect(col * TileSize, row * TileSize, TileSize, TileSize);
+        }
+
+        /// <summary>Parses a "#RRGGBB" hex colour into an ImGui-packed U32 (0xAABBGGRR, full alpha).</summary>
+        private static uint ParseMapColor(string s)
+        {
+            if (s.StartsWith("#", StringComparison.Ordinal)) s = s.Substring(1);
+            // Accept RRGGBB or RRGGBBAA; default alpha to 255.
+            int r, g, b, a = 255;
+            if (s.Length == 6)
+            {
+                r = Convert.ToInt32(s.Substring(0, 2), 16);
+                g = Convert.ToInt32(s.Substring(2, 2), 16);
+                b = Convert.ToInt32(s.Substring(4, 2), 16);
+            }
+            else if (s.Length == 8)
+            {
+                r = Convert.ToInt32(s.Substring(0, 2), 16);
+                g = Convert.ToInt32(s.Substring(2, 2), 16);
+                b = Convert.ToInt32(s.Substring(4, 2), 16);
+                a = Convert.ToInt32(s.Substring(6, 2), 16);
+            }
+            else
+            {
+                throw new InvalidDataException($"Bad mapColor \"{s}\" (expected #RRGGBB or #RRGGBBAA).");
+            }
+            return ((uint)a << 24) | ((uint)b << 16) | ((uint)g << 8) | (uint)r;
+        }
+    }
+}

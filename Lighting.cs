@@ -38,13 +38,20 @@ namespace CubeApp
         private readonly bool[] opaque;
         private readonly byte[] light;
 
-        public ChunkLighting(IReadOnlyCollection<ChunkCoordinates> chunkCoords, int chunkSize, int chunkHeight, Func<int, int, int, BlockType> getBlock)
+        // Meshing runs on a small fixed set of worker threads and each builds at most one
+        // ChunkLighting at a time, so the big scratch arrays (~590k cells for a 3x3-chunk region)
+        // are pooled per thread instead of being reallocated (and GC'd) on every single remesh.
+        [ThreadStatic] private static bool[]? _opaquePool;
+        [ThreadStatic] private static byte[]? _lightPool;
+        [ThreadStatic] private static Queue<int>? _queuePool;
+
+        public ChunkLighting(IReadOnlyDictionary<ChunkCoordinates, Chunk> chunks, int chunkSize, int chunkHeight)
         {
-            if (getBlock == null) throw new ArgumentNullException(nameof(getBlock));
+            if (chunks == null) throw new ArgumentNullException(nameof(chunks));
 
             int minChunkX = int.MaxValue, maxChunkX = int.MinValue;
             int minChunkZ = int.MaxValue, maxChunkZ = int.MinValue;
-            foreach (var c in chunkCoords)
+            foreach (var c in chunks.Keys)
             {
                 if (c.X < minChunkX) minChunkX = c.X;
                 if (c.X > maxChunkX) maxChunkX = c.X;
@@ -52,7 +59,7 @@ namespace CubeApp
                 if (c.Z > maxChunkZ) maxChunkZ = c.Z;
             }
 
-            if (chunkCoords.Count == 0)
+            if (chunks.Count == 0)
             {
                 minChunkX = maxChunkX = 0;
                 minChunkZ = maxChunkZ = 0;
@@ -64,28 +71,54 @@ namespace CubeApp
             dimX = (maxChunkX - minChunkX + 1) * chunkSize;
             dimZ = (maxChunkZ - minChunkZ + 1) * chunkSize;
 
-            opaque = new bool[dimX * height * dimZ];
-            light = new byte[dimX * height * dimZ];
-
-            for (int lx = 0; lx < dimX; lx++)
+            int cells = dimX * height * dimZ;
+            if (_opaquePool == null || _opaquePool.Length < cells)
             {
-                for (int lz = 0; lz < dimZ; lz++)
+                _opaquePool = new bool[cells];
+                _lightPool = new byte[cells];
+            }
+            opaque = _opaquePool;
+            light = _lightPool!;
+            Array.Clear(opaque, 0, cells);
+            Array.Clear(light, 0, cells);
+
+            // Fill occupancy straight from each chunk's raw block bytes. Both layouts keep the
+            // vertical column contiguous, so the inner copy is a tight sequential loop - no
+            // delegate calls, no dictionary lookups, no per-cell coordinate math. Chunks missing
+            // from the region (e.g. unloaded diagonal corners) simply stay air.
+            foreach (var kv in chunks)
+            {
+                var c = kv.Value;
+                byte[] raw = c.RawBlocks;
+                int baseLX = kv.Key.X * chunkSize - minX;
+                int baseLZ = kv.Key.Z * chunkSize - minZ;
+                for (int x = 0; x < chunkSize; x++)
                 {
-                    for (int y = 0; y < height; y++)
+                    for (int z = 0; z < chunkSize; z++)
                     {
-                        opaque[Index(lx, y, lz)] = getBlock(minX + lx, y, minZ + lz) != BlockType.Air;
+                        int src = (x * chunkSize + z) * chunkHeight;
+                        int dst = Index(baseLX + x, 0, baseLZ + z);
+                        for (int y = 0; y < chunkHeight; y++)
+                        {
+                            // Opaque blocks skylight flood-fill (stone, dirt, planks...). Transparent-to-light blocks
+                            // (water, glass, leaves) let light pass through so caves under water aren't black.
+                            opaque[dst + y] = BlockRegistry.IsOpaque(raw[src + y]);
+                        }
                     }
                 }
             }
 
-            var queue = new Queue<int>();
+            var queue = _queuePool ??= new Queue<int>();
+            queue.Clear();
             SeedSkyLight(queue);
             Propagate(queue);
         }
 
+        // y is the fastest-varying index so vertical columns are contiguous (matches Chunk's
+        // internal layout, which makes the occupancy fill and sky-light seeding sequential).
         private int Index(int lx, int y, int lz)
         {
-            return (lx * height + y) * dimZ + lz;
+            return (lx * dimZ + lz) * height + y;
         }
 
         private void SeedSkyLight(Queue<int> queue)
@@ -96,10 +129,11 @@ namespace CubeApp
                 {
                     // Walk down from the sky; every air block is fully sky-lit until the first
                     // opaque block, which casts everything below it into shadow (to be filled in by
-                    // the flood fill from the sides).
+                    // the flood fill from the sides). Columns are contiguous in the new layout.
+                    int colBase = Index(lx, 0, lz);
                     for (int y = height - 1; y >= 0; y--)
                     {
-                        int idx = Index(lx, y, lz);
+                        int idx = colBase + y;
                         if (opaque[idx])
                         {
                             break;
@@ -150,10 +184,10 @@ namespace CubeApp
 
         private void Decode(int idx, out int lx, out int y, out int lz)
         {
-            lz = idx % dimZ;
-            int t = idx / dimZ;
-            y = t % height;
-            lx = t / height;
+            y = idx % height;
+            int t = idx / height;
+            lz = t % dimZ;
+            lx = t / dimZ;
         }
 
         /// <summary>
@@ -176,14 +210,20 @@ namespace CubeApp
         }
 
         /// <summary>
-        /// Maps a discrete light level to a brightness multiplier, matching the Cubuild reference:
-        /// a linear ramp from a small ambient minimum at level 0 up to full brightness at level 15.
+        /// Maps a discrete light level to a brightness multiplier, matching Minecraft's classic
+        /// lightBrightnessTable (Alpha 1.1.2_01 / Infdev 20100630 World.java):
+        ///     v = 1 - light/15
+        ///     table[light] = (1 - v) / (v*3 + 1) * (1 - 0.05) + 0.05
+        /// A gamma curve with a 0.05 ambient minimum at level 0. It darkens low light levels far
+        /// more aggressively than a linear ramp, which gives classic Minecraft its deep-cave
+        /// contrast and torch falloff.
         /// </summary>
         public static float Brightness(int lightLevel)
         {
             int clamped = Math.Clamp(lightLevel, 0, MaxLight);
-            const float minBrightness = 0.04f;
-            return minBrightness + (1f - minBrightness) * (clamped / (float)MaxLight);
+            float inverted = 1f - clamped / (float)MaxLight;
+            const float ambient = 0.05f;
+            return (1f - inverted) / (inverted * 3f + 1f) * (1f - ambient) + ambient;
         }
     }
 }

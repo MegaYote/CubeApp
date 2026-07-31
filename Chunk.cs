@@ -3,31 +3,34 @@ using System.Collections.Generic;
 
 namespace CubeApp
 {
-    public enum BlockType
-    {
-        Air,
-        Grass,
-        Dirt,
-        Stone,
-        Cobblestone,
-        Sand,
-        Planks,
-        Bedrock,
-        Gravel,
-        Obsidian,
-        MossyCobblestone
-    }
-
     public sealed class Chunk
     {
-        private readonly BlockType[,,] blocks;
+        // Flat byte array (1 byte per block instead of a 4-byte enum in a multidimensional
+        // array): 4x less memory per chunk and faster indexing (single bounds check, no
+        // per-dimension checks). Layout is column-major: ((x * Depth + z) * Height + y), so a
+        // vertical column is contiguous - the common access pattern for generation and lighting.
+        private readonly byte[] blocks;
         private readonly object _meshLock = new();
 
         public int Width { get; }
         public int Height { get; }
         public int Depth { get; }
         public int OriginX { get; }
+        public int OriginY { get; }
         public int OriginZ { get; }
+
+        /// <summary>
+        /// Converts a world Y coordinate to the local array index.
+        /// </summary>
+        public int WorldYToLocal(int worldY) => worldY - OriginY;
+
+        /// <summary>
+        /// Returns true if the given local coordinates are within the chunk's array bounds.
+        /// </summary>
+        public bool IsInBounds(int localX, int localY, int localZ)
+        {
+            return localX >= 0 && localX < Width && localY >= 0 && localY < Height && localZ >= 0 && localZ < Depth;
+        }
         // Cached mesh for this chunk (regenerated when NeedsRemesh is true)
         public List<MeshFace> MeshFaces { get; set; } = new List<MeshFace>();
         public bool NeedsRemesh { get; set; } = true;
@@ -38,25 +41,27 @@ namespace CubeApp
 
         public object MeshLock => _meshLock;
 
-        public Chunk(int width, int height, int depth, int originX, int originZ)
+        public Chunk(int width, int height, int depth, int originX, int originY, int originZ)
         {
             Width = width;
             Height = height;
             Depth = depth;
             OriginX = originX;
+            OriginY = originY;
             OriginZ = originZ;
-            blocks = new BlockType[width, height, depth];
+            blocks = new byte[width * height * depth];
         }
 
-        public BlockType this[int x, int y, int z]
-        {
-            get => blocks[x, y, z];
-            set => blocks[x, y, z] = value;
-        }
+        /// <summary>Flat index of a local block coordinate (column-major; y contiguous).</summary>
+        public int Index(int x, int y, int z) => (x * Depth + z) * Height + y;
 
-        public bool IsInBounds(int x, int y, int z)
+        /// <summary>Raw block storage for hot paths (mesher/lighting). Values are block ids.</summary>
+        public byte[] RawBlocks => blocks;
+
+        public int this[int x, int y, int z]
         {
-            return x >= 0 && x < Width && y >= 0 && y < Height && z >= 0 && z < Depth;
+            get => blocks[(x * Depth + z) * Height + y];
+            set => blocks[(x * Depth + z) * Height + y] = (byte)value;
         }
 
         public void GenerateFlatPlane(int grassHeight)
@@ -74,15 +79,19 @@ namespace CubeApp
                     {
                         if (y == grassHeight)
                         {
-                            blocks[x, y, z] = BlockType.Grass;
+                            this[x, y, z] = BlockRegistry.GetId("grass");
                         }
                         else if (y < grassHeight)
                         {
-                            blocks[x, y, z] = BlockType.Dirt;
+                            this[x, y, z] = BlockRegistry.GetId("dirt");
+                        }
+                        else if (y <= 0)
+                        {
+                            this[x, y, z] = BlockRegistry.GetId("water");
                         }
                         else
                         {
-                            blocks[x, y, z] = BlockType.Air;
+                            this[x, y, z] = BlockRegistry.AirId;
                         }
                     }
                 }
@@ -116,15 +125,19 @@ namespace CubeApp
 
                         if (y < groundHeight - 1 && !carveCave)
                         {
-                            blocks[x, y, z] = (y < groundHeight - 3) ? BlockType.Stone : BlockType.Dirt;
+                            this[x, y, z] = (y < groundHeight - 3) ? BlockRegistry.GetId("stone") : BlockRegistry.GetId("dirt");
                         }
                         else if (y == groundHeight - 1 && !carveCave)
                         {
-                            blocks[x, y, z] = BlockType.Grass;
+                            this[x, y, z] = BlockRegistry.GetId("grass");
+                        }
+                        else if (y <= 0)
+                        {
+                            this[x, y, z] = BlockRegistry.GetId("water");
                         }
                         else
                         {
-                            blocks[x, y, z] = BlockType.Air;
+                            this[x, y, z] = BlockRegistry.AirId;
                         }
                     }
                 }

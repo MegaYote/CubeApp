@@ -7,10 +7,16 @@ namespace CubeApp.Renderer
         void Render();
         void Dispose();
         void UploadChunk(CubeApp.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces);
+        void UploadChunkPriority(CubeApp.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces);
         void RemoveChunk(CubeApp.ChunkCoordinates coords);
         void UpdateCamera(CubeApp.Point3D position, float yaw, float pitch);
+        CubeApp.Point3D? CameraPosition { get; }
+        System.Numerics.Matrix4x4? ViewProjection { get; }
         void SetRenderDistance(int chunkRadius);
         void SetHud(HudState hud);
-        void SetEntities(System.Collections.Generic.IReadOnlyList<CubeApp.DuckInstance> ducks);
+        void SetEntities(System.Collections.Generic.IReadOnlyList<CubeApp.MobRenderData> mobRenderData);
+        void SetChunkManager(CubeApp.ChunkManager manager);
+        void MeshChunkImmediate(CubeApp.ChunkCoordinates coords);
+        void ProcessPendingPriorityMeshes();
     }
 }

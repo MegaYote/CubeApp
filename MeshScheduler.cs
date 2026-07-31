@@ -42,7 +42,7 @@ namespace CubeApp
             return queued;
         }
 
-        // Jumps a specific chunk to the front of the mesh queue. Call this the moment the player
+// Jumps a specific chunk to the front of the mesh queue. Call this the moment the player
         // edits a block, so they see the change right away instead of waiting on whatever terrain
         // happens to be streaming in.
         public void RequestImmediateRemesh(ChunkCoordinates coords)
@@ -50,12 +50,12 @@ namespace CubeApp
             if (!_manager.TryGetLoadedChunk(coords, out var chunk))
                 return;
 
-            if (!chunk.NeedsRemesh)
-                return;
-
+            // Always set NeedsRemesh so the chunk will be remeshed
+            chunk.NeedsRemesh = true;
             chunk.IsMeshingQueued = true;
             _meshWorker.EnqueuePriority(coords);
         }
 
+        public void Dispose() { }
     }
 }

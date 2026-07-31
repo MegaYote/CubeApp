@@ -8,7 +8,7 @@ namespace CubeApp
     public sealed class ChunkManager
     {
         public const int ChunkSize = 16;
-        public const int ChunkHeight = 64;
+        public const int ChunkHeight = 256; // Increased for higher build limit (world Y: -128 to 127)
         private readonly ConcurrentDictionary<ChunkCoordinates, Chunk> loadedChunks = new();
         private readonly PriorityQueue<ChunkRequest, double> queue = new();
         private readonly object queueLock = new();
@@ -51,19 +51,20 @@ namespace CubeApp
             return result;
         }
 
-        public bool TrySetBlock(int worldX, int worldY, int worldZ, BlockType blockType)
+public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
         {
             int chunkX = FloorDiv(worldX, ChunkSize);
             int chunkZ = FloorDiv(worldZ, ChunkSize);
             var chunk = GetOrCreateChunk(chunkX, chunkZ);
             int localX = worldX - chunk.OriginX;
             int localZ = worldZ - chunk.OriginZ;
-            if (!chunk.IsInBounds(localX, worldY, localZ))
+            int localY = chunk.WorldYToLocal(worldY);
+            if (!chunk.IsInBounds(localX, localY, localZ))
             {
                 return false;
             }
 
-            chunk[localX, worldY, localZ] = blockType;
+            chunk[localX, localY, localZ] = blockId;
             // mark this chunk dirty so it will be remeshed
             chunk.NeedsRemesh = true;
 
@@ -80,25 +81,26 @@ namespace CubeApp
             return true;
         }
 
-        public bool TryGetLoadedBlock(int worldX, int worldY, int worldZ, out BlockType blockType)
+public bool TryGetLoadedBlock(int worldX, int worldY, int worldZ, out int blockId)
         {
             int chunkX = FloorDiv(worldX, ChunkSize);
             int chunkZ = FloorDiv(worldZ, ChunkSize);
             if (!loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ), out var chunk))
             {
-                blockType = BlockType.Air;
+                blockId = BlockRegistry.AirId;
                 return false;
             }
 
             int localX = worldX - chunk.OriginX;
             int localZ = worldZ - chunk.OriginZ;
-            if (!chunk.IsInBounds(localX, worldY, localZ))
+            int localY = chunk.WorldYToLocal(worldY);
+            if (!chunk.IsInBounds(localX, localY, localZ))
             {
-                blockType = BlockType.Air;
+                blockId = BlockRegistry.AirId;
                 return false;
             }
 
-            blockType = chunk[localX, worldY, localZ];
+            blockId = chunk[localX, localY, localZ];
             return true;
         }
 
