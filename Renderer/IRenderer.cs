@@ -21,5 +21,6 @@ namespace CubeApp.Renderer
         void SetUiInputSnapshot(Veldrid.InputSnapshot snapshot);
         bool TryTakeInventorySelection(out int blockId);
         void SpawnBlockBreakParticles(int worldX, int worldY, int worldZ, int blockId, int count);
+        void ResetWorld();
     }
 }

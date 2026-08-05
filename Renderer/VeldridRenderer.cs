@@ -103,6 +103,15 @@ namespace CubeApp.Renderer
         private TextureView? _iconAtlasView;
         private IntPtr _iconImGuiId;
         private Vector4[]? _blockIconUv;
+        // Terrain atlas bound to ImGui for the title/pause menu's dirt background.
+        private IntPtr _terrainImGuiId;
+        // Title-screen logo graphic (cubuild.png, embedded).
+        private Texture? _logoTexture;
+        private TextureView? _logoView;
+        private IntPtr _logoImGuiId;
+        private byte[] _worldNameBuffer = new byte[64];
+        private byte[] _seedBuffer = new byte[64];
+        private bool _menuBuffersInitialized;
         // Real input for the ImGui UI (only wired when the mouse is free, e.g. the E-menu
         // inventory); otherwise ImGui stays inert via NullInputSnapshot.
         private InputSnapshot? _uiInputSnapshot;
@@ -275,6 +284,37 @@ namespace CubeApp.Renderer
 
             // Build the isometric block-icon atlas (needs the ImGui renderer for its texture binding).
             BuildIconAtlas();
+
+            // Bind the terrain atlas to ImGui so the menus can draw the dirt background.
+            if (_imguiRenderer != null && _atlasView != null)
+            {
+                _terrainImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _atlasView);
+            }
+
+            LoadLogo();
+        }
+
+        // Loads the embedded title-screen logo and exposes it to ImGui.
+        private void LoadLogo()
+        {
+            try
+            {
+                byte[]? bytes = LoadImageBytes("cubuild.png");
+                if (bytes == null) return;
+                var image = StbImageSharp.ImageResult.FromMemory(bytes, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                var texDesc = TextureDescription.Texture2D((uint)image.Width, (uint)image.Height, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
+                _logoTexture = _gd.ResourceFactory.CreateTexture(texDesc);
+                _gd.UpdateTexture(_logoTexture, image.Data, 0, 0, 0, (uint)image.Width, (uint)image.Height, 1, 0, 0);
+                _logoView = _gd.ResourceFactory.CreateTextureView(_logoTexture);
+                if (_imguiRenderer != null)
+                {
+                    _logoImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _logoView);
+                }
+            }
+            catch
+            {
+                // ignore; the title falls back to text if the logo can't load
+            }
         }
 
         private static byte[]? LoadAtlasBytes()
@@ -1878,11 +1918,168 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             ImGui.End();
         }
 
+        // Tiles the dirt block texture across the screen - the classic Infdev menu background.
+        // Uses the BACKGROUND draw list so the ImGui menu windows render on top of it.
+        private void DrawDirtBackground(Vector2 screenSize)
+        {
+            if (_terrainImGuiId == IntPtr.Zero) return;
+            var dirt = BlockRegistry.Get("dirt").AllTexture;
+            if (!dirt.HasValue) return;
+            var tr = dirt.Value;
+            float u0 = tr.X / _atlasWidth;
+            float v0 = tr.Y / _atlasHeight;
+            float uw = tr.Width / _atlasWidth;
+            float vh = tr.Height / _atlasHeight;
+            var drawList = ImGui.GetBackgroundDrawList();
+            const float tile = 48f;
+            uint tint = ImGui.ColorConvertFloat4ToU32(new Vector4(0.72f, 0.72f, 0.72f, 1f));
+            for (float y = 0; y < screenSize.Y; y += tile)
+            {
+                for (float x = 0; x < screenSize.X; x += tile)
+                {
+                    drawList.AddImage(_terrainImGuiId,
+                        new Vector2(x, y),
+                        new Vector2(Math.Min(x + tile, screenSize.X), Math.Min(y + tile, screenSize.Y)),
+                        new Vector2(u0, v0), new Vector2(u0 + uw, v0 + vh), tint);
+                }
+            }
+        }
+
+        // The title / create-world / pause menus. Driven by MenuState (shared with Program).
+        private void DrawMenu()
+        {
+            var m = _hud.Menu;
+            if (m == null) return;
+            var io = ImGui.GetIO();
+            var size = io.DisplaySize;
+
+            DrawDirtBackground(size);
+
+            ImGuiWindowFlags windowFlags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
+                | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar
+                | ImGuiWindowFlags.NoScrollWithMouse;
+
+            if (m.Screen == GameScreen.Title)
+            {
+                // Logo sits at the top-center of the screen, like Infdev's main menu.
+                const float logoW = 224f;
+                const float logoH = 224f;
+                if (_logoImGuiId != IntPtr.Zero)
+                {
+                    ImGui.SetNextWindowPos(new Vector2((size.X - logoW) / 2f, 30f), ImGuiCond.Always);
+                    ImGui.SetNextWindowSize(new Vector2(logoW, logoH), ImGuiCond.Always);
+                    ImGui.Begin("##logo", windowFlags | ImGuiWindowFlags.NoBackground);
+                    ImGui.Image(_logoImGuiId, new Vector2(logoW, logoH));
+                    ImGui.End();
+                }
+                else
+                {
+                    // Fallback text logo at the same spot.
+                    ImGui.SetNextWindowPos(new Vector2((size.X - 200f) / 2f, 40f), ImGuiCond.Always);
+                    ImGui.SetNextWindowSize(new Vector2(200, 60), ImGuiCond.Always);
+                    ImGui.Begin("##logo", windowFlags | ImGuiWindowFlags.NoBackground);
+                    ImGui.SetWindowFontScale(2.4f);
+                    var titlePos = ImGui.GetCursorScreenPos();
+                    var titleFont = ImGui.GetFont();
+                    float titleSize = ImGui.GetFontSize();
+                    uint shadowCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.55f));
+                    uint whiteCol = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 1f));
+                    var titleDraw = ImGui.GetWindowDrawList();
+                    titleDraw.AddText(titleFont, titleSize, titlePos + new Vector2(3, 3), shadowCol, "Cubuild");
+                    titleDraw.AddText(titleFont, titleSize, titlePos, whiteCol, "Cubuild");
+                    ImGui.SetWindowFontScale(1f);
+                    ImGui.End();
+                }
+
+                // Buttons hang lower, in the classic Minecraft vertical column.
+                ImGui.SetNextWindowPos(new Vector2((size.X - 220f) / 2f, size.Y / 4f + 72f), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(220, 130), ImGuiCond.Always);
+                ImGui.Begin("##title", windowFlags);
+                if (ImGui.Button("Singleplayer", new Vector2(200, 34)))
+                {
+                    m.Screen = GameScreen.CreateWorld;
+                    _menuBuffersInitialized = false;
+                }
+                ImGui.Dummy(new Vector2(0, 18));
+                if (ImGui.Button("Quit", new Vector2(200, 34))) m.QuitClicked = true;
+                ImGui.End();
+            }
+            else if (m.Screen == GameScreen.CreateWorld)
+            {
+                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 150f, size.Y / 2f - 120f), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(300, 240), ImGuiCond.Always);
+                ImGui.Begin("##createworld", windowFlags);
+                ImGui.Text("Create World");
+                ImGui.Spacing();
+                if (!_menuBuffersInitialized)
+                {
+                    WriteBuffer(_worldNameBuffer, m.WorldName);
+                    WriteBuffer(_seedBuffer, m.SeedInput);
+                    _menuBuffersInitialized = true;
+                }
+                ImGui.InputText("World name", _worldNameBuffer, (uint)_worldNameBuffer.Length);
+                m.WorldName = ReadBuffer(_worldNameBuffer);
+                ImGui.InputText("Seed (optional)", _seedBuffer, (uint)_seedBuffer.Length);
+                m.SeedInput = ReadBuffer(_seedBuffer);
+                ImGui.Spacing();
+                if (ImGui.Button("Create World", new Vector2(220, 34)))
+                {
+                    m.CreateWorldClicked = true;
+                }
+                ImGui.Spacing();
+                if (ImGui.Button("Back", new Vector2(220, 28))) m.Screen = GameScreen.Title;
+                ImGui.End();
+            }
+            else if (m.Screen == GameScreen.Paused)
+            {
+                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 120f, size.Y / 2f - 90f), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(240, 180), ImGuiCond.Always);
+                ImGui.Begin("##paused", windowFlags);
+                ImGui.SetWindowFontScale(1.6f);
+                ImGui.TextColored(new Vector4(1f, 1f, 1f, 1f), "Paused");
+                ImGui.SetWindowFontScale(1f);
+                ImGui.Spacing();
+                ImGui.Spacing();
+                if (ImGui.Button("Resume", new Vector2(200, 32))) m.ResumeClicked = true;
+                ImGui.Spacing();
+                if (ImGui.Button("Quit to Title", new Vector2(200, 32))) m.QuitToTitleClicked = true;
+                ImGui.End();
+            }
+        }
+
+        // Copies a string into a null-terminated byte buffer for ImGui.InputText.
+        private static void WriteBuffer(byte[] buffer, string value)
+        {
+            Array.Clear(buffer, 0, buffer.Length);
+            if (string.IsNullOrEmpty(value)) return;
+            var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+            int n = Math.Min(bytes.Length, buffer.Length - 1);
+            Array.Copy(bytes, buffer, n);
+        }
+
+        // Reads a null-terminated byte buffer back into a string.
+        private static string ReadBuffer(byte[] buffer)
+        {
+            int end = Array.IndexOf(buffer, (byte)0);
+            if (end < 0) end = buffer.Length;
+            return System.Text.Encoding.UTF8.GetString(buffer, 0, end);
+        }
+
         private void BuildHudUi()
         {
             var io = ImGui.GetIO();
             var displaySize = io.DisplaySize;
             var drawList = ImGui.GetForegroundDrawList();
+
+            // Menus (title / create world / paused) take over the whole screen; the gameplay HUD
+            // below only draws while actually playing.
+            var menu = _hud.Menu;
+            bool playing = menu == null || menu.Screen == GameScreen.Playing;
+            if (!playing)
+            {
+                DrawMenu();
+                return;
+            }
 
             // Crosshair
             var center = new Vector2(displaySize.X / 2f, displaySize.Y / 2f);
@@ -2031,6 +2228,10 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             _glassPipeline?.Dispose();
             _transparentPipeline?.Dispose();
             if (_iconAtlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_iconAtlasTexture);
+            if (_atlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_atlasTexture);
+            if (_logoTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_logoTexture);
+            _logoView?.Dispose();
+            _logoTexture?.Dispose();
             _iconAtlasView?.Dispose();
             _iconAtlasTexture?.Dispose();
             _sc?.Dispose();
@@ -2346,6 +2547,23 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
         public bool TryTakeInventorySelection(out int blockId)
         {
             return _inventorySelections.TryDequeue(out blockId);
+        }
+
+        // Drops all chunk geometry when starting a brand new world over the previous one.
+        public void ResetWorld()
+        {
+            _chunkRanges.Clear();
+            _cutoutRanges.Clear();
+            _glassRanges.Clear();
+            _transparentRanges.Clear();
+            _freeBlocks.Clear();
+            _drawCommands.Clear();
+            _cutoutDrawCommands.Clear();
+            _glassDrawCommands.Clear();
+            _transparentDrawCommands.Clear();
+            _vbTailBytes = 0;
+            _ibTailBytes = 0;
+            _drawCommandsDirty = true;
         }
 
         // Spawns little textured cubes of the block's tile flying out of a broken block.

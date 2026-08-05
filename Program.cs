@@ -15,8 +15,7 @@ namespace CubeApp
 {
     public sealed class Program : IDisposable
     {
-        private readonly ChunkManager manager;
-        private IRenderer? gpuRenderer;
+        private ChunkManager manager;        private IRenderer? gpuRenderer;
         private MeshWorker? meshWorker;
         private MeshScheduler meshScheduler;
         private BlockTickScheduler? blockTickScheduler;
@@ -69,14 +68,17 @@ namespace CubeApp
         private int selectedSlot;
         private const int HotbarSlots = 10;
         private readonly int[] _hotbarBlocks = new int[HotbarSlots];
-        private readonly int worldSeed;
-        private readonly World.InfdevChunkProvider chunkProvider;
+        private int worldSeed;
+        private World.InfdevChunkProvider chunkProvider;
+        private GameScreen screen = GameScreen.Title;
+        private readonly MenuState menu = new();
         private bool inventoryOpen;
         private bool flyMode;
         private bool thirdPersonView;
+        private int _ignoreInteractFrames; // skips break/place right after a menu click
         private float playerWalkPhase;
         private float playerWalkAmount;
-        private readonly EntityManager entityManager;
+        private EntityManager entityManager;
 
         public Program()
         {
@@ -88,22 +90,79 @@ namespace CubeApp
                 _hotbarBlocks[i] = i < BlockRegistry.Hotbar.Count ? BlockRegistry.Hotbar[i] : BlockRegistry.AirId;
             }
             selectedBlock = Math.Max(0, _hotbarBlocks[0]);
-            // Every world gets its own random seed (like Infdev's fresh-world roll), so terrain
-            // varies on each launch. Shown in the F3 debug overlay.
-            worldSeed = Random.Shared.Next(0, int.MaxValue);
-            chunkProvider = new InfdevChunkProvider(worldSeed);
+            MobRegistry.DiscoverMobs(AppDomain.CurrentDomain.BaseDirectory);
+            // The world isn't created until the player picks "Create World" on the title screen.
+        }
+
+        // Creates the world from a seed (the title screen's "Create World" action): rebuilds the
+        // chunk pipeline, spawns the player on dry land, and enters the Playing screen.
+        private void StartNewWorld(int seed)
+        {
+            worldSeed = seed;
+            chunkProvider = new World.InfdevChunkProvider(seed);
             manager = new ChunkManager(chunkProvider);
             entityManager = new EntityManager(manager);
-            MobRegistry.DiscoverMobs(AppDomain.CurrentDomain.BaseDirectory);
-            EnsureVisibleChunks();
-            PlaceCameraAtSafeSpawn();
             meshWorker = new MeshWorker(manager, () => gpuRenderer);
             meshScheduler = new MeshScheduler(manager, meshWorker);
             blockTickScheduler = new BlockTickScheduler(manager, meshScheduler);
-            meshScheduler.Update();
-            int genWorkers = Math.Max(1, Environment.ProcessorCount - 2);
-            chunkGenWorker = new ChunkGenWorker(manager, () => needsMeshUpdate = true, genWorkers);
+            chunkGenWorker = new ChunkGenWorker(manager, () => needsMeshUpdate = true, Math.Max(1, Environment.ProcessorCount - 2));
+            if (gpuRenderer != null)
+            {
+                gpuRenderer.SetChunkManager(manager);
+                gpuRenderer.ResetWorld();
+            }
+            EnsureVisibleChunks();
+            PlaceCameraAtSafeSpawn();
             _lastMeshPosition = cameraPosition;
+            meshScheduler.Update();
+            screen = GameScreen.Playing;
+            menu.Screen = GameScreen.Playing;
+            _ignoreInteractFrames = 2;
+            EnableMouseLook();
+        }
+
+        private void ResumeToPlaying()
+        {
+            screen = GameScreen.Playing;
+            menu.Screen = GameScreen.Playing;
+            _ignoreInteractFrames = 2;
+            EnableMouseLook();
+        }
+
+        private void ReturnToTitle()
+        {
+            screen = GameScreen.Title;
+            menu.Screen = GameScreen.Title;
+            DisableMouseLook();
+        }
+
+        // Parses the seed text field; blank or invalid rolls a random seed.
+        private static int ParseSeed(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return Random.Shared.Next(0, int.MaxValue);
+            return int.TryParse(text.Trim(), out int seed) ? seed : Random.Shared.Next(0, int.MaxValue);
+        }
+
+        // Consumes the renderer's menu button presses and transitions screens.
+        private void ProcessMenuActions()
+        {
+            if (menu.CreateWorldClicked)
+            {
+                StartNewWorld(ParseSeed(menu.SeedInput));
+            }
+            else if (menu.ResumeClicked)
+            {
+                ResumeToPlaying();
+            }
+            else if (menu.QuitToTitleClicked)
+            {
+                ReturnToTitle();
+            }
+            else if (menu.QuitClicked)
+            {
+                window?.Close();
+            }
+            menu.ResetFlags();
         }
 
         public void Run()
@@ -119,7 +178,6 @@ namespace CubeApp
             graphicsDevice = createdGraphicsDevice;
             baseTitle = window.Title;
             InitializeGpuRenderer(createdGraphicsDevice, createdGraphicsDevice.MainSwapchain);
-            EnableMouseLook();
             RunMainLoop();
         }
 
@@ -147,6 +205,7 @@ namespace CubeApp
                         gpuRenderer?.Resize(lastWidth, lastHeight);
                     }
                     input.ProcessSnapshot(snapshot, mouseLook, MouseSensitivity);
+                    ProcessMenuActions();
                     ApplyFrameInput(input.CaptureFrameInput());
                     ApplyLookInput(input.CaptureLookDelta());
                     long nowTicks = timer.ElapsedTicks;
@@ -182,7 +241,7 @@ namespace CubeApp
                     {
                         _lastMeshPosition = cameraPosition;
                     }
-            if (needsMeshUpdate)
+            if (needsMeshUpdate && meshScheduler != null)
             {
                 meshScheduler.Update();
                 needsMeshUpdate = false;
@@ -195,16 +254,19 @@ namespace CubeApp
             {
                 gpuRenderer.UpdateCamera(thirdPersonView ? GetThirdPersonCameraPosition() : cameraPosition, cameraYaw, cameraPitch);
                 gpuRenderer.SetHud(BuildHud());
-                if (thirdPersonView)
+                if (entityManager != null)
                 {
-                    var withPlayer = new List<MobRenderData>(entityManager.MobRenderData.Count + 1);
-                    withPlayer.AddRange(entityManager.MobRenderData);
-                    withPlayer.Add(BuildLocalPlayerRenderData());
-                    gpuRenderer.SetEntities(withPlayer);
-                }
-                else
-                {
-                    gpuRenderer.SetEntities(entityManager.MobRenderData);
+                    if (thirdPersonView)
+                    {
+                        var withPlayer = new List<MobRenderData>(entityManager.MobRenderData.Count + 1);
+                        withPlayer.AddRange(entityManager.MobRenderData);
+                        withPlayer.Add(BuildLocalPlayerRenderData());
+                        gpuRenderer.SetEntities(withPlayer);
+                    }
+                    else
+                    {
+                        gpuRenderer.SetEntities(entityManager.MobRenderData);
+                    }
                 }
                 // Player edits already mesh immediately via MeshChunkImmediate();
                 // Background MeshWorker handles all other meshing.
@@ -242,40 +304,62 @@ namespace CubeApp
 
         private void ApplyFrameInput(FrameInputState frameInput)
         {
-            if (frameInput.ToggleMouseCapturePressed) DisableMouseLook();
-            if (!mouseLook && (frameInput.BreakBlockPressed || frameInput.PlaceBlockPressed))
+            // ESC toggles pause while playing; on the pause screen it resumes. It also releases
+            // the cursor so the pause menu can be clicked.
+            if (frameInput.ToggleMouseCapturePressed)
+            {
+                if (screen == GameScreen.Playing)
+                {
+                    screen = GameScreen.Paused;
+                    menu.Screen = GameScreen.Paused;
+                    DisableMouseLook();
+                }
+                else if (screen == GameScreen.Paused)
+                {
+                    ResumeToPlaying();
+                }
+            }
+            // Don't auto-enroll mouse look from a menu click; only when actually playing.
+            if (screen == GameScreen.Playing && !mouseLook && (frameInput.BreakBlockPressed || frameInput.PlaceBlockPressed))
             {
                 EnableMouseLook();
                 return;
             }
             if (frameInput.ToggleDebugPressed) showFps = !showFps;
-            if (frameInput.ToggleFlyPressed) flyMode = !flyMode;
-            if (frameInput.ToggleInventoryPressed)
+            if (_ignoreInteractFrames > 0) _ignoreInteractFrames--;
+            if (screen == GameScreen.Playing)
             {
-                inventoryOpen = !inventoryOpen;
-                if (inventoryOpen)
+                if (frameInput.ToggleFlyPressed) flyMode = !flyMode;
+                if (frameInput.ToggleInventoryPressed)
                 {
-                    DisableMouseLook(); // free the cursor for the inventory
-                }
-                else
-                {
-                    EnableMouseLook();
+                    inventoryOpen = !inventoryOpen;
+                    if (inventoryOpen)
+                    {
+                        DisableMouseLook(); // free the cursor for the inventory
+                    }
+                    else
+                    {
+                        EnableMouseLook();
+                    }
                 }
             }
             if (frameInput.CycleRenderDistancePressed) CycleRenderDistance();
-            if (frameInput.SpawnMobPressed) SpawnDuck();
-            if (frameInput.SpawnCoyotePressed) SpawnCoyote();
-            if (frameInput.SpawnStevePressed) SpawnSteve();
+            if (screen == GameScreen.Playing)
+            {
+                if (frameInput.SpawnMobPressed) SpawnDuck();
+                if (frameInput.SpawnCoyotePressed) SpawnCoyote();
+                if (frameInput.SpawnStevePressed) SpawnSteve();
+            }
             if (frameInput.ToggleThirdPersonPressed) thirdPersonView = !thirdPersonView;
             if (frameInput.SelectedSlot.HasValue) SetSelectedSlot(frameInput.SelectedSlot.Value);
-            if (frameInput.BreakBlockPressed)
+            if (screen == GameScreen.Playing && _ignoreInteractFrames == 0 && frameInput.BreakBlockPressed)
             {
                 if (!entityManager.TryAttackMob(cameraPosition, GetCameraForward(), null))
                 {
                     DeleteHighlightedBlock();
                 }
             }
-            if (frameInput.PlaceBlockPressed) PlaceSelectedBlock();
+            if (screen == GameScreen.Playing && _ignoreInteractFrames == 0 && frameInput.PlaceBlockPressed) PlaceSelectedBlock();
         }
 
         private void SpawnDuck() => entityManager.SpawnDuck(cameraPosition, cameraYaw);
@@ -331,6 +415,8 @@ namespace CubeApp
 
         private void StepSimulation(TickInputState tickInput, float deltaSeconds)
         {
+            // The world sim only runs while actually playing - paused/title freeze everything.
+            if (screen != GameScreen.Playing || manager == null) return;
             blockTickScheduler?.Tick(deltaSeconds);
             UpdatePlayerMovement(tickInput, deltaSeconds);
             UpdateDucks(deltaSeconds);
@@ -813,16 +899,19 @@ namespace CubeApp
                 gpuRenderer = new VeldridRenderer();
                 gpuRenderer.Initialize(gd, sc);
                 gpuRenderer.SetRenderDistance(ChunkRenderRadius);
-                gpuRenderer.SetChunkManager(manager);
+                if (manager != null) gpuRenderer.SetChunkManager(manager);
                 if (window != null) gpuRenderer.Resize(window.Width, window.Height);
-                var loaded = manager.GetLoadedChunks();
-                foreach (var ch in loaded)
+                if (manager != null)
                 {
-                    if (ch.MeshFaces != null && ch.MeshFaces.Count > 0)
+                    var loaded = manager.GetLoadedChunks();
+                    foreach (var ch in loaded)
                     {
-                        int chunkX = ch.OriginX / ChunkManager.ChunkSize;
-                        int chunkZ = ch.OriginZ / ChunkManager.ChunkSize;
-                        gpuRenderer.UploadChunk(new ChunkCoordinates(chunkX, chunkZ), ch.MeshFaces);
+                        if (ch.MeshFaces != null && ch.MeshFaces.Count > 0)
+                        {
+                            int chunkX = ch.OriginX / ChunkManager.ChunkSize;
+                            int chunkZ = ch.OriginZ / ChunkManager.ChunkSize;
+                            gpuRenderer.UploadChunk(new ChunkCoordinates(chunkX, chunkZ), ch.MeshFaces);
+                        }
                     }
                 }
             }
@@ -837,13 +926,27 @@ namespace CubeApp
 
         private HudState BuildHud()
         {
+            // Before a world exists (title/create screens) there's nothing to pick or highlight.
+            if (manager == null)
+            {
+                return new HudState
+                {
+                    ShowDebug = showFps, FlyMode = flyMode, Menu = menu, Fps = lastFps,
+                    UpdateMs = lastUpdateMs, MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
+                    SelectedBlockText = "Selected: -",
+                    SelectedSlot = selectedSlot, WorldSeed = worldSeed,
+                    Hotbar = _hotbarBlocks,
+                    PlayerX = cameraPosition.X, PlayerY = cameraPosition.Y, PlayerZ = cameraPosition.Z,
+                    RenderDistance = ChunkRenderRadius,
+                };
+            }
             var forward = GetCameraForward();
             var pickResult = TryPickBlock(cameraPosition, forward);
             Vector3[]? highlightQuad = null;
             if (pickResult.HasValue) highlightQuad = ComputeHighlightWorldQuad(pickResult.Value);
             return new HudState
             {
-                ShowDebug = showFps, InventoryOpen = inventoryOpen, FlyMode = flyMode, Fps = lastFps, UpdateMs = lastUpdateMs,
+                ShowDebug = showFps, InventoryOpen = inventoryOpen, FlyMode = flyMode, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
                 MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                 FacingText = $"{GetCompassDirection(cameraYaw)} ({NormalizeYaw(cameraYaw):0.0} deg)",
                 SelectedBlockText = $"Selected: {BlockRegistry.GetName(selectedBlock)}",

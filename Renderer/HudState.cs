@@ -12,6 +12,8 @@ namespace CubeApp.Renderer
         public bool ShowDebug;
         public bool InventoryOpen;
         public bool FlyMode;
+        /// <summary>Shared menu state (screen + create-world form + button flags).</summary>
+        public MenuState Menu;
         public float Fps;
         public float UpdateMs;
         public float MeshMs;
@@ -54,6 +56,7 @@ namespace CubeApp.Renderer
             ShowDebug = false,
             InventoryOpen = false,
             FlyMode = false,
+            Menu = new MenuState(),
             Fps = 0f,
             UpdateMs = 0f,
             MeshMs = 0f,
