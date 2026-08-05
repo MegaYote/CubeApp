@@ -85,10 +85,6 @@ public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeigh
                         double density = (targetSurface - worldY) + main3D * 5.0 + overhang * 2.5;
 
                         bool solid = density > 0.0;
-                        if (solid && y >= 3 && SampleCave(worldX, worldY, worldZ) > 0.63)
-                        {
-                            solid = false; // carve cave pockets (and the odd cave mouth) through stone
-                        }
 
                         if (!solid)
                         {
@@ -120,11 +116,147 @@ public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeigh
                 }
             }
 
+            // Carve proper wormy cave tunnels (Infdev-style random walkers) into the filled chunk.
+            GenerateCaves(chunkX, chunkZ, chunk);
+
             chunk.NeedsRemesh = true;
             return chunk;
         }
 
-        // Region/terrain family at a world position, for the F3 debug overlay.
+        // Infdev-style cave generation: a per-chunk deterministic chance of spawning cave walkers
+        // that carve winding, branching tubes through the stone.
+        private void GenerateCaves(int chunkX, int chunkZ, Chunk chunk)
+        {
+            byte[] blocks = chunk.RawBlocks;
+            var rand = new Random(unchecked(chunkX * 341873128 + chunkZ * 132897987 ^ seed));
+
+            int numCaves = rand.Next(rand.Next(rand.Next(40) + 1) + 1);
+            if (rand.Next(15) != 0) numCaves = 0;
+
+            for (int i = 0; i < numCaves; i++)
+            {
+                double x = chunkX * 16 + rand.Next(16);
+                double y = rand.Next(rand.Next(230) + 8);
+                double z = chunkZ * 16 + rand.Next(16);
+
+                int nodeCount = 1;
+                if (rand.Next(4) == 0)
+                {
+                    GenerateCaveNode(chunk, blocks, chunkX, chunkZ, rand,
+                        x, y, z, (float)(rand.NextDouble() * 2.0 + rand.NextDouble()), 0f, 0f, -1, -1, 1.0);
+                    nodeCount += rand.Next(4);
+                }
+
+                for (int n = 0; n < nodeCount; n++)
+                {
+                    float yaw = (float)(rand.NextDouble() * Math.PI * 2.0);
+                    float pitch = (float)((rand.NextDouble() - 0.5) * 2.0 / 8.0);
+                    float size = (float)(rand.NextDouble() * 2.0 + rand.NextDouble());
+                    GenerateCaveNode(chunk, blocks, chunkX, chunkZ, rand, x, y, z, size, yaw, pitch, 0, 0, 1.0);
+                }
+            }
+        }
+
+        // One random-walker cave tube: advances in the yaw/pitch direction, carving a round tube
+        // whose radius bulges in the middle, wobbling as it goes and branching at the midpoint.
+        private void GenerateCaveNode(Chunk chunk, byte[] blocks, int chunkX, int chunkZ, Random rand,
+            double x, double y, double z, float size, float yaw, float pitch, int start, int maxLength, double scale)
+        {
+            double cx = chunkX * 16 + 8;
+            double cz = chunkZ * 16 + 8;
+            var rng = new Random(rand.Next());
+            float wobbleYaw = 0f;
+            float wobblePitch = 0f;
+            byte idWater = (byte)BlockRegistry.GetId("water");
+            byte idGrass = (byte)BlockRegistry.GetId("grass");
+            byte idDirt = (byte)BlockRegistry.GetId("dirt");
+
+            if (maxLength <= 0) maxLength = 112 - rng.Next(112 / 4);
+            bool branch = false;
+            if (start == -1)
+            {
+                start = maxLength / 2;
+                branch = true;
+            }
+            int branchAt = rng.Next(maxLength / 2) + maxLength / 4;
+
+            const int height = ChunkManager.ChunkHeight; // 256 (local Y 0..255)
+
+            for (int len = start; len < maxLength; len++)
+            {
+                double radius = 1.5 + Math.Sin(len * Math.PI / maxLength) * size;
+                double vRadius = radius * scale;
+
+                x += Math.Cos(yaw) * Math.Cos(pitch);
+                y += Math.Sin(pitch);
+                z += Math.Sin(yaw) * Math.Cos(pitch);
+
+                if (rng.Next(6) == 0) pitch *= 0.92f;
+                else pitch *= 0.7f;
+                pitch += wobblePitch * 0.1f;
+                yaw += wobbleYaw * 0.1f;
+                wobblePitch *= 0.9f;
+                wobbleYaw *= 12f / 16f;
+                wobblePitch += (float)((rng.NextDouble() - rng.NextDouble()) * rng.NextDouble() * 2.0);
+                wobbleYaw += (float)((rng.NextDouble() - rng.NextDouble()) * rng.NextDouble() * 4.0);
+
+                if (!branch && len == branchAt && size > 1.0f)
+                {
+                    GenerateCaveNode(chunk, blocks, chunkX, chunkZ, rng, x, y, z,
+                        (float)(rng.NextDouble() * 0.5 + 0.5), yaw - (float)Math.PI * 0.5f, pitch / 3f, len, maxLength, 1.0);
+                    GenerateCaveNode(chunk, blocks, chunkX, chunkZ, rng, x, y, z,
+                        (float)(rng.NextDouble() * 0.5 + 0.5), yaw + (float)Math.PI * 0.5f, pitch / 3f, len, maxLength, 1.0);
+                    return;
+                }
+
+                // Stop when the walker leaves the chunk's neighbourhood.
+                double dx = x - cx;
+                double dz = z - cz;
+                double remaining = maxLength - len;
+                double bound = size + 2.0 + 16.0;
+                if (dx * dx + dz * dz - remaining * remaining > bound * bound) return;
+
+                int minX = (int)Math.Floor(x - radius) - chunkX * 16 - 1;
+                int maxX = (int)Math.Floor(x + radius) - chunkX * 16 + 1;
+                int minY = (int)Math.Floor(y - vRadius) - 1;
+                int maxY = (int)Math.Floor(y + vRadius) + 1;
+                int minZ = (int)Math.Floor(z - radius) - chunkZ * 16 - 1;
+                int maxZ = (int)Math.Floor(z + radius) - chunkZ * 16 + 1;
+                if (minX < 0) minX = 0;
+                if (maxX > 16) maxX = 16;
+                if (minY < 1) minY = 1;
+                if (maxY > height - 1) maxY = height - 1;
+                if (minZ < 0) minZ = 0;
+                if (maxZ > 16) maxZ = 16;
+
+                for (int lx = minX; lx < maxX; lx++)
+                {
+                    double ndx = (lx + chunkX * 16 + 0.5 - x) / radius;
+                    for (int lz = minZ; lz < maxZ; lz++)
+                    {
+                        double ndz = (lz + chunkZ * 16 + 0.5 - z) / radius;
+                        for (int ly = maxY; ly >= minY; ly--)
+                        {
+                            double ndy = (ly + 0.5 - y) / vRadius;
+                            if (ndx * ndx + ndy * ndy + ndz * ndz < 1.0)
+                            {
+                                int idx = (lx * 16 + lz) * height + ly;
+                                byte id = blocks[idx];
+                                if (id == idWater) continue; // don't carve water
+                                if (id == 0) continue;        // already air
+                                blocks[idx] = 0;
+                                // If the cave opened through a surface grass block, let the grass
+                                // settle one block down so no floating grass is left over a mouth.
+                                if (id == idGrass && ly > 1 && blocks[idx - 1] == idDirt)
+                                {
+                                    blocks[idx - 1] = idGrass;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         public string BiomeNameAt(int worldX, int worldZ)
         {
             double region = Fbm2D(worldX * 0.0032, worldZ * 0.0032, 3, 0.5);
