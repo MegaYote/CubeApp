@@ -19,6 +19,7 @@ namespace CubeApp
         private IRenderer? gpuRenderer;
         private MeshWorker? meshWorker;
         private MeshScheduler meshScheduler;
+        private BlockTickScheduler? blockTickScheduler;
         private ChunkGenWorker? chunkGenWorker;
         private Sdl2Window? window;
         private GraphicsDevice? graphicsDevice;
@@ -85,6 +86,7 @@ namespace CubeApp
             PlaceCameraAtSafeSpawn();
             meshWorker = new MeshWorker(manager, () => gpuRenderer);
             meshScheduler = new MeshScheduler(manager, meshWorker);
+            blockTickScheduler = new BlockTickScheduler(manager, meshScheduler);
             meshScheduler.Update();
             int genWorkers = Math.Max(1, Environment.ProcessorCount - 2);
             chunkGenWorker = new ChunkGenWorker(manager, () => needsMeshUpdate = true, genWorkers);
@@ -290,6 +292,7 @@ namespace CubeApp
 
         private void StepSimulation(TickInputState tickInput, float deltaSeconds)
         {
+            blockTickScheduler?.Tick(deltaSeconds);
             UpdatePlayerMovement(tickInput, deltaSeconds);
             UpdateDucks(deltaSeconds);
             int chunkX = WorldToChunkCoord(cameraPosition.X);
@@ -412,7 +415,7 @@ namespace CubeApp
             for (int y = blockMinY; y <= blockMaxY; y++)
             for (int z = blockMinZ; z <= blockMaxZ; z++)
             {
-                if (manager.TryGetLoadedBlock(x, y, z, out var block) && block != BlockRegistry.AirId)
+                if (manager.TryGetLoadedBlock(x, y, z, out var block) && BlockRegistry.IsSolid(block))
                     return true;
             }
             return false;
@@ -447,7 +450,7 @@ namespace CubeApp
                 int highestSolidY = -1;
                 for (int y = ChunkManager.ChunkHeight - 1; y >= 0; y--)
                 {
-                    if (manager.TryGetLoadedBlock(wx, y, wz, out var block) && block != BlockRegistry.AirId)
+                    if (manager.TryGetLoadedBlock(wx, y, wz, out var block) && BlockRegistry.IsSolid(block))
                     {
                         highestSolidY = y;
                         break;
@@ -475,6 +478,7 @@ namespace CubeApp
             if (!pickResult.HasValue) return;
             var remove = pickResult.Value.Remove;
             if (!manager.TrySetBlock(remove.x, remove.y, remove.z, BlockRegistry.AirId)) return;
+            blockTickScheduler?.OnBlockChanged(remove.x, remove.y, remove.z);
             var editedChunk = new ChunkCoordinates(WorldToChunkCoord(remove.x), WorldToChunkCoord(remove.z));
             meshScheduler.RequestImmediateRemesh(editedChunk);
             needsMeshUpdate = true;
@@ -487,6 +491,7 @@ namespace CubeApp
             var place = pickResult.Value.Place;
             if (WouldBlockIntersectPlayer(place.x, place.y, place.z)) return;
             if (!manager.TrySetBlock(place.x, place.y, place.z, selectedBlock)) return;
+            blockTickScheduler?.OnBlockChanged(place.x, place.y, place.z);
             var editedChunk = new ChunkCoordinates(WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));
             meshScheduler.RequestImmediateRemesh(editedChunk);
             // Priority queue ensures background worker updates this chunk quickly (within ~1-2 frames).
@@ -744,7 +749,7 @@ namespace CubeApp
                 int bx = (int)Math.Floor(p.X);
                 int by = (int)Math.Floor(p.Y);
                 int bz = (int)Math.Floor(p.Z);
-                if (manager.TryGetLoadedBlock(bx, by, bz, out var block) && block != BlockRegistry.AirId)
+                if (manager.TryGetLoadedBlock(bx, by, bz, out var block) && BlockRegistry.IsSolid(block))
                 {
                     break;
                 }

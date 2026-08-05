@@ -8,7 +8,9 @@ namespace CubeApp
     public sealed class ChunkManager
     {
         public const int ChunkSize = 16;
-        public const int ChunkHeight = 256; // Increased for higher build limit (world Y: -128 to 127)
+        // World Y origin: local y=0 maps to this world Y. World spans WorldOriginY..(WorldOriginY + ChunkHeight).
+        public const int WorldOriginY = -64;
+        public const int ChunkHeight = 256;
         private readonly ConcurrentDictionary<ChunkCoordinates, Chunk> loadedChunks = new();
         private readonly PriorityQueue<ChunkRequest, double> queue = new();
         private readonly object queueLock = new();
@@ -53,6 +55,11 @@ namespace CubeApp
 
 public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
         {
+            return TrySetBlock(worldX, worldY, worldZ, blockId, 0);
+        }
+
+        public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId, int meta)
+        {
             int chunkX = FloorDiv(worldX, ChunkSize);
             int chunkZ = FloorDiv(worldZ, ChunkSize);
             var chunk = GetOrCreateChunk(chunkX, chunkZ);
@@ -65,6 +72,46 @@ public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
             }
 
             chunk[localX, localY, localZ] = blockId;
+            chunk.SetMeta(localX, localY, localZ, (byte)meta);
+            MarkDirty(chunkX, chunkZ, localX, localZ);
+            return true;
+        }
+
+        /// <summary>
+        /// Like <see cref="TrySetBlock(int,int,int,int,int)"/> but refuses to generate the target
+        /// chunk. Fluid simulation uses this so a spreading water edge can never force terrain
+        /// generation into unloaded territory; it simply doesn't flow there.
+        /// </summary>
+        public bool TrySetBlockLoadedOnly(int worldX, int worldY, int worldZ, int blockId, int meta)
+        {
+            int chunkX = FloorDiv(worldX, ChunkSize);
+            int chunkZ = FloorDiv(worldZ, ChunkSize);
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ), out var chunk))
+            {
+                return false;
+            }
+
+            int localX = worldX - chunk.OriginX;
+            int localZ = worldZ - chunk.OriginZ;
+            int localY = chunk.WorldYToLocal(worldY);
+            if (!chunk.IsInBounds(localX, localY, localZ))
+            {
+                return false;
+            }
+
+            chunk[localX, localY, localZ] = blockId;
+            chunk.SetMeta(localX, localY, localZ, (byte)meta);
+            MarkDirty(chunkX, chunkZ, localX, localZ);
+            return true;
+        }
+
+        private void MarkDirty(int chunkX, int chunkZ, int localX, int localZ)
+        {
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ), out var chunk))
+            {
+                return;
+            }
+
             // mark this chunk dirty so it will be remeshed
             chunk.NeedsRemesh = true;
 
@@ -78,10 +125,21 @@ public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
             if (localZ == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ + 1), out var front))
                 front.NeedsRemesh = true;
 
-            return true;
+            // A change on a chunk corner also affects the diagonal neighbour: the water pass
+            // samples the 2x2 block neighbourhood around each corner, so the corner cell of a
+            // diagonal chunk feeds the surface height of the four-chunk junction. Without this,
+            // an edit/flow at a corner would leave the diagonal chunk's junction water stale.
+            if (localX == 0 && localZ == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX - 1, chunkZ - 1), out var diagNW))
+                diagNW.NeedsRemesh = true;
+            if (localX == ChunkSize - 1 && localZ == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX + 1, chunkZ - 1), out var diagNE))
+                diagNE.NeedsRemesh = true;
+            if (localX == 0 && localZ == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX - 1, chunkZ + 1), out var diagSW))
+                diagSW.NeedsRemesh = true;
+            if (localX == ChunkSize - 1 && localZ == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX + 1, chunkZ + 1), out var diagSE))
+                diagSE.NeedsRemesh = true;
         }
 
-public bool TryGetLoadedBlock(int worldX, int worldY, int worldZ, out int blockId)
+        public bool TryGetLoadedBlock(int worldX, int worldY, int worldZ, out int blockId)
         {
             int chunkX = FloorDiv(worldX, ChunkSize);
             int chunkZ = FloorDiv(worldZ, ChunkSize);
@@ -104,6 +162,44 @@ public bool TryGetLoadedBlock(int worldX, int worldY, int worldZ, out int blockI
             return true;
         }
 
+        public bool TryGetLoadedBlockAndMeta(int worldX, int worldY, int worldZ, out int blockId, out byte meta)
+        {
+            int chunkX = FloorDiv(worldX, ChunkSize);
+            int chunkZ = FloorDiv(worldZ, ChunkSize);
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ), out var chunk))
+            {
+                blockId = BlockRegistry.AirId;
+                meta = 0;
+                return false;
+            }
+
+            int localX = worldX - chunk.OriginX;
+            int localZ = worldZ - chunk.OriginZ;
+            int localY = chunk.WorldYToLocal(worldY);
+            if (!chunk.IsInBounds(localX, localY, localZ))
+            {
+                blockId = BlockRegistry.AirId;
+                meta = 0;
+                return false;
+            }
+
+            blockId = chunk[localX, localY, localZ];
+            meta = chunk.GetMeta(localX, localY, localZ);
+            return true;
+        }
+
+        /// <summary>Block id at world coords, or AirId when the chunk isn't loaded / coords out of bounds.</summary>
+        public int GetBlockAt(int worldX, int worldY, int worldZ)
+        {
+            return TryGetLoadedBlock(worldX, worldY, worldZ, out var id) ? id : BlockRegistry.AirId;
+        }
+
+        /// <summary>Block metadata at world coords, or 0 when the chunk isn't loaded / coords out of bounds.</summary>
+        public byte GetMetaAt(int worldX, int worldY, int worldZ)
+        {
+            return TryGetLoadedBlockAndMeta(worldX, worldY, worldZ, out _, out var meta) ? meta : (byte)0;
+        }
+
         public bool TryGetLoadedChunk(ChunkCoordinates coords, out Chunk chunk)
         {
             return loadedChunks.TryGetValue(coords, out chunk);
@@ -120,10 +216,12 @@ public bool TryGetLoadedBlock(int worldX, int worldY, int worldZ, out int blockI
             return result;
         }
 
-        public IReadOnlyList<Chunk> GetLoadedChunks()
-        {
-            return new List<Chunk>(loadedChunks.Values);
-        }
+        /// <summary>
+        /// Live view of all loaded chunks. No defensive copy: ConcurrentDictionary.Values
+        /// enumerates over an internal snapshot, so iterating is safe against chunks being
+        /// generated/removed by worker threads while the render thread scans.
+        /// </summary>
+        public ICollection<Chunk> GetLoadedChunks() => loadedChunks.Values;
 
         public bool EnsureChunksAround(int centerChunkX, int centerChunkZ, int radius)
         {

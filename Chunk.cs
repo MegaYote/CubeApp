@@ -10,6 +10,9 @@ namespace CubeApp
         // per-dimension checks). Layout is column-major: ((x * Depth + z) * Height + y), so a
         // vertical column is contiguous - the common access pattern for generation and lighting.
         private readonly byte[] blocks;
+        // Per-block metadata (same layout as blocks). For fluids this holds the flow level:
+        // 0 = source/still, 1..7 = flowing, >=8 = falling stream. Zero-initialized like blocks.
+        private readonly byte[] meta;
         private readonly object _meshLock = new();
 
         public int Width { get; }
@@ -50,6 +53,7 @@ namespace CubeApp
             OriginY = originY;
             OriginZ = originZ;
             blocks = new byte[width * height * depth];
+            meta = new byte[width * height * depth];
         }
 
         /// <summary>Flat index of a local block coordinate (column-major; y contiguous).</summary>
@@ -57,6 +61,11 @@ namespace CubeApp
 
         /// <summary>Raw block storage for hot paths (mesher/lighting). Values are block ids.</summary>
         public byte[] RawBlocks => blocks;
+        /// <summary>Raw metadata storage (same layout as RawBlocks). Values are block metadata.</summary>
+        public byte[] RawMeta => meta;
+
+        public byte GetMeta(int x, int y, int z) => meta[(x * Depth + z) * Height + y];
+        public void SetMeta(int x, int y, int z, byte value) => meta[(x * Depth + z) * Height + y] = value;
 
         public int this[int x, int y, int z]
         {

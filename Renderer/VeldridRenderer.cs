@@ -23,6 +23,11 @@ namespace CubeApp.Renderer
         private Sampler _atlasSampler;
         private ResourceSet _textureSet;
         private Pipeline _pipeline;
+        // Second pass for transparent geometry (water): same shaders/state as _pipeline but with
+        // depth WRITES disabled so blended faces (alpha 0.65) tint whatever opaque geometry was
+        // already drawn instead of blocking it from ever drawing (which made border water walls
+        // render as ghosty see-through when their chunk happened to draw before the terrain behind).
+        private Pipeline _transparentPipeline;
         private Pipeline _highlightPipeline;
         private DeviceBuffer _highlightVertexBuffer;
         private DeviceBuffer _highlightIndexBuffer;
@@ -110,9 +115,14 @@ namespace CubeApp.Renderer
             public uint IndexCount;
         }
         private readonly Dictionary<CubeApp.ChunkCoordinates, ChunkRange> _chunkRanges = new();
+        // Transparent (water) faces are uploaded into the same mega buffers but tracked in a
+        // separate range set and drawn as a second pass (depth-write off, back-to-front blend).
+        private readonly Dictionary<CubeApp.ChunkCoordinates, ChunkRange> _transparentRanges = new();
         private readonly List<(uint VbOffset, uint VbBytes, uint IbOffset, uint IbBytes)> _freeBlocks = new();
         private readonly List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _drawCommands = new();
+        private readonly List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _transparentDrawCommands = new();
         private IndirectDrawIndexedArguments[] _indirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
+        private IndirectDrawIndexedArguments[] _transparentIndirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
         private bool _drawCommandsDirty = true;
 
         // Pending GPU-side buffer growth copies (old -> new, recorded after cl.Begin()).
@@ -130,12 +140,16 @@ namespace CubeApp.Renderer
             public CubeApp.ChunkCoordinates Coord { get; }
             public float[] Vertices { get; }
             public ushort[] Indices { get; }
+            public float[] TransparentVertices { get; }
+            public ushort[] TransparentIndices { get; }
 
-            public PendingUpload(CubeApp.ChunkCoordinates coord, float[] vertices, ushort[] indices)
+            public PendingUpload(CubeApp.ChunkCoordinates coord, float[] vertices, ushort[] indices, float[] transparentVertices, ushort[] transparentIndices)
             {
                 Coord = coord;
                 Vertices = vertices;
                 Indices = indices;
+                TransparentVertices = transparentVertices;
+                TransparentIndices = transparentIndices;
             }
         }
 
@@ -397,6 +411,19 @@ void main() {
 
             _pipeline = factory.CreateGraphicsPipeline(pipelineDesc);
 
+            // Same pipeline, depth-write OFF: drawn after all opaque chunks so blended water
+            // tints the already-rendered terrain instead of depth-blocking it (see field comment).
+            _transparentPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleAlphaBlend,
+                DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout },
+                ShaderSet = shaderSet,
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
+
             // create texture resource set if atlas loaded
             if (_atlasView != null && _atlasSampler != null)
             {
@@ -619,13 +646,13 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             // Process priority uploads (player edits) first - no limit for instant feedback
             while (_pendingPriorityUploads.TryDequeue(out var pu))
             {
-                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices);
+                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.TransparentVertices, pu.TransparentIndices);
             }
 
             int uploadsThisFrame = 0;
             while (uploadsThisFrame < _maxUploadsPerFrame && _pendingUploads.TryDequeue(out var pu))
             {
-                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices);
+                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.TransparentVertices, pu.TransparentIndices);
                 uploadsThisFrame++;
             }
 
@@ -656,33 +683,15 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             _pendingBufferCopies.Clear();
 
             // One draw call for the visible chunk world via multi-draw indirect. Commands are
-            // frustum-culled per frame, so chunks behind/off-screen never reach the GPU.
-            if (_megaVertexBuffer != null && _megaIndexBuffer != null && _drawCommands.Count > 0)
+            // frustum-culled per frame, so chunks behind/off-screen never reach the GPU. Opaque
+            // chunks draw first and depth-write; the transparent (water) pass draws afterwards with
+            // depth-writes off so it tints terrain that already rendered.
+            if (_megaVertexBuffer != null && _megaIndexBuffer != null)
             {
-                uint visibleCount = CullDrawCommands();
-                if (visibleCount > 0)
+                DrawWorldPass(cl, _drawCommands, _indirectScratch, _pipeline);
+                if (_transparentDrawCommands.Count > 0)
                 {
-                    cl.SetVertexBuffer(0, _megaVertexBuffer);
-                    cl.SetIndexBuffer(_megaIndexBuffer, IndexFormat.UInt16);
-                    if (_gd.Features.DrawIndirect)
-                    {
-                        EnsureIndirectCapacity(visibleCount);
-                        // D3D11 indirect-args buffers are USAGE_DEFAULT (no Dynamic flag), so the
-                        // contents are pushed via CommandList.UpdateBuffer (UpdateSubresource).
-                        // The visible set changes with the camera, so refresh it each frame
-                        // (~20 bytes per visible chunk - negligible).
-                        cl.UpdateBuffer(_indirectBuffer, 0, ref _indirectScratch[0], visibleCount * IndirectCommandStride);
-                        cl.DrawIndexedIndirect(_indirectBuffer, 0, visibleCount, IndirectCommandStride);
-                    }
-                    else
-                    {
-                        // Fallback for backends without indirect draws (D3D11 has it).
-                        for (int i = 0; i < visibleCount; i++)
-                        {
-                            var cmd = _indirectScratch[i];
-                            cl.DrawIndexed(cmd.IndexCount, cmd.InstanceCount, cmd.FirstIndex, (int)cmd.VertexOffset, cmd.FirstInstance);
-                        }
-                    }
+                    DrawWorldPass(cl, _transparentDrawCommands, _transparentIndirectScratch, _transparentPipeline);
                 }
             }
 
@@ -698,6 +707,51 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             cl.End();
             _gd.SubmitCommands(cl);
             _gd.SwapBuffers(_sc);
+        }
+
+        // Issues one indirect world draw for a chunk-command pass (opaque or transparent) using the
+        // given pipeline. Commands are frustum-culled this frame; the indirect-args buffer contents
+        // are refreshed each frame since the visible set changes with the camera.
+        private void DrawWorldPass(
+            CommandList cl,
+            System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            IndirectDrawIndexedArguments[] scratch,
+            Pipeline pipeline)
+        {
+            if (commands.Count == 0)
+            {
+                return;
+            }
+
+            uint visibleCount = CullDrawCommands(commands, scratch);
+            if (visibleCount == 0)
+            {
+                return;
+            }
+
+            cl.SetPipeline(pipeline);
+            cl.SetGraphicsResourceSet(0, _projViewSet);
+            if (_textureSet != null)
+                cl.SetGraphicsResourceSet(1, _textureSet);
+            cl.SetVertexBuffer(0, _megaVertexBuffer);
+            cl.SetIndexBuffer(_megaIndexBuffer, IndexFormat.UInt16);
+            if (_gd.Features.DrawIndirect)
+            {
+                EnsureIndirectCapacity(visibleCount);
+                // D3D11 indirect-args buffers are USAGE_DEFAULT (no Dynamic flag), so the contents
+                // are pushed via CommandList.UpdateBuffer (UpdateSubresource).
+                cl.UpdateBuffer(_indirectBuffer, 0, ref scratch[0], visibleCount * IndirectCommandStride);
+                cl.DrawIndexedIndirect(_indirectBuffer, 0, visibleCount, IndirectCommandStride);
+            }
+            else
+            {
+                // Fallback for backends without indirect draws (D3D11 has it).
+                for (int i = 0; i < visibleCount; i++)
+                {
+                    var cmd = scratch[i];
+                    cl.DrawIndexed(cmd.IndexCount, cmd.InstanceCount, cmd.FirstIndex, (int)cmd.VertexOffset, cmd.FirstInstance);
+                }
+            }
         }
 
         private void DrawHighlight(CommandList cl)
@@ -748,8 +802,8 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                     float maxX = minX + chunkSize;
                     float minZ = chunkZ * chunkSize;
                     float maxZ = minZ + chunkSize;
-                    float minY = 0;
-                    float maxY = chunkHeight;
+                    float minY = ChunkManager.WorldOriginY;
+                    float maxY = ChunkManager.WorldOriginY + chunkHeight;
 
                     // Add vertical edges (4 corners)
                     AddLine(minX, minY, minZ, minX, maxY, minZ, ref vertexIndex);
@@ -951,11 +1005,15 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
         // pooling the previous buffers for reuse.
         // Uploads one chunk's vertices/indices into a region of the shared mega vertex/index buffers,
 // reusing freed holes or appending at the tail. The previous range (if any) is recycled.
-private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushort[] indices)
+private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushort[] indices, float[] transVerts, ushort[] transIndices)
         {
             if (_chunkRanges.TryGetValue(coord, out var prev))
             {
                 FreeRange(prev);
+            }
+            if (_transparentRanges.TryGetValue(coord, out var prevTrans))
+            {
+                FreeRange(prevTrans);
             }
 
             uint vbBytes = (uint)(verts.Length * sizeof(float));
@@ -966,6 +1024,25 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
             _gd.UpdateBuffer(_megaIndexBuffer, ibo, indices);
 
             _chunkRanges[coord] = new ChunkRange { VbOffsetBytes = vbo, VbBytes = vbBytes, IbOffsetBytes = ibo, IndexCount = (uint)indices.Length };
+
+            // Transparent (water) faces: only when the chunk actually has any, uploaded into the
+            // same mega buffers but tracked separately for the second draw pass.
+            if (transVerts != null && transVerts.Length > 0 && transIndices != null && transIndices.Length > 0)
+            {
+                uint tvbBytes = (uint)(transVerts.Length * sizeof(float));
+                uint tibBytes = (uint)(transIndices.Length * sizeof(ushort));
+                var (tvbo, _, tibo, _) = AllocateRange(tvbBytes, tibBytes);
+
+                _gd.UpdateBuffer(_megaVertexBuffer, tvbo, transVerts);
+                _gd.UpdateBuffer(_megaIndexBuffer, tibo, transIndices);
+
+                _transparentRanges[coord] = new ChunkRange { VbOffsetBytes = tvbo, VbBytes = tvbBytes, IbOffsetBytes = tibo, IndexCount = (uint)transIndices.Length };
+            }
+            else
+            {
+                _transparentRanges.Remove(coord);
+            }
+
             _drawCommandsDirty = true;
         }
 
@@ -1004,6 +1081,11 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
             {
                 FreeRange(r);
                 _chunkRanges.Remove(coord);
+            }
+            if (_transparentRanges.TryGetValue(coord, out var tr))
+            {
+                FreeRange(tr);
+                _transparentRanges.Remove(coord);
             }
         }
 
@@ -1074,29 +1156,50 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
             {
                 _indirectScratch = new IndirectDrawIndexedArguments[Math.Max(256, _drawCommands.Count * 2)];
             }
+
+            _transparentDrawCommands.Clear();
+            foreach (var kv in _transparentRanges)
+            {
+                var r = kv.Value;
+                _transparentDrawCommands.Add((kv.Key, new IndirectDrawIndexedArguments
+                {
+                    IndexCount = r.IndexCount,
+                    InstanceCount = 1,
+                    FirstIndex = r.IbOffsetBytes / 2,           // ushort index units
+                    VertexOffset = (int)(r.VbOffsetBytes / VertexStrideBytes),
+                    FirstInstance = 0,
+                }));
+            }
+            if (_transparentIndirectScratch.Length < _transparentDrawCommands.Count)
+            {
+                _transparentIndirectScratch = new IndirectDrawIndexedArguments[Math.Max(256, _transparentDrawCommands.Count * 2)];
+            }
         }
 
-        // Fills the indirect scratch array with the commands for chunks inside the current view
-        // frustum. Returns the visible count; falls back to "everything" when no camera is set.
-        private uint CullDrawCommands()
+        // Fills the given indirect scratch array with the commands from a pass list that are inside
+        // the current view frustum. Returns the visible count; falls back to "everything" when no
+        // camera is set.
+        private uint CullDrawCommands(
+            System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            IndirectDrawIndexedArguments[] scratch)
         {
             int n = 0;
             if (_viewProjection.HasValue)
             {
                 ExtractFrustumPlanes(_viewProjection.Value);
-                for (int i = 0; i < _drawCommands.Count; i++)
+                for (int i = 0; i < commands.Count; i++)
                 {
-                    if (ChunkInFrustum(_drawCommands[i].Coord))
+                    if (ChunkInFrustum(commands[i].Coord))
                     {
-                        _indirectScratch[n++] = _drawCommands[i].Cmd;
+                        scratch[n++] = commands[i].Cmd;
                     }
                 }
             }
             else
             {
-                for (int i = 0; i < _drawCommands.Count; i++)
+                for (int i = 0; i < commands.Count; i++)
                 {
-                    _indirectScratch[n++] = _drawCommands[i].Cmd;
+                    scratch[n++] = commands[i].Cmd;
                 }
             }
             return (uint)n;
@@ -1121,8 +1224,10 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
             float maxX = minX + ChunkManager.ChunkSize;
             float minZ = coord.Z * ChunkManager.ChunkSize;
             float maxZ = minZ + ChunkManager.ChunkSize;
-            const float minY = 0f;
-            const float maxY = ChunkManager.ChunkHeight;
+            // World Y bounds come from the world origin, not 0. With minY=0 the chunk under the
+            // camera gets culled the moment the eye drops below Y≈0 (near plane dips past the box).
+            const float minY = ChunkManager.WorldOriginY;
+            const float maxY = ChunkManager.WorldOriginY + ChunkManager.ChunkHeight;
 
             for (int i = 0; i < 6; i++)
             {
@@ -1356,6 +1461,9 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
                 }
 
                 Line($"FPS: {_hud.Fps:0.0}");
+                Line($"XYZ: {_hud.PlayerX:0.000} / {_hud.PlayerY:0.000} / {_hud.PlayerZ:0.000}");
+                Line($"Block: {(int)Math.Floor(_hud.PlayerX)} / {(int)Math.Floor(_hud.PlayerY)} / {(int)Math.Floor(_hud.PlayerZ)}");
+                Line($"Chunk: {_hud.PlayerChunkX} / {_hud.PlayerChunkZ}");
                 Line($"Upd: {_hud.UpdateMs:0.0} ms");
                 Line($"Mesh: {_hud.MeshMs:0.0} ms");
                 Line($"Upload: {_hud.UploadMs:0.0} ms");
@@ -1399,36 +1507,69 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
             _playerTexture?.Dispose();
             _modelPipeline?.Dispose();
             _pipeline?.Dispose();
+            _transparentPipeline?.Dispose();
             _sc?.Dispose();
             _gd?.Dispose();
         }
 
         public void UploadChunk(CubeApp.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces)
         {
-            BuildMesh(faces, out var vArr, out var iArr);
-            _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr));
+            BuildMesh(faces, out var vArr, out var iArr, out var tvArr, out var tiArr);
+            _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr, tvArr, tiArr));
         }
 
         // Player edits jump the line: same vertex data, but enqueued on the priority queue that
         // ProcessPendingPriorityMeshes drains every frame for instant feedback.
         public void UploadChunkPriority(CubeApp.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces)
         {
-            BuildMesh(faces, out var vArr, out var iArr);
-            _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr));
+            BuildMesh(faces, out var vArr, out var iArr, out var tvArr, out var tiArr);
+            _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr, tvArr, tiArr));
         }
 
         // Builds the 13-float-per-vertex chunk mesh (pos + localUV + tileRect + color) from greedy
         // faces. Per-face alpha comes from MeshFace.Alpha so transparent blocks (water) can blend.
-        private void BuildMesh(System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces, out float[] vertsArr, out ushort[] indicesArr)
+        // Faces with alpha < 1 go into a separate transparent buffer pair that the renderer uploads
+        // into its own range and draws in a second, depth-write-free pass.
+        // Sizes are deterministic (4 verts + 6 indices per face), so the target arrays are filled
+        // directly - no List<T>, no ToArray() copies, no double allocation per chunk upload.
+        private void BuildMesh(
+            System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces,
+            out float[] vertsArr, out ushort[] indicesArr,
+            out float[] transVertsArr, out ushort[] transIndicesArr)
         {
             // vertex layout: position(3) + localUV(2) + tileRect(4) + color(4) = 13 floats per vertex
-            var verts = new System.Collections.Generic.List<float>(faces.Count * 4 * 13);
-            var indices = new System.Collections.Generic.List<ushort>(faces.Count * 6);
-            ushort vi = 0;
+            int faceCount = faces.Count;
+            int opaqueFaces = 0;
+            for (int i = 0; i < faceCount; i++)
+            {
+                if (faces[i].Alpha >= 1f) opaqueFaces++;
+            }
+            int transFaces = faceCount - opaqueFaces;
+
+            var verts = new float[opaqueFaces * 4 * 13];
+            var indices = new ushort[opaqueFaces * 6];
+            var transVerts = new float[transFaces * 4 * 13];
+            var transIndices = new ushort[transFaces * 6];
             float atlasW = Math.Max(1f, _atlasWidth);
             float atlasH = Math.Max(1f, _atlasHeight);
-            foreach (var f in faces)
+            // Hoisted out of the face loop: stackalloc reserves stack for the method, so a
+            // per-face stackalloc would grow the frame with face count (CA2014).
+            Span<CubeApp.Point3D> vertsSpan = stackalloc CubeApp.Point3D[4];
+            int opaqueFace = 0;
+            int transFace = 0;
+            for (int fi = 0; fi < faceCount; fi++)
             {
+                var f = faces[fi];
+                bool isTrans = f.Alpha < 1f;
+                var dstVerts = isTrans ? transVerts : verts;
+                var dstIndices = isTrans ? transIndices : indices;
+                int faceIdx = isTrans ? transFace : opaqueFace;
+                int vertexStart = faceIdx * 4;
+
+                vertsSpan[0] = f.V0;
+                vertsSpan[1] = f.V1;
+                vertsSpan[2] = f.V2;
+                vertsSpan[3] = f.V3;
                 int tileW = Math.Max(1, f.SrcRect.Width);
                 int tileH = Math.Max(1, f.SrcRect.Height);
                 int spanU = Math.Max(1, f.TileWidth);
@@ -1446,7 +1587,7 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
 
                     for (int ci = 0; ci < 4; ci++)
                     {
-                        var c = f.Vertices[ci];
+                        var c = vertsSpan[ci];
                         double u = Dot(c, uAxis);
                         double v = Dot(c, vAxis);
                         if (u < minU) minU = u;
@@ -1470,15 +1611,16 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
                 float tileSzX = tileW / atlasW;
                 float tileSzY = tileH / atlasH;
 
-                var v0p = f.Vertices[0];
-                var edgeU = f.Vertices[1] - v0p;
-                var edgeV = f.Vertices[3] - v0p;
+                var v0p = vertsSpan[0];
+                var edgeU = vertsSpan[1] - v0p;
+                var edgeV = vertsSpan[3] - v0p;
                 double denomU = edgeU.X * edgeU.X + edgeU.Y * edgeU.Y + edgeU.Z * edgeU.Z;
                 double denomV = edgeV.X * edgeV.X + edgeV.Y * edgeV.Y + edgeV.Z * edgeV.Z;
 
+                int vertWrite = vertexStart * 13;
                 for (int i = 0; i < 4; i++)
                 {
-                    var vv = f.Vertices[i];
+                    var vv = vertsSpan[i];
                     double du;
                     double dv;
                     if (hasAxes)
@@ -1497,29 +1639,37 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
                         dv = Math.Clamp(dv, 0.0, 1.0) * spanV;
                     }
 
-                    verts.Add((float)vv.X);
-                    verts.Add((float)vv.Y);
-                    verts.Add((float)vv.Z);
-                    verts.Add((float)du);
-                    verts.Add((float)dv);
-                    verts.Add(tileOriginX);
-                    verts.Add(tileOriginY);
-                    verts.Add(tileSzX);
-                    verts.Add(tileSzY);
-                    verts.Add(rf); verts.Add(gf); verts.Add(bf); verts.Add(alpha);
+                    dstVerts[vertWrite] = (float)vv.X;
+                    dstVerts[vertWrite + 1] = (float)vv.Y;
+                    dstVerts[vertWrite + 2] = (float)vv.Z;
+                    dstVerts[vertWrite + 3] = (float)du;
+                    dstVerts[vertWrite + 4] = (float)dv;
+                    dstVerts[vertWrite + 5] = tileOriginX;
+                    dstVerts[vertWrite + 6] = tileOriginY;
+                    dstVerts[vertWrite + 7] = tileSzX;
+                    dstVerts[vertWrite + 8] = tileSzY;
+                    dstVerts[vertWrite + 9] = rf;
+                    dstVerts[vertWrite + 10] = gf;
+                    dstVerts[vertWrite + 11] = bf;
+                    dstVerts[vertWrite + 12] = alpha;
+                    vertWrite += 13;
                 }
 
-                indices.Add((ushort)(vi + 0));
-                indices.Add((ushort)(vi + 1));
-                indices.Add((ushort)(vi + 2));
-                indices.Add((ushort)(vi + 0));
-                indices.Add((ushort)(vi + 2));
-                indices.Add((ushort)(vi + 3));
-                vi += 4;
+                int ib = faceIdx * 6;
+                dstIndices[ib + 0] = (ushort)(vertexStart + 0);
+                dstIndices[ib + 1] = (ushort)(vertexStart + 1);
+                dstIndices[ib + 2] = (ushort)(vertexStart + 2);
+                dstIndices[ib + 3] = (ushort)(vertexStart + 0);
+                dstIndices[ib + 4] = (ushort)(vertexStart + 2);
+                dstIndices[ib + 5] = (ushort)(vertexStart + 3);
+
+                if (isTrans) transFace++; else opaqueFace++;
             }
 
-            vertsArr = verts.ToArray();
-            indicesArr = indices.ToArray();
+            vertsArr = verts;
+            indicesArr = indices;
+            transVertsArr = transVerts;
+            transIndicesArr = transIndices;
         }
 
         public void RemoveChunk(CubeApp.ChunkCoordinates coords)
@@ -1617,7 +1767,7 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
         {
             while (_pendingPriorityUploads.TryDequeue(out var pu))
             {
-                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices);
+                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.TransparentVertices, pu.TransparentIndices);
             }
         }
 

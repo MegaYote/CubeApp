@@ -12,6 +12,6 @@
     { "id": "gravel",          "displayName": "Gravel",          "texture": "3,1", "mapColor": "#848484" },
     { "id": "obsidian",        "displayName": "Obsidian",        "texture": "5,2", "mapColor": "#3C2D5A" },
     { "id": "mossycobblestone","displayName": "Mossy Cobblestone","texture": "4,2", "mapColor": "#5E6C5E" },
-    { "id": "water",           "displayName": "Water",           "texture": "2,3", "solid": true, "opaque": false, "transparent": true, "alpha": 0.65, "mapColor": "#3F76E4" }
+    { "id": "water",           "displayName": "Water",           "texture": "12,14", "solid": false, "opaque": false, "transparent": true, "alpha": 0.65, "mapColor": "#3F76E4" }
   ]
 }

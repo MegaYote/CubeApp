@@ -6,6 +6,12 @@ namespace CubeApp
 {
     public sealed class Mesher
     {
+        // Water is meshed by a dedicated pass (sloped surfaces + stretched sides), so the greedy
+        // cube pass must never emit faces owned by a water block. Neighbouring solid blocks still
+        // render their faces toward water through the normal RendersToward rules.
+        private static readonly int WaterId = BlockRegistry.GetId("water");
+        private static readonly TextureRect WaterBaseTile = BlockRegistry.Get("water").AllTexture ?? default;
+
         private static readonly (int dx, int dy, int dz)[] FaceOffsets =
         {
             (0, 0, -1), // back
@@ -124,8 +130,8 @@ namespace CubeApp
                                     ? (rawPosX != null ? rawPosX[jv * height + iu] : BlockRegistry.AirId)
                                     : raw[((slice + 1) * depth + jv) * height + iu];
                                 int cell = iu * dimV + jv;
-                                if (RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + slice + 1, iu, chunk.OriginZ + jv));
-                                if (RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + slice, iu, chunk.OriginZ + jv));
+                                if (A != WaterId && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + slice + 1, iu, chunk.OriginZ + jv));
+                                if (B != WaterId && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + slice, iu, chunk.OriginZ + jv));
                             }
                         }
                     }
@@ -140,8 +146,8 @@ namespace CubeApp
                                 int A = raw[baseIdx];
                                 int B = lastSlice ? BlockRegistry.AirId : raw[baseIdx + 1];
                                 int cell = iu * dimV + jv;
-                                if (RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu));
-                                if (RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + jv, slice, chunk.OriginZ + iu));
+                                if (A != WaterId && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu));
+                                if (B != WaterId && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + jv, slice, chunk.OriginZ + iu));
                             }
                         }
                     }
@@ -157,8 +163,8 @@ namespace CubeApp
                                     ? (rawPosZ != null ? rawPosZ[iu * depth * height + jv] : BlockRegistry.AirId)
                                     : raw[(iu * depth + slice + 1) * height + jv];
                                 int cell = iu * dimV + jv;
-                                if (RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice + 1));
-                                if (RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice));
+                                if (A != WaterId && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice + 1));
+                                if (B != WaterId && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice));
                             }
                         }
                     }
@@ -168,6 +174,11 @@ namespace CubeApp
                     EmitMergedFaces(maskNeg, dimU, dimV, slice, d, chunk, mesh);
                 }
             }
+
+            // Fluid pass: water blocks render as sloped surfaces, not cubes. This runs after the
+            // greedy pass (which was told to skip water-owned faces) so solid blocks keep their
+            // correct occlusion against water while water gets its own geometry.
+            EmitWaterFaces(chunk, chunkLookup, lighting, mesh);
 
             return mesh;
         }
@@ -183,6 +194,262 @@ namespace CubeApp
                && (nId == BlockRegistry.AirId || BlockRegistry.IsTransparent(nId))
                && !(BlockRegistry.IsTransparent(nId) && nId == xId);
 
+        // ---- Fluid (water) pass -----------------------------------------------------
+
+        private static void EmitWaterFaces(Chunk chunk, Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh)
+        {
+            byte[] raw = chunk.RawBlocks;
+            int height = chunk.Height;
+            int depth = chunk.Depth;
+            int width = chunk.Width;
+            float alpha = BlockRegistry.Alpha(WaterId);
+            var sideTile = new TextureRect(WaterBaseTile.X + BlockRegistry.TileSize, WaterBaseTile.Y, WaterBaseTile.Width, WaterBaseTile.Height);
+
+            for (int x = 0; x < width; x++)
+            {
+                for (int z = 0; z < depth; z++)
+                {
+                    int column = (x * depth + z) * height;
+                    for (int y = 0; y < height; y++)
+                    {
+                        if (raw[column + y] != WaterId)
+                        {
+                            continue;
+                        }
+
+                        EmitWaterCellFaces(lookup, lighting, WaterId,
+                            chunk.OriginX + x, chunk.OriginY + y, chunk.OriginZ + z,
+                            WaterBaseTile, sideTile, alpha, mesh);
+                    }
+                }
+            }
+        }
+
+        private static void EmitWaterCellFaces(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, int waterId,
+            int wx, int wy, int wz, TextureRect baseTile, TextureRect sideTile, float alpha, List<MeshFace> mesh)
+        {
+            // Corner heights of this cell's top surface (0..1 above block bottom), MC order:
+            // (x,z), (x,z+1), (x+1,z+1), (x+1,z).
+            float h00 = GetFluidHeight(lookup, waterId, wx, wy, wz);
+            float h01 = GetFluidHeight(lookup, waterId, wx, wy, wz + 1);
+            float h11 = GetFluidHeight(lookup, waterId, wx + 1, wy, wz + 1);
+            float h10 = GetFluidHeight(lookup, waterId, wx + 1, wy, wz);
+
+            var blockPos = new Point3D(wx, wy, wz);
+
+            // Top face (only when the cell above isn't water). Flowing water uses the side tile,
+            // still water the base tile, matching BlockFluid.getBlockTextureFromSideAndMetadata.
+            if (GetBlockAt(lookup, wx, wy + 1, wz) != waterId)
+            {
+                var topTile = GetFlowVector(lookup, waterId, wx, wy, wz) ? sideTile : baseTile;
+                int topLight = Math.Max(lighting.GetLight(wx, wy, wz), lighting.GetLight(wx, wy + 1, wz));
+                double brightness = 1.0 * ChunkLighting.Brightness(topLight);
+                mesh.Add(new MeshFace(
+                    new Point3D(wx + 0, wy + h00, wz + 0),
+                    new Point3D(wx + 0, wy + h01, wz + 1),
+                    new Point3D(wx + 1, wy + h11, wz + 1),
+                    new Point3D(wx + 1, wy + h10, wz + 0),
+                    topTile, new Point3D(0, 1, 0), blockPos, (float)brightness, 1, 1, alpha));
+            }
+
+            // Bottom face (only when the cell below isn't water and doesn't occlude).
+            int below = GetBlockAt(lookup, wx, wy - 1, wz);
+            if (below != waterId && (!BlockRegistry.IsSolid(below) || BlockRegistry.IsTransparent(below)))
+            {
+                double brightness = 0.5 * ChunkLighting.Brightness(lighting.GetLight(wx, wy - 1, wz));
+                mesh.Add(new MeshFace(
+                    new Point3D(wx + 0, wy + 0, wz + 0),
+                    new Point3D(wx + 1, wy + 0, wz + 0),
+                    new Point3D(wx + 1, wy + 0, wz + 1),
+                    new Point3D(wx + 0, wy + 0, wz + 1),
+                    baseTile, new Point3D(0, -1, 0), blockPos, (float)brightness, 1, 1, alpha));
+            }
+
+            // Four side faces. Vertex order matches the greedy pass's FaceVertices table exactly
+            // (bottom pair first, then the top pair) so the walls survive back-face culling;
+            // the top edge follows the two corner heights so the side is sloped too.
+            EmitWaterSide(lookup, lighting, waterId, wx, wy, wz, mesh,
+                new Point3D(0, 0, -1), sideTile, alpha, 0.8, wx, wz - 1,
+                new Point3D(wx + 0, wy + 0, wz + 0),
+                new Point3D(wx + 1, wy + 0, wz + 0),
+                new Point3D(wx + 1, wy + h10, wz + 0),
+                new Point3D(wx + 0, wy + h00, wz + 0));
+            EmitWaterSide(lookup, lighting, waterId, wx, wy, wz, mesh,
+                new Point3D(0, 0, 1), sideTile, alpha, 0.8, wx, wz + 1,
+                new Point3D(wx + 1, wy + 0, wz + 1),
+                new Point3D(wx + 0, wy + 0, wz + 1),
+                new Point3D(wx + 0, wy + h01, wz + 1),
+                new Point3D(wx + 1, wy + h11, wz + 1));
+            EmitWaterSide(lookup, lighting, waterId, wx, wy, wz, mesh,
+                new Point3D(-1, 0, 0), sideTile, alpha, 0.6, wx - 1, wz,
+                new Point3D(wx + 0, wy + 0, wz + 0),
+                new Point3D(wx + 0, wy + 0, wz + 1),
+                new Point3D(wx + 0, wy + h01, wz + 1),
+                new Point3D(wx + 0, wy + h00, wz + 0));
+            EmitWaterSide(lookup, lighting, waterId, wx, wy, wz, mesh,
+                new Point3D(1, 0, 0), sideTile, alpha, 0.6, wx + 1, wz,
+                new Point3D(wx + 1, wy + 0, wz + 1),
+                new Point3D(wx + 1, wy + 0, wz + 0),
+                new Point3D(wx + 1, wy + h10, wz + 0),
+                new Point3D(wx + 1, wy + h11, wz + 1));
+        }
+
+        private static void EmitWaterSide(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, int waterId,
+            int wx, int wy, int wz, List<MeshFace> mesh,
+            Point3D normal, TextureRect tile, float alpha, double shade, int neighborX, int neighborZ,
+            Point3D p0, Point3D p1, Point3D p2, Point3D p3)
+        {
+            int neighbor = GetBlockAt(lookup, neighborX, wy, neighborZ);
+            if (neighbor == waterId || (BlockRegistry.IsSolid(neighbor) && !BlockRegistry.IsTransparent(neighbor)))
+            {
+                return;
+            }
+
+            double brightness = shade * ChunkLighting.Brightness(lighting.GetLight(neighborX, wy, neighborZ));
+            var blockPos = new Point3D(wx, wy, wz);
+            mesh.Add(new MeshFace(
+                p0, p1, p2, p3,
+                tile, normal, blockPos, (float)brightness, 1, 1, alpha));
+        }
+
+        // ---- Fluid world reads (bounded by the chunk set the worker handed us) ----------
+
+        private static int GetBlockAt(Dictionary<ChunkCoordinates, Chunk> lookup, int wx, int wy, int wz)
+        {
+            var chunk = FindChunk(lookup, wx, wz);
+            if (chunk == null)
+            {
+                return BlockRegistry.AirId;
+            }
+
+            int lx = wx - chunk.OriginX;
+            int lz = wz - chunk.OriginZ;
+            int ly = chunk.WorldYToLocal(wy);
+            return chunk.IsInBounds(lx, ly, lz) ? chunk[lx, ly, lz] : BlockRegistry.AirId;
+        }
+
+        private static int GetMetaAt(Dictionary<ChunkCoordinates, Chunk> lookup, int wx, int wy, int wz)
+        {
+            var chunk = FindChunk(lookup, wx, wz);
+            if (chunk == null)
+            {
+                return 0;
+            }
+
+            int lx = wx - chunk.OriginX;
+            int lz = wz - chunk.OriginZ;
+            int ly = chunk.WorldYToLocal(wy);
+            return chunk.IsInBounds(lx, ly, lz) ? chunk.GetMeta(lx, ly, lz) : 0;
+        }
+
+        private static Chunk? FindChunk(Dictionary<ChunkCoordinates, Chunk> lookup, int wx, int wz)
+        {
+            int cx = FloorDiv(wx, ChunkManager.ChunkSize);
+            int cz = FloorDiv(wz, ChunkManager.ChunkSize);
+            lookup.TryGetValue(new ChunkCoordinates(cx, cz), out var chunk);
+            return chunk;
+        }
+
+        /// <summary>BlockFluid.getFluidHeight: weighted average of the four cells around a corner,
+        /// full height when any of them has water directly above.</summary>
+        private static float GetFluidHeight(Dictionary<ChunkCoordinates, Chunk> lookup, int waterId, int wx, int wy, int wz)
+        {
+            int divisor = 0;
+            float sum = 0f;
+            for (int i = 0; i < 4; i++)
+            {
+                int cx = wx - (i & 1);
+                int cz = wz - ((i >> 1) & 1);
+                if (GetBlockAt(lookup, cx, wy + 1, cz) == waterId)
+                {
+                    return 1f;
+                }
+
+                int mat = GetBlockAt(lookup, cx, wy, cz);
+                if (mat != waterId)
+                {
+                    if (!BlockRegistry.IsSolid(mat))
+                    {
+                        sum += 1f;
+                        divisor += 1;
+                    }
+                }
+                else
+                {
+                    int m = GetMetaAt(lookup, cx, wy, cz);
+                    if (m >= 8 || m == 0)
+                    {
+                        sum += PercentAir(m) * 10f;
+                        divisor += 10;
+                    }
+
+                    sum += PercentAir(m);
+                    divisor += 1;
+                }
+            }
+
+            return divisor == 0 ? 1f : 1f - sum / divisor;
+        }
+
+        /// <summary>BlockFluid.getPercentAir: air fraction of a flow level, falling water = 0.</summary>
+        private static float PercentAir(int meta)
+        {
+            if (meta >= 8)
+            {
+                meta = 0;
+            }
+
+            return (meta + 1) / 9f;
+        }
+
+        /// <summary>True when the top-surface texture should use the side tile, i.e. the flow
+        /// vector has a horizontal component (BlockFluid.getFlowDirection != -1000 sentinel).</summary>
+        private static bool GetFlowVector(Dictionary<ChunkCoordinates, Chunk> lookup, int waterId, int wx, int wy, int wz)
+        {
+            int self = GetEffectiveFlowDecay(lookup, waterId, wx, wy, wz);
+            double vx = 0, vz = 0;
+            for (int i = 0; i < 4; i++)
+            {
+                int nx = wx, nz = wz;
+                if (i == 0) nx = wx - 1;
+                else if (i == 1) nz = wz - 1;
+                else if (i == 2) nx = wx + 1;
+                else nz = wz + 1;
+
+                int decay = GetEffectiveFlowDecay(lookup, waterId, nx, wy, nz);
+                int d;
+                if (decay < 0)
+                {
+                    decay = GetEffectiveFlowDecay(lookup, waterId, nx, wy - 1, nz);
+                    if (decay >= 0)
+                    {
+                        d = decay - (self - 8);
+                        vx += (nx - wx) * d;
+                        vz += (nz - wz) * d;
+                    }
+                }
+                else
+                {
+                    d = decay - self;
+                    vx += (nx - wx) * d;
+                    vz += (nz - wz) * d;
+                }
+            }
+
+            return Math.Abs(vx) > 1e-9 || Math.Abs(vz) > 1e-9;
+        }
+
+        private static int GetEffectiveFlowDecay(Dictionary<ChunkCoordinates, Chunk> lookup, int waterId, int wx, int wy, int wz)
+        {
+            if (GetBlockAt(lookup, wx, wy, wz) != waterId)
+            {
+                return -1;
+            }
+
+            int m = GetMetaAt(lookup, wx, wy, wz);
+            return m >= 8 ? 0 : m;
+        }
+
         private static int Pack(int blockId, bool positive, int light)
             => 1 | (blockId << 1) | (positive ? 0x200 : 0) | (light << 10);
 
@@ -194,6 +461,11 @@ namespace CubeApp
         private static void EmitMergedFaces(int[] mask, int dimU, int dimV, int slice, int d, Chunk chunk, List<MeshFace> mesh)
         {
             int height = chunk.Height;
+            // Scratch buffers hoisted out of the face loop: stackalloc reserves space for the
+            // whole method, so doing it per-face would let stack use grow with face count.
+            Span<Point3D> corners = stackalloc Point3D[4];
+            Span<bool> usedScratch = stackalloc bool[4];
+            Span<Point3D> orderedScratch = stackalloc Point3D[4];
             for (int i = 0; i < dimU; i++)
             {
                 for (int j = 0; j < dimV; j++)
@@ -229,8 +501,7 @@ namespace CubeApp
                     // Faces lie on the boundary between slice and slice+1, independent of normal sign.
                     int boundary = slice + 1;
 
-                    // build four corners in world coordinates
-                    var corners = new Point3D[4];
+                    // build four corners in world coordinates (reusing the hoisted buffer)
                     for (int cornerIdx = 0; cornerIdx < 4; cornerIdx++)
                     {
                         int cu = (cornerIdx == 0 || cornerIdx == 3) ? i : i + w;
@@ -271,7 +542,7 @@ namespace CubeApp
                     int tileHeight = Math.Max(1, h);
                     if (TryGetCubuildFaceAxes(axisNormal, out var uAxis, out var vAxis))
                     {
-                        CanonicalizeQuadByAxes(corners, uAxis, vAxis);
+                        CanonicalizeQuadByAxes(corners, usedScratch, orderedScratch, uAxis, vAxis);
                         var canonicalCross = Cross(corners[1] - corners[0], corners[2] - corners[0]);
                         if (Dot(canonicalCross, axisNormal) < 0)
                         {
@@ -312,7 +583,7 @@ namespace CubeApp
                     // per-block atlas tile (honouring top/bottom/side overrides) and render alpha
                     var src = BlockRegistry.FaceTexture(entryType, axisNormal);
                     float alpha = BlockRegistry.Alpha(entryType);
-                    mesh.Add(new MeshFace(corners, src, axisNormal, blockPos, (float)brightness, tileWidth, tileHeight, alpha));
+                    mesh.Add(new MeshFace(corners[0], corners[1], corners[2], corners[3], src, axisNormal, blockPos, (float)brightness, tileWidth, tileHeight, alpha));
 
                     // zero-out mask
                     for (int aOff = 0; aOff < w; aOff++)
@@ -388,7 +659,7 @@ namespace CubeApp
             return false;
         }
 
-        private static double GetAxisSpan(Point3D[] corners, Point3D axis)
+        private static double GetAxisSpan(ReadOnlySpan<Point3D> corners, Point3D axis)
         {
             double min = double.PositiveInfinity;
             double max = double.NegativeInfinity;
@@ -402,7 +673,7 @@ namespace CubeApp
             return Math.Max(0.0, max - min);
         }
 
-        private static void CanonicalizeQuadByAxes(Point3D[] corners, Point3D uAxis, Point3D vAxis)
+        private static void CanonicalizeQuadByAxes(Span<Point3D> corners, Span<bool> used, Span<Point3D> ordered, Point3D uAxis, Point3D vAxis)
         {
             double minU = double.PositiveInfinity;
             double maxU = double.NegativeInfinity;
@@ -419,8 +690,7 @@ namespace CubeApp
                 if (v > maxV) maxV = v;
             }
 
-            var used = new bool[corners.Length];
-            var ordered = new Point3D[4];
+            used.Clear();
             ordered[0] = TakeClosestCorner(corners, used, uAxis, vAxis, minU, minV);
             ordered[1] = TakeClosestCorner(corners, used, uAxis, vAxis, maxU, minV);
             ordered[2] = TakeClosestCorner(corners, used, uAxis, vAxis, maxU, maxV);
@@ -432,7 +702,7 @@ namespace CubeApp
             }
         }
 
-        private static Point3D TakeClosestCorner(Point3D[] corners, bool[] used, Point3D uAxis, Point3D vAxis, double targetU, double targetV)
+        private static Point3D TakeClosestCorner(ReadOnlySpan<Point3D> corners, Span<bool> used, Point3D uAxis, Point3D vAxis, double targetU, double targetV)
         {
             int bestIndex = -1;
             double bestDistSq = double.PositiveInfinity;

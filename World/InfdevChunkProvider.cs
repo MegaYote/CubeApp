@@ -15,16 +15,18 @@ public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeigh
         {
             int originX = chunkX * chunkSize;
             int originZ = chunkZ * chunkSize;
-            // World Y spans -64..191. Local Y 0..255 with OriginY = -64.
-            const int originY = -64;
+// World Y spans -64..191. Local Y 0..255 with OriginY = -64 (see ChunkManager.WorldOriginY).
+            const int originY = ChunkManager.WorldOriginY;
             var chunk = new Chunk(chunkSize, chunkHeight, chunkSize, originX, originY, originZ);
 
-            // Sea level at world Y=0 (local Y=64).
-            const int seaLevelLocalY = 64;
+            // Sea level in world space. Any air column sitting at or below this Y fills with water,
+            // so terrain needs to actually dip below it for oceans to generate.
+            const int seaLevelWorldY = 0;
 
             // Resolve block ids once from the data-driven registry (air=0 reserved).
             int idBedrock = BlockRegistry.GetId("bedrock");
             int idWater = BlockRegistry.GetId("water");
+            int idSand = BlockRegistry.GetId("sand");
             int idAir = BlockRegistry.AirId;
             int idGrass = BlockRegistry.GetId("grass");
             int idDirt = BlockRegistry.GetId("dirt");
@@ -37,19 +39,29 @@ public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeigh
                     int worldX = originX + lx;
                     int worldZ = originZ + lz;
 
-                    // Heightfield uses layered value-noise to mimic classic rolling terrain.
-                    // Surface height centered around Y=60-80 with natural variation.
-                    double baseNoise = Fbm2D(worldX * 0.035, worldZ * 0.035, 4, 0.5);
-                    double detailNoise = Fbm2D(worldX * 0.09, worldZ * 0.09, 2, 0.5);
-                    int surfaceWorldY = 64 + (int)Math.Round(baseNoise * 16.0 + detailNoise * 8.0);
+                    // Heightfield uses layered value-noise. A broad, low-frequency base octave
+                    // carves large ocean basins and continents; a finer detail octave adds local
+                    // variation. Amplitude is wide enough (~96 blocks peak-to-peak) that lows
+                    // regularly dip below sea level (Y=0) so oceans actually generate, while the
+                    // occasional aligned high pushes hilltops up toward Y=130+.
+                    double baseNoise = Fbm2D(worldX * 0.0105, worldZ * 0.0105, 4, 0.5);
+                    double detailNoise = Fbm2D(worldX * 0.045, worldZ * 0.045, 2, 0.5);
+                    int surfaceWorldY = 64 + (int)Math.Round(baseNoise * 72.0 + detailNoise * 24.0);
                     int surfaceLocalY = surfaceWorldY - originY;  // local Y = world Y - originY
                     surfaceLocalY = Math.Clamp(surfaceLocalY, 0, chunkHeight - 1);
+
+                    // Surface/sub-surface blocks pick by depth relative to sea level: underwater
+                    // and the immediate shoreline use sand (no grass grows beneath water), while
+                    // dry land keeps the grass-on-dirt-on-stone stratigraphy.
+                    bool submerged = surfaceWorldY <= seaLevelWorldY;
+                    int surfaceBlock = submerged ? idSand : idGrass;
+                    int subSurfaceBlock = submerged ? idSand : idDirt;
 
                     for (int y = 0; y < chunk.Height; y++)
                     {
                         int worldY = y + originY; // convert local Y to world Y
 
-if (y == 0)
+                        if (y == 0)
                         {
                             chunk[lx, y, lz] = idBedrock;
                             continue;
@@ -57,8 +69,8 @@ if (y == 0)
 
                         if (y > surfaceLocalY)
                         {
-                            // Below sea level fill with water, above sea level fill with air
-                            if (worldY <= 0)
+                            // Below sea level fills with water; above stays air.
+                            if (worldY <= seaLevelWorldY)
                             {
                                 chunk[lx, y, lz] = idWater;
                             }
@@ -78,11 +90,11 @@ if (y == 0)
 
                         if (y == surfaceLocalY)
                         {
-                            chunk[lx, y, lz] = idGrass;
+                            chunk[lx, y, lz] = surfaceBlock;
                         }
                         else if (y >= surfaceLocalY - 3)
                         {
-                            chunk[lx, y, lz] = idDirt;
+                            chunk[lx, y, lz] = subSurfaceBlock;
                         }
                         else
                         {
