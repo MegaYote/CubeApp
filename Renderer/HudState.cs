@@ -10,6 +10,7 @@ namespace CubeApp.Renderer
     public struct HudState
     {
         public bool ShowDebug;
+        public bool InventoryOpen;
         public float Fps;
         public float UpdateMs;
         public float MeshMs;
@@ -19,6 +20,9 @@ namespace CubeApp.Renderer
         public string SelectedBlockText;
         public string RenderDistanceText;
         public int SelectedSlot;
+        /// <summary>Current per-slot hotbar contents (block ids); may differ from the default list
+        /// once the player drops inventory picks into slots.</summary>
+        public IReadOnlyList<int> Hotbar;
 
         /// <summary>
         /// Four world-space corners of the targeted block face, or null if nothing is currently
@@ -45,6 +49,7 @@ namespace CubeApp.Renderer
         public static HudState Empty => new HudState
         {
             ShowDebug = false,
+            InventoryOpen = false,
             Fps = 0f,
             UpdateMs = 0f,
             MeshMs = 0f,
@@ -54,6 +59,7 @@ namespace CubeApp.Renderer
             SelectedBlockText = string.Empty,
             RenderDistanceText = string.Empty,
             SelectedSlot = 0,
+            Hotbar = Array.Empty<int>(),
             HighlightWorldQuad = null,
             PlayerChunkX = 0,
             PlayerChunkZ = 0,

@@ -18,5 +18,7 @@ namespace CubeApp.Renderer
         void SetChunkManager(CubeApp.ChunkManager manager);
         void MeshChunkImmediate(CubeApp.ChunkCoordinates coords);
         void ProcessPendingPriorityMeshes();
+        void SetUiInputSnapshot(Veldrid.InputSnapshot snapshot);
+        bool TryTakeInventorySelection(out int blockId);
     }
 }

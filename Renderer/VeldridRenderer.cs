@@ -96,6 +96,10 @@ namespace CubeApp.Renderer
         private TextureView? _iconAtlasView;
         private IntPtr _iconImGuiId;
         private Vector4[]? _blockIconUv;
+        // Real input for the ImGui UI (only wired when the mouse is free, e.g. the E-menu
+        // inventory); otherwise ImGui stays inert via NullInputSnapshot.
+        private InputSnapshot? _uiInputSnapshot;
+        private readonly System.Collections.Concurrent.ConcurrentQueue<int> _inventorySelections = new();
 
         // Chunk world mesh: one shared growable vertex/index buffer pair drawn with a single
         // DrawIndexedIndirect call (one IndirectDrawIndexedArguments per live chunk). Chunk-local
@@ -829,7 +833,7 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             DrawHighlight(cl);
             DrawChunkBorders(cl);
 
-            _imguiRenderer.Update(1f / 60f, NullInputSnapshot.Instance);
+            _imguiRenderer.Update(1f / 60f, _uiInputSnapshot ?? NullInputSnapshot.Instance);
             BuildHudUi();
             _imguiRenderer.Render(_gd, cl);
 
@@ -1514,6 +1518,45 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
             }
         }
 
+        // The E-menu inventory: a scrollable grid of every registered block rendered with its
+        // isometric cube icon. Clicks are queued and consumed by Program on the next frame.
+        private void DrawInventoryWindow(Vector2 displaySize)
+        {
+            if (_iconImGuiId == IntPtr.Zero || _blockIconUv == null) return;
+
+            float winW = Math.Min(680, displaySize.X - 32);
+            float winH = Math.Min(480, displaySize.Y - 64);
+            ImGui.SetNextWindowPos(new Vector2((displaySize.X - winW) / 2f, 24), ImGuiCond.Always);
+            ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
+            ImGui.Begin("##inventory", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
+                | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse);
+            ImGui.Text("Inventory - click a block to put it in the selected hotbar slot");
+            ImGui.Separator();
+            ImGui.BeginChild("##invgrid", new Vector2(0, -4));
+
+            float avail = ImGui.GetContentRegionAvail().X;
+            const float cellW = 64f;
+            int perRow = Math.Max(1, (int)(avail / cellW));
+            for (int id = 1; id < BlockRegistry.Count; id++)
+            {
+                var uv = _blockIconUv[id];
+                string name = BlockRegistry.GetById(id).DisplayName;
+                ImGui.PushID(id);
+                if (ImGui.ImageButton($"##icon{id}", _iconImGuiId, new Vector2(48, 48),
+                        new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W),
+                        Vector4.Zero, Vector4.One))
+                {
+                    _inventorySelections.Enqueue(id);
+                }
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip(name);
+                ImGui.PopID();
+                if (id % perRow != 0) ImGui.SameLine();
+            }
+
+            ImGui.EndChild();
+            ImGui.End();
+        }
+
         private void BuildHudUi()
         {
             var io = ImGui.GetIO();
@@ -1558,10 +1601,10 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
                     drawList.AddRect(topLeft + new Vector2(4, 4), bottomRight - new Vector2(4, 4), activeBorder, 0f, ImDrawFlags.None, 2f);
                 }
 
-                if (i < BlockRegistry.Hotbar.Count)
+                if (_hud.Hotbar != null && i < _hud.Hotbar.Count)
                 {
-                    int bid = BlockRegistry.Hotbar[i];
-                    if (_iconImGuiId != IntPtr.Zero && _blockIconUv != null && bid < _blockIconUv.Length)
+                    int bid = _hud.Hotbar[i];
+                    if (bid > 0 && _iconImGuiId != IntPtr.Zero && _blockIconUv != null && bid < _blockIconUv.Length)
                     {
                         var uv = _blockIconUv[bid];
                         drawList.AddImage(
@@ -1573,12 +1616,19 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
                     }
                     else
                     {
-                        uint iconColor = BlockRegistry.MapColorOf(bid);
+                        uint iconColor = bid > 0 ? BlockRegistry.MapColorOf(bid) : 0;
                         drawList.AddRectFilled(topLeft + new Vector2(8, 8), topLeft + new Vector2(40, 40), iconColor);
                     }
                 }
 
                 drawList.AddText(topLeft + new Vector2(4, 2), textColor, ((i + 1) % 10).ToString());
+            }
+
+            // E-menu inventory: a grid of every block. Clicking one queues it to Program, which
+            // drops it into the selected hotbar slot and closes the menu.
+            if (_hud.InventoryOpen)
+            {
+                DrawInventoryWindow(displaySize);
             }
 
             // Selected block label
@@ -1926,6 +1976,19 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
             {
                 WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.TransparentVertices, pu.TransparentIndices);
             }
+        }
+
+        /// <summary>Feeds the real input snapshot to ImGui (for the interactive E-menu inventory).
+        /// Called every frame; pass null/never to keep ImGui inert.</summary>
+        public void SetUiInputSnapshot(InputSnapshot snapshot)
+        {
+            _uiInputSnapshot = snapshot;
+        }
+
+        /// <summary>Pops one block id the player clicked in the inventory, or false.</summary>
+        public bool TryTakeInventorySelection(out int blockId)
+        {
+            return _inventorySelections.TryDequeue(out blockId);
         }
 
         // Synchronously re-mesh one chunk (used for instant player edits). The greedy mesh from the
