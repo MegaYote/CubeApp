@@ -16,8 +16,8 @@
 
     { "id": "bricks",          "displayName": "Bricks",          "texture": "8,4", "mapColor": "#964640" },
     { "id": "log",             "displayName": "Log",             "texture": "4,1", "top": "5,1", "bottom": "5,1", "mapColor": "#6B4A28" },
-    { "id": "leaves",          "displayName": "Leaves",          "texture": "4,3", "opaque": false, "transparent": true, "alpha": 0.85, "mapColor": "#3A7A1F" },
-    { "id": "glass",           "displayName": "Glass",           "texture": "0,5", "opaque": false, "transparent": true, "alpha": 0.4, "mapColor": "#C8C8C8" },
+    { "id": "leaves",          "displayName": "Leaves",          "texture": "4,3", "shape": "cutout", "opaque": false, "transparent": true, "mapColor": "#3A7A1F" },
+    { "id": "glass",           "displayName": "Glass",           "texture": "0,5", "shape": "glass", "opaque": false, "transparent": true, "mapColor": "#C8C8C8" },
     { "id": "bomb",            "displayName": "Bomb",            "texture": "8,0", "top": "9,0", "mapColor": "#333333" },
     { "id": "full_grass",      "displayName": "Full Grass",      "texture": "0,0", "mapColor": "#228B22" },
     { "id": "sponge",          "displayName": "Sponge",          "texture": "3,3", "mapColor": "#C8B54A" },
@@ -38,6 +38,15 @@
     { "id": "iron",            "displayName": "Iron Block",      "texture": "6,2", "top": "6,1", "bottom": "6,3", "mapColor": "#E8E8E8" },
     { "id": "gold",            "displayName": "Gold Block",      "texture": "7,2", "top": "7,1", "bottom": "7,3", "mapColor": "#F7E040" },
     { "id": "diamond",         "displayName": "Diamond Block",   "texture": "8,2", "top": "8,1", "bottom": "8,3", "mapColor": "#66E8E0" },
-    { "id": "bookshelf",       "displayName": "Bookshelf",       "texture": "3,2", "top": "4,0", "bottom": "4,0", "mapColor": "#8A6B45" }
+    { "id": "bookshelf",       "displayName": "Bookshelf",       "texture": "3,2", "top": "4,0", "bottom": "4,0", "mapColor": "#8A6B45" },
+
+    { "id": "sapling",         "displayName": "Sapling",         "texture": "15,0", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#3A7A1F" },
+    { "id": "red_flower",      "displayName": "Red Flower",      "texture": "12,0", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#D22B2B" },
+    { "id": "yellow_flower",   "displayName": "Yellow Flower",   "texture": "13,0", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#FFD700" },
+    { "id": "blue_flower",     "displayName": "Blue Flower",     "texture": "14,0", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#4169E1" },
+    { "id": "red_mushroom",    "displayName": "Red Mushroom",    "texture": "12,1", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#B22C2C" },
+    { "id": "white_mushroom",  "displayName": "White Mushroom",  "texture": "13,1", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#E8E8E8" },
+    { "id": "poison_mushroom", "displayName": "Poison Mushroom", "texture": "14,1", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#B22C2C" },
+    { "id": "spikes",          "displayName": "Spikes",          "texture": "15,2", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.9, "mapColor": "#808080" }
   ]
 }
