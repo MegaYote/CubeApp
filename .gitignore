@@ -16,4 +16,10 @@ AnyCPU/
 *.cache
 *.pdb
 
+# Big media files - too large for GitHub's 100MB limit
+*.mp4
+*.mov
+*.avi
+*.wmv
+
 imgui.ini
