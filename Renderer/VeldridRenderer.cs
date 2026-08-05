@@ -367,7 +367,11 @@ void main() {
     // fract() tiles the same atlas tile regardless of how many blocks the face spans.
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
     vec4 tex = texture(uAtlas, atlasUV);
-    outColor = tex * vColor;
+    // Opacity comes from the block's configured alpha (vColor.a), NOT the atlas art's baked
+    // alpha - the water tile ships semi-transparent in the PNG, and multiplying that by the
+    // block alpha made water ~46% transparent instead of the intended 0.85. Opaque blocks
+    // (alpha = 1) are unaffected.
+    outColor = vec4(tex.rgb * vColor.rgb, vColor.a);
 }";
 
             var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
@@ -1578,6 +1582,12 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
                 bool hasAxes = TryGetCubuildFaceAxes(f.Normal, out var uAxis, out var vAxis);
                 double minU = 0.0;
                 double minV = 0.0;
+                // For fluid side walls (AnchorVBottom) the tile is planted at the block bottom:
+                // the surface vertex must sample (1 - wallHeight) down the tile and the bottom
+                // vertex must sample the tile bottom. With vAxis=(0,-1,0) the raw dv measures
+                // from the TOP, so we shift it by (1 - height) to match Infdev's
+                // ((var51 + (1.0F - var31) * 16.0F) / 256.0F).
+                double anchorVOffset = 0.0;
                 if (hasAxes)
                 {
                     minU = double.PositiveInfinity;
@@ -1594,6 +1604,11 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
                         if (u > maxU) maxU = u;
                         if (v < minV) minV = v;
                         if (v > maxV) maxV = v;
+                    }
+
+                    if (f.AnchorVBottom)
+                    {
+                        anchorVOffset = Math.Max(0.0, 1.0 - (maxV - minV));
                     }
 
                     spanU = Math.Max(1, (int)Math.Round(maxU - minU));
@@ -1628,7 +1643,7 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
                         du = Dot(vv, uAxis) - minU;
                         dv = Dot(vv, vAxis) - minV;
                         du = Math.Clamp(du, 0.0, spanU);
-                        dv = Math.Clamp(dv, 0.0, spanV);
+                        dv = Math.Clamp(dv + anchorVOffset, 0.0, spanV);
                     }
                     else
                     {
