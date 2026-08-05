@@ -47,6 +47,25 @@
     { "id": "red_mushroom",    "displayName": "Red Mushroom",    "texture": "12,1", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#B22C2C" },
     { "id": "white_mushroom",  "displayName": "White Mushroom",  "texture": "13,1", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#E8E8E8" },
     { "id": "poison_mushroom", "displayName": "Poison Mushroom", "texture": "14,1", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#B22C2C" },
-    { "id": "spikes",          "displayName": "Spikes",          "texture": "15,2", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.9, "mapColor": "#808080" }
+    { "id": "spikes",          "displayName": "Spikes",          "texture": "15,2", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.9, "mapColor": "#808080" },
+
+    { "id": "stone_slab",      "displayName": "Stone Slab",      "texture": "1,0", "shape": "slab", "solid": true, "opaque": false, "mapColor": "#808080" },
+    { "id": "stone_slab_top",  "displayName": "Stone Slab (Top)","texture": "1,0", "shape": "slab_top", "solid": true, "opaque": false, "inventory": false, "mapColor": "#808080" },
+    { "id": "stone_stairs",    "displayName": "Stone Stairs",    "texture": "1,0", "shape": "stairs", "solid": true, "opaque": false, "mapColor": "#808080" },
+    { "id": "planks_slab",     "displayName": "Planks Slab",     "texture": "4,0", "shape": "slab", "solid": true, "opaque": false, "mapColor": "#A07846" },
+    { "id": "planks_slab_top", "displayName": "Planks Slab (Top)","texture": "4,0", "shape": "slab_top", "solid": true, "opaque": false, "inventory": false, "mapColor": "#A07846" },
+    { "id": "planks_stairs",   "displayName": "Planks Stairs",   "texture": "4,0", "shape": "stairs", "solid": true, "opaque": false, "mapColor": "#A07846" },
+    { "id": "cobblestone_slab",      "displayName": "Cobblestone Slab",      "texture": "0,1", "shape": "slab", "solid": true, "opaque": false, "mapColor": "#707070" },
+    { "id": "cobblestone_slab_top",  "displayName": "Cobblestone Slab (Top)","texture": "0,1", "shape": "slab_top", "solid": true, "opaque": false, "inventory": false, "mapColor": "#707070" },
+    { "id": "cobblestone_stairs",    "displayName": "Cobblestone Stairs",    "texture": "0,1", "shape": "stairs", "solid": true, "opaque": false, "mapColor": "#707070" },
+    { "id": "sand_slab",       "displayName": "Sand Slab",       "texture": "2,1", "shape": "slab", "solid": true, "opaque": false, "mapColor": "#D2C48C" },
+    { "id": "sand_slab_top",   "displayName": "Sand Slab (Top)", "texture": "2,1", "shape": "slab_top", "solid": true, "opaque": false, "inventory": false, "mapColor": "#D2C48C" },
+    { "id": "sand_stairs",     "displayName": "Sand Stairs",     "texture": "2,1", "shape": "stairs", "solid": true, "opaque": false, "mapColor": "#D2C48C" },
+    { "id": "dirt_slab",       "displayName": "Dirt Slab",       "texture": "2,0", "shape": "slab", "solid": true, "opaque": false, "mapColor": "#8B4513" },
+    { "id": "dirt_slab_top",   "displayName": "Dirt Slab (Top)", "texture": "2,0", "shape": "slab_top", "solid": true, "opaque": false, "inventory": false, "mapColor": "#8B4513" },
+    { "id": "dirt_stairs",     "displayName": "Dirt Stairs",     "texture": "2,0", "shape": "stairs", "solid": true, "opaque": false, "mapColor": "#8B4513" },
+    { "id": "bricks_slab",     "displayName": "Bricks Slab",     "texture": "8,4", "shape": "slab", "solid": true, "opaque": false, "mapColor": "#964640" },
+    { "id": "bricks_slab_top", "displayName": "Bricks Slab (Top)","texture": "8,4", "shape": "slab_top", "solid": true, "opaque": false, "inventory": false, "mapColor": "#964640" },
+    { "id": "bricks_stairs",   "displayName": "Bricks Stairs",   "texture": "8,4", "shape": "stairs", "solid": true, "opaque": false, "mapColor": "#964640" }
   ]
 }

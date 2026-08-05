@@ -389,9 +389,28 @@ namespace CubeApp
         private void MovePlayerWithCollisions(Point3D displacement)
         {
             bool hitX = false, hitY = false, hitZ = false;
+            var start = cameraPosition;
             cameraPosition = MoveAlongAxis(cameraPosition, displacement.X, Axis.X, ref hitX);
             cameraPosition = MoveAlongAxis(cameraPosition, displacement.Y, Axis.Y, ref hitY);
             cameraPosition = MoveAlongAxis(cameraPosition, displacement.Z, Axis.Z, ref hitZ);
+
+            // Step-up onto low obstacles (slabs, stair steps): when a horizontal move is blocked
+            // by something no taller than a half block, lift the player, retry the move, and
+            // settle back down onto it - Minecraft's auto step-up. Full-height walls still block.
+            // (No !hitY gate: a grounded player collides downward every frame, so that would
+            // disable stepping entirely.)
+            if (hitX || hitZ)
+            {
+                var stepped = TryStepUp(start, displacement);
+                if (stepped.HasValue)
+                {
+                    cameraPosition = stepped.Value;
+                    hitX = hitZ = false;
+                    hitY = true;
+                    playerGrounded = true;
+                }
+            }
+
             if (hitX) playerVelocity = new Point3D(0, playerVelocity.Y, playerVelocity.Z);
             if (hitZ) playerVelocity = new Point3D(playerVelocity.X, playerVelocity.Y, 0);
             if (hitY)
@@ -400,6 +419,30 @@ namespace CubeApp
                 playerVelocity = new Point3D(playerVelocity.X, 0, playerVelocity.Z);
             }
             else playerGrounded = false;
+        }
+
+        // Auto step-up: raise the player up to MaxStepHeight, retry the horizontal move, then
+        // settle down onto whatever's beneath. Returns the stepped position, or null if the
+        // obstacle is taller than a step (full wall) or there's no headroom.
+        private Point3D? TryStepUp(Point3D start, Point3D displacement)
+        {
+            const double maxStepHeight = 0.5;
+            var raised = new Point3D(start.X, start.Y + maxStepHeight, start.Z);
+            if (IsPlayerColliding(raised)) return null;
+
+            bool hx = false, hz = false;
+            var moved = MoveAlongAxis(raised, displacement.X, Axis.X, ref hx);
+            moved = MoveAlongAxis(moved, displacement.Z, Axis.Z, ref hz);
+            if (hx || hz) return null; // still blocked after lifting -> full-height obstacle
+
+            var down = moved;
+            while (down.Y > start.Y)
+            {
+                var candidate = new Point3D(down.X, down.Y - CollisionStep, down.Z);
+                if (IsPlayerColliding(candidate)) break;
+                down = candidate;
+            }
+            return down;
         }
 
         private Point3D MoveAlongAxis(Point3D start, double amount, Axis axis, ref bool collided)
@@ -445,8 +488,47 @@ namespace CubeApp
             for (int y = blockMinY; y <= blockMaxY; y++)
             for (int z = blockMinZ; z <= blockMaxZ; z++)
             {
-                if (manager.TryGetLoadedBlock(x, y, z, out var block) && BlockRegistry.IsSolid(block))
+                if (manager.TryGetLoadedBlockAndMeta(x, y, z, out var block, out var meta) && BlockRegistry.IsSolid(block))
+                {
+                    if (BoxesOverlapPlayer(GetBlockCollisionBoxes(block, meta), x, y, z, minX, maxX, minY, maxY, minZ, maxZ))
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        // Collision boxes for a block (full cube, or partial boxes for slabs/stairs). Boxes are
+        // in 0..1 block-relative units, matching the mesher's special-solid geometry. Also used
+        // for ray picking: cross plants get a small centered box so you can aim past them.
+        private static (double minX, double minY, double minZ, double maxX, double maxY, double maxZ)[] GetBlockCollisionBoxes(int id, int meta)
+        {
+            if (BlockRegistry.IsSlab(id)) return new[] { (0.0, 0.0, 0.0, 1.0, 0.5, 1.0) };
+            if (BlockRegistry.IsSlabTop(id)) return new[] { (0.0, 0.5, 0.0, 1.0, 1.0, 1.0) };
+            if (BlockRegistry.IsStair(id))
+            {
+                return meta switch
+                {
+                    0 => new[] { (0.0, 0.0, 0.0, 0.5, 0.5, 1.0), (0.5, 0.0, 0.0, 1.0, 1.0, 1.0) },
+                    1 => new[] { (0.0, 0.0, 0.0, 0.5, 1.0, 1.0), (0.5, 0.0, 0.0, 1.0, 0.5, 1.0) },
+                    2 => new[] { (0.0, 0.0, 0.0, 1.0, 0.5, 0.5), (0.0, 0.0, 0.5, 1.0, 1.0, 1.0) },
+                    _ => new[] { (0.0, 0.0, 0.0, 1.0, 1.0, 0.5), (0.0, 0.0, 0.5, 1.0, 0.5, 1.0) },
+                };
+            }
+            if (BlockRegistry.IsCross(id)) return new[] { (0.25, 0.0, 0.25, 0.75, 0.8, 0.75) };
+            return new[] { (0.0, 0.0, 0.0, 1.0, 1.0, 1.0) };
+        }
+
+        private static bool BoxesOverlapPlayer((double minX, double minY, double minZ, double maxX, double maxY, double maxZ)[] boxes,
+            int bx, int by, int bz, double pMinX, double pMaxX, double pMinY, double pMaxY, double pMinZ, double pMaxZ)
+        {
+            foreach (var b in boxes)
+            {
+                if (bx + b.maxX > pMinX && bx + b.minX < pMaxX
+                    && by + b.maxY > pMinY && by + b.minY < pMaxY
+                    && bz + b.maxZ > pMinZ && bz + b.minZ < pMaxZ)
+                {
                     return true;
+                }
             }
             return false;
         }
@@ -516,11 +598,53 @@ namespace CubeApp
 
         private void PlaceSelectedBlock()
         {
-            var pickResult = TryPickBlock(cameraPosition, GetCameraForward());
+            var pickResult = TryPickBlock(cameraPosition, GetCameraForward(), out double hitDistance);
             if (!pickResult.HasValue) return;
             var place = pickResult.Value.Place;
-            if (WouldBlockIntersectPlayer(place.x, place.y, place.z)) return;
-            if (!manager.TrySetBlock(place.x, place.y, place.z, selectedBlock)) return;
+            var normal = pickResult.Value.Normal;
+            var hitPoint = cameraPosition + GetCameraForward() * hitDistance;
+
+            int blockToPlace = selectedBlock;
+            int meta = 0;
+
+            if (BlockRegistry.IsSlab(blockToPlace) || BlockRegistry.IsSlabTop(blockToPlace))
+            {
+                // Same-material slab merge: hitting the top of a bottom slab (or bottom of a top
+                // slab) turns it into the full material block - Cubuild's mergeTo behavior.
+                var hit = pickResult.Value.Remove;
+                if (TryMergeSlab(hit.x, hit.y, hit.z, normal, blockToPlace)) return;
+
+                // Top vs bottom slab by where the ray hits the target cell.
+                bool placeTop = normal.Y < 0 || (normal.Y == 0 && (hitPoint.Y - place.y) > 0.5);
+                if (BlockRegistry.IsSlab(blockToPlace) && placeTop)
+                {
+                    blockToPlace = SlabTopIdFor(blockToPlace);
+                }
+
+                // The shape-aware pick can land on an ALREADY OCCUPIED cell (the ray passed
+                // through the empty half of a partial block). Filling the opposite half of a
+                // same-material slab merges into a full block; anything else can't be placed into.
+                if (manager.TryGetLoadedBlockAndMeta(place.x, place.y, place.z, out var oldId, out _) && oldId != BlockRegistry.AirId)
+                {
+                    if (TryFillSlabCell(place.x, place.y, place.z, blockToPlace)) return;
+                    return; // occupied by a block we can't merge with
+                }
+            }
+            else if (BlockRegistry.IsStair(blockToPlace))
+            {
+                meta = StairFacingMeta();
+            }
+            else
+            {
+                // General safety: never overwrite an occupied cell.
+                if (manager.TryGetLoadedBlockAndMeta(place.x, place.y, place.z, out var occupied, out _) && occupied != BlockRegistry.AirId)
+                {
+                    return;
+                }
+            }
+
+            if (WouldBlockIntersectPlayer(place.x, place.y, place.z, blockToPlace, meta)) return;
+            if (!manager.TrySetBlock(place.x, place.y, place.z, blockToPlace, meta)) return;
             blockTickScheduler?.OnBlockChanged(place.x, place.y, place.z);
             var editedChunk = new ChunkCoordinates(WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));
             meshScheduler.RequestImmediateRemesh(editedChunk);
@@ -529,7 +653,67 @@ namespace CubeApp
             needsMeshUpdate = true;
         }
 
-        private bool WouldBlockIntersectPlayer(int x, int y, int z)
+        // Merges a hit same-material slab into its full block when the face placement matches
+        // (top of a bottom slab, bottom of a top slab). Returns true if the merge happened.
+        private bool TryMergeSlab(int x, int y, int z, Point3D normal, int heldBlock)
+        {
+            if (!manager.TryGetLoadedBlockAndMeta(x, y, z, out var hitId, out _)) return false;
+            if (!BlockRegistry.IsSlab(hitId) && !BlockRegistry.IsSlabTop(hitId)) return false;
+            if (SlabMaterialOf(hitId) != SlabMaterialOf(heldBlock)) return false;
+            if (!((BlockRegistry.IsSlab(hitId) && normal.Y > 0) || (BlockRegistry.IsSlabTop(hitId) && normal.Y < 0))) return false;
+
+            int fullId = BlockRegistry.GetId(SlabMaterialOf(hitId));
+            if (!manager.TrySetBlock(x, y, z, fullId, 0)) return false;
+            blockTickScheduler?.OnBlockChanged(x, y, z);
+            meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            needsMeshUpdate = true;
+            return true;
+        }
+
+        // Fills the empty half of an existing same-material slab with the slab being placed
+        // (opposite halves only), turning the cell into the full material block. Returns false if
+        // the cell isn't a mergeable opposite-half slab.
+        private bool TryFillSlabCell(int x, int y, int z, int placingId)
+        {
+            if (!manager.TryGetLoadedBlockAndMeta(x, y, z, out var oldId, out _)) return false;
+            if (!BlockRegistry.IsSlab(oldId) && !BlockRegistry.IsSlabTop(oldId)) return false;
+            if (SlabMaterialOf(oldId) != SlabMaterialOf(placingId)) return false;
+            bool oldTop = BlockRegistry.IsSlabTop(oldId);
+            bool newTop = BlockRegistry.IsSlabTop(placingId);
+            if (oldTop == newTop) return false; // same half -> can't stack
+
+            int fullId = BlockRegistry.GetId(SlabMaterialOf(oldId));
+            if (!manager.TrySetBlock(x, y, z, fullId, 0)) return false;
+            blockTickScheduler?.OnBlockChanged(x, y, z);
+            meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            needsMeshUpdate = true;
+            return true;
+        }
+
+        private static string SlabMaterialOf(int id)
+        {
+            string name = BlockRegistry.GetName(id);
+            return name.EndsWith("_slab_top", StringComparison.Ordinal)
+                ? name[..^"_slab_top".Length]
+                : name.EndsWith("_slab", StringComparison.Ordinal) ? name[..^"_slab".Length] : name;
+        }
+
+        private static int SlabTopIdFor(int slabId)
+            => BlockRegistry.GetId(SlabMaterialOf(slabId) + "_slab_top");
+
+        // Stair facing from the player's horizontal look direction. The stair's low step is
+        // toward the player, so the high step rises in the direction the player faces.
+        private int StairFacingMeta()
+        {
+            float yawRad = cameraYaw * (float)Math.PI / 180f;
+            double dirX = Math.Sin(yawRad);
+            double dirZ = Math.Cos(yawRad);
+            if (Math.Abs(dirX) > Math.Abs(dirZ))
+                return dirX > 0 ? 0 : 1; // east / west
+            return dirZ > 0 ? 2 : 3;     // south / north
+        }
+
+        private bool WouldBlockIntersectPlayer(int x, int y, int z, int blockId, int meta)
         {
             double minX = cameraPosition.X - PlayerRadius;
             double maxX = cameraPosition.X + PlayerRadius;
@@ -537,10 +721,7 @@ namespace CubeApp
             double maxY = minY + PlayerHeight;
             double minZ = cameraPosition.Z - PlayerRadius;
             double maxZ = cameraPosition.Z + PlayerRadius;
-            bool overlapsX = (x + 1.0) > minX && x < maxX;
-            bool overlapsY = (y + 1.0) > minY && y < maxY;
-            bool overlapsZ = (z + 1.0) > minZ && z < maxZ;
-            return overlapsX && overlapsY && overlapsZ;
+            return BoxesOverlapPlayer(GetBlockCollisionBoxes(blockId, meta), x, y, z, minX, maxX, minY, maxY, minZ, maxZ);
         }
 
         private static float NormalizeYaw(float yaw)
@@ -613,32 +794,32 @@ namespace CubeApp
 
         private Vector3[]? ComputeHighlightWorldQuad(PickBlockResult hit)
         {
-            var remove = hit.Remove;
+            var f = hit.Face;
             var n = hit.Normal;
             Point3D[] faceCorners = new Point3D[4];
             if (Math.Abs(n.X) > 0.5)
             {
-                double xplane = remove.x + (n.X > 0 ? 1.0 : 0.0);
-                faceCorners[0] = new Point3D(xplane, remove.y, remove.z);
-                faceCorners[1] = new Point3D(xplane, remove.y, remove.z + 1.0);
-                faceCorners[2] = new Point3D(xplane, remove.y + 1.0, remove.z + 1.0);
-                faceCorners[3] = new Point3D(xplane, remove.y + 1.0, remove.z);
+                double xplane = f.minX;
+                faceCorners[0] = new Point3D(xplane, f.minY, f.minZ);
+                faceCorners[1] = new Point3D(xplane, f.minY, f.maxZ);
+                faceCorners[2] = new Point3D(xplane, f.maxY, f.maxZ);
+                faceCorners[3] = new Point3D(xplane, f.maxY, f.minZ);
             }
             else if (Math.Abs(n.Y) > 0.5)
             {
-                double yplane = remove.y + (n.Y > 0 ? 1.0 : 0.0);
-                faceCorners[0] = new Point3D(remove.x, yplane, remove.z);
-                faceCorners[1] = new Point3D(remove.x + 1.0, yplane, remove.z);
-                faceCorners[2] = new Point3D(remove.x + 1.0, yplane, remove.z + 1.0);
-                faceCorners[3] = new Point3D(remove.x, yplane, remove.z + 1.0);
+                double yplane = f.minY;
+                faceCorners[0] = new Point3D(f.minX, yplane, f.minZ);
+                faceCorners[1] = new Point3D(f.maxX, yplane, f.minZ);
+                faceCorners[2] = new Point3D(f.maxX, yplane, f.maxZ);
+                faceCorners[3] = new Point3D(f.minX, yplane, f.maxZ);
             }
             else
             {
-                double zplane = remove.z + (n.Z > 0 ? 1.0 : 0.0);
-                faceCorners[0] = new Point3D(remove.x, remove.y, zplane);
-                faceCorners[1] = new Point3D(remove.x + 1.0, remove.y, zplane);
-                faceCorners[2] = new Point3D(remove.x + 1.0, remove.y + 1.0, zplane);
-                faceCorners[3] = new Point3D(remove.x, remove.y + 1.0, zplane);
+                double zplane = f.minZ;
+                faceCorners[0] = new Point3D(f.minX, f.minY, zplane);
+                faceCorners[1] = new Point3D(f.maxX, f.minY, zplane);
+                faceCorners[2] = new Point3D(f.maxX, f.maxY, zplane);
+                faceCorners[3] = new Point3D(f.minX, f.maxY, zplane);
             }
             faceCorners = CanonicalizeFaceCornersByAxes(faceCorners, n);
             const double faceEpsilon = 0.002;
@@ -827,25 +1008,40 @@ namespace CubeApp
             int currentX = blockX, currentY = blockY, currentZ = blockZ;
             var maxDistance = BlockReach;
             var distance = 0.0;
-            int lastX = currentX, lastY = currentY, lastZ = currentZ;
-            var normal = new Point3D(0, 0, 0);
-            for (int iteration = 0; iteration < 200 && distance <= maxDistance; iteration++)
+            for (int iteration = 0; iteration < 400 && distance <= maxDistance; iteration++)
             {
-                if (manager.TryGetLoadedBlock(currentX, currentY, currentZ, out var block) && block != BlockRegistry.AirId)
+                // Test the block's ACTUAL shape (full cube, slab half-box, stair boxes, small
+                // cross-plant box). A ray that passes through the empty part of a partial block
+                // (e.g. the air above a bottom slab) continues to the next cell instead of
+                // stopping at the cell.
+                if (manager.TryGetLoadedBlockAndMeta(currentX, currentY, currentZ, out var block, out var meta) && block != BlockRegistry.AirId)
                 {
-                    hitDistance = distance;
-                    return new PickBlockResult((currentX, currentY, currentZ), (lastX, lastY, lastZ), normal);
+                    double cellExit = Math.Min(tMaxX, Math.Min(tMaxY, tMaxZ));
+                    var boxes = GetBlockCollisionBoxes(block, meta);
+                    foreach (var b in boxes)
+                    {
+                        if (RayBoxHit(origin, direction,
+                                currentX + b.minX, currentY + b.minY, currentZ + b.minZ,
+                                currentX + b.maxX, currentY + b.maxY, currentZ + b.maxZ,
+                                distance - 1e-9, cellExit + 1e-9, out double t, out var n))
+                        {
+                            hitDistance = Math.Max(0.0, t);
+                            var face = ComputeFaceRect(currentX, currentY, currentZ, b, n);
+                            var place = ((int)Math.Floor(currentX + n.X + 0.5), (int)Math.Floor(currentY + n.Y + 0.5), (int)Math.Floor(currentZ + n.Z + 0.5));
+                            return new PickBlockResult((currentX, currentY, currentZ), place, n, face);
+                        }
+                    }
                 }
-                lastX = currentX; lastY = currentY; lastZ = currentZ;
+
                 if (tMaxX < tMaxY)
                 {
-                    if (tMaxX < tMaxZ) { currentX += stepX; distance = tMaxX; tMaxX += tDeltaX; normal = new Point3D(-stepX, 0, 0); }
-                    else { currentZ += stepZ; distance = tMaxZ; tMaxZ += tDeltaZ; normal = new Point3D(0, 0, -stepZ); }
+                    if (tMaxX < tMaxZ) { currentX += stepX; distance = tMaxX; tMaxX += tDeltaX; }
+                    else { currentZ += stepZ; distance = tMaxZ; tMaxZ += tDeltaZ; }
                 }
                 else
                 {
-                    if (tMaxY < tMaxZ) { currentY += stepY; distance = tMaxY; tMaxY += tDeltaY; normal = new Point3D(0, -stepY, 0); }
-                    else { currentZ += stepZ; distance = tMaxZ; tMaxZ += tDeltaZ; normal = new Point3D(0, 0, -stepZ); }
+                    if (tMaxY < tMaxZ) { currentY += stepY; distance = tMaxY; tMaxY += tDeltaY; }
+                    else { currentZ += stepZ; distance = tMaxZ; tMaxZ += tDeltaZ; }
                 }
             }
             return null;
@@ -896,10 +1092,67 @@ namespace CubeApp
             public (int x, int y, int z) Remove { get; }
             public (int x, int y, int z) Place { get; }
             public Point3D Normal { get; }
-            public PickBlockResult((int x, int y, int z) remove, (int x, int y, int z) place, Point3D normal)
+            /// <summary>World-space rectangle of the actual face that was hit (matches the block's
+            /// real shape, e.g. a slab's top at y+0.5 or a stair riser).</summary>
+            public (double minX, double minY, double minZ, double maxX, double maxY, double maxZ) Face { get; }
+            public PickBlockResult((int x, int y, int z) remove, (int x, int y, int z) place, Point3D normal,
+                (double minX, double minY, double minZ, double maxX, double maxY, double maxZ) face)
             {
-                Remove = remove; Place = place; Normal = normal;
+                Remove = remove; Place = place; Normal = normal; Face = face;
             }
+        }
+
+        // Ray vs axis-aligned box, restricted to [tMinLimit, tMaxLimit] (the cell the ray is
+        // currently crossing). Returns the entry distance and the face normal of the box entered.
+        private static bool RayBoxHit(Point3D o, Point3D d,
+            double bMinX, double bMinY, double bMinZ, double bMaxX, double bMaxY, double bMaxZ,
+            double tMinLimit, double tMaxLimit, out double t, out Point3D normal)
+        {
+            t = 0; normal = Point3D.Zero;
+            double tMin = tMinLimit, tMax = tMaxLimit;
+            int axis = -1;
+            double ox = o.X, oy = o.Y, oz = o.Z, dx = d.X, dy = d.Y, dz = d.Z;
+            double[] bmin = { bMinX, bMinY, bMinZ };
+            double[] bmax = { bMaxX, bMaxY, bMaxZ };
+            double[] oa = { ox, oy, oz };
+            double[] da = { dx, dy, dz };
+            for (int a = 0; a < 3; a++)
+            {
+                if (Math.Abs(da[a]) < 1e-12)
+                {
+                    if (oa[a] < bmin[a] || oa[a] > bmax[a]) return false;
+                }
+                else
+                {
+                    double t1 = (bmin[a] - oa[a]) / da[a];
+                    double t2 = (bmax[a] - oa[a]) / da[a];
+                    if (t1 > t2) { (t1, t2) = (t2, t1); }
+                    if (t1 > tMin) { tMin = t1; axis = a; }
+                    if (t2 < tMax) tMax = t2;
+                    if (tMin > tMax) return false;
+                }
+            }
+            t = tMin;
+            normal = axis switch
+            {
+                0 => new Point3D(-Math.Sign(dx), 0, 0),
+                1 => new Point3D(0, -Math.Sign(dy), 0),
+                _ => new Point3D(0, 0, -Math.Sign(dz)),
+            };
+            return true;
+        }
+
+        // The rectangle (on the face plane) of a block box face, in world coordinates - used for
+        // the targeted-face highlight on partial shapes.
+        private static (double minX, double minY, double minZ, double maxX, double maxY, double maxZ) ComputeFaceRect(
+            int cx, int cy, int cz, (double minX, double minY, double minZ, double maxX, double maxY, double maxZ) b, Point3D n)
+        {
+            if (n.X > 0.5) return (cx + b.maxX, cy + b.minY, cz + b.minZ, cx + b.maxX, cy + b.maxY, cz + b.maxZ);
+            if (n.X < -0.5) return (cx + b.minX, cy + b.minY, cz + b.minZ, cx + b.minX, cy + b.maxY, cz + b.maxZ);
+            if (n.Y > 0.5) return (cx + b.minX, cy + b.maxY, cz + b.minZ, cx + b.maxX, cy + b.maxY, cz + b.maxZ);
+            if (n.Y < -0.5) return (cx + b.minX, cy + b.minY, cz + b.minZ, cx + b.maxX, cy + b.minY, cz + b.maxZ);
+            if (n.Z > 0.5) return (cx + b.minX, cy + b.minY, cz + b.maxZ, cx + b.maxX, cy + b.maxY, cz + b.maxZ);
+            return (cx + b.minX, cy + b.minY, cz + b.minZ, cx + b.maxX, cy + b.maxY, cz + b.minZ);
         }
 
         private enum Axis

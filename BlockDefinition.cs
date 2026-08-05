@@ -37,6 +37,9 @@ namespace CubeApp
         /// <summary>Mesh shape: "" (full cube), "cross" (two crossed billboard quads, like
         /// saplings/flowers), future "slab"/"torch"/"fire".</summary>
         public string Shape { get; set; } = "";
+        /// <summary>Whether the block shows up in the E-menu inventory. Placement-only variants
+        /// (like the auto-picked top slabs) set this false.</summary>
+        public bool Inventory { get; set; } = true;
         /// <summary>Reserved for block-light emission (torches, glowstone). 0..15, currently unused.</summary>
         public int LightEmission { get; set; }
         /// <summary>Hotbar / debug swatch colour, an ImGui packed U32 (0xAABBGGRR, full alpha).</summary>

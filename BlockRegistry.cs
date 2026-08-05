@@ -27,6 +27,10 @@ namespace CubeApp
         private static bool[] _cross = Array.Empty<bool>();
         private static bool[] _cutout = Array.Empty<bool>();
         private static bool[] _glass = Array.Empty<bool>();
+        private static bool[] _slab = Array.Empty<bool>();
+        private static bool[] _slabTop = Array.Empty<bool>();
+        private static bool[] _stair = Array.Empty<bool>();
+        private static bool[] _inventory = Array.Empty<bool>();
         private static float[] _alpha = Array.Empty<float>();
         private static uint[] _mapColor = Array.Empty<uint>();
         private static int[] _hotbar = Array.Empty<int>();
@@ -54,6 +58,7 @@ namespace CubeApp
             public bool Transparent { get; set; } = false;
             public double Alpha { get; set; } = 1.0;
             public string? Shape { get; set; }
+            public bool Inventory { get; set; } = true;
             public int LightEmission { get; set; } = 0;
             public string? MapColor { get; set; } = "#000000";
         }
@@ -94,6 +99,7 @@ namespace CubeApp
                     Transparent = dto.Transparent,
                     Alpha = (float)dto.Alpha,
                     Shape = dto.Shape ?? "",
+                    Inventory = dto.Inventory,
                     LightEmission = dto.LightEmission,
                     MapColor = ParseMapColor(dto.MapColor ?? "#000000"),
                 };
@@ -121,6 +127,10 @@ namespace CubeApp
             _cross = new bool[Count];
             _cutout = new bool[Count];
             _glass = new bool[Count];
+            _slab = new bool[Count];
+            _slabTop = new bool[Count];
+            _stair = new bool[Count];
+            _inventory = new bool[Count];
             for (int i = 0; i < Count; i++)
             {
                 _solid[i] = defs[i].Solid;
@@ -128,9 +138,13 @@ namespace CubeApp
                 _transparent[i] = defs[i].Transparent;
                 _alpha[i] = defs[i].Alpha;
                 _mapColor[i] = defs[i].MapColor;
+                _inventory[i] = defs[i].Inventory;
                 _cross[i] = string.Equals(defs[i].Shape, "cross", StringComparison.OrdinalIgnoreCase);
                 _cutout[i] = _cross[i] || string.Equals(defs[i].Shape, "cutout", StringComparison.OrdinalIgnoreCase);
                 _glass[i] = string.Equals(defs[i].Shape, "glass", StringComparison.OrdinalIgnoreCase);
+                _slab[i] = string.Equals(defs[i].Shape, "slab", StringComparison.OrdinalIgnoreCase);
+                _slabTop[i] = string.Equals(defs[i].Shape, "slab_top", StringComparison.OrdinalIgnoreCase);
+                _stair[i] = string.Equals(defs[i].Shape, "stairs", StringComparison.OrdinalIgnoreCase);
             }
 
             _hotbar = new int[Math.Min(file.Hotbar.Count, 10)];
@@ -190,6 +204,11 @@ namespace CubeApp
         public static bool IsCross(int id) => id > 0 && id < Count && _cross[id];
         public static bool IsCutout(int id) => id > 0 && id < Count && _cutout[id];
         public static bool IsGlass(int id) => id > 0 && id < Count && _glass[id];
+        public static bool IsSlab(int id) => id > 0 && id < Count && _slab[id];
+        public static bool IsSlabTop(int id) => id > 0 && id < Count && _slabTop[id];
+        public static bool IsStair(int id) => id > 0 && id < Count && _stair[id];
+        public static bool IsPartialShape(int id) => id > 0 && id < Count && (_slab[id] || _slabTop[id] || _stair[id]);
+        public static bool IsInInventory(int id) => id >= 0 && id < Count && _inventory[id];
         public static float Alpha(int id) => _alpha[id];
         public static uint MapColorOf(int id) => _mapColor[id];
         public static TextureRect FaceTexture(int id, Point3D normal) => _defs[id].FaceTexture(normal);
