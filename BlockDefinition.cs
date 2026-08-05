@@ -34,6 +34,9 @@ namespace CubeApp
         /// <summary>Vertex-color alpha used to make transparent tiles see-through when the atlas
         /// itself is opaque (the water tile has no alpha, so this tints it). 1.0 = fully opaque.</summary>
         public float Alpha { get; set; } = 1f;
+        /// <summary>Mesh shape: "" (full cube), "cross" (two crossed billboard quads, like
+        /// saplings/flowers), future "slab"/"torch"/"fire".</summary>
+        public string Shape { get; set; } = "";
         /// <summary>Reserved for block-light emission (torches, glowstone). 0..15, currently unused.</summary>
         public int LightEmission { get; set; }
         /// <summary>Hotbar / debug swatch colour, an ImGui packed U32 (0xAABBGGRR, full alpha).</summary>

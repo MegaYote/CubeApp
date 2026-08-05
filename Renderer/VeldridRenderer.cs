@@ -23,10 +23,17 @@ namespace CubeApp.Renderer
         private Sampler _atlasSampler;
         private ResourceSet _textureSet;
         private Pipeline _pipeline;
-        // Second pass for transparent geometry (water): same shaders/state as _pipeline but with
-        // depth WRITES disabled so blended faces (alpha 0.65) tint whatever opaque geometry was
-        // already drawn instead of blocking it from ever drawing (which made border water walls
-        // render as ghosty see-through when their chunk happened to draw before the terrain behind).
+        // Cutout pass (cross plants / leaves): alpha-test discard + depth-write ON so a nearer
+        // sprite quad depth-occludes a farther one (matches Cubuild's worldMaterialCutout).
+        private Pipeline _cutoutPipeline;
+        // Glass pass: alpha-test discard but depth-write OFF and front-side culling, matching
+        // Cubuild's worldMaterialGlass - the inside (back) faces of glass don't render through the
+        // panes, and far glass shows through near glass.
+        private Pipeline _glassPipeline;
+        // Transparent pass for water: same shaders/state as _pipeline but with depth WRITES
+        // disabled so blended faces tint whatever opaque geometry was already drawn instead of
+        // blocking it from ever drawing (which made border water walls render as ghosty
+        // see-through when their chunk happened to draw before the terrain behind).
         private Pipeline _transparentPipeline;
         private Pipeline _highlightPipeline;
         private DeviceBuffer _highlightVertexBuffer;
@@ -128,13 +135,19 @@ namespace CubeApp.Renderer
             public uint IndexCount;
         }
         private readonly Dictionary<CubeApp.ChunkCoordinates, ChunkRange> _chunkRanges = new();
-        // Transparent (water) faces are uploaded into the same mega buffers but tracked in a
-        // separate range set and drawn as a second pass (depth-write off, back-to-front blend).
+        // Cutout (cross plants / leaves, alpha-tested, depth-writing) and transparent (water,
+        // blended, no depth-write) faces live in separate ranges drawn as their own passes.
+        private readonly Dictionary<CubeApp.ChunkCoordinates, ChunkRange> _cutoutRanges = new();
+        private readonly Dictionary<CubeApp.ChunkCoordinates, ChunkRange> _glassRanges = new();
         private readonly Dictionary<CubeApp.ChunkCoordinates, ChunkRange> _transparentRanges = new();
         private readonly List<(uint VbOffset, uint VbBytes, uint IbOffset, uint IbBytes)> _freeBlocks = new();
         private readonly List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _drawCommands = new();
+        private readonly List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _cutoutDrawCommands = new();
+        private readonly List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _glassDrawCommands = new();
         private readonly List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _transparentDrawCommands = new();
         private IndirectDrawIndexedArguments[] _indirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
+        private IndirectDrawIndexedArguments[] _cutoutIndirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
+        private IndirectDrawIndexedArguments[] _glassIndirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
         private IndirectDrawIndexedArguments[] _transparentIndirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
         private bool _drawCommandsDirty = true;
 
@@ -153,14 +166,24 @@ namespace CubeApp.Renderer
             public CubeApp.ChunkCoordinates Coord { get; }
             public float[] Vertices { get; }
             public ushort[] Indices { get; }
+            public float[] CutoutVertices { get; }
+            public ushort[] CutoutIndices { get; }
+            public float[] GlassVertices { get; }
+            public ushort[] GlassIndices { get; }
             public float[] TransparentVertices { get; }
             public ushort[] TransparentIndices { get; }
 
-            public PendingUpload(CubeApp.ChunkCoordinates coord, float[] vertices, ushort[] indices, float[] transparentVertices, ushort[] transparentIndices)
+            public PendingUpload(CubeApp.ChunkCoordinates coord, float[] vertices, ushort[] indices,
+                float[] cutoutVertices, ushort[] cutoutIndices, float[] glassVertices, ushort[] glassIndices,
+                float[] transparentVertices, ushort[] transparentIndices)
             {
                 Coord = coord;
                 Vertices = vertices;
                 Indices = indices;
+                CutoutVertices = cutoutVertices;
+                CutoutIndices = cutoutIndices;
+                GlassVertices = glassVertices;
+                GlassIndices = glassIndices;
                 TransparentVertices = transparentVertices;
                 TransparentIndices = transparentIndices;
             }
@@ -496,10 +519,8 @@ void main() {
     // fract() tiles the same atlas tile regardless of how many blocks the face spans.
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
     vec4 tex = texture(uAtlas, atlasUV);
-    // Block alpha (vColor.a) governs opacity - transparent tiles (water, glass, leaves) are
-    // tinted by their configured alpha, not the atlas art's baked alpha. Opaque blocks
-    // (alpha = 1) sample the tile fully. (Per-pixel alpha cutouts like classic leaves are a
-    // future alpha-test feature.)
+    // Block alpha (vColor.a) governs opacity - transparent tiles (water) are tinted by their
+    // configured alpha; opaque blocks (alpha 1) sample the tile fully.
     outColor = vec4(tex.rgb * vColor.rgb, vColor.a);
 }";
 
@@ -544,13 +565,60 @@ void main() {
 
             _pipeline = factory.CreateGraphicsPipeline(pipelineDesc);
 
-            // Same pipeline, depth-write OFF: drawn after all opaque chunks so blended water
-            // tints the already-rendered terrain instead of depth-blocking it (see field comment).
+            // Cutout pass (cross plants + leaves): same vertex shader, but the fragment shader
+            // DISCARDS texels below the alpha threshold instead of blending. Depth-write stays ON
+            // (Cubuild's worldMaterialCutout: alphaTest 0.5, depthWrite true, DoubleSide), so when
+            // the two quads of a cross plant overlap, the NEARER quad's depth occludes the FAR one
+            // - no sorting or prepass needed. Culling is off for the billboard sprites.
+            string cutoutFsCode = @"#version 450
+layout(location=0) in vec2 vLocalUV;
+layout(location=1) in vec4 vTileRect;
+layout(location=2) in vec4 vColor;
+layout(set=1, binding=0) uniform sampler2D uAtlas;
+layout(location=0) out vec4 outColor;
+void main() {
+    vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
+    vec4 tex = texture(uAtlas, atlasUV);
+    if (tex.a < 0.5) discard; // sprite background falls away; no blending
+    outColor = vec4(tex.rgb * vColor.rgb, 1.0);
+}";
+            var cutoutFsSpirv = SpirvCompilation.CompileGlslToSpirv(cutoutFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var cutoutFsDesc = new ShaderDescription(ShaderStages.Fragment, cutoutFsSpirv.SpirvBytes, "main");
+            var cutoutShaders = factory.CreateFromSpirv(vsDesc, cutoutFsDesc);
+            var cutoutShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { vs, cutoutShaders[1] });
+            _cutoutPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleDisabled,
+                DepthStencilState = new DepthStencilStateDescription(true, true, ComparisonKind.LessEqual),
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout },
+                ShaderSet = cutoutShaderSet,
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
+
+            // Glass: same discard shader, but depth-write OFF (far glass shows through near glass)
+            // and BACK culling (inside faces never render through the panes) - Cubuild glass rules.
+            _glassPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleDisabled,
+                DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout },
+                ShaderSet = cutoutShaderSet,
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
+
+            // Transparent pass (water): blended, depth-write OFF, drawn after opaque + cutout so it
+            // tints whatever geometry already rendered instead of depth-blocking it (which made
+            // border water walls render as ghosty see-through when their chunk drew before the
+            // terrain behind). Culling off matches Cubuild's DoubleSide water material.
             _transparentPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
             {
                 BlendState = BlendStateDescription.SingleAlphaBlend,
                 DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
-                RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
                 ResourceLayouts = new[] { _projViewLayout, _textureLayout },
                 ShaderSet = shaderSet,
@@ -779,13 +847,13 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             // Process priority uploads (player edits) first - no limit for instant feedback
             while (_pendingPriorityUploads.TryDequeue(out var pu))
             {
-                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.TransparentVertices, pu.TransparentIndices);
+                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices, pu.TransparentVertices, pu.TransparentIndices);
             }
 
             int uploadsThisFrame = 0;
             while (uploadsThisFrame < _maxUploadsPerFrame && _pendingUploads.TryDequeue(out var pu))
             {
-                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.TransparentVertices, pu.TransparentIndices);
+                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices, pu.TransparentVertices, pu.TransparentIndices);
                 uploadsThisFrame++;
             }
 
@@ -817,13 +885,26 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
 
             // One draw call for the visible chunk world via multi-draw indirect. Commands are
             // frustum-culled per frame, so chunks behind/off-screen never reach the GPU. Opaque
-            // chunks draw first and depth-write; the transparent (water) pass draws afterwards with
-            // depth-writes off so it tints terrain that already rendered.
+            // chunks draw first and depth-write; cutout sprites (cross plants / leaves) draw next,
+            // alpha-testing and depth-writing so nearer quads occlude farther ones; glass alpha-tests
+            // without depth-writing, so its chunks are sorted back-to-front (far first) like
+            // Cubuild/THREE does for transparent objects - otherwise a far chunk drawn after a near
+            // one would paint its frame on top. Water blends last, likewise sorted.
             if (_megaVertexBuffer != null && _megaIndexBuffer != null)
             {
                 DrawWorldPass(cl, _drawCommands, _indirectScratch, _pipeline);
+                if (_cutoutDrawCommands.Count > 0)
+                {
+                    DrawWorldPass(cl, _cutoutDrawCommands, _cutoutIndirectScratch, _cutoutPipeline);
+                }
+                if (_glassDrawCommands.Count > 0)
+                {
+                    SortPassBackToFront(_glassDrawCommands);
+                    DrawWorldPass(cl, _glassDrawCommands, _glassIndirectScratch, _glassPipeline);
+                }
                 if (_transparentDrawCommands.Count > 0)
                 {
+                    SortPassBackToFront(_transparentDrawCommands);
                     DrawWorldPass(cl, _transparentDrawCommands, _transparentIndirectScratch, _transparentPipeline);
                 }
             }
@@ -840,6 +921,27 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             cl.End();
             _gd.SubmitCommands(cl);
             _gd.SwapBuffers(_sc);
+        }
+
+        // Sorts a no-depth-write pass (glass/water) far-to-near from the camera so the nearest
+        // chunk draws last and paints over farther ones - the back-to-front order THREE.js applies
+        // to transparent objects in Cubuild.
+        private void SortPassBackToFront(System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands)
+        {
+            if (!_cameraPosition.HasValue) return;
+            var cam = _cameraPosition.Value;
+            commands.Sort((a, b) => ChunkCenterDistSq(b.Coord, cam).CompareTo(ChunkCenterDistSq(a.Coord, cam))); // far first
+        }
+
+        private static float ChunkCenterDistSq(CubeApp.ChunkCoordinates coord, CubeApp.Point3D cam)
+        {
+            float cx = coord.X * ChunkManager.ChunkSize + ChunkManager.ChunkSize * 0.5f;
+            float cz = coord.Z * ChunkManager.ChunkSize + ChunkManager.ChunkSize * 0.5f;
+            float cy = ChunkManager.WorldOriginY + ChunkManager.ChunkHeight * 0.5f;
+            float dx = cx - (float)cam.X;
+            float dy = cy - (float)cam.Y;
+            float dz = cz - (float)cam.Z;
+            return dx * dx + dy * dy + dz * dz;
         }
 
         // Issues one indirect world draw for a chunk-command pass (opaque or transparent) using the
@@ -1138,11 +1240,21 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
         // pooling the previous buffers for reuse.
         // Uploads one chunk's vertices/indices into a region of the shared mega vertex/index buffers,
 // reusing freed holes or appending at the tail. The previous range (if any) is recycled.
-private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushort[] indices, float[] transVerts, ushort[] transIndices)
+        private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushort[] indices,
+            float[] cutoutVerts, ushort[] cutoutIndices, float[] glassVerts, ushort[] glassIndices,
+            float[] transVerts, ushort[] transIndices)
         {
             if (_chunkRanges.TryGetValue(coord, out var prev))
             {
                 FreeRange(prev);
+            }
+            if (_cutoutRanges.TryGetValue(coord, out var prevCutout))
+            {
+                FreeRange(prevCutout);
+            }
+            if (_glassRanges.TryGetValue(coord, out var prevGlass))
+            {
+                FreeRange(prevGlass);
             }
             if (_transparentRanges.TryGetValue(coord, out var prevTrans))
             {
@@ -1158,8 +1270,41 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
 
             _chunkRanges[coord] = new ChunkRange { VbOffsetBytes = vbo, VbBytes = vbBytes, IbOffsetBytes = ibo, IndexCount = (uint)indices.Length };
 
-            // Transparent (water) faces: only when the chunk actually has any, uploaded into the
-            // same mega buffers but tracked separately for the second draw pass.
+            // Cutout (cross plants / leaves) faces: only when the chunk actually has any.
+            if (cutoutVerts != null && cutoutVerts.Length > 0 && cutoutIndices != null && cutoutIndices.Length > 0)
+            {
+                uint cvbBytes = (uint)(cutoutVerts.Length * sizeof(float));
+                uint cibBytes = (uint)(cutoutIndices.Length * sizeof(ushort));
+                var (cvbo, _, cibo, _) = AllocateRange(cvbBytes, cibBytes);
+
+                _gd.UpdateBuffer(_megaVertexBuffer, cvbo, cutoutVerts);
+                _gd.UpdateBuffer(_megaIndexBuffer, cibo, cutoutIndices);
+
+                _cutoutRanges[coord] = new ChunkRange { VbOffsetBytes = cvbo, VbBytes = cvbBytes, IbOffsetBytes = cibo, IndexCount = (uint)cutoutIndices.Length };
+            }
+            else
+            {
+                _cutoutRanges.Remove(coord);
+            }
+
+            // Glass faces: only when the chunk actually has any.
+            if (glassVerts != null && glassVerts.Length > 0 && glassIndices != null && glassIndices.Length > 0)
+            {
+                uint gvbBytes = (uint)(glassVerts.Length * sizeof(float));
+                uint gibBytes = (uint)(glassIndices.Length * sizeof(ushort));
+                var (gvbo, _, gibo, _) = AllocateRange(gvbBytes, gibBytes);
+
+                _gd.UpdateBuffer(_megaVertexBuffer, gvbo, glassVerts);
+                _gd.UpdateBuffer(_megaIndexBuffer, gibo, glassIndices);
+
+                _glassRanges[coord] = new ChunkRange { VbOffsetBytes = gvbo, VbBytes = gvbBytes, IbOffsetBytes = gibo, IndexCount = (uint)glassIndices.Length };
+            }
+            else
+            {
+                _glassRanges.Remove(coord);
+            }
+
+            // Transparent (water) faces: only when the chunk actually has any.
             if (transVerts != null && transVerts.Length > 0 && transIndices != null && transIndices.Length > 0)
             {
                 uint tvbBytes = (uint)(transVerts.Length * sizeof(float));
@@ -1214,6 +1359,16 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
             {
                 FreeRange(r);
                 _chunkRanges.Remove(coord);
+            }
+            if (_cutoutRanges.TryGetValue(coord, out var cr))
+            {
+                FreeRange(cr);
+                _cutoutRanges.Remove(coord);
+            }
+            if (_glassRanges.TryGetValue(coord, out var gr))
+            {
+                FreeRange(gr);
+                _glassRanges.Remove(coord);
             }
             if (_transparentRanges.TryGetValue(coord, out var tr))
             {
@@ -1288,6 +1443,42 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
             if (_indirectScratch.Length < _drawCommands.Count)
             {
                 _indirectScratch = new IndirectDrawIndexedArguments[Math.Max(256, _drawCommands.Count * 2)];
+            }
+
+            _cutoutDrawCommands.Clear();
+            foreach (var kv in _cutoutRanges)
+            {
+                var r = kv.Value;
+                _cutoutDrawCommands.Add((kv.Key, new IndirectDrawIndexedArguments
+                {
+                    IndexCount = r.IndexCount,
+                    InstanceCount = 1,
+                    FirstIndex = r.IbOffsetBytes / 2,           // ushort index units
+                    VertexOffset = (int)(r.VbOffsetBytes / VertexStrideBytes),
+                    FirstInstance = 0,
+                }));
+            }
+            if (_cutoutIndirectScratch.Length < _cutoutDrawCommands.Count)
+            {
+                _cutoutIndirectScratch = new IndirectDrawIndexedArguments[Math.Max(256, _cutoutDrawCommands.Count * 2)];
+            }
+
+            _glassDrawCommands.Clear();
+            foreach (var kv in _glassRanges)
+            {
+                var r = kv.Value;
+                _glassDrawCommands.Add((kv.Key, new IndirectDrawIndexedArguments
+                {
+                    IndexCount = r.IndexCount,
+                    InstanceCount = 1,
+                    FirstIndex = r.IbOffsetBytes / 2,           // ushort index units
+                    VertexOffset = (int)(r.VbOffsetBytes / VertexStrideBytes),
+                    FirstInstance = 0,
+                }));
+            }
+            if (_glassIndirectScratch.Length < _glassDrawCommands.Count)
+            {
+                _glassIndirectScratch = new IndirectDrawIndexedArguments[Math.Max(256, _glassDrawCommands.Count * 2)];
             }
 
             _transparentDrawCommands.Clear();
@@ -1700,6 +1891,8 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
             _playerTexture?.Dispose();
             _modelPipeline?.Dispose();
             _pipeline?.Dispose();
+            _cutoutPipeline?.Dispose();
+            _glassPipeline?.Dispose();
             _transparentPipeline?.Dispose();
             if (_iconAtlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_iconAtlasTexture);
             _iconAtlasView?.Dispose();
@@ -1710,40 +1903,54 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
 
         public void UploadChunk(CubeApp.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces)
         {
-            BuildMesh(faces, out var vArr, out var iArr, out var tvArr, out var tiArr);
-            _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr, tvArr, tiArr));
+            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr);
+            _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr));
         }
 
         // Player edits jump the line: same vertex data, but enqueued on the priority queue that
         // ProcessPendingPriorityMeshes drains every frame for instant feedback.
         public void UploadChunkPriority(CubeApp.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces)
         {
-            BuildMesh(faces, out var vArr, out var iArr, out var tvArr, out var tiArr);
-            _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr, tvArr, tiArr));
+            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr);
+            _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr));
         }
 
         // Builds the 13-float-per-vertex chunk mesh (pos + localUV + tileRect + color) from greedy
-        // faces. Per-face alpha comes from MeshFace.Alpha so transparent blocks (water) can blend.
-        // Faces with alpha < 1 go into a separate transparent buffer pair that the renderer uploads
-        // into its own range and draws in a second, depth-write-free pass.
+        // faces. Per-face alpha routes each face to one of four buffer pairs:
+        //   alpha >= 1   -> opaque (culled, depth-writing)
+        //   alpha < -10  -> glass (alpha-tested, depth-WRITE OFF, front-side; marker set by the
+        //                   mesher as -(alpha) - 100)
+        //   -10 <= a < 0 -> cutout (alpha-tested sprites: cross plants, leaves) - depth-writing so
+        //                   near quads occlude far ones
+        //   0 <= a < 1   -> transparent (water) - blended, depth-write-free
         // Sizes are deterministic (4 verts + 6 indices per face), so the target arrays are filled
         // directly - no List<T>, no ToArray() copies, no double allocation per chunk upload.
         private void BuildMesh(
             System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces,
             out float[] vertsArr, out ushort[] indicesArr,
+            out float[] cutoutVertsArr, out ushort[] cutoutIndicesArr,
+            out float[] glassVertsArr, out ushort[] glassIndicesArr,
             out float[] transVertsArr, out ushort[] transIndicesArr)
         {
             // vertex layout: position(3) + localUV(2) + tileRect(4) + color(4) = 13 floats per vertex
             int faceCount = faces.Count;
             int opaqueFaces = 0;
+            int cutoutFaces = 0;
+            int glassFaces = 0;
             for (int i = 0; i < faceCount; i++)
             {
                 if (faces[i].Alpha >= 1f) opaqueFaces++;
+                else if (faces[i].Alpha < -10f) glassFaces++;
+                else if (faces[i].Alpha < 0f) cutoutFaces++;
             }
-            int transFaces = faceCount - opaqueFaces;
+            int transFaces = faceCount - opaqueFaces - cutoutFaces - glassFaces;
 
             var verts = new float[opaqueFaces * 4 * 13];
             var indices = new ushort[opaqueFaces * 6];
+            var cutoutVerts = new float[cutoutFaces * 4 * 13];
+            var cutoutIndices = new ushort[cutoutFaces * 6];
+            var glassVerts = new float[glassFaces * 4 * 13];
+            var glassIndices = new ushort[glassFaces * 6];
             var transVerts = new float[transFaces * 4 * 13];
             var transIndices = new ushort[transFaces * 6];
             float atlasW = Math.Max(1f, _atlasWidth);
@@ -1752,14 +1959,18 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
             // per-face stackalloc would grow the frame with face count (CA2014).
             Span<CubeApp.Point3D> vertsSpan = stackalloc CubeApp.Point3D[4];
             int opaqueFace = 0;
+            int cutoutFace = 0;
+            int glassFace = 0;
             int transFace = 0;
             for (int fi = 0; fi < faceCount; fi++)
             {
                 var f = faces[fi];
-                bool isTrans = f.Alpha < 1f;
-                var dstVerts = isTrans ? transVerts : verts;
-                var dstIndices = isTrans ? transIndices : indices;
-                int faceIdx = isTrans ? transFace : opaqueFace;
+                bool isGlass = f.Alpha < -10f;
+                bool isCutout = !isGlass && f.Alpha < 0f;
+                bool isTrans = !isGlass && !isCutout && f.Alpha < 1f;
+                var dstVerts = isGlass ? glassVerts : (isCutout ? cutoutVerts : (isTrans ? transVerts : verts));
+                var dstIndices = isGlass ? glassIndices : (isCutout ? cutoutIndices : (isTrans ? transIndices : indices));
+                int faceIdx = isGlass ? glassFace : (isCutout ? cutoutFace : (isTrans ? transFace : opaqueFace));
                 int vertexStart = faceIdx * 4;
 
                 vertsSpan[0] = f.V0;
@@ -1870,11 +2081,18 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
                 dstIndices[ib + 4] = (ushort)(vertexStart + 2);
                 dstIndices[ib + 5] = (ushort)(vertexStart + 3);
 
-                if (isTrans) transFace++; else opaqueFace++;
+                if (isGlass) glassFace++;
+                else if (isCutout) cutoutFace++;
+                else if (isTrans) transFace++;
+                else opaqueFace++;
             }
 
             vertsArr = verts;
             indicesArr = indices;
+            cutoutVertsArr = cutoutVerts;
+            cutoutIndicesArr = cutoutIndices;
+            glassVertsArr = glassVerts;
+            glassIndicesArr = glassIndices;
             transVertsArr = transVerts;
             transIndicesArr = transIndices;
         }
@@ -1974,7 +2192,7 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
         {
             while (_pendingPriorityUploads.TryDequeue(out var pu))
             {
-                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.TransparentVertices, pu.TransparentIndices);
+                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices, pu.TransparentVertices, pu.TransparentIndices);
             }
         }
 

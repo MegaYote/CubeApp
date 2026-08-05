@@ -130,8 +130,8 @@ namespace CubeApp
                                     ? (rawPosX != null ? rawPosX[jv * height + iu] : BlockRegistry.AirId)
                                     : raw[((slice + 1) * depth + jv) * height + iu];
                                 int cell = iu * dimV + jv;
-                                if (A != WaterId && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + slice + 1, iu, chunk.OriginZ + jv));
-                                if (B != WaterId && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + slice, iu, chunk.OriginZ + jv));
+                                if (A != WaterId && !BlockRegistry.IsCross(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + slice + 1, iu, chunk.OriginZ + jv));
+                                if (B != WaterId && !BlockRegistry.IsCross(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + slice, iu, chunk.OriginZ + jv));
                             }
                         }
                     }
@@ -146,8 +146,8 @@ namespace CubeApp
                                 int A = raw[baseIdx];
                                 int B = lastSlice ? BlockRegistry.AirId : raw[baseIdx + 1];
                                 int cell = iu * dimV + jv;
-                                if (A != WaterId && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu));
-                                if (B != WaterId && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + jv, slice, chunk.OriginZ + iu));
+                                if (A != WaterId && !BlockRegistry.IsCross(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu));
+                                if (B != WaterId && !BlockRegistry.IsCross(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + jv, slice, chunk.OriginZ + iu));
                             }
                         }
                     }
@@ -163,8 +163,8 @@ namespace CubeApp
                                     ? (rawPosZ != null ? rawPosZ[iu * depth * height + jv] : BlockRegistry.AirId)
                                     : raw[(iu * depth + slice + 1) * height + jv];
                                 int cell = iu * dimV + jv;
-                                if (A != WaterId && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice + 1));
-                                if (B != WaterId && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice));
+                                if (A != WaterId && !BlockRegistry.IsCross(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice + 1));
+                                if (B != WaterId && !BlockRegistry.IsCross(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice));
                             }
                         }
                     }
@@ -179,6 +179,9 @@ namespace CubeApp
             // greedy pass (which was told to skip water-owned faces) so solid blocks keep their
             // correct occlusion against water while water gets its own geometry.
             EmitWaterFaces(chunk, chunkLookup, lighting, mesh);
+
+            // Cross pass: saplings/flowers/mushrooms render as two crossed billboard quads.
+            EmitCrossFaces(chunk, chunkLookup, lighting, mesh);
 
             return mesh;
         }
@@ -313,6 +316,59 @@ namespace CubeApp
             mesh.Add(new MeshFace(
                 p0, p1, p2, p3,
                 tile, normal, blockPos, (float)brightness, 1, 1, alpha, anchorVBottom: true));
+        }
+
+        // ---- Cross-shape pass (saplings, flowers, mushrooms, spikes) -------------------
+
+        // Cross plants render as two diagonal billboard quads spanning the cell (classic MC).
+        // Vertex order puts the TOP of the tile at the quad's top (edge-based UV maps v0->tile
+        // top, so V0/V3 are ordered top-first then bottom). Alpha is stored NEGATIVE: the shader
+        // interprets it as "sample the sprite's per-pixel alpha" (the plant tiles ship with
+        // transparent backgrounds). The transparent pipeline is double-sided, so each quad is
+        // emitted once with front-facing winding and mirrors correctly from behind.
+        private static void EmitCrossFaces(Chunk chunk, Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh)
+        {
+            byte[] raw = chunk.RawBlocks;
+            int height = chunk.Height;
+            int depth = chunk.Depth;
+            int width = chunk.Width;
+
+            for (int x = 0; x < width; x++)
+            {
+                for (int z = 0; z < depth; z++)
+                {
+                    int column = (x * depth + z) * height;
+                    for (int y = 0; y < height; y++)
+                    {
+                        int id = raw[column + y];
+                        if (!BlockRegistry.IsCross(id)) continue;
+
+                        var tile = BlockRegistry.GetById(id).AllTexture ?? default;
+                        float alpha = -BlockRegistry.Alpha(id); // negative -> per-pixel sprite alpha
+                        int wx = chunk.OriginX + x;
+                        int wy = chunk.OriginY + y;
+                        int wz = chunk.OriginZ + z;
+                        int ly = wy - ChunkManager.WorldOriginY;
+                        double brightness = ChunkLighting.Brightness(lighting.GetLight(wx, ly, wz));
+                        var blockPos = new Point3D(wx, wy, wz);
+
+                        // Diagonal 0,0 -> 1,1 (top vertices first so the sprite isn't flipped).
+                        mesh.Add(new MeshFace(
+                            new Point3D(wx + 1, wy + 1, wz + 1),
+                            new Point3D(wx + 0, wy + 1, wz + 0),
+                            new Point3D(wx + 0, wy + 0, wz + 0),
+                            new Point3D(wx + 1, wy + 0, wz + 1),
+                            tile, new Point3D(1, 0, -1), blockPos, (float)brightness, 1, 1, alpha));
+                        // Diagonal 0,1 -> 1,0.
+                        mesh.Add(new MeshFace(
+                            new Point3D(wx + 1, wy + 1, wz + 0),
+                            new Point3D(wx + 0, wy + 1, wz + 1),
+                            new Point3D(wx + 0, wy + 0, wz + 1),
+                            new Point3D(wx + 1, wy + 0, wz + 0),
+                            tile, new Point3D(1, 0, 1), blockPos, (float)brightness, 1, 1, alpha));
+                    }
+                }
+            }
         }
 
         // ---- Fluid world reads (bounded by the chunk set the worker handed us) ----------
@@ -583,9 +639,15 @@ namespace CubeApp
                     // combine directional shade with the flood-filled light level
                     double brightness = shade * ChunkLighting.Brightness(entryLight);
 
-                    // per-block atlas tile (honouring top/bottom/side overrides) and render alpha
+                    // per-block atlas tile (honouring top/bottom/side overrides) and render alpha.
+                    // The alpha sign routes the face to its pass in the renderer:
+                    //   cutout blocks (leaves)      -> negative alpha
+                    //   glass                       -> negative alpha minus 100 (its own pass:
+                    //                                  alpha-test, depth-write OFF, front-side)
                     var src = BlockRegistry.FaceTexture(entryType, axisNormal);
                     float alpha = BlockRegistry.Alpha(entryType);
+                    if (BlockRegistry.IsGlass(entryType)) alpha = -alpha - 100f;
+                    else if (BlockRegistry.IsCutout(entryType)) alpha = -alpha;
                     mesh.Add(new MeshFace(corners[0], corners[1], corners[2], corners[3], src, axisNormal, blockPos, (float)brightness, tileWidth, tileHeight, alpha));
 
                     // zero-out mask
