@@ -11,6 +11,7 @@ namespace CubeApp.Renderer
     {
         public bool ShowDebug;
         public bool InventoryOpen;
+        public bool FlyMode;
         public float Fps;
         public float UpdateMs;
         public float MeshMs;
@@ -21,6 +22,7 @@ namespace CubeApp.Renderer
         public string RenderDistanceText;
         public int SelectedSlot;
         public int WorldSeed;
+        public string BiomeText;
         /// <summary>Current per-slot hotbar contents (block ids); may differ from the default list
         /// once the player drops inventory picks into slots.</summary>
         public IReadOnlyList<int> Hotbar;
@@ -51,6 +53,7 @@ namespace CubeApp.Renderer
         {
             ShowDebug = false,
             InventoryOpen = false,
+            FlyMode = false,
             Fps = 0f,
             UpdateMs = 0f,
             MeshMs = 0f,
@@ -61,6 +64,7 @@ namespace CubeApp.Renderer
             RenderDistanceText = string.Empty,
             SelectedSlot = 0,
             WorldSeed = 0,
+            BiomeText = string.Empty,
             Hotbar = Array.Empty<int>(),
             HighlightWorldQuad = null,
             PlayerChunkX = 0,

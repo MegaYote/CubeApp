@@ -108,6 +108,31 @@ namespace CubeApp.Renderer
         private InputSnapshot? _uiInputSnapshot;
         private readonly System.Collections.Concurrent.ConcurrentQueue<int> _inventorySelections = new();
 
+        // ---- Block-break particles ---------------------------------------------------
+        // Small camera-facing quads textured with the broken block's tile. Simulated on the CPU,
+        // drawn with the world pipeline so they depth-test against terrain.
+        private struct BlockParticle
+        {
+            public float X, Y, Z;
+            public float VX, VY, VZ;
+            public float Age, Lifetime;
+            public float Size;
+            public float TileX, TileY, TileW, TileH; // atlas pixels
+            public float Brightness;
+        }
+        private readonly BlockParticle[] _particles = new BlockParticle[512];
+        private int _particleCount;
+        private DeviceBuffer? _particleVertexBuffer;
+        private DeviceBuffer? _particleIndexBuffer;
+        private uint _particleVertexCapacityBytes;
+        private uint _particleIndexCapacityBytes;
+        private float[] _particleVertexScratch = Array.Empty<float>();
+        private ushort[] _particleIndexScratch = Array.Empty<ushort>();
+        private Vector3 _cameraRight = Vector3.UnitX;
+        private Vector3 _cameraUp = Vector3.UnitY;
+        private readonly System.Diagnostics.Stopwatch _particleClock = System.Diagnostics.Stopwatch.StartNew();
+        private long _lastParticleTicks;
+
         // Chunk world mesh: one shared growable vertex/index buffer pair drawn with a single
         // DrawIndexedIndirect call (one IndirectDrawIndexedArguments per live chunk). Chunk-local
         // 16-bit indices stay zero-based; each draw command supplies the absolute FirstIndex
@@ -869,6 +894,13 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             cl.ClearColorTarget(0, RgbaFloat.CornflowerBlue);
             cl.ClearDepthStencil(1f);
 
+            // Advance the block-break particle simulation with the real frame delta.
+            long now = _particleClock.ElapsedTicks;
+            float particleDt = (float)((now - _lastParticleTicks) / (double)System.Diagnostics.Stopwatch.Frequency);
+            _lastParticleTicks = now;
+            if (particleDt > 0.1f) particleDt = 0.1f;
+            if (_particleCount > 0) UpdateParticles(particleDt);
+
             cl.SetPipeline(_pipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
             if (_textureSet != null)
@@ -909,6 +941,7 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                 }
             }
 
+            DrawParticles(cl);
             DrawDucks(cl);
             DrawPlayers(cl);
             DrawHighlight(cl);
@@ -942,6 +975,102 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             float dy = cy - (float)cam.Y;
             float dz = cz - (float)cam.Z;
             return dx * dx + dy * dy + dz * dz;
+        }
+
+        // Renders the block-break particles as camera-facing quads using the world pipeline
+        // (atlas sampling + depth test), so they're occluded by terrain like any block face.
+        private void DrawParticles(CommandList cl)
+        {
+            int n = _particleCount;
+            if (n == 0) return;
+            float atlasW = Math.Max(1f, _atlasWidth);
+            float atlasH = Math.Max(1f, _atlasHeight);
+
+            int vertFloats = n * 4 * 13;
+            if (_particleVertexScratch.Length < vertFloats) _particleVertexScratch = new float[vertFloats];
+            int indexCount = n * 6;
+            if (_particleIndexScratch.Length < indexCount) _particleIndexScratch = new ushort[indexCount];
+
+            var r = _cameraRight;
+            var u = _cameraUp;
+            int vf = 0;
+            int ii = 0;
+            for (int i = 0; i < n; i++)
+            {
+                ref var p = ref _particles[i];
+                float half = p.Size * 0.5f;
+                var rx = r.X * half; var ry = r.Y * half; var rz = r.Z * half;
+                var ux = u.X * half; var uy = u.Y * half; var uz = u.Z * half;
+
+                float oX = p.X, oY = p.Y, oZ = p.Z;
+                // corners: bottom-left, bottom-right, top-right, top-left
+                float[,] corners =
+                {
+                    { oX - rx - ux, oY - ry - uy, oZ - rz - uz },
+                    { oX + rx - ux, oY + ry - uy, oZ + rz - uz },
+                    { oX + rx + ux, oY + ry + uy, oZ + rz + uz },
+                    { oX - rx + ux, oY - ry + uy, oZ - rz + uz }
+                };
+                float u0 = p.TileX / atlasW;
+                float v0 = p.TileY / atlasH;
+                float uw = p.TileW / atlasW;
+                float vh = p.TileH / atlasH;
+                int baseV = i * 4;
+                // UVs must never hit exactly 1.0 - the world shader samples via fract(vLocalUV),
+                // and fract(1.0) == 0.0 would collapse the whole quad onto one texel.
+                const float uvMax = 0.999f;
+                for (int c = 0; c < 4; c++)
+                {
+                    _particleVertexScratch[vf++] = corners[c, 0];
+                    _particleVertexScratch[vf++] = corners[c, 1];
+                    _particleVertexScratch[vf++] = corners[c, 2];
+                    _particleVertexScratch[vf++] = (c == 1 || c == 2) ? uvMax : 0f;
+                    _particleVertexScratch[vf++] = (c == 2 || c == 3) ? uvMax : 0f;
+                    _particleVertexScratch[vf++] = u0;
+                    _particleVertexScratch[vf++] = v0;
+                    _particleVertexScratch[vf++] = uw;
+                    _particleVertexScratch[vf++] = vh;
+                    _particleVertexScratch[vf++] = p.Brightness;
+                    _particleVertexScratch[vf++] = p.Brightness;
+                    _particleVertexScratch[vf++] = p.Brightness;
+                    _particleVertexScratch[vf++] = 1f;
+                }
+                _particleIndexScratch[ii++] = (ushort)(baseV + 0);
+                _particleIndexScratch[ii++] = (ushort)(baseV + 1);
+                _particleIndexScratch[ii++] = (ushort)(baseV + 2);
+                _particleIndexScratch[ii++] = (ushort)(baseV + 0);
+                _particleIndexScratch[ii++] = (ushort)(baseV + 2);
+                _particleIndexScratch[ii++] = (ushort)(baseV + 3);
+            }
+
+            EnsureParticleBuffers((uint)(vertFloats * sizeof(float)), (uint)(indexCount * sizeof(ushort)));
+            _gd.UpdateBuffer(_particleVertexBuffer, 0, _particleVertexScratch);
+            _gd.UpdateBuffer(_particleIndexBuffer, 0, _particleIndexScratch);
+
+            cl.SetPipeline(_pipeline);
+            cl.SetGraphicsResourceSet(0, _projViewSet);
+            if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
+            cl.SetVertexBuffer(0, _particleVertexBuffer);
+            cl.SetIndexBuffer(_particleIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed((uint)indexCount);
+        }
+
+        private void EnsureParticleBuffers(uint vbBytes, uint ibBytes)
+        {
+            if (_particleVertexBuffer == null || _particleVertexCapacityBytes < vbBytes)
+            {
+                _particleVertexBuffer?.Dispose();
+                _particleVertexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                    Math.Max(vbBytes, 4096), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+                _particleVertexCapacityBytes = Math.Max(vbBytes, 4096);
+            }
+            if (_particleIndexBuffer == null || _particleIndexCapacityBytes < ibBytes)
+            {
+                _particleIndexBuffer?.Dispose();
+                _particleIndexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                    Math.Max(ibBytes, 2048), BufferUsage.IndexBuffer | BufferUsage.Dynamic));
+                _particleIndexCapacityBytes = Math.Max(ibBytes, 2048);
+            }
         }
 
         // Issues one indirect world draw for a chunk-command pass (opaque or transparent) using the
@@ -1846,7 +1975,10 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                 }
 
                 Line($"FPS: {_hud.Fps:0.0}");
+                Line($"Particles: {_particleCount}");
                 Line($"Seed: {_hud.WorldSeed}");
+                Line($"Fly: {(_hud.FlyMode ? "ON" : "OFF")}");
+                if (!string.IsNullOrEmpty(_hud.BiomeText)) Line($"Biome: {_hud.BiomeText}");
                 Line($"XYZ: {_hud.PlayerX:0.000} / {_hud.PlayerY:0.000} / {_hud.PlayerZ:0.000}");
                 Line($"Block: {(int)Math.Floor(_hud.PlayerX)} / {(int)Math.Floor(_hud.PlayerY)} / {(int)Math.Floor(_hud.PlayerZ)}");
                 Line($"Chunk: {_hud.PlayerChunkX} / {_hud.PlayerChunkZ}");
@@ -1870,6 +2002,8 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             _megaVertexBuffer?.Dispose();
             _megaIndexBuffer?.Dispose();
             _indirectBuffer?.Dispose();
+            _particleVertexBuffer?.Dispose();
+            _particleIndexBuffer?.Dispose();
 
             _projViewSet?.Dispose();
             _projViewLayout?.Dispose();
@@ -2169,6 +2303,9 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             var target = cameraPos + forward;
             var view = Matrix4x4.CreateLookAt(cameraPos, target, Vector3.UnitY);
             var viewProj = Matrix4x4.Multiply(view, proj);
+            // Billboard basis for the particle system.
+            _cameraRight = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY));
+            _cameraUp = Vector3.Normalize(Vector3.Cross(_cameraRight, forward));
             // Cache the camera and view-projection so chunk frustum culling and the mob meshing
             // can read them without re-deriving.
             _cameraPosition = position;
@@ -2209,6 +2346,65 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
         public bool TryTakeInventorySelection(out int blockId)
         {
             return _inventorySelections.TryDequeue(out blockId);
+        }
+
+        // Spawns little textured cubes of the block's tile flying out of a broken block.
+        public void SpawnBlockBreakParticles(int worldX, int worldY, int worldZ, int blockId, int count)
+        {
+            var def = BlockRegistry.GetById(blockId);
+            var tile = def.AllTexture;
+            if (!tile.HasValue || _particles.Length == 0) return;
+            var tr = tile.Value;
+            for (int i = 0; i < count && _particleCount < _particles.Length; i++)
+            {
+                ref var p = ref _particles[_particleCount++];
+                p.X = (float)(worldX + Random.Shared.NextDouble());
+                p.Y = (float)(worldY + Random.Shared.NextDouble());
+                p.Z = (float)(worldZ + Random.Shared.NextDouble());
+                p.VX = (float)((Random.Shared.NextDouble() * 2.0 - 1.0) * 2.2);
+                p.VY = (float)(0.8 + Random.Shared.NextDouble() * 3.0);
+                p.VZ = (float)((Random.Shared.NextDouble() * 2.0 - 1.0) * 2.2);
+                p.Age = 0f;
+                p.Lifetime = (float)(0.6 + Random.Shared.NextDouble() * 0.5);
+                p.Size = (float)(0.14 + Random.Shared.NextDouble() * 0.08);
+                // Each particle shows a small random piece of the block tile (a ~4x4 texel crop),
+                // like Minecraft's break particles - not the whole texture.
+                int pieceW = Math.Max(2, tr.Width / 4);
+                int pieceH = Math.Max(2, tr.Height / 4);
+                int ox = Random.Shared.Next(0, Math.Max(1, tr.Width - pieceW + 1));
+                int oy = Random.Shared.Next(0, Math.Max(1, tr.Height - pieceH + 1));
+                p.TileX = tr.X + ox;
+                p.TileY = tr.Y + oy;
+                p.TileW = pieceW;
+                p.TileH = pieceH;
+                p.Brightness = (float)(0.85 + Random.Shared.NextDouble() * 0.15);
+            }
+        }
+
+        // Advances the particle pool (gravity, motion, ground stop, expiry).
+        private void UpdateParticles(float dt)
+        {
+            int write = 0;
+            for (int i = 0; i < _particleCount; i++)
+            {
+                ref var p = ref _particles[i];
+                p.Age += dt;
+                if (p.Age >= p.Lifetime) continue;
+                p.VY -= 18f * dt;
+                p.X += p.VX * dt;
+                p.Y += p.VY * dt;
+                p.Z += p.VZ * dt;
+                // Rest on the first solid block the particle lands in; it fades via lifetime.
+                if (_chunkManager != null
+                    && _chunkManager.GetBlockAt((int)Math.Floor(p.X), (int)Math.Floor(p.Y), (int)Math.Floor(p.Z)) != 0)
+                {
+                    p.VX = 0f;
+                    p.VY = 0f;
+                    p.VZ = 0f;
+                }
+                _particles[write++] = p;
+            }
+            _particleCount = write;
         }
 
         // Synchronously re-mesh one chunk (used for instant player edits). The greedy mesh from the

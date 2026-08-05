@@ -48,6 +48,7 @@ namespace CubeApp
         private Point3D playerVelocity = new Point3D(0, 0, 0);
         private bool playerGrounded;
         private const float WalkSpeed = 4.317f;
+        private const float FlySpeed = 10.8f;
         private const float JumpVelocity = 8.0f;
         private const float Gravity = 24.0f;
         private const float MaxFallSpeed = 36.0f;
@@ -69,7 +70,9 @@ namespace CubeApp
         private const int HotbarSlots = 10;
         private readonly int[] _hotbarBlocks = new int[HotbarSlots];
         private readonly int worldSeed;
+        private readonly World.InfdevChunkProvider chunkProvider;
         private bool inventoryOpen;
+        private bool flyMode;
         private bool thirdPersonView;
         private float playerWalkPhase;
         private float playerWalkAmount;
@@ -88,7 +91,8 @@ namespace CubeApp
             // Every world gets its own random seed (like Infdev's fresh-world roll), so terrain
             // varies on each launch. Shown in the F3 debug overlay.
             worldSeed = Random.Shared.Next(0, int.MaxValue);
-            manager = new ChunkManager(new InfdevChunkProvider(worldSeed));
+            chunkProvider = new InfdevChunkProvider(worldSeed);
+            manager = new ChunkManager(chunkProvider);
             entityManager = new EntityManager(manager);
             MobRegistry.DiscoverMobs(AppDomain.CurrentDomain.BaseDirectory);
             EnsureVisibleChunks();
@@ -245,6 +249,7 @@ namespace CubeApp
                 return;
             }
             if (frameInput.ToggleDebugPressed) showFps = !showFps;
+            if (frameInput.ToggleFlyPressed) flyMode = !flyMode;
             if (frameInput.ToggleInventoryPressed)
             {
                 inventoryOpen = !inventoryOpen;
@@ -350,8 +355,34 @@ namespace CubeApp
 
         private void UpdatePlayerMovement(TickInputState tickInput, float deltaSeconds)
         {
-            var forward = GetCameraForward();
-            var forwardHorizontal = new Point3D(forward.X, 0, forward.Z).Normalized();
+            if (flyMode)
+            {
+                // Free 3D flight: full look-direction movement (pitch-aware), space up / shift
+                // down, no gravity, no jump. Collisions stay on so you don't clip into terrain.
+                var flyForward = GetCameraForward();
+                var flyRight = GetCameraRight(cameraYaw);
+                var flyDir = new Point3D(0, 0, 0);
+                if (tickInput.MoveForward) flyDir += flyForward;
+                if (tickInput.MoveBackward) flyDir -= flyForward;
+                if (tickInput.MoveLeft) flyDir += flyRight;
+                if (tickInput.MoveRight) flyDir -= flyRight;
+                if (tickInput.MoveUp) flyDir += new Point3D(0, 1, 0);
+                if (tickInput.MoveDown) flyDir += new Point3D(0, -1, 0);
+                if (flyDir.X != 0 || flyDir.Y != 0 || flyDir.Z != 0)
+                {
+                    double len = Math.Sqrt(flyDir.X * flyDir.X + flyDir.Y * flyDir.Y + flyDir.Z * flyDir.Z);
+                    flyDir *= 1.0 / len;
+                }
+                playerVelocity = flyDir * FlySpeed;
+                playerVelocity = new Point3D(playerVelocity.X, playerVelocity.Y, playerVelocity.Z);
+                MovePlayerWithCollisions(playerVelocity * deltaSeconds);
+                playerGrounded = false;
+                playerWalkAmount = 0f;
+                return;
+            }
+
+            var forwardWalk = GetCameraForward();
+            var forwardHorizontal = new Point3D(forwardWalk.X, 0, forwardWalk.Z).Normalized();
             var right = GetCameraRight(cameraYaw);
             var desiredDirection = new Point3D(0, 0, 0);
             if (tickInput.MoveForward) desiredDirection += forwardHorizontal;
@@ -600,6 +631,9 @@ namespace CubeApp
             var pickResult = TryPickBlock(cameraPosition, GetCameraForward());
             if (!pickResult.HasValue) return;
             var remove = pickResult.Value.Remove;
+            if (!manager.TryGetLoadedBlock(remove.x, remove.y, remove.z, out var blockId)) return;
+            // Little chunks of the block's tile fly out as it breaks.
+            gpuRenderer?.SpawnBlockBreakParticles(remove.x, remove.y, remove.z, blockId, 12);
             if (!manager.TrySetBlock(remove.x, remove.y, remove.z, BlockRegistry.AirId)) return;
             blockTickScheduler?.OnBlockChanged(remove.x, remove.y, remove.z);
             var editedChunk = new ChunkCoordinates(WorldToChunkCoord(remove.x), WorldToChunkCoord(remove.z));
@@ -788,12 +822,14 @@ namespace CubeApp
             if (pickResult.HasValue) highlightQuad = ComputeHighlightWorldQuad(pickResult.Value);
             return new HudState
             {
-                ShowDebug = showFps, InventoryOpen = inventoryOpen, Fps = lastFps, UpdateMs = lastUpdateMs,
+                ShowDebug = showFps, InventoryOpen = inventoryOpen, FlyMode = flyMode, Fps = lastFps, UpdateMs = lastUpdateMs,
                 MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                 FacingText = $"{GetCompassDirection(cameraYaw)} ({NormalizeYaw(cameraYaw):0.0} deg)",
                 SelectedBlockText = $"Selected: {BlockRegistry.GetName(selectedBlock)}",
                 RenderDistanceText = $"Render dist: {RenderDistanceName} ({ChunkRenderRadius})",
-                SelectedSlot = selectedSlot, WorldSeed = worldSeed, Hotbar = _hotbarBlocks, HighlightWorldQuad = highlightQuad,
+                SelectedSlot = selectedSlot, WorldSeed = worldSeed,
+                BiomeText = chunkProvider?.BiomeNameAt((int)Math.Floor(cameraPosition.X), (int)Math.Floor(cameraPosition.Z)) ?? string.Empty,
+                Hotbar = _hotbarBlocks, HighlightWorldQuad = highlightQuad,
                 PlayerX = cameraPosition.X,
                 PlayerY = cameraPosition.Y,
                 PlayerZ = cameraPosition.Z,
