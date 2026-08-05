@@ -587,41 +587,56 @@ namespace CubeApp
         {
             int baseX = (int)Math.Floor(cameraPosition.X);
             int baseZ = (int)Math.Floor(cameraPosition.Z);
-            // Scan a wide area and pick the HIGHEST solid column so the player spawns on the
-            // best nearby land (a hill or beach) instead of possibly the ocean floor.
-            int bestX = 0, bestZ = 0, bestY = int.MinValue;
-            for (int radius = 0; radius <= 14; radius++)
-            for (int dx = -radius; dx <= radius; dx++)
-            for (int dz = -radius; dz <= radius; dz++)
+            // Scan outward ring by ring (generating chunks as needed) and take the FIRST ring
+            // that has dry land - the surface must be at or above sea level, so the player never
+            // spawns underwater. Within a ring, the highest dry spot wins (solid footing, not a
+            // cliff edge). Mirrors Infdev's "find a beach" spawn spirit.
+            const int seaLevelWorldY = 0;
+            for (int radius = 0; radius <= 64; radius++)
             {
-                if (radius > 0 && Math.Abs(dx) != radius && Math.Abs(dz) != radius) continue;
-                int wx = baseX + dx;
-                int wz = baseZ + dz;
-                for (int y = ChunkManager.ChunkHeight - 1; y >= 0; y--)
+                int bestY = int.MinValue, bestX = 0, bestZ = 0;
+                for (int dx = -radius; dx <= radius; dx++)
+                for (int dz = -radius; dz <= radius; dz++)
                 {
-                    if (manager.TryGetLoadedBlock(wx, y, wz, out var block) && BlockRegistry.IsSolid(block))
+                    if (radius > 0 && Math.Abs(dx) != radius && Math.Abs(dz) != radius) continue;
+                    int wx = baseX + dx;
+                    int wz = baseZ + dz;
+                    manager.GetOrCreateChunk(WorldToChunkCoord(wx), WorldToChunkCoord(wz));
+                    int surfaceY = FindSurfaceWorldY(wx, wz);
+                    if (surfaceY < seaLevelWorldY) continue; // submerged - keep searching
+                    if (surfaceY > bestY)
                     {
-                        if (y > bestY)
-                        {
-                            bestY = y;
-                            bestX = wx;
-                            bestZ = wz;
-                        }
-                        break;
+                        bestY = surfaceY;
+                        bestX = wx;
+                        bestZ = wz;
                     }
                 }
-            }
-            if (bestY < 0) return null;
-            double px = bestX + 0.5;
-            double pz = bestZ + 0.5;
-            double minEyeY = bestY + EyeHeight + 0.01;
-            double maxEyeY = ChunkManager.ChunkHeight + 1.0;
-            for (double eyeY = minEyeY; eyeY <= maxEyeY; eyeY += 0.25)
-            {
-                var candidate = new Point3D(px, eyeY, pz);
-                if (!IsPlayerColliding(candidate)) return candidate;
+                if (bestY == int.MinValue) continue;
+
+                double px = bestX + 0.5;
+                double pz = bestZ + 0.5;
+                double minEyeY = bestY + EyeHeight + 0.01;
+                double maxEyeY = ChunkManager.ChunkHeight + 1.0;
+                for (double eyeY = minEyeY; eyeY <= maxEyeY; eyeY += 0.25)
+                {
+                    var candidate = new Point3D(px, eyeY, pz);
+                    if (!IsPlayerColliding(candidate)) return candidate;
+                }
             }
             return null;
+        }
+
+        // Topmost solid block in a column, in world Y (-64..191). Returns OriginY-1 if empty.
+        private int FindSurfaceWorldY(int wx, int wz)
+        {
+            for (int wy = 191; wy >= ChunkManager.WorldOriginY; wy--)
+            {
+                if (manager.TryGetLoadedBlock(wx, wy, wz, out var block) && BlockRegistry.IsSolid(block))
+                {
+                    return wy;
+                }
+            }
+            return ChunkManager.WorldOriginY - 1;
         }
 
         private static int WorldToChunkCoord(double value) => (int)Math.Floor(value / ChunkManager.ChunkSize);
