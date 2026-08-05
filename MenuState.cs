@@ -1,5 +1,6 @@
 namespace CubeApp
 {
+    using System.Collections.Generic;
     // Which top-level screen the game is showing. The title/create/pause screens are rendered by
     // the ImGui overlay; the world sim only runs while Playing.
     public enum GameScreen
@@ -24,6 +25,10 @@ namespace CubeApp
         public bool ResumeClicked;
         public bool QuitToTitleClicked;
         public bool QuitClicked;
+        public bool LoadWorldClicked;
+        public int SelectedWorldIndex = -1;
+        /// <summary>Display names of saved worlds (from the saves folder), for the title list.</summary>
+        public List<string> SavedWorlds = new();
 
         public void ResetFlags()
         {
@@ -31,6 +36,7 @@ namespace CubeApp
             ResumeClicked = false;
             QuitToTitleClicked = false;
             QuitClicked = false;
+            LoadWorldClicked = false;
         }
     }
 }

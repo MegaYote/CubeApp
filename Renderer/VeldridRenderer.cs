@@ -1953,7 +1953,17 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             var io = ImGui.GetIO();
             var size = io.DisplaySize;
 
-            DrawDirtBackground(size);
+            // The title/create screens get the dirt background; the pause menu just dims the
+            // frozen world behind it with a translucent gray wash.
+            if (m.Screen == GameScreen.Paused)
+            {
+                uint tint = ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.45f));
+                ImGui.GetBackgroundDrawList().AddRectFilled(Vector2.Zero, size, tint);
+            }
+            else
+            {
+                DrawDirtBackground(size);
+            }
 
             ImGuiWindowFlags windowFlags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
                 | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar
@@ -1991,9 +2001,12 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                     ImGui.End();
                 }
 
-                // Buttons hang lower, in the classic Minecraft vertical column.
+                // Buttons hang lower, in the classic Minecraft vertical column, with any saved
+                // worlds listed beneath so one click loads a world.
+                int shownWorlds = Math.Min(m.SavedWorlds.Count, 6);
+                float winH = 130f + (shownWorlds > 0 ? 42f + shownWorlds * 30f : 0f);
                 ImGui.SetNextWindowPos(new Vector2((size.X - 220f) / 2f, size.Y / 4f + 72f), ImGuiCond.Always);
-                ImGui.SetNextWindowSize(new Vector2(220, 130), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(220, winH), ImGuiCond.Always);
                 ImGui.Begin("##title", windowFlags);
                 if (ImGui.Button("Singleplayer", new Vector2(200, 34)))
                 {
@@ -2002,6 +2015,21 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                 }
                 ImGui.Dummy(new Vector2(0, 18));
                 if (ImGui.Button("Quit", new Vector2(200, 34))) m.QuitClicked = true;
+                if (shownWorlds > 0)
+                {
+                    ImGui.Dummy(new Vector2(0, 10));
+                    uint dimCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.8f, 0.8f, 0.8f, 1f));
+                    ImGui.TextColored(new Vector4(0.8f, 0.8f, 0.8f, 1f), "Saved Worlds");
+                    ImGui.Dummy(new Vector2(0, 4));
+                    for (int i = 0; i < shownWorlds; i++)
+                    {
+                        if (ImGui.Button(m.SavedWorlds[i], new Vector2(200, 26)))
+                        {
+                            m.SelectedWorldIndex = i;
+                            m.LoadWorldClicked = true;
+                        }
+                    }
+                }
                 ImGui.End();
             }
             else if (m.Screen == GameScreen.CreateWorld)

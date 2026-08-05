@@ -12,6 +12,10 @@ namespace CubeApp
         public const int WorldOriginY = -64;
         public const int ChunkHeight = 256;
         private readonly ConcurrentDictionary<ChunkCoordinates, Chunk> loadedChunks = new();
+        // Chunk coords that have been modified (player edits / fluid flow) since load; these are
+        // the only chunks a world save needs to serialize.
+        private readonly HashSet<ChunkCoordinates> _modifiedChunks = new();
+        public IReadOnlyCollection<ChunkCoordinates> ModifiedChunks => _modifiedChunks;
         private readonly PriorityQueue<ChunkRequest, double> queue = new();
         private readonly object queueLock = new();
         private readonly ConcurrentDictionary<ChunkCoordinates, byte> pendingGeneration = new();
@@ -23,8 +27,7 @@ namespace CubeApp
         }
 
         public Chunk GetOrCreateChunk(int chunkX, int chunkZ)
-        {
-            var key = new ChunkCoordinates(chunkX, chunkZ);
+        {            var key = new ChunkCoordinates(chunkX, chunkZ);
             bool created = false;
             var result = loadedChunks.GetOrAdd(key, _ =>
             {
@@ -51,6 +54,16 @@ namespace CubeApp
             }
 
             return result;
+        }
+
+        // Stamps a saved chunk's block+meta data over the (re)generated chunk on world load.
+        public void ApplySavedChunk(int chunkX, int chunkZ, byte[] blocks, byte[] meta)
+        {
+            var chunk = GetOrCreateChunk(chunkX, chunkZ);
+            if (blocks != null) Array.Copy(blocks, chunk.RawBlocks, Math.Min(blocks.Length, chunk.RawBlocks.Length));
+            if (meta != null) Array.Copy(meta, chunk.RawMeta, Math.Min(meta.Length, chunk.RawMeta.Length));
+            chunk.NeedsRemesh = true;
+            _modifiedChunks.Add(new ChunkCoordinates(chunkX, chunkZ));
         }
 
 public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
@@ -111,6 +124,10 @@ public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
             {
                 return;
             }
+
+            // Remember this chunk for world saving (only modified chunks get serialized; the
+            // rest regenerate from the seed).
+            _modifiedChunks.Add(new ChunkCoordinates(chunkX, chunkZ));
 
             // mark this chunk dirty so it will be remeshed
             chunk.NeedsRemesh = true;

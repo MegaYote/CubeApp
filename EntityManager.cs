@@ -240,6 +240,72 @@ namespace CubeApp
             _mobRenderData.Clear();
         }
 
+        // Serializes the current mob state for a world save.
+        public List<SavedMob> SaveMobs()
+        {
+            var result = new List<SavedMob>();
+            foreach (var mob in _mobs)
+            {
+                string type = mob switch
+                {
+                    Duck => "duck",
+                    Coyote => "coyote",
+                    SteveMob => "steve",
+                    GenericMobEntity g => g.MobId,
+                    _ => "duck",
+                };
+                int health = mob switch
+                {
+                    MobEntity me => me.Health,
+                    Duck d => d.Health,
+                    _ => 10,
+                };
+                result.Add(new SavedMob { Type = type, X = mob.Position.X, Y = mob.Position.Y, Z = mob.Position.Z, Yaw = mob.Yaw, Health = health });
+            }
+            return result;
+        }
+
+        // Restores mobs from a world save.
+        public void LoadMobs(IEnumerable<SavedMob> mobs)
+        {
+            _mobs.Clear();
+            foreach (var m in mobs)
+            {
+                SpawnSavedMob(m);
+            }
+        }
+
+        private void SpawnSavedMob(SavedMob m)
+        {
+            var pos = new Point3D(m.X, m.Y, m.Z);
+            if (m.Type == "duck")
+            {
+                var mob = new Duck(pos, m.Yaw);
+                mob.RestoreState(pos, m.Yaw, m.Health);
+                _mobs.Add(mob);
+            }
+            else if (m.Type == "coyote" || m.Type == "coyotemob")
+            {
+                var mob = new Coyote(pos, m.Yaw);
+                mob.RestoreState(pos, m.Yaw, m.Health);
+                _mobs.Add(mob);
+            }
+            else if (m.Type == "steve")
+            {
+                var mob = new SteveMob(pos, m.Yaw);
+                mob.RestoreState(pos, m.Yaw, m.Health);
+                _mobs.Add(mob);
+            }
+            else
+            {
+                var def = MobRegistry.Get(m.Type);
+                if (def == null) return;
+                var generic = new GenericMobEntity(def, pos, m.Yaw);
+                generic.RestoreState(pos, m.Yaw, m.Health);
+                _mobs.Add(generic);
+            }
+        }
+
         public void Dispose() { }
     }
 
@@ -260,6 +326,8 @@ namespace CubeApp
             MaxHealth = definition.MaxHealth;
             Health = MaxHealth;
         }
+
+        public string MobId => _definition.Id;
 
         public bool LoadModel(GraphicsDevice graphicsDevice)
         {
