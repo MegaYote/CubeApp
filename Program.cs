@@ -69,6 +69,7 @@ namespace CubeApp
         private const int HotbarSlots = 10;
         private readonly int[] _hotbarBlocks = new int[HotbarSlots];
         private int worldSeed;
+        private string worldName = "World 1";
         private World.InfdevChunkProvider chunkProvider;
         private GameScreen screen = GameScreen.Title;
         private readonly MenuState menu = new();
@@ -91,14 +92,16 @@ namespace CubeApp
             }
             selectedBlock = Math.Max(0, _hotbarBlocks[0]);
             MobRegistry.DiscoverMobs(AppDomain.CurrentDomain.BaseDirectory);
+            RefreshSavedWorlds();
             // The world isn't created until the player picks "Create World" on the title screen.
         }
 
         // Creates the world from a seed (the title screen's "Create World" action): rebuilds the
         // chunk pipeline, spawns the player on dry land, and enters the Playing screen.
-        private void StartNewWorld(int seed)
+        private void StartNewWorld(int seed, string name)
         {
             worldSeed = seed;
+            worldName = string.IsNullOrWhiteSpace(name) ? "World 1" : name;
             chunkProvider = new World.InfdevChunkProvider(seed);
             manager = new ChunkManager(chunkProvider);
             entityManager = new EntityManager(manager);
@@ -133,6 +136,7 @@ namespace CubeApp
         {
             screen = GameScreen.Title;
             menu.Screen = GameScreen.Title;
+            RefreshSavedWorlds();
             DisableMouseLook();
         }
 
@@ -148,7 +152,11 @@ namespace CubeApp
         {
             if (menu.CreateWorldClicked)
             {
-                StartNewWorld(ParseSeed(menu.SeedInput));
+                StartNewWorld(ParseSeed(menu.SeedInput), menu.WorldName);
+            }
+            else if (menu.LoadWorldClicked)
+            {
+                LoadWorldFromList();
             }
             else if (menu.ResumeClicked)
             {
@@ -156,13 +164,116 @@ namespace CubeApp
             }
             else if (menu.QuitToTitleClicked)
             {
+                SaveWorld();
                 ReturnToTitle();
             }
             else if (menu.QuitClicked)
             {
+                SaveWorld();
                 window?.Close();
             }
             menu.ResetFlags();
+        }
+
+        private void LoadWorldFromList()
+        {
+            int index = menu.SelectedWorldIndex;
+            if (index < 0 || index >= menu.SavedWorlds.Count) return;
+            string name = menu.SavedWorlds[index];
+            string path = Path.Combine(SavesFolder, SanitizeFileName(name) + ".cubuild");
+            if (!File.Exists(path)) return;
+            var save = WorldSave.Load(path);
+            if (save == null) return;
+            LoadWorld(save);
+        }
+
+        // Saves the current world to the saves folder (modified chunks only).
+        private void SaveWorld()
+        {
+            if (manager == null) return;
+            try
+            {
+                Directory.CreateDirectory(SavesFolder);
+                var save = new WorldSave
+                {
+                    Name = worldName,
+                    Seed = worldSeed,
+                    PlayerX = cameraPosition.X,
+                    PlayerY = cameraPosition.Y,
+                    PlayerZ = cameraPosition.Z,
+                    Yaw = cameraYaw,
+                    Pitch = cameraPitch,
+                    SelectedSlot = selectedSlot,
+                    Hotbar = (int[])_hotbarBlocks.Clone(),
+                };
+                foreach (var coord in manager.ModifiedChunks)
+                {
+                    if (manager.TryGetLoadedChunk(coord, out var chunk))
+                    {
+                        save.Chunks.Add(new SavedChunk
+                        {
+                            X = coord.X,
+                            Z = coord.Z,
+                            Blocks = (byte[])chunk.RawBlocks.Clone(),
+                            Meta = (byte[])chunk.RawMeta.Clone(),
+                        });
+                    }
+                }
+                if (entityManager != null) save.Mobs = entityManager.SaveMobs();
+                save.Save(Path.Combine(SavesFolder, SanitizeFileName(save.Name) + ".cubuild"));
+            }
+            catch (Exception ex)
+            {
+                try { System.IO.File.AppendAllText("save_error.log", DateTime.Now + " Save failed: " + ex + Environment.NewLine); } catch { }
+            }
+        }
+
+        // Loads a saved world: regenerates from its seed, stamps saved chunks on top, restores
+        // the player and mobs.
+        private void LoadWorld(WorldSave save)
+        {
+            StartNewWorld(save.Seed, save.Name);
+            foreach (var c in save.Chunks)
+            {
+                manager.ApplySavedChunk(c.X, c.Z, c.Blocks, c.Meta);
+            }
+            cameraPosition = new Point3D(save.PlayerX, save.PlayerY, save.PlayerZ);
+            cameraYaw = save.Yaw;
+            cameraPitch = save.Pitch;
+            playerVelocity = new Point3D(0, 0, 0);
+            if (save.Hotbar != null && save.Hotbar.Length == HotbarSlots)
+            {
+                for (int i = 0; i < HotbarSlots; i++) _hotbarBlocks[i] = save.Hotbar[i];
+            }
+            selectedSlot = Math.Clamp(save.SelectedSlot, 0, HotbarSlots - 1);
+            selectedBlock = _hotbarBlocks[selectedSlot];
+            entityManager?.LoadMobs(save.Mobs);
+            needsMeshUpdate = true;
+        }
+
+        // Refreshes the title screen's saved-world list from the saves folder.
+        private void RefreshSavedWorlds()
+        {
+            menu.SavedWorlds.Clear();
+            try
+            {
+                if (!Directory.Exists(SavesFolder)) return;
+                foreach (var file in Directory.GetFiles(SavesFolder, "*.cubuild"))
+                {
+                    menu.SavedWorlds.Add(Path.GetFileNameWithoutExtension(file));
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static string SavesFolder => System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "saves");
+
+        private static string SanitizeFileName(string name)
+        {
+            foreach (var c in System.IO.Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+            return string.IsNullOrWhiteSpace(name) ? "World" : name;
         }
 
         public void Run()
@@ -300,6 +411,9 @@ namespace CubeApp
                     try { System.IO.File.AppendAllText("app_error.log", DateTime.Now + " Tick error: " + ex + Environment.NewLine); } catch { }
                 }
             }
+
+            // The window closed - save the world if one is active.
+            SaveWorld();
         }
 
         private void ApplyFrameInput(FrameInputState frameInput)
@@ -310,6 +424,7 @@ namespace CubeApp
             {
                 if (screen == GameScreen.Playing)
                 {
+                    SaveWorld(); // autosave whenever the pause menu opens
                     screen = GameScreen.Paused;
                     menu.Screen = GameScreen.Paused;
                     DisableMouseLook();

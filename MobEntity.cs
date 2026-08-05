@@ -55,6 +55,14 @@ namespace CubeApp
         public bool Removed { get; protected set; }
         public bool IsDead => _dead;
 
+        // Restores saved state after spawning (world load).
+        public void RestoreState(Point3D position, float yaw, int health)
+        {
+            Position = position;
+            Yaw = yaw;
+            Health = Math.Max(1, health);
+        }
+
         public int Health { get; protected set; } = 10;
         public int MaxHealth { get; protected set; } = 10;
 
