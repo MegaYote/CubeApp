@@ -19,6 +19,12 @@ Run target: `bin\Debug\net9.0-windows\win-x64\CubeApp.exe` — the `bin\Debug\ne
 - **Side-face winding fixed** (was culled from view side): all four `EmitWaterSide` quads use bottom-pair-first + sloped top edge, matching the greedy pass ordering.
 - **Transparent two-pass renderer fix (8/4, verified by user "it looks awesome now")**: water walls at chunk borders rendered ghosty/see-through because the single blended pass with depth-write ON let a water chunk drawn first depth-block the terrain behind it. Fix in `VeldridRenderer.cs`: `BuildMesh` splits faces into opaque (alpha ≥ 1) + transparent (alpha < 1) arrays; each chunk uploads TWO `ChunkRange`s into the same mega buffers (`_chunkRanges` + `_transparentRanges`); `RebuildDrawCommands` builds two command lists; draw loop calls `DrawWorldPass` twice — opaque with `_pipeline` (depth-write on), then transparent with `_transparentPipeline` (SingleAlphaBlend, `DepthStencilStateDescription(true, false, LessEqual)` = depth test on, write off). `PendingUpload` carries both pairs; `FreeChunkRange` frees both.
 - **Known small artifact (not the report, not yet fixed)**: side-wall UV in `TryGetCubuildFaceAxes` maps V from Y with `vAxis=(0,-1,0)` — shows the top strip of the side tile; MC anchors the tile bottom at the waterline instead. Optional follow-up: MC-style side-wall UV anchoring.
+- **Water rendering fixes (8/5, verified by user "yay <3 pretty blue water")**:
+  - **THE BIG ONE — light Y mismatch**: the water pass called `ChunkLighting.GetLight` with WORLD Y (-64..191) but the light array is indexed by LOCAL Y (0..255, OriginY=-64). Sea-level water (world Y=0) read array index 0 = the BOTTOM bedrock block → light 0 → brightness floor 0.05 → water RGB crushed to near-black. Fixed: all three water light samples in `Mesher.cs` convert `wy - ChunkManager.WorldOriginY` (top face `ly`, `ly+1`; bottom `ly-1`; side `wy - WorldOriginY`). The greedy pass always used local Y, which is why terrain was lit fine.
+  - **Side-wall UV anchoring (AnchorVBottom)**: added `MeshFace.AnchorVBottom` flag, set true in `EmitWaterSide`. `BuildMesh` shifts dv by `(1 - (maxV-minV))` so the tile bottom anchors to the block bottom and the surface cuts across — matches `RenderBlocks.renderBlockFluids` `((var51 + (1.0F - var31) * 16.0F) / 256.0F)`. Opaque faces (h=1) get offset 0, unaffected.
+  - **Shader opacity fix**: fragment shader now `outColor = vec4(tex.rgb * vColor.rgb, vColor.a)` — block alpha governs opacity, not the atlas art's baked alpha (water tile ships ~138/255 ≈ 54% in terrain.png, halving effective opacity to ~46%).
+  - **Water block alpha**: `blocks.json` water `alpha` 0.65 → 0.85.
+  - **Probe harness**: `C:\Users\jimza\AppData\Local\Temp\opencode\waterprobe\` — self-contained console app referencing CubeApp project; generates chunks, builds lighting, prints water light values + mesh face alphas. IMPORTANT: the FIRST chunk in the list passed to `Mesher.GenerateMesh` is the mesher's target — put chunk (0,0) first when probing it.
 
 ## Authoritative Shading Reference (user-provided): `IF-20100630-main` (Infdev 20100630, ~Alpha 1.1.2_01 era)
 - `World.java` 1577-1585: `v = 1 - light/15`; `table[light] = (1-v)/(v*3+1) * 0.95 + 0.05` (gamma curve, 0.05 ambient floor).
@@ -35,5 +41,5 @@ Run target: `bin\Debug\net9.0-windows\win-x64\CubeApp.exe` — the `bin\Debug\ne
 4. `Start-Process` the win-x64 exe.
 
 ## Next Moves
-- Optional: MC-style side-wall UV anchoring (tile bottom fixed, top slides) for water walls.
+- Optional: MC-style side-wall UV anchoring (tile bottom fixed, top slides) for water walls — DONE 8/5 (AnchorVBottom flag).
 - Optional: lava pass by copying the water simulation logic.
