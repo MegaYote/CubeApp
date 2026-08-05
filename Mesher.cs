@@ -236,13 +236,16 @@ namespace CubeApp
             float h10 = GetFluidHeight(lookup, waterId, wx + 1, wy, wz);
 
             var blockPos = new Point3D(wx, wy, wz);
+            // ChunkLighting indexes its light array by LOCAL y (0..chunkHeight-1, OriginY=-64),
+            // while wx/wy/wz here are world coordinates - so the light samples must convert.
+            int ly = wy - ChunkManager.WorldOriginY;
 
             // Top face (only when the cell above isn't water). Flowing water uses the side tile,
             // still water the base tile, matching BlockFluid.getBlockTextureFromSideAndMetadata.
             if (GetBlockAt(lookup, wx, wy + 1, wz) != waterId)
             {
                 var topTile = GetFlowVector(lookup, waterId, wx, wy, wz) ? sideTile : baseTile;
-                int topLight = Math.Max(lighting.GetLight(wx, wy, wz), lighting.GetLight(wx, wy + 1, wz));
+                int topLight = Math.Max(lighting.GetLight(wx, ly, wz), lighting.GetLight(wx, ly + 1, wz));
                 double brightness = 1.0 * ChunkLighting.Brightness(topLight);
                 mesh.Add(new MeshFace(
                     new Point3D(wx + 0, wy + h00, wz + 0),
@@ -256,7 +259,7 @@ namespace CubeApp
             int below = GetBlockAt(lookup, wx, wy - 1, wz);
             if (below != waterId && (!BlockRegistry.IsSolid(below) || BlockRegistry.IsTransparent(below)))
             {
-                double brightness = 0.5 * ChunkLighting.Brightness(lighting.GetLight(wx, wy - 1, wz));
+                double brightness = 0.5 * ChunkLighting.Brightness(lighting.GetLight(wx, ly - 1, wz));
                 mesh.Add(new MeshFace(
                     new Point3D(wx + 0, wy + 0, wz + 0),
                     new Point3D(wx + 1, wy + 0, wz + 0),
@@ -305,11 +308,11 @@ namespace CubeApp
                 return;
             }
 
-            double brightness = shade * ChunkLighting.Brightness(lighting.GetLight(neighborX, wy, neighborZ));
+            double brightness = shade * ChunkLighting.Brightness(lighting.GetLight(neighborX, wy - ChunkManager.WorldOriginY, neighborZ));
             var blockPos = new Point3D(wx, wy, wz);
             mesh.Add(new MeshFace(
                 p0, p1, p2, p3,
-                tile, normal, blockPos, (float)brightness, 1, 1, alpha));
+                tile, normal, blockPos, (float)brightness, 1, 1, alpha, anchorVBottom: true));
         }
 
         // ---- Fluid world reads (bounded by the chunk set the worker handed us) ----------

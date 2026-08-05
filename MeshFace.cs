@@ -17,8 +17,15 @@ namespace CubeApp
         public int TileWidth { get; }
         public int TileHeight { get; }
         public float Alpha { get; }
+        /// <summary>
+        /// When true (fluid side walls), the tile's bottom edge is anchored to the lowest face
+        /// vertex and the fluid surface cuts across the tile, matching Infdev's
+        /// RenderBlocks.renderBlockFluids. Without it, a partial-height wall shows the tile's
+        /// TOP strip instead of its bottom portion.
+        /// </summary>
+        public bool AnchorVBottom { get; }
 
-        public MeshFace(Point3D v0, Point3D v1, Point3D v2, Point3D v3, TextureRect srcRect, Point3D normal, Point3D blockPosition, float shade, int tileWidth, int tileHeight, float alpha = 1f)
+        public MeshFace(Point3D v0, Point3D v1, Point3D v2, Point3D v3, TextureRect srcRect, Point3D normal, Point3D blockPosition, float shade, int tileWidth, int tileHeight, float alpha = 1f, bool anchorVBottom = false)
         {
             V0 = v0;
             V1 = v1;
@@ -31,6 +38,7 @@ namespace CubeApp
             TileWidth = tileWidth;
             TileHeight = tileHeight;
             Alpha = alpha;
+            AnchorVBottom = anchorVBottom;
         }
     }
 }
