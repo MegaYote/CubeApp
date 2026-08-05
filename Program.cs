@@ -67,6 +67,7 @@ namespace CubeApp
         private int selectedBlock = 0; // numeric block id (BlockRegistry), set in ctor once the registry is loaded
         private int selectedSlot;
         private const int HotbarSlots = 10;
+        private readonly int[] _hotbarBlocks = new int[HotbarSlots];
         private bool inventoryOpen;
         private bool thirdPersonView;
         private float playerWalkPhase;
@@ -78,7 +79,11 @@ namespace CubeApp
             // Load block definitions first - chunks, terrain gen, mesher and the hotbar all read
             // numeric ids out of the registry, so it has to be ready before any block is touched.
             BlockRegistry.LoadDefault();
-            selectedBlock = Math.Max(0, BlockRegistry.Hotbar.Count > 0 ? BlockRegistry.Hotbar[0] : 0);
+            for (int i = 0; i < HotbarSlots; i++)
+            {
+                _hotbarBlocks[i] = i < BlockRegistry.Hotbar.Count ? BlockRegistry.Hotbar[i] : BlockRegistry.AirId;
+            }
+            selectedBlock = Math.Max(0, _hotbarBlocks[0]);
             manager = new ChunkManager(new InfdevChunkProvider(20100630));
             entityManager = new EntityManager(manager);
             MobRegistry.DiscoverMobs(AppDomain.CurrentDomain.BaseDirectory);
@@ -196,7 +201,21 @@ namespace CubeApp
                 // Player edits already mesh immediately via MeshChunkImmediate();
                 // Background MeshWorker handles all other meshing.
                 gpuRenderer.ProcessPendingPriorityMeshes();
+                gpuRenderer.SetUiInputSnapshot(snapshot);
                 gpuRenderer.Render();
+
+                // Apply any block the player picked from the inventory (renderer queues it during
+                // its ImGui pass): drop it into the currently selected hotbar slot and close.
+                while (gpuRenderer.TryTakeInventorySelection(out int invBlock))
+                {
+                    if (invBlock > 0 && invBlock < BlockRegistry.Count)
+                    {
+                        _hotbarBlocks[selectedSlot] = invBlock;
+                        selectedBlock = invBlock;
+                    }
+                    inventoryOpen = false;
+                    EnableMouseLook();
+                }
             }
                     var t5 = stageStopwatch.ElapsedTicks;
                     lastRenderMs = (t5 - t4) * 1000f / Stopwatch.Frequency;
@@ -222,7 +241,18 @@ namespace CubeApp
                 return;
             }
             if (frameInput.ToggleDebugPressed) showFps = !showFps;
-            if (frameInput.ToggleInventoryPressed) inventoryOpen = !inventoryOpen;
+            if (frameInput.ToggleInventoryPressed)
+            {
+                inventoryOpen = !inventoryOpen;
+                if (inventoryOpen)
+                {
+                    DisableMouseLook(); // free the cursor for the inventory
+                }
+                else
+                {
+                    EnableMouseLook();
+                }
+            }
             if (frameInput.CycleRenderDistancePressed) CycleRenderDistance();
             if (frameInput.SpawnMobPressed) SpawnDuck();
             if (frameInput.SpawnCoyotePressed) SpawnCoyote();
@@ -287,7 +317,7 @@ namespace CubeApp
         {
             if (slot < 0 || slot >= HotbarSlots) return;
             selectedSlot = slot;
-            if (slot < BlockRegistry.Hotbar.Count) selectedBlock = BlockRegistry.Hotbar[slot];
+            selectedBlock = _hotbarBlocks[slot];
         }
 
         private void StepSimulation(TickInputState tickInput, float deltaSeconds)
@@ -566,12 +596,12 @@ namespace CubeApp
             if (pickResult.HasValue) highlightQuad = ComputeHighlightWorldQuad(pickResult.Value);
             return new HudState
             {
-                ShowDebug = showFps, Fps = lastFps, UpdateMs = lastUpdateMs, MeshMs = lastMeshMs,
-                UploadMs = lastUploadMs, RenderMs = lastRenderMs,
+                ShowDebug = showFps, InventoryOpen = inventoryOpen, Fps = lastFps, UpdateMs = lastUpdateMs,
+                MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                 FacingText = $"{GetCompassDirection(cameraYaw)} ({NormalizeYaw(cameraYaw):0.0} deg)",
                 SelectedBlockText = $"Selected: {BlockRegistry.GetName(selectedBlock)}",
                 RenderDistanceText = $"Render dist: {RenderDistanceName} ({ChunkRenderRadius})",
-                SelectedSlot = selectedSlot, HighlightWorldQuad = highlightQuad,
+                SelectedSlot = selectedSlot, Hotbar = _hotbarBlocks, HighlightWorldQuad = highlightQuad,
                 PlayerX = cameraPosition.X,
                 PlayerY = cameraPosition.Y,
                 PlayerZ = cameraPosition.Z,
