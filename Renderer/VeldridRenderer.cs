@@ -87,6 +87,15 @@ namespace CubeApp.Renderer
         private float _farPlane = 100f;
         private float _atlasWidth = 256f;
         private float _atlasHeight = 256f;
+        // CPU copy of the atlas pixels (for generating hotbar/inventory block icons) and the
+        // icon atlas texture built from them (classic MC-style isometric cubes per block).
+        private byte[] _atlasRgba = Array.Empty<byte>();
+        private int _atlasPixelsW;
+        private int _atlasPixelsH;
+        private Texture? _iconAtlasTexture;
+        private TextureView? _iconAtlasView;
+        private IntPtr _iconImGuiId;
+        private Vector4[]? _blockIconUv;
 
         // Chunk world mesh: one shared growable vertex/index buffer pair drawn with a single
         // DrawIndexedIndirect call (one IndirectDrawIndexedArguments per live chunk). Chunk-local
@@ -176,6 +185,9 @@ namespace CubeApp.Renderer
                     int h = image.Height;
                     _atlasWidth = w;
                     _atlasHeight = h;
+                    _atlasPixelsW = w;
+                    _atlasPixelsH = h;
+                    _atlasRgba = (byte[])image.Data.Clone();
 
                     var texDesc = TextureDescription.Texture2D((uint)w, (uint)h, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
                     _atlasTexture = _gd.ResourceFactory.CreateTexture(texDesc);
@@ -208,6 +220,9 @@ namespace CubeApp.Renderer
                 _sc.Framebuffer.OutputDescription,
                 Math.Max(1, (int)_sc.Framebuffer.Width),
                 Math.Max(1, (int)_sc.Framebuffer.Height));
+
+            // Build the isometric block-icon atlas (needs the ImGui renderer for its texture binding).
+            BuildIconAtlas();
         }
 
         private static byte[]? LoadAtlasBytes()
@@ -341,6 +356,116 @@ namespace CubeApp.Renderer
             {
                 // ignore; player rendering is skipped if the texture fails to load
             }
+        }
+
+        // Renders a classic MC-style isometric cube icon for every block into one RGBA texture,
+        // then exposes it to ImGui for the hotbar/inventory. Uses separate horizontal (a) and
+        // vertical (b) half-extents so the cube is a chunky ~1.5:1 ratio (like MC), showing the
+        // top face as a diamond and the front-left/right faces as the two lower parallelograms.
+        private void BuildIconAtlas()
+        {
+            if (_atlasRgba.Length == 0) return;
+            const int iconSize = 48;
+            const int cols = 12;
+            int blockCount = BlockRegistry.Count;
+            int rows = Math.Max(1, (int)Math.Ceiling((blockCount - 1) / (double)cols));
+            int atlasW = cols * iconSize;
+            int atlasH = rows * iconSize;
+            var iconData = new byte[atlasW * atlasH * 4];
+
+            // Exact Cubuild/Classic MC block-icon proportions (from drawProjectedBlockIcon,
+            // scaled from its 64-unit canvas down to our 48px cells):
+            //   top  = (24,4.5)(37.5,11.25)(24,18)(10.5,11.25)
+            //   left = (10.5,11.25)(24,18)(24,37.5)(10.5,30.75)
+            //   right= (24,18)(37.5,11.25)(37.5,30.75)(24,37.5)
+            const float cx = 24f;                 // cube center x
+            const float halfW = 13.5f;            // horizontal half-extent
+            const float diamondTopY = 4.5f;       // diamond top vertex
+            const float diamondMidY = 11.25f;     // diamond left/right vertices
+            const float diamondBottomY = 18f;     // diamond bottom vertex
+            const float cubeBottomY = 37.5f;      // bottom of the side faces
+            const float sideDrop = cubeBottomY - diamondBottomY;      // 19.5
+            const float diamondHalfDrop = diamondBottomY - diamondMidY; // 6.75
+            const float topDenom = 2f * halfW;    // 27
+            _blockIconUv = new Vector4[blockCount];
+
+            for (int id = 1; id < blockCount; id++)
+            {
+                var def = BlockRegistry.GetById(id);
+                var topTile = def.FaceTexture(new Point3D(0, 1, 0));
+                var leftTile = def.FaceTexture(new Point3D(0, 0, -1));
+                var rightTile = def.FaceTexture(new Point3D(1, 0, 0));
+
+                int cellX = ((id - 1) % cols) * iconSize;
+                int cellY = ((id - 1) / cols) * iconSize;
+
+                for (int py = 0; py < iconSize; py++)
+                {
+                    for (int px = 0; px < iconSize; px++)
+                    {
+                        int di = ((cellY + py) * atlasW + (cellX + px)) * 4;
+
+                        // Right face: u from front toward back, v straight down.
+                        float u = (px - cx) / halfW;
+                        if (u >= 0f && u <= 1f)
+                        {
+                            float v = (py - diamondBottomY + u * diamondHalfDrop) / sideDrop;
+                            if (v >= 0f && v <= 1f)
+                            {
+                                SampleTile(iconData, di, rightTile, u, v);
+                                continue;
+                            }
+                        }
+
+                        // Front-left face: u from back toward front, v straight down.
+                        u = (px - cx + halfW) / halfW;
+                        if (u >= 0f && u <= 1f)
+                        {
+                            float v = (py - diamondMidY - u * diamondHalfDrop) / sideDrop;
+                            if (v >= 0f && v <= 1f)
+                            {
+                                SampleTile(iconData, di, leftTile, u, v);
+                                continue;
+                            }
+                        }
+
+                        // Top face: diamond (affine inverse of the top parallelogram).
+                        float su = px - cx;
+                        float sv = py - diamondTopY;
+                        u = (su + 2f * sv) / topDenom;
+                        float tv = (2f * sv - su) / topDenom;
+                        if (u >= 0f && u <= 1f && tv >= 0f && tv <= 1f)
+                        {
+                            SampleTile(iconData, di, topTile, u, tv);
+                        }
+                    }
+                }
+
+                _blockIconUv[id] = new Vector4(
+                    cellX / (float)atlasW, cellY / (float)atlasH,
+                    iconSize / (float)atlasW, iconSize / (float)atlasH);
+            }
+
+            _iconAtlasTexture = _gd.ResourceFactory.CreateTexture(TextureDescription.Texture2D(
+                (uint)atlasW, (uint)atlasH, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled));
+            _gd.UpdateTexture(_iconAtlasTexture, iconData, 0, 0, 0, (uint)atlasW, (uint)atlasH, 1, 0, 0);
+            _iconAtlasView = _gd.ResourceFactory.CreateTextureView(_iconAtlasTexture);
+            if (_imguiRenderer != null)
+            {
+                _iconImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _iconAtlasView);
+            }
+        }
+
+        // Copies one nearest-sampled texel from the terrain atlas into the icon buffer.
+        private void SampleTile(byte[] dst, int di, TextureRect tile, float u, float v)
+        {
+            int tx = tile.X + (int)(u * 15.999f);
+            int ty = tile.Y + (int)(v * 15.999f);
+            int si = (ty * _atlasPixelsW + tx) * 4;
+            dst[di + 0] = _atlasRgba[si + 0];
+            dst[di + 1] = _atlasRgba[si + 1];
+            dst[di + 2] = _atlasRgba[si + 2];
+            dst[di + 3] = _atlasRgba[si + 3];
         }
 
         private void CreatePipeline()
@@ -1435,8 +1560,22 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
 
                 if (i < BlockRegistry.Hotbar.Count)
                 {
-                    uint iconColor = BlockRegistry.MapColorOf(BlockRegistry.Hotbar[i]);
-                    drawList.AddRectFilled(topLeft + new Vector2(8, 8), topLeft + new Vector2(40, 40), iconColor);
+                    int bid = BlockRegistry.Hotbar[i];
+                    if (_iconImGuiId != IntPtr.Zero && _blockIconUv != null && bid < _blockIconUv.Length)
+                    {
+                        var uv = _blockIconUv[bid];
+                        drawList.AddImage(
+                            _iconImGuiId,
+                            topLeft + new Vector2(2, 2),
+                            topLeft + new Vector2(46, 46),
+                            new Vector2(uv.X, uv.Y),
+                            new Vector2(uv.X + uv.Z, uv.Y + uv.W));
+                    }
+                    else
+                    {
+                        uint iconColor = BlockRegistry.MapColorOf(bid);
+                        drawList.AddRectFilled(topLeft + new Vector2(8, 8), topLeft + new Vector2(40, 40), iconColor);
+                    }
                 }
 
                 drawList.AddText(topLeft + new Vector2(4, 2), textColor, ((i + 1) % 10).ToString());
@@ -1512,6 +1651,9 @@ private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushor
             _modelPipeline?.Dispose();
             _pipeline?.Dispose();
             _transparentPipeline?.Dispose();
+            if (_iconAtlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_iconAtlasTexture);
+            _iconAtlasView?.Dispose();
+            _iconAtlasTexture?.Dispose();
             _sc?.Dispose();
             _gd?.Dispose();
         }
