@@ -21,6 +21,8 @@
     <EmbeddedResource Include="player.png" />
     <!-- Data-driven block definitions (texture tiles, flags, hotbar, map colours). -->
     <EmbeddedResource Include="blocks.json" />
+    <!-- Title-screen logo graphic. -->
+    <EmbeddedResource Include="cubuild.png" />
   </ItemGroup>
   <ItemGroup>
     <!-- Copy GLB models to output -->
