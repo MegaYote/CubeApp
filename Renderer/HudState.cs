@@ -20,6 +20,7 @@ namespace CubeApp.Renderer
         public string SelectedBlockText;
         public string RenderDistanceText;
         public int SelectedSlot;
+        public int WorldSeed;
         /// <summary>Current per-slot hotbar contents (block ids); may differ from the default list
         /// once the player drops inventory picks into slots.</summary>
         public IReadOnlyList<int> Hotbar;
@@ -59,6 +60,7 @@ namespace CubeApp.Renderer
             SelectedBlockText = string.Empty,
             RenderDistanceText = string.Empty,
             SelectedSlot = 0,
+            WorldSeed = 0,
             Hotbar = Array.Empty<int>(),
             HighlightWorldQuad = null,
             PlayerChunkX = 0,
