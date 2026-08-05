@@ -683,8 +683,10 @@ namespace CubeApp
 
                 // The shape-aware pick can land on an ALREADY OCCUPIED cell (the ray passed
                 // through the empty half of a partial block). Filling the opposite half of a
-                // same-material slab merges into a full block; anything else can't be placed into.
-                if (manager.TryGetLoadedBlockAndMeta(place.x, place.y, place.z, out var oldId, out _) && oldId != BlockRegistry.AirId)
+                // same-material slab merges into a full block; water is replaceable (placing
+                // displaces it, like MC); anything else can't be placed into.
+                if (manager.TryGetLoadedBlockAndMeta(place.x, place.y, place.z, out var oldId, out _)
+                    && oldId != BlockRegistry.AirId && !IsReplaceableFluid(oldId))
                 {
                     if (TryFillSlabCell(place.x, place.y, place.z, blockToPlace)) return;
                     return; // occupied by a block we can't merge with
@@ -696,8 +698,9 @@ namespace CubeApp
             }
             else
             {
-                // General safety: never overwrite an occupied cell.
-                if (manager.TryGetLoadedBlockAndMeta(place.x, place.y, place.z, out var occupied, out _) && occupied != BlockRegistry.AirId)
+                // General safety: never overwrite an occupied cell (water is replaceable).
+                if (manager.TryGetLoadedBlockAndMeta(place.x, place.y, place.z, out var occupied, out _)
+                    && occupied != BlockRegistry.AirId && !IsReplaceableFluid(occupied))
                 {
                     return;
                 }
@@ -749,6 +752,9 @@ namespace CubeApp
             needsMeshUpdate = true;
             return true;
         }
+
+        // Fluids that blocks can be placed into (displacing them), but that can't be picked/dug.
+        private static bool IsReplaceableFluid(int id) => id == BlockRegistry.GetId("water");
 
         private static string SlabMaterialOf(int id)
         {
@@ -1075,8 +1081,11 @@ namespace CubeApp
                 // Test the block's ACTUAL shape (full cube, slab half-box, stair boxes, small
                 // cross-plant box). A ray that passes through the empty part of a partial block
                 // (e.g. the air above a bottom slab) continues to the next cell instead of
-                // stopping at the cell.
-                if (manager.TryGetLoadedBlockAndMeta(currentX, currentY, currentZ, out var block, out var meta) && block != BlockRegistry.AirId)
+                // stopping at the cell. Fluids (water) are never pickable - the ray passes
+                // straight through to the block behind/underneath, like Infdev.
+                if (manager.TryGetLoadedBlockAndMeta(currentX, currentY, currentZ, out var block, out var meta)
+                    && block != BlockRegistry.AirId
+                    && block != BlockRegistry.GetId("water"))
                 {
                     double cellExit = Math.Min(tMaxX, Math.Min(tMaxY, tMaxZ));
                     var boxes = GetBlockCollisionBoxes(block, meta);
