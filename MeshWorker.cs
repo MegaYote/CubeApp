@@ -106,7 +106,12 @@ namespace CubeApp
                                     continue;
                                 }
 
-                                // Do the meshing work
+                                // Do the meshing work. The target chunk plus its loaded neighbours:
+                                // cardinal neighbours for greedy border occlusion, and DIAGONAL
+                                // neighbours for the water pass (a cell's corner heights sample the
+                                // 2x2 block neighbourhood around each corner, which crosses into the
+                                // diagonal chunk at a chunk corner). Missing diagonals would make
+                                // water surfaces dip at the seams where four chunks meet.
                                 var chunksToPass = new List<Chunk> { chunk };
                                 var chunkX = chunk.OriginX / ChunkManager.ChunkSize;
                                 var chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
@@ -114,15 +119,21 @@ namespace CubeApp
                                 if (_manager.TryGetLoadedChunk(new ChunkCoordinates(chunkX + 1, chunkZ), out var right)) chunksToPass.Add(right);
                                 if (_manager.TryGetLoadedChunk(new ChunkCoordinates(chunkX, chunkZ - 1), out var back)) chunksToPass.Add(back);
                                 if (_manager.TryGetLoadedChunk(new ChunkCoordinates(chunkX, chunkZ + 1), out var front)) chunksToPass.Add(front);
+                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(chunkX - 1, chunkZ - 1), out var diagNW)) chunksToPass.Add(diagNW);
+                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(chunkX + 1, chunkZ - 1), out var diagNE)) chunksToPass.Add(diagNE);
+                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(chunkX - 1, chunkZ + 1), out var diagSW)) chunksToPass.Add(diagSW);
+                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(chunkX + 1, chunkZ + 1), out var diagSE)) chunksToPass.Add(diagSE);
 
                                 var renderer = _getRenderer();
                                 var faces = Mesher.GenerateMesh(chunksToPass);
 
-                                // Lock to ensure atomic mesh update
+                                // Lock to ensure atomic mesh update. Mesher.GenerateMesh always
+                                // returns a List<MeshFace>, and the worker owns it exclusively here,
+                                // so hand the instance straight to the chunk instead of copying it.
                                 IReadOnlyList<MeshFace> facesToUpload;
                                 lock (chunk.MeshLock)
                                 {
-                                    chunk.MeshFaces = new List<MeshFace>(faces);
+                                    chunk.MeshFaces = faces as List<MeshFace> ?? new List<MeshFace>(faces);
                                     chunk.MeshVersion++;
                                     chunk.NeedsRemesh = false;
                                     facesToUpload = chunk.MeshFaces;
