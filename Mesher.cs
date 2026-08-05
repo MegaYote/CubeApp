@@ -130,8 +130,8 @@ namespace CubeApp
                                     ? (rawPosX != null ? rawPosX[jv * height + iu] : BlockRegistry.AirId)
                                     : raw[((slice + 1) * depth + jv) * height + iu];
                                 int cell = iu * dimV + jv;
-                                if (A != WaterId && !BlockRegistry.IsCross(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + slice + 1, iu, chunk.OriginZ + jv));
-                                if (B != WaterId && !BlockRegistry.IsCross(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + slice, iu, chunk.OriginZ + jv));
+                                if (A != WaterId && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + slice + 1, iu, chunk.OriginZ + jv));
+                                if (B != WaterId && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + slice, iu, chunk.OriginZ + jv));
                             }
                         }
                     }
@@ -146,8 +146,8 @@ namespace CubeApp
                                 int A = raw[baseIdx];
                                 int B = lastSlice ? BlockRegistry.AirId : raw[baseIdx + 1];
                                 int cell = iu * dimV + jv;
-                                if (A != WaterId && !BlockRegistry.IsCross(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu));
-                                if (B != WaterId && !BlockRegistry.IsCross(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + jv, slice, chunk.OriginZ + iu));
+                                if (A != WaterId && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu));
+                                if (B != WaterId && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + jv, slice, chunk.OriginZ + iu));
                             }
                         }
                     }
@@ -163,8 +163,8 @@ namespace CubeApp
                                     ? (rawPosZ != null ? rawPosZ[iu * depth * height + jv] : BlockRegistry.AirId)
                                     : raw[(iu * depth + slice + 1) * height + jv];
                                 int cell = iu * dimV + jv;
-                                if (A != WaterId && !BlockRegistry.IsCross(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice + 1));
-                                if (B != WaterId && !BlockRegistry.IsCross(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice));
+                                if (A != WaterId && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice + 1));
+                                if (B != WaterId && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice));
                             }
                         }
                     }
@@ -183,6 +183,9 @@ namespace CubeApp
             // Cross pass: saplings/flowers/mushrooms render as two crossed billboard quads.
             EmitCrossFaces(chunk, chunkLookup, lighting, mesh);
 
+            // Special-solid pass: slabs and stairs render as partial boxes (not full cubes).
+            EmitSpecialFaces(chunk, chunkLookup, lighting, mesh);
+
             return mesh;
         }
 
@@ -194,7 +197,7 @@ namespace CubeApp
         /// </summary>
         private static bool RendersToward(int xId, int nId)
             => xId != BlockRegistry.AirId
-               && (nId == BlockRegistry.AirId || BlockRegistry.IsTransparent(nId))
+               && (nId == BlockRegistry.AirId || BlockRegistry.IsTransparent(nId) || BlockRegistry.IsPartialShape(nId))
                && !(BlockRegistry.IsTransparent(nId) && nId == xId);
 
         // ---- Fluid (water) pass -----------------------------------------------------
@@ -368,6 +371,123 @@ namespace CubeApp
                             tile, new Point3D(1, 0, 1), blockPos, (float)brightness, 1, 1, alpha));
                     }
                 }
+            }
+        }
+
+        // ---- Special-solid pass (slabs, stairs) ---------------------------------------
+
+        // Slabs and stairs render as partial boxes, not full cubes. Each visible face is emitted
+        // with the greedy pass's exact vertex winding (FaceVertices) so back-face culling keeps
+        // the correct side, and the face's light is sampled from the empty cell it faces into.
+        private static void EmitSpecialFaces(Chunk chunk, Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh)
+        {
+            byte[] raw = chunk.RawBlocks;
+            int height = chunk.Height;
+            int depth = chunk.Depth;
+            int width = chunk.Width;
+
+            for (int x = 0; x < width; x++)
+            {
+                for (int z = 0; z < depth; z++)
+                {
+                    int column = (x * depth + z) * height;
+                    for (int y = 0; y < height; y++)
+                    {
+                        int id = raw[column + y];
+                        if (!BlockRegistry.IsPartialShape(id)) continue;
+                        int wx = chunk.OriginX + x;
+                        int wy = chunk.OriginY + y;
+                        int wz = chunk.OriginZ + z;
+
+                        if (BlockRegistry.IsSlab(id))
+                        {
+                            EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0, 0, 0, 1, 0.5, 1);
+                        }
+                        else if (BlockRegistry.IsSlabTop(id))
+                        {
+                            EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0, 0.5, 0, 1, 1, 1);
+                        }
+                        else // stairs - facing from metadata, two boxes (Infdev layout)
+                        {
+                            int meta = chunk.GetMeta(x, y, z);
+                            switch (meta)
+                            {
+                                case 0:
+                                    EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0, 0, 0, 0.5, 0.5, 1);
+                                    EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0.5, 0, 0, 1, 1, 1);
+                                    break;
+                                case 1:
+                                    EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0, 0, 0, 0.5, 1, 1);
+                                    EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0.5, 0, 0, 1, 0.5, 1);
+                                    break;
+                                case 2:
+                                    EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0, 0, 0, 1, 0.5, 0.5);
+                                    EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0, 0, 0.5, 1, 1, 1);
+                                    break;
+                                default: // 3
+                                    EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0, 0, 0, 1, 1, 0.5);
+                                    EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0, 0, 0.5, 1, 0.5, 1);
+                                    break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private static void EmitBox(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh,
+            int wx, int wy, int wz, int blockId, double minX, double minY, double minZ, double maxX, double maxY, double maxZ)
+        {
+            var def = BlockRegistry.GetById(blockId);
+            for (int i = 0; i < FaceOffsets.Length; i++)
+            {
+                var off = FaceOffsets[i];
+                int nx = wx + off.dx;
+                int ny = wy + off.dy;
+                int nz = wz + off.dz;
+
+                // A full opaque cube neighbour only hides this face when the face lies ON the
+                // block-cell boundary (e.g. a slab's bottom/sides). Partial faces inside the cell
+                // (a slab's top, a stair's riser) face their own cell's space and are never
+                // occluded by a neighbouring cube - otherwise a block above a slab would wrongly
+                // make the slab's top vanish.
+                bool onCellBoundary =
+                    (off.dx > 0 && maxX >= 1.0 - 1e-6) || (off.dx < 0 && minX <= 1e-6) ||
+                    (off.dy > 0 && maxY >= 1.0 - 1e-6) || (off.dy < 0 && minY <= 1e-6) ||
+                    (off.dz > 0 && maxZ >= 1.0 - 1e-6) || (off.dz < 0 && minZ <= 1e-6);
+                if (onCellBoundary)
+                {
+                    int nId = GetBlockAt(lookup, nx, ny, nz);
+                    if (nId != BlockRegistry.AirId && BlockRegistry.IsOpaque(nId) && BlockRegistry.IsSolid(nId)
+                        && !BlockRegistry.IsPartialShape(nId) && !BlockRegistry.IsCross(nId))
+                    {
+                        continue;
+                    }
+                }
+
+                int nly = ny - ChunkManager.WorldOriginY;
+                double shade = off.dy > 0 ? 1.0 : (off.dy < 0 ? 0.5 : (off.dx != 0 ? 0.6 : 0.8));
+                double brightness = shade * ChunkLighting.Brightness(lighting.GetLight(nx, nly, nz));
+
+                var normal = new Point3D(off.dx, off.dy, off.dz);
+                var verts = FaceVertices[i];
+                var p0 = new Point3D(wx + minX + (maxX - minX) * verts[0].X, wy + minY + (maxY - minY) * verts[0].Y, wz + minZ + (maxZ - minZ) * verts[0].Z);
+                var p1 = new Point3D(wx + minX + (maxX - minX) * verts[1].X, wy + minY + (maxY - minY) * verts[1].Y, wz + minZ + (maxZ - minZ) * verts[1].Z);
+                var p2 = new Point3D(wx + minX + (maxX - minX) * verts[2].X, wy + minY + (maxY - minY) * verts[2].Y, wz + minZ + (maxZ - minZ) * verts[2].Z);
+                var p3 = new Point3D(wx + minX + (maxX - minX) * verts[3].X, wy + minY + (maxY - minY) * verts[3].Y, wz + minZ + (maxZ - minZ) * verts[3].Z);
+
+                // The FaceVertices table's +Z/-Z entries are wound opposite their normals (the
+                // greedy pass corrects them); do the same here so back-face culling keeps the
+                // front faces visible on slabs/stairs.
+                if (Dot(Cross(p1 - p0, p2 - p0), normal) < 0)
+                {
+                    var tmp = p1;
+                    p1 = p3;
+                    p3 = tmp;
+                }
+
+                var src = def.FaceTexture(normal);
+                mesh.Add(new MeshFace(p0, p1, p2, p3, src, normal, new Point3D(wx, wy, wz), (float)brightness, 1, 1, 1f));
             }
         }
 

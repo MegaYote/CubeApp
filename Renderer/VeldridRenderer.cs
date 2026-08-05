@@ -1730,6 +1730,7 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             int perRow = Math.Max(1, (int)(avail / cellW));
             for (int id = 1; id < BlockRegistry.Count; id++)
             {
+                if (!BlockRegistry.IsInInventory(id)) continue;
                 var uv = _blockIconUv[id];
                 string name = BlockRegistry.GetById(id).DisplayName;
                 ImGui.PushID(id);
