@@ -60,7 +60,7 @@ namespace CubeApp
         private const double MaxFrameDeltaSeconds = 0.25;
         private static readonly int[] RenderDistances = { 16, 8, 4, 2 };
         private static readonly string[] RenderDistanceNames = { "Far", "Normal", "Short", "Tiny" };
-        private int renderDistanceIndex = 1;
+        private int renderDistanceIndex = 0; // Far by default, like Infdev
         private int ChunkRenderRadius => RenderDistances[renderDistanceIndex];
         private string RenderDistanceName => RenderDistanceNames[renderDistanceIndex];
         private const int SpawnSyncRadius = 2;

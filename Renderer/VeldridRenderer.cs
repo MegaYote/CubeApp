@@ -18,6 +18,12 @@ namespace CubeApp.Renderer
         private ResourceLayout _projViewLayout;
         private ResourceSet _projViewSet;
         private ResourceLayout _textureLayout;
+        // Distance fog (Infdev-style): a per-frame uniform block + resource set bound to the world
+        // pipelines. Linear from fogStart (25% of the far plane) to fogEnd (the far plane).
+        private DeviceBuffer _fogBuffer;
+        private ResourceLayout _fogLayout;
+        private ResourceSet _fogSet;
+        private readonly float[] _fogParams = new float[12];
         private Texture _atlasTexture;
         private TextureView _atlasView;
         private Sampler _atlasSampler;
@@ -571,14 +577,21 @@ layout(location=3) in vec4 aColor;
 layout(location=0) out vec2 vLocalUV;
 layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
+layout(location=3) out vec3 vWorldPos;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
-void main() { vLocalUV = aLocalUV; vTileRect = aTileRect; vColor = aColor; gl_Position = projView * vec4(aPosition, 1.0); }";
+void main() { vLocalUV = aLocalUV; vTileRect = aTileRect; vColor = aColor; vWorldPos = aPosition; gl_Position = projView * vec4(aPosition, 1.0); }";
 
             string fsCode = @"#version 450
 layout(location=0) in vec2 vLocalUV;
 layout(location=1) in vec4 vTileRect;
 layout(location=2) in vec4 vColor;
+layout(location=3) in vec3 vWorldPos;
 layout(set=1, binding=0) uniform sampler2D uAtlas;
+layout(set=2, binding=0) uniform FogParams {
+    vec4 fogColor;   // rgb + pad
+    vec2 fogRange;   // start, end
+    vec4 cameraPos;  // xyz + pad
+};
 layout(location=0) out vec4 outColor;
 void main() {
     // fract() tiles the same atlas tile regardless of how many blocks the face spans.
@@ -587,6 +600,10 @@ void main() {
     // Block alpha (vColor.a) governs opacity - transparent tiles (water) are tinted by their
     // configured alpha; opaque blocks (alpha 1) sample the tile fully.
     outColor = vec4(tex.rgb * vColor.rgb, vColor.a);
+    // Linear distance fog, like Infdev: fully fogged at fogRange.y, clear at fogRange.x.
+    float dist = length(vWorldPos - cameraPos.xyz);
+    float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
+    outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);
 }";
 
             var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
@@ -615,6 +632,12 @@ void main() {
                 new ResourceLayoutElementDescription("uAtlas", ResourceKind.TextureReadOnly, ShaderStages.Fragment),
                 new ResourceLayoutElementDescription("uAtlasSampler", ResourceKind.Sampler, ShaderStages.Fragment)));
 
+            // Distance fog uniform block (set 2), shared by all world pipelines.
+            _fogLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
+                new ResourceLayoutElementDescription("FogParams", ResourceKind.UniformBuffer, ShaderStages.Fragment)));
+            _fogBuffer = factory.CreateBuffer(new BufferDescription(48, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _fogSet = factory.CreateResourceSet(new ResourceSetDescription(_fogLayout, _fogBuffer));
+
             var pipelineDesc = new GraphicsPipelineDescription()
             {
                 // Alpha blend so blocks flagged transparent (water) tint see-through; opaque tiles
@@ -623,7 +646,7 @@ void main() {
                 DepthStencilState = new DepthStencilStateDescription(true, true, ComparisonKind.LessEqual),
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
-                ResourceLayouts = new[] { _projViewLayout, _textureLayout },
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
                 ShaderSet = shaderSet,
                 Outputs = _sc.Framebuffer.OutputDescription
             };
@@ -639,13 +662,22 @@ void main() {
 layout(location=0) in vec2 vLocalUV;
 layout(location=1) in vec4 vTileRect;
 layout(location=2) in vec4 vColor;
+layout(location=3) in vec3 vWorldPos;
 layout(set=1, binding=0) uniform sampler2D uAtlas;
+layout(set=2, binding=0) uniform FogParams {
+    vec4 fogColor;
+    vec2 fogRange;
+    vec4 cameraPos;
+};
 layout(location=0) out vec4 outColor;
 void main() {
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
     vec4 tex = texture(uAtlas, atlasUV);
     if (tex.a < 0.5) discard; // sprite background falls away; no blending
     outColor = vec4(tex.rgb * vColor.rgb, 1.0);
+    float dist = length(vWorldPos - cameraPos.xyz);
+    float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
+    outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);
 }";
             var cutoutFsSpirv = SpirvCompilation.CompileGlslToSpirv(cutoutFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
             var cutoutFsDesc = new ShaderDescription(ShaderStages.Fragment, cutoutFsSpirv.SpirvBytes, "main");
@@ -657,7 +689,7 @@ void main() {
                 DepthStencilState = new DepthStencilStateDescription(true, true, ComparisonKind.LessEqual),
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
-                ResourceLayouts = new[] { _projViewLayout, _textureLayout },
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
                 ShaderSet = cutoutShaderSet,
                 Outputs = _sc.Framebuffer.OutputDescription
             });
@@ -670,7 +702,7 @@ void main() {
                 DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
-                ResourceLayouts = new[] { _projViewLayout, _textureLayout },
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
                 ShaderSet = cutoutShaderSet,
                 Outputs = _sc.Framebuffer.OutputDescription
             });
@@ -685,7 +717,7 @@ void main() {
                 DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
-                ResourceLayouts = new[] { _projViewLayout, _textureLayout },
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
                 ShaderSet = shaderSet,
                 Outputs = _sc.Framebuffer.OutputDescription
             });
@@ -931,7 +963,8 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             var cl = _commandList;
             cl.Begin();
             cl.SetFramebuffer(_sc.Framebuffer);
-            cl.ClearColorTarget(0, RgbaFloat.CornflowerBlue);
+            // Infdev's daytime sky (World.skyColor = 0x88BBFF).
+            cl.ClearColorTarget(0, new RgbaFloat(136f / 255f, 187f / 255f, 1f, 1f));
             cl.ClearDepthStencil(1f);
 
             // Advance the block-break particle simulation with the real frame delta.
@@ -940,6 +973,8 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             _lastParticleTicks = now;
             if (particleDt > 0.1f) particleDt = 0.1f;
             if (_particleCount > 0) UpdateParticles(particleDt);
+
+            UpdateFog();
 
             cl.SetPipeline(_pipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
@@ -1090,6 +1125,7 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             cl.SetPipeline(_pipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
             if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
+            cl.SetGraphicsResourceSet(2, _fogSet);
             cl.SetVertexBuffer(0, _particleVertexBuffer);
             cl.SetIndexBuffer(_particleIndexBuffer, IndexFormat.UInt16);
             cl.DrawIndexed((uint)indexCount);
@@ -1111,6 +1147,29 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                     Math.Max(ibBytes, 2048), BufferUsage.IndexBuffer | BufferUsage.Dynamic));
                 _particleIndexCapacityBytes = Math.Max(ibBytes, 2048);
             }
+        }
+
+        // Pushes the Infdev-style distance fog: linear from 25% of the far plane to the far
+        // plane, colored to match the sky (the clear color), so distant terrain fades away.
+        // The far plane scales with the render distance, so the F key moves the fog with it.
+        private void UpdateFog()
+        {
+            // Fog disabled for now (fogStart 0 + huge fogEnd keeps the fog factor ~1 = clear at
+            // every distance). The uniform plumbing stays so it's trivial to re-enable later.
+            _fogParams[0] = 192f / 255f;
+            _fogParams[1] = 216f / 255f;
+            _fogParams[2] = 1f;
+            _fogParams[3] = 1f;
+            _fogParams[4] = 0f;
+            _fogParams[5] = 1e6f;
+            if (_cameraPosition.HasValue)
+            {
+                _fogParams[6] = (float)_cameraPosition.Value.X;
+                _fogParams[7] = (float)_cameraPosition.Value.Y;
+                _fogParams[8] = (float)_cameraPosition.Value.Z;
+            }
+            _fogParams[9] = 1f;
+            _gd.UpdateBuffer(_fogBuffer, 0, _fogParams);
         }
 
         // Issues one indirect world draw for a chunk-command pass (opaque or transparent) using the
@@ -1137,6 +1196,7 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             cl.SetGraphicsResourceSet(0, _projViewSet);
             if (_textureSet != null)
                 cl.SetGraphicsResourceSet(1, _textureSet);
+            cl.SetGraphicsResourceSet(2, _fogSet);
             cl.SetVertexBuffer(0, _megaVertexBuffer);
             cl.SetIndexBuffer(_megaIndexBuffer, IndexFormat.UInt16);
             if (_gd.Features.DrawIndirect)
@@ -2200,6 +2260,8 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                 }
 
                 Line($"FPS: {_hud.Fps:0.0}");
+                if (_cameraPosition.HasValue)
+                    Line($"FogCam: {_cameraPosition.Value.X:0.0}, {_cameraPosition.Value.Y:0.0}, {_cameraPosition.Value.Z:0.0}  range: {_fogParams[4]:0.0}-{_fogParams[5]:0.0}");
                 Line($"Particles: {_particleCount}");
                 Line($"Seed: {_hud.WorldSeed}");
                 Line($"Fly: {(_hud.FlyMode ? "ON" : "OFF")}");
@@ -2233,6 +2295,9 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             _projViewSet?.Dispose();
             _projViewLayout?.Dispose();
             _projViewBuffer?.Dispose();
+            _fogSet?.Dispose();
+            _fogLayout?.Dispose();
+            _fogBuffer?.Dispose();
             _commandList?.Dispose();
             _imguiRenderer?.Dispose();
             _highlightVertexBuffer?.Dispose();
@@ -2544,9 +2609,10 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
 
         public void SetRenderDistance(int chunkRadius)
         {
-            // Push the far clip past the farthest visible chunk corner so distant terrain isn't
-            // clipped when the render distance grows. 16 blocks/chunk, ~1.5x for the diagonal + margin.
-            _farPlane = Math.Max(100f, chunkRadius * 16f * 1.5f + 32f);
+            // Infdev's far plane is exactly the chunk render distance (256 >> renderDistance):
+            // 16 chunks = 256 blocks, 8 = 128, 4 = 64, 2 = 32. Fog starts at 25% and fully fades
+            // at the far plane, so distant terrain dissolves right at the render edge like Infdev.
+            _farPlane = chunkRadius * 16f;
         }
 
         public void SetChunkManager(CubeApp.ChunkManager manager)
