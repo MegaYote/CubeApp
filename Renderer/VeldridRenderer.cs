@@ -1846,6 +1846,7 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                 }
 
                 Line($"FPS: {_hud.Fps:0.0}");
+                Line($"Seed: {_hud.WorldSeed}");
                 Line($"XYZ: {_hud.PlayerX:0.000} / {_hud.PlayerY:0.000} / {_hud.PlayerZ:0.000}");
                 Line($"Block: {(int)Math.Floor(_hud.PlayerX)} / {(int)Math.Floor(_hud.PlayerY)} / {(int)Math.Floor(_hud.PlayerZ)}");
                 Line($"Chunk: {_hud.PlayerChunkX} / {_hud.PlayerChunkZ}");

@@ -39,14 +39,14 @@ public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeigh
                     int worldX = originX + lx;
                     int worldZ = originZ + lz;
 
-                    // Heightfield uses layered value-noise. A broad, low-frequency base octave
-                    // carves large ocean basins and continents; a finer detail octave adds local
-                    // variation. Amplitude is wide enough (~96 blocks peak-to-peak) that lows
-                    // regularly dip below sea level (Y=0) so oceans actually generate, while the
-                    // occasional aligned high pushes hilltops up toward Y=130+.
-                    double baseNoise = Fbm2D(worldX * 0.0105, worldZ * 0.0105, 4, 0.5);
-                    double detailNoise = Fbm2D(worldX * 0.045, worldZ * 0.045, 2, 0.5);
-                    int surfaceWorldY = 64 + (int)Math.Round(baseNoise * 72.0 + detailNoise * 24.0);
+                    // Heightfield in the Infdev spirit: the terrain surface sits AT sea level
+                    // (world Y 0), shaped by a very broad "continent" mask that carves large
+                    // ocean basins and landmasses, plus gentle rolling hills. Amplitudes stay
+                    // modest so most terrain hugs the shoreline and real oceans form - while the
+                    // tall world Y range (-64..191) stays available for building and digging.
+                    double continent = Fbm2D(worldX * 0.0025, worldZ * 0.0025, 3, 0.5);
+                    double hills = Fbm2D(worldX * 0.012, worldZ * 0.012, 3, 0.5);
+                    int surfaceWorldY = (int)Math.Round(continent * 16.0 + hills * 8.0 + 1.0);
                     int surfaceLocalY = surfaceWorldY - originY;  // local Y = world Y - originY
                     surfaceLocalY = Math.Clamp(surfaceLocalY, 0, chunkHeight - 1);
 

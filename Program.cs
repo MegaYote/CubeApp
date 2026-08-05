@@ -68,6 +68,7 @@ namespace CubeApp
         private int selectedSlot;
         private const int HotbarSlots = 10;
         private readonly int[] _hotbarBlocks = new int[HotbarSlots];
+        private readonly int worldSeed;
         private bool inventoryOpen;
         private bool thirdPersonView;
         private float playerWalkPhase;
@@ -84,7 +85,10 @@ namespace CubeApp
                 _hotbarBlocks[i] = i < BlockRegistry.Hotbar.Count ? BlockRegistry.Hotbar[i] : BlockRegistry.AirId;
             }
             selectedBlock = Math.Max(0, _hotbarBlocks[0]);
-            manager = new ChunkManager(new InfdevChunkProvider(20100630));
+            // Every world gets its own random seed (like Infdev's fresh-world roll), so terrain
+            // varies on each launch. Shown in the F3 debug overlay.
+            worldSeed = Random.Shared.Next(0, int.MaxValue);
+            manager = new ChunkManager(new InfdevChunkProvider(worldSeed));
             entityManager = new EntityManager(manager);
             MobRegistry.DiscoverMobs(AppDomain.CurrentDomain.BaseDirectory);
             EnsureVisibleChunks();
@@ -552,32 +556,39 @@ namespace CubeApp
         {
             int baseX = (int)Math.Floor(cameraPosition.X);
             int baseZ = (int)Math.Floor(cameraPosition.Z);
-            for (int radius = 0; radius <= 6; radius++)
+            // Scan a wide area and pick the HIGHEST solid column so the player spawns on the
+            // best nearby land (a hill or beach) instead of possibly the ocean floor.
+            int bestX = 0, bestZ = 0, bestY = int.MinValue;
+            for (int radius = 0; radius <= 14; radius++)
             for (int dx = -radius; dx <= radius; dx++)
             for (int dz = -radius; dz <= radius; dz++)
             {
                 if (radius > 0 && Math.Abs(dx) != radius && Math.Abs(dz) != radius) continue;
                 int wx = baseX + dx;
                 int wz = baseZ + dz;
-                int highestSolidY = -1;
                 for (int y = ChunkManager.ChunkHeight - 1; y >= 0; y--)
                 {
                     if (manager.TryGetLoadedBlock(wx, y, wz, out var block) && BlockRegistry.IsSolid(block))
                     {
-                        highestSolidY = y;
+                        if (y > bestY)
+                        {
+                            bestY = y;
+                            bestX = wx;
+                            bestZ = wz;
+                        }
                         break;
                     }
                 }
-                if (highestSolidY < 0) continue;
-                double px = wx + 0.5;
-                double pz = wz + 0.5;
-                double minEyeY = highestSolidY + EyeHeight + 0.01;
-                double maxEyeY = ChunkManager.ChunkHeight + 1.0;
-                for (double eyeY = minEyeY; eyeY <= maxEyeY; eyeY += 0.25)
-                {
-                    var candidate = new Point3D(px, eyeY, pz);
-                    if (!IsPlayerColliding(candidate)) return candidate;
-                }
+            }
+            if (bestY < 0) return null;
+            double px = bestX + 0.5;
+            double pz = bestZ + 0.5;
+            double minEyeY = bestY + EyeHeight + 0.01;
+            double maxEyeY = ChunkManager.ChunkHeight + 1.0;
+            for (double eyeY = minEyeY; eyeY <= maxEyeY; eyeY += 0.25)
+            {
+                var candidate = new Point3D(px, eyeY, pz);
+                if (!IsPlayerColliding(candidate)) return candidate;
             }
             return null;
         }
@@ -782,7 +793,7 @@ namespace CubeApp
                 FacingText = $"{GetCompassDirection(cameraYaw)} ({NormalizeYaw(cameraYaw):0.0} deg)",
                 SelectedBlockText = $"Selected: {BlockRegistry.GetName(selectedBlock)}",
                 RenderDistanceText = $"Render dist: {RenderDistanceName} ({ChunkRenderRadius})",
-                SelectedSlot = selectedSlot, Hotbar = _hotbarBlocks, HighlightWorldQuad = highlightQuad,
+                SelectedSlot = selectedSlot, WorldSeed = worldSeed, Hotbar = _hotbarBlocks, HighlightWorldQuad = highlightQuad,
                 PlayerX = cameraPosition.X,
                 PlayerY = cameraPosition.Y,
                 PlayerZ = cameraPosition.Z,
