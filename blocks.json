@@ -1,5 +1,5 @@
 {
-  "hotbar": [ "grass", "dirt", "stone", "cobblestone", "sand", "planks", "bedrock", "gravel", "obsidian", "mossycobblestone" ],
+  "hotbar": [ "grass", "dirt", "stone", "cobblestone", "sand", "planks", "log", "leaves", "glass", "bricks" ],
   "blocks": [
     { "id": "air",             "displayName": "Air",             "solid": false, "opaque": false, "transparent": false, "alpha": 1.0,  "mapColor": "#000000" },
     { "id": "grass",           "displayName": "Grass",           "texture": "0,0", "mapColor": "#228B22" },
@@ -12,6 +12,32 @@
     { "id": "gravel",          "displayName": "Gravel",          "texture": "3,1", "mapColor": "#848484" },
     { "id": "obsidian",        "displayName": "Obsidian",        "texture": "5,2", "mapColor": "#3C2D5A" },
     { "id": "mossycobblestone","displayName": "Mossy Cobblestone","texture": "4,2", "mapColor": "#5E6C5E" },
-    { "id": "water",           "displayName": "Water",           "texture": "12,14", "solid": false, "opaque": false, "transparent": true, "alpha": 0.85, "mapColor": "#3F76E4" }
+    { "id": "water",           "displayName": "Water",           "texture": "12,14", "solid": false, "opaque": false, "transparent": true, "alpha": 0.85, "mapColor": "#3F76E4" },
+
+    { "id": "bricks",          "displayName": "Bricks",          "texture": "8,4", "mapColor": "#964640" },
+    { "id": "log",             "displayName": "Log",             "texture": "4,1", "top": "5,1", "bottom": "5,1", "mapColor": "#6B4A28" },
+    { "id": "leaves",          "displayName": "Leaves",          "texture": "4,3", "opaque": false, "transparent": true, "alpha": 0.85, "mapColor": "#3A7A1F" },
+    { "id": "glass",           "displayName": "Glass",           "texture": "0,5", "opaque": false, "transparent": true, "alpha": 0.4, "mapColor": "#C8C8C8" },
+    { "id": "bomb",            "displayName": "Bomb",            "texture": "8,0", "top": "9,0", "mapColor": "#333333" },
+    { "id": "full_grass",      "displayName": "Full Grass",      "texture": "0,0", "mapColor": "#228B22" },
+    { "id": "sponge",          "displayName": "Sponge",          "texture": "3,3", "mapColor": "#C8B54A" },
+    { "id": "wool",            "displayName": "Wool",            "texture": "3,6", "mapColor": "#EDEDED" },
+    { "id": "cage",            "displayName": "Cage",            "texture": "11,5", "opaque": false, "transparent": true, "mapColor": "#C86A00" },
+    { "id": "darkstone",       "displayName": "Darkstone",       "texture": "7,0", "mapColor": "#333333" },
+    { "id": "bluebrick",       "displayName": "Blue Brick",      "texture": "5,4", "mapColor": "#5160D0" },
+    { "id": "greenbrick",      "displayName": "Green Brick",     "texture": "6,4", "mapColor": "#4AA052" },
+    { "id": "yellowbrick",     "displayName": "Yellow Brick",    "texture": "7,4", "mapColor": "#E8C446" },
+    { "id": "sap",             "displayName": "Sap",             "texture": "9,4", "opaque": false, "transparent": true, "mapColor": "#442200" },
+    { "id": "rottingwood",     "displayName": "Rotting Wood",    "texture": "0,4", "mapColor": "#4A4030" },
+    { "id": "coalore",         "displayName": "Coal Ore",        "texture": "2,2", "mapColor": "#6C6C6C" },
+    { "id": "ironore",         "displayName": "Iron Ore",        "texture": "1,2", "mapColor": "#A08E7E" },
+    { "id": "goldore",         "displayName": "Gold Ore",        "texture": "0,2", "mapColor": "#8E8670" },
+    { "id": "diamondore",      "displayName": "Diamond Ore",     "texture": "1,3", "mapColor": "#828F8F" },
+    { "id": "bluestoneore",    "displayName": "Bluestone Ore",   "texture": "2,3", "mapColor": "#6E7090" },
+    { "id": "copperore",       "displayName": "Copper Ore",      "texture": "0,3", "mapColor": "#827268" },
+    { "id": "iron",            "displayName": "Iron Block",      "texture": "6,2", "top": "6,1", "bottom": "6,3", "mapColor": "#E8E8E8" },
+    { "id": "gold",            "displayName": "Gold Block",      "texture": "7,2", "top": "7,1", "bottom": "7,3", "mapColor": "#F7E040" },
+    { "id": "diamond",         "displayName": "Diamond Block",   "texture": "8,2", "top": "8,1", "bottom": "8,3", "mapColor": "#66E8E0" },
+    { "id": "bookshelf",       "displayName": "Bookshelf",       "texture": "3,2", "top": "4,0", "bottom": "4,0", "mapColor": "#8A6B45" }
   ]
 }

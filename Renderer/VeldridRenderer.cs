@@ -367,10 +367,10 @@ void main() {
     // fract() tiles the same atlas tile regardless of how many blocks the face spans.
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
     vec4 tex = texture(uAtlas, atlasUV);
-    // Opacity comes from the block's configured alpha (vColor.a), NOT the atlas art's baked
-    // alpha - the water tile ships semi-transparent in the PNG, and multiplying that by the
-    // block alpha made water ~46% transparent instead of the intended 0.85. Opaque blocks
-    // (alpha = 1) are unaffected.
+    // Block alpha (vColor.a) governs opacity - transparent tiles (water, glass, leaves) are
+    // tinted by their configured alpha, not the atlas art's baked alpha. Opaque blocks
+    // (alpha = 1) sample the tile fully. (Per-pixel alpha cutouts like classic leaves are a
+    // future alpha-test feature.)
     outColor = vec4(tex.rgb * vColor.rgb, vColor.a);
 }";
 
