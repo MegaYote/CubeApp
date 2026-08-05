@@ -39,25 +39,38 @@ public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeigh
                     int worldX = originX + lx;
                     int worldZ = originZ + lz;
 
-                    // Heightfield in the Infdev spirit: the terrain surface sits AT sea level
-                    // (world Y 0), shaped by a very broad "continent" mask that carves large
-                    // ocean basins and landmasses, plus gentle rolling hills. Amplitudes stay
-                    // modest so most terrain hugs the shoreline and real oceans form - while the
-                    // tall world Y range (-64..191) stays available for building and digging.
-                    double continent = Fbm2D(worldX * 0.0025, worldZ * 0.0025, 3, 0.5);
-                    double hills = Fbm2D(worldX * 0.012, worldZ * 0.012, 3, 0.5);
-                    int surfaceWorldY = (int)Math.Round(continent * 16.0 + hills * 8.0 + 1.0);
-                    int surfaceLocalY = surfaceWorldY - originY;  // local Y = world Y - originY
-                    surfaceLocalY = Math.Clamp(surfaceLocalY, 0, chunkHeight - 1);
+                    // ---- Region selection: which terrain family this area belongs to ----
+                    // A very broad noise splits the map into plains / hills / mountain belts,
+                    // blended through smooth masks so transitions read as natural rolling borders.
+                    double region = Fbm2D(worldX * 0.0032, worldZ * 0.0032, 3, 0.5);
+                    double plainsW = Math.Clamp(1.0 - (region + 0.40) / 0.45, 0.0, 1.0);
+                    double mountainW = Math.Clamp((region - 0.30) / 0.55, 0.0, 1.0);
+                    double hillsW = Math.Clamp(1.0 - plainsW - mountainW, 0.0, 1.0);
 
-                    // Surface/sub-surface blocks pick by depth relative to sea level: underwater
-                    // and the immediate shoreline use sand (no grass grows beneath water), while
-                    // dry land keeps the grass-on-dirt-on-stone stratigraphy.
-                    bool submerged = surfaceWorldY <= seaLevelWorldY;
-                    int surfaceBlock = submerged ? idSand : idGrass;
-                    int subSurfaceBlock = submerged ? idSand : idDirt;
+                    // ---- Height sources ----
+                    // Continent: very broad ocean basins vs landmasses (keeps real seas even in
+                    // mountain belts). roll/rugged: the relief that each family scales differently.
+                    double continent = Fbm2D(worldX * 0.0024, worldZ * 0.0024, 3, 0.5);
+                    double roll = Fbm2D(worldX * 0.008, worldZ * 0.008, 3, 0.5);
+                    double rugged = Fbm2D(worldX * 0.013, worldZ * 0.013, 3, 0.5);
 
-                    for (int y = 0; y < chunk.Height; y++)
+                    // Target surface height (world Y). Sea level is 0, so oceans form where the
+                    // combined field dips below it. Plains stay low and gentle, mountains push
+                    // high and rugged, hills sit between.
+                    double targetSurface = continent * 20.0
+                        + plainsW * roll * 6.0
+                        + hillsW * roll * 16.0
+                        + mountainW * (roll * 26.0 + rugged * 16.0)
+                        + 1.0;
+
+                    // ---- Column fill via a 3D density field ----
+                    // density > 0 = solid. The height gradient provides the main body; the 3D
+                    // noise terms wobble it so the surface gains overhangs, ledges and natural
+                    // underground pockets - the Infdev-style terrain that a flat heightmap can't.
+                    // The column is scanned TOP-DOWN so the first solid found is the surface.
+                    bool firstSolid = true;
+                    int surfaceDepth = 0;
+                    for (int y = chunk.Height - 1; y >= 0; y--)
                     {
                         int worldY = y + originY; // convert local Y to world Y
 
@@ -67,34 +80,37 @@ public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeigh
                             continue;
                         }
 
-                        if (y > surfaceLocalY)
+                        double main3D = Fbm3D(worldX * 0.012, worldY * 0.024, worldZ * 0.012, 2, 0.5);
+                        double overhang = Fbm3D(worldX * 0.033, worldY * 0.045, worldZ * 0.033, 1, 0.5);
+                        double density = (targetSurface - worldY) + main3D * 5.0 + overhang * 2.5;
+
+                        bool solid = density > 0.0;
+                        if (solid && y >= 3 && SampleCave(worldX, worldY, worldZ) > 0.63)
                         {
-                            // Below sea level fills with water; above stays air.
-                            if (worldY <= seaLevelWorldY)
-                            {
-                                chunk[lx, y, lz] = idWater;
-                            }
-                            else
-                            {
-                                chunk[lx, y, lz] = idAir;
-                            }
+                            solid = false; // carve cave pockets (and the odd cave mouth) through stone
+                        }
+
+                        if (!solid)
+                        {
+                            // Water fills air below sea level until the first solid below (the sea
+                            // floor); cave pockets underground stay air.
+                            bool fillWater = worldY <= seaLevelWorldY && firstSolid;
+                            chunk[lx, y, lz] = fillWater ? idWater : idAir;
                             continue;
                         }
 
-                        bool carveCave = y < surfaceLocalY - 3 && SampleCave(worldX, worldY, worldZ) > 0.63;
-                        if (carveCave)
+                        if (firstSolid)
                         {
-                            chunk[lx, y, lz] = idAir;
-                            continue;
+                            // Topmost solid in the column is the surface: grass on land, sand
+                            // under water / on the shoreline.
+                            firstSolid = false;
+                            surfaceDepth = 3;
+                            chunk[lx, y, lz] = worldY <= seaLevelWorldY ? idSand : idGrass;
                         }
-
-                        if (y == surfaceLocalY)
+                        else if (surfaceDepth > 0)
                         {
-                            chunk[lx, y, lz] = surfaceBlock;
-                        }
-                        else if (y >= surfaceLocalY - 3)
-                        {
-                            chunk[lx, y, lz] = subSurfaceBlock;
+                            surfaceDepth--;
+                            chunk[lx, y, lz] = worldY <= seaLevelWorldY ? idSand : idDirt;
                         }
                         else
                         {
@@ -106,6 +122,27 @@ public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeigh
 
             chunk.NeedsRemesh = true;
             return chunk;
+        }
+
+        // Region/terrain family at a world position, for the F3 debug overlay.
+        public string BiomeNameAt(int worldX, int worldZ)
+        {
+            double region = Fbm2D(worldX * 0.0032, worldZ * 0.0032, 3, 0.5);
+            double plainsW = Math.Clamp(1.0 - (region + 0.40) / 0.45, 0.0, 1.0);
+            double mountainW = Math.Clamp((region - 0.30) / 0.55, 0.0, 1.0);
+            double hillsW = Math.Clamp(1.0 - plainsW - mountainW, 0.0, 1.0);
+            double continent = Fbm2D(worldX * 0.0024, worldZ * 0.0024, 3, 0.5);
+            double roll = Fbm2D(worldX * 0.008, worldZ * 0.008, 3, 0.5);
+            double rugged = Fbm2D(worldX * 0.013, worldZ * 0.013, 3, 0.5);
+            double surface = continent * 20.0
+                + plainsW * roll * 6.0
+                + hillsW * roll * 16.0
+                + mountainW * (roll * 26.0 + rugged * 16.0)
+                + 1.0;
+            if (surface <= 0) return "Ocean";
+            if (mountainW > plainsW && mountainW > hillsW) return "Mountains";
+            if (hillsW >= plainsW) return "Hills";
+            return "Plains";
         }
 
         private double SampleCave(int x, int y, int z)

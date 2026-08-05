@@ -14,6 +14,7 @@ namespace CubeApp
         public bool SpawnCoyotePressed { get; }
         public bool SpawnStevePressed { get; }
         public bool ToggleThirdPersonPressed { get; }
+        public bool ToggleFlyPressed { get; }
         public bool BreakBlockPressed { get; }
         public bool PlaceBlockPressed { get; }
         public int? SelectedSlot { get; }
@@ -27,6 +28,7 @@ namespace CubeApp
             bool spawnCoyotePressed,
             bool spawnStevePressed,
             bool toggleThirdPersonPressed,
+            bool toggleFlyPressed,
             bool breakBlockPressed,
             bool placeBlockPressed,
             int? selectedSlot)
@@ -39,6 +41,7 @@ namespace CubeApp
             SpawnCoyotePressed = spawnCoyotePressed;
             SpawnStevePressed = spawnStevePressed;
             ToggleThirdPersonPressed = toggleThirdPersonPressed;
+            ToggleFlyPressed = toggleFlyPressed;
             BreakBlockPressed = breakBlockPressed;
             PlaceBlockPressed = placeBlockPressed;
             SelectedSlot = selectedSlot;
@@ -52,6 +55,8 @@ namespace CubeApp
         public bool MoveLeft { get; }
         public bool MoveRight { get; }
         public bool JumpPressed { get; }
+        public bool MoveUp { get; }
+        public bool MoveDown { get; }
         public Vector2 LookDelta { get; }
 
         public TickInputState(
@@ -60,6 +65,8 @@ namespace CubeApp
             bool moveLeft,
             bool moveRight,
             bool jumpPressed,
+            bool moveUp,
+            bool moveDown,
             Vector2 lookDelta)
         {
             MoveForward = moveForward;
@@ -67,6 +74,8 @@ namespace CubeApp
             MoveLeft = moveLeft;
             MoveRight = moveRight;
             JumpPressed = jumpPressed;
+            MoveUp = moveUp;
+            MoveDown = moveDown;
             LookDelta = lookDelta;
         }
     }
@@ -81,6 +90,8 @@ namespace CubeApp
         private bool moveLeft;
         private bool moveRight;
         private bool jumpPressed;
+        private bool moveUp;
+        private bool moveDown;
 
         private bool toggleMouseCapturePressed;
         private bool toggleDebugPressed;
@@ -90,6 +101,7 @@ namespace CubeApp
         private bool spawnCoyotePressed;
         private bool spawnStevePressed;
         private bool toggleThirdPersonPressed;
+        private bool toggleFlyPressed;
         private bool breakBlockPressed;
         private bool placeBlockPressed;
         private int? selectedSlot;
@@ -107,6 +119,7 @@ namespace CubeApp
             spawnCoyotePressed = false;
             spawnStevePressed = false;
             toggleThirdPersonPressed = false;
+            toggleFlyPressed = false;
             breakBlockPressed = false;
             placeBlockPressed = false;
             selectedSlot = null;
@@ -138,7 +151,11 @@ namespace CubeApp
                         moveRight = down;
                         break;
                     case Key.Space:
+                        moveUp = down;
                         if (down) jumpPressed = true;
+                        break;
+                    case Key.ShiftLeft:
+                        moveDown = down;
                         break;
                     case Key.Escape:
                         if (down) toggleMouseCapturePressed = true;
@@ -163,6 +180,9 @@ namespace CubeApp
                         break;
                     case Key.F5:
                         if (down) toggleThirdPersonPressed = true;
+                        break;
+                    case Key.F2:
+                        if (down) toggleFlyPressed = true;
                         break;
                     case Key.Number1:
                         if (down) selectedSlot = 0;
@@ -279,6 +299,7 @@ namespace CubeApp
                 spawnCoyotePressed,
                 spawnStevePressed,
                 toggleThirdPersonPressed,
+                toggleFlyPressed,
                 breakBlockPressed,
                 placeBlockPressed,
                 selectedSlot);
@@ -313,6 +334,8 @@ namespace CubeApp
                 moveLeft,
                 moveRight,
                 jumpPressed,
+                moveUp,
+                moveDown,
                 Vector2.Zero);
 
             jumpPressed = false;
