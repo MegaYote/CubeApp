@@ -38,11 +38,20 @@ namespace CubeApp
             {
                 while (!token.IsCancellationRequested)
                 {
-                    if (_manager.TryGenerateNext())
+                    try
                     {
-                        // A new chunk (and its dirtied neighbors) needs meshing.
-                        _onChunkGenerated();
-                        continue;
+                        if (_manager.TryGenerateNext())
+                        {
+                            // A new chunk (and its dirtied neighbors) needs meshing.
+                            _onChunkGenerated();
+                            continue;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // A bad chunk must never kill the whole generation worker - otherwise new
+                        // terrain silently stops generating while the game keeps running.
+                        try { System.IO.File.AppendAllText("chunkgen_worker.log", DateTime.Now + " gen failed: " + ex + Environment.NewLine); } catch { }
                     }
 
                     await Task.Delay(4, token).ConfigureAwait(false);

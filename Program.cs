@@ -357,6 +357,7 @@ namespace CubeApp
                 meshScheduler.Update();
                 needsMeshUpdate = false;
             }
+            UpdateDeepFill();
             var t3 = stageStopwatch.ElapsedTicks;
             lastMeshMs = (t3 - t2) * 1000f / Stopwatch.Frequency;
             lastUploadMs = 0f;
@@ -666,6 +667,40 @@ namespace CubeApp
             double hSpeed = Math.Sqrt(playerVelocity.X * playerVelocity.X + playerVelocity.Z * playerVelocity.Z);
             playerWalkAmount = (float)Math.Min(1.0, hSpeed / WalkSpeed);
             playerWalkPhase += deltaSeconds * playerWalkAmount * 10f;
+        }
+
+        // Lazy deep-fill (Proposal A): while the player is underground (below world ~-32), fill the
+        // empty deep zone of chunks near them with stone + caves. New chunks generated while deep
+        // are auto-filled at generation time (provider.AutoDeepFill) so they're born with terrain.
+        // Already-loaded chunks are filled once when the player first crosses below the threshold
+        // (and any later-loaded-but-unfilled stragglers on subsequent frames). Cheap: DeepFillChunk
+        // is idempotent (returns immediately once a chunk's zone is already stone).
+        private void UpdateDeepFill()
+        {
+            if (manager == null || chunkProvider == null) return;
+            // Terrain band is world -64..63; start filling the deep zone when the player descends
+            // below -32 so there's a solid floor waiting just beneath the lowest reachable rock.
+            const double deepThreshold = -32.0;
+            bool isDeep = cameraPosition.Y < deepThreshold;
+            chunkProvider.AutoDeepFill = isDeep;
+            if (!isDeep) return;
+
+            int cx = (int)Math.Floor(cameraPosition.X / ChunkManager.ChunkSize);
+            int cz = (int)Math.Floor(cameraPosition.Z / ChunkManager.ChunkSize);
+
+            foreach (var ch in manager.GetLoadedChunks())
+            {
+                int dx = ch.OriginX / ChunkManager.ChunkSize - cx;
+                int dz = ch.OriginZ / ChunkManager.ChunkSize - cz;
+                if (dx * dx + dz * dz > 49) continue; // within ~7 chunks of the player
+                chunkProvider.DeepFillChunk(ch.OriginX / ChunkManager.ChunkSize, ch.OriginZ / ChunkManager.ChunkSize, ch);
+                // Only request a remesh if this fill actually did something (idempotent check inside).
+                if (ch.NeedsRemesh)
+                {
+                    ch.IsMeshingQueued = false;
+                    meshScheduler?.RequestImmediateRemesh(new ChunkCoordinates(ch.OriginX / ChunkManager.ChunkSize, ch.OriginZ / ChunkManager.ChunkSize));
+                }
+            }
         }
 
         private void ApplyLookInput(Vector2 lookDelta)

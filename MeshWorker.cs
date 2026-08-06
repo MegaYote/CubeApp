@@ -97,8 +97,7 @@ namespace CubeApp
                         try
                         {
                             if (_manager.TryGetLoadedChunk(coords, out chunk))
-                            {
-                                needsFlagReset = true;
+                            {                                needsFlagReset = true;
                                 
                                 // double-check chunk still needs remesh
                                 if (!chunk.NeedsRemesh)
@@ -161,6 +160,14 @@ namespace CubeApp
                                     }
                                 }
                             }
+                        }
+                        catch (Exception ex)
+                        {
+                            // One bad chunk (meshing bug, out-of-bounds, etc.) must never kill the
+                            // whole worker pool - otherwise chunks stop appearing and it looks like
+                            // terrain generation froze. Log and move on; the chunk stays dirty so a
+                            // later pass retries it.
+                            try { System.IO.File.AppendAllText("mesh_worker.log", DateTime.Now + " mesh failed " + coords.X + "," + coords.Z + ": " + ex + Environment.NewLine); } catch { }
                         }
                         finally
                         {
