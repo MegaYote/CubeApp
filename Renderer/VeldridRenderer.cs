@@ -50,7 +50,7 @@ namespace CubeApp.Renderer
         private Pipeline _chunkBorderPipeline;
         private DeviceBuffer _chunkBorderVertexBuffer;
         private DeviceBuffer _chunkBorderIndexBuffer;
-        private readonly float[] _chunkBorderVertexScratch = new float[768]; // 24 edges * 2 vertices * 3 coords * 4 chunks (max for small radius)
+        private float[] _chunkBorderVertexScratch = new float[768]; // grown on demand for larger render distances
 
         // Textured entity-model pipeline (currently just the duck test mob).
         private Pipeline _modelPipeline;
@@ -1254,6 +1254,19 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             int vertexIndex = 0;
             int chunkSize = ChunkManager.ChunkSize;
             int chunkHeight = ChunkManager.ChunkHeight;
+
+            // Size the scratch + GPU buffer for every chunk in the render radius: each chunk
+            // draws 12 border lines = 72 floats. The old fixed 768-float buffer silently dropped
+            // lines once full - which left only the far chunks (drawn first) visible.
+            int chunksWide = (2 * _hud.RenderDistance + 1) * (2 * _hud.RenderDistance + 1);
+            int neededFloats = chunksWide * 12 * 6;
+            if (_chunkBorderVertexScratch.Length < neededFloats)
+            {
+                _chunkBorderVertexScratch = new float[neededFloats];
+                _chunkBorderVertexBuffer?.Dispose();
+                _chunkBorderVertexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                    (uint)(neededFloats * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            }
 
             // Draw chunk borders for loaded chunks around player
             for (int dz = -_hud.RenderDistance; dz <= _hud.RenderDistance; dz++)
