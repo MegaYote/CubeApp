@@ -127,6 +127,7 @@ namespace CubeApp.Renderer
         private Texture? _iconAtlasTexture;
         private TextureView? _iconAtlasView;
         private IntPtr _iconImGuiId;
+        private const int IconCellSize = 48;
         private Vector4[]? _blockIconUv;
         // Terrain atlas bound to ImGui for the title/pause menu's dirt background.
         private IntPtr _terrainImGuiId;
@@ -538,80 +539,24 @@ namespace CubeApp.Renderer
             int atlasH = rows * iconSize;
             var iconData = new byte[atlasW * atlasH * 4];
 
-            // Exact Cubuild/Classic MC block-icon proportions (from drawProjectedBlockIcon,
-            // scaled from its 64-unit canvas down to our 48px cells):
-            //   top  = (24,4.5)(37.5,11.25)(24,18)(10.5,11.25)
-            //   left = (10.5,11.25)(24,18)(24,37.5)(10.5,30.75)
-            //   right= (24,18)(37.5,11.25)(37.5,30.75)(24,37.5)
-            const float cx = 24f;                 // cube center x
-            const float halfW = 13.5f;            // horizontal half-extent
-            const float diamondTopY = 4.5f;       // diamond top vertex
-            const float diamondMidY = 11.25f;     // diamond left/right vertices
-            const float diamondBottomY = 18f;     // diamond bottom vertex
-            const float cubeBottomY = 37.5f;      // bottom of the side faces
-            const float sideDrop = cubeBottomY - diamondBottomY;      // 19.5
-            const float diamondHalfDrop = diamondBottomY - diamondMidY; // 6.75
-            const float topDenom = 2f * halfW;    // 27
             _blockIconUv = new Vector4[blockCount];
 
             for (int id = 1; id < blockCount; id++)
             {
-                var def = BlockRegistry.GetById(id);
-                var topTile = def.FaceTexture(new Point3D(0, 1, 0));
-                var leftTile = def.FaceTexture(new Point3D(0, 0, -1));
-                var rightTile = def.FaceTexture(new Point3D(1, 0, 0));
+                int cellX = ((id - 1) % cols) * IconCellSize;
+                int cellY = ((id - 1) / cols) * IconCellSize;
+                int cellDi = (cellY * atlasW + cellX) * 4;
 
-                int cellX = ((id - 1) % cols) * iconSize;
-                int cellY = ((id - 1) / cols) * iconSize;
-
-                for (int py = 0; py < iconSize; py++)
-                {
-                    for (int px = 0; px < iconSize; px++)
-                    {
-                        int di = ((cellY + py) * atlasW + (cellX + px)) * 4;
-
-                        // Right face (+X): u from front toward back, v straight down. Infdev shades
-                        // E+W faces 0.6.
-                        float u = (px - cx) / halfW;
-                        if (u >= 0f && u <= 1f)
-                        {
-                            float v = (py - diamondBottomY + u * diamondHalfDrop) / sideDrop;
-                            if (v >= 0f && v <= 1f)
-                            {
-                                SampleTile(iconData, di, rightTile, u, v, 0.6f);
-                                continue;
-                            }
-                        }
-
-                        // Front-left face (-Z): u from back toward front, v straight down. Infdev
-                        // shades N+S faces 0.8.
-                        u = (px - cx + halfW) / halfW;
-                        if (u >= 0f && u <= 1f)
-                        {
-                            float v = (py - diamondMidY - u * diamondHalfDrop) / sideDrop;
-                            if (v >= 0f && v <= 1f)
-                            {
-                                SampleTile(iconData, di, leftTile, u, v, 0.8f);
-                                continue;
-                            }
-                        }
-
-                        // Top face: diamond (affine inverse of the top parallelogram). Infdev shades
-                        // the top 1.0 (full bright).
-                        float su = px - cx;
-                        float sv = py - diamondTopY;
-                        u = (su + 2f * sv) / topDenom;
-                        float tv = (2f * sv - su) / topDenom;
-                        if (u >= 0f && u <= 1f && tv >= 0f && tv <= 1f)
-                        {
-                            SampleTile(iconData, di, topTile, u, tv, 1.0f);
-                        }
-                    }
-                }
+                // Icons are a SOFTWARE RENDER of the REAL mesher output: build a tiny chunk with the
+                // block, run the same Mesher.GenerateMesh the world uses, and rasterize the actual
+                // MeshFaces into the cell. This is the single source of truth - cubes, slabs, stairs,
+                // cross plants, glass and water all come out exactly like they render in the world,
+                // with no hand-drawn shape variants to drift out of sync.
+                DrawMeshIcon(iconData, cellDi, atlasW, id);
 
                 _blockIconUv[id] = new Vector4(
                     cellX / (float)atlasW, cellY / (float)atlasH,
-                    iconSize / (float)atlasW, iconSize / (float)atlasH);
+                    IconCellSize / (float)atlasW, IconCellSize / (float)atlasH);
             }
 
             _iconAtlasTexture = _gd.ResourceFactory.CreateTexture(TextureDescription.Texture2D(
@@ -621,6 +566,270 @@ namespace CubeApp.Renderer
             if (_imguiRenderer != null)
             {
                 _iconImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _iconAtlasView);
+            }
+        }
+
+        // Software-renders a block icon from the REAL mesher output: builds a tiny 16x16x16 chunk
+        // with the block at (8,8,8), runs Mesher.GenerateMesh (the same mesh builder the world uses),
+        // then rasterizes the actual MeshFaces into the 48px cell. Every shape - full cubes, slabs,
+        // stairs, cross plants, glass, water - renders exactly like it does in the world, so there is
+        // ONE source of truth and the GUI can never drift from the game.
+        private void DrawMeshIcon(byte[] dst, int cellDi, int atlasW, int blockId)
+        {
+            // Cross plants are drawn as their FLAT sprite tile (like Cubuild's cross shape), not as
+            // the 3D crossed billboards - those project as thin diagonal slivers in an isometric icon.
+            if (BlockRegistry.IsCross(blockId))
+            {
+                var def = BlockRegistry.GetById(blockId);
+                var tile = def.FaceTexture(new Point3D(0, 0, -1));
+                if (tile.Width == 0) tile = def.AllTexture ?? default;
+                DrawCrossSprite(dst, cellDi, atlasW, tile);
+                return;
+            }
+
+            var chunk = new Chunk(16, 16, 16, 0, 0, 0);
+            chunk[8, 8, 8] = blockId;
+            // Stairs use metadata for facing. The menu icon shows a canonical orientation: the LOW
+            // step toward the viewer (front-bottom) and the HIGH step at the back - that is meta 1
+            // for this icon camera (+X,+Y,-Z). Force it so every stair icon looks the same classic
+            // way instead of whichever placement-facing the mesh happens to use.
+            if (BlockRegistry.IsStair(blockId)) chunk.SetMeta(8, 8, 8, 1);
+            var faces = Mesher.GenerateMesh(chunk);
+
+            // Isometric projection matching the classic MC/Cubuild icon (48px cell). The block
+            // occupies local (0,0,0)-(1,1,1) at world (8,8,8)-(9,9,9). +X right, +Y up, +Z front.
+            // Derived from the old cube-icon diamond:
+            //   front-bottom (0,0,0) -> (24,37.5), +X -> (37.5,30.75), +Z -> (10.5,30.75), +Y -> (24,18)
+            // Affine: sx = 24 + 13.5*x - 13.5*z ; sy = 37.5 - 6.75*x - 6.75*z - 19.5*y
+            // Camera is at +X,+Y,-Z so visible faces are +Y (top), +X (right), -Z (front-left).
+            Span<MeshFace> sorted = faces.Count <= 64
+                ? stackalloc MeshFace[64]
+                : new MeshFace[faces.Count];
+            for (int i = 0; i < faces.Count; i++) sorted[i] = faces[i];
+            // Painter's algorithm: sort FAR-TO-NEAR so the nearest face paints last (on top).
+            // Depth increases toward -X, +Z, -Y (the camera sits at +X,+Y,-Z), so the face depth
+            // key is (-centroid.x + centroid.z - centroid.y): LARGER key = farther. Sort descending
+            // so the farthest face is rasterized first and nearer faces cover it.
+            for (int i = 1; i < faces.Count; i++)
+            {
+                var key = FaceDepthKey(sorted[i]);
+                for (int j = i; j > 0 && FaceDepthKey(sorted[j - 1]) < key; j--)
+                {
+                    (sorted[j], sorted[j - 1]) = (sorted[j - 1], sorted[j]);
+                }
+            }
+
+            for (int i = 0; i < faces.Count; i++)
+            {
+                RasterizeFace(dst, cellDi, atlasW, sorted[i]);
+            }
+        }
+
+        // Infdev's fixed per-face light multipliers (RenderBlocks.java): bottom 0.5 / top 1.0 /
+        // N+S 0.8 / E+W 0.6. The icon camera shows top (+Y), right (+X) and front-left (-Z).
+        private static float FaceIconShade(Point3D normal)
+        {
+            if (normal.Y > 0.5) return 1.0f;
+            if (normal.Y < -0.5) return 0.5f;
+            if (Math.Abs(normal.X) > 0.5) return 0.6f;
+            return 0.8f;
+        }
+
+        private static float FaceDepthKey(in MeshFace f)
+        {
+            double cx = (f.V0.X + f.V1.X + f.V2.X + f.V3.X) * 0.25;
+            double cy = (f.V0.Y + f.V1.Y + f.V2.Y + f.V3.Y) * 0.25;
+            double cz = (f.V0.Z + f.V1.Z + f.V2.Z + f.V3.Z) * 0.25;
+            // Farther = smaller x, larger z, smaller y (camera sits +X,+Y,-Z).
+            return (float)(-cx + cz - cy);
+        }
+
+        // Rasterizes one real MeshFace into the 48px icon cell. Projects the quad's four corners
+        // through the isometric transform and fills them as two triangles. UVs use the SAME
+        // convention as the GPU world path: du = dot(world, uAxis) - minU, dv = dot(world, vAxis)
+        // - minV, normalized across the face - so the tile texture is oriented exactly like the
+        // in-world block, not rotated by whatever vertex order the mesher chose.
+        private void RasterizeFace(byte[] dst, int cellDi, int atlasW, in MeshFace f)
+        {
+            // Skip faces that point away from the icon camera (+X,+Y,-Z): dot(normal, (1,1,-1)) <= 0.
+            if ((float)(f.Normal.X + f.Normal.Y - f.Normal.Z) <= 0f) return;
+
+            bool hasAxes = TryGetCubuildFaceAxes(f.Normal, out var uAxis, out var vAxis);
+
+            Span<Point3D> verts = stackalloc Point3D[4];
+            verts[0] = f.V0;
+            verts[1] = f.V1;
+            verts[2] = f.V2;
+            verts[3] = f.V3;
+
+            double minU = 0.0, minV = 0.0, maxU = 1.0, maxV = 1.0;
+            if (hasAxes)
+            {
+                minU = double.PositiveInfinity;
+                minV = double.PositiveInfinity;
+                maxU = double.NegativeInfinity;
+                maxV = double.NegativeInfinity;
+                for (int ci = 0; ci < 4; ci++)
+                {
+                    double u = Dot(verts[ci], uAxis);
+                    double v = Dot(verts[ci], vAxis);
+                    if (u < minU) minU = u;
+                    if (u > maxU) maxU = u;
+                    if (v < minV) minV = v;
+                    if (v > maxV) maxV = v;
+                }
+            }
+
+            // Project the four corners. World -> local (block spans 1 cell), then affine to screen.
+            Span<Vector2> proj = stackalloc Vector2[4];
+            for (int ci = 0; ci < 4; ci++)
+            {
+                proj[ci] = ProjectIconPoint(verts[ci]);
+            }
+
+            // Sample a pixel: interpolate the world position across the triangle, then compute the
+            // face-axis UV exactly like the GPU path and nearest-sample the tile.
+            // Icons use STUDIO lighting - the fixed Infdev per-face multiplier (top 1.0, bottom 0.5,
+            // E/W 0.6, N/S 0.8) - NOT the mesher's Shade, which bakes in the tiny chunk's simulated
+            // light that attenuates by the block's y position and leaves partial shapes looking dark.
+            float shade = FaceIconShade(f.Normal);
+            bool cutout = f.Alpha < 0f;       // cross plants / glass: per-pixel sprite alpha
+            bool transparent = !cutout && f.Alpha < 1f; // water etc.
+            int spanU = Math.Max(1, f.TileWidth);
+            int spanV = Math.Max(1, f.TileHeight);
+            int tileW = Math.Max(1, f.SrcRect.Width);
+            int tileH = Math.Max(1, f.SrcRect.Height);
+
+            RasterizeTriangle(dst, cellDi, atlasW, proj[0], proj[1], proj[2], verts[0], verts[1], verts[2],
+                hasAxes, uAxis, vAxis, minU, maxU, minV, maxV, spanU, spanV, tileW, tileH, f.SrcRect, shade, cutout, transparent);
+            RasterizeTriangle(dst, cellDi, atlasW, proj[0], proj[2], proj[3], verts[0], verts[2], verts[3],
+                hasAxes, uAxis, vAxis, minU, maxU, minV, maxV, spanU, spanV, tileW, tileH, f.SrcRect, shade, cutout, transparent);
+        }
+
+        private void RasterizeTriangle(byte[] dst, int cellDi, int atlasW,
+            Vector2 p0, Vector2 p1, Vector2 p2,
+            Point3D v0, Point3D v1, Point3D v2,
+            bool hasAxes, Point3D uAxis, Point3D vAxis,
+            double minU, double maxU, double minV, double maxV,
+            int spanU, int spanV,
+            int tileW, int tileH, TextureRect tile, float shade, bool cutout, bool transparent)
+        {
+            float minX = Math.Min(Math.Min(p0.X, p1.X), p2.X);
+            float maxX = Math.Max(Math.Max(p0.X, p1.X), p2.X);
+            float minY = Math.Min(Math.Min(p0.Y, p1.Y), p2.Y);
+            float maxY = Math.Max(Math.Max(p0.Y, p1.Y), p2.Y);
+
+            int ix0 = Math.Max(0, (int)Math.Floor(minX));
+            int ix1 = Math.Min(IconCellSize - 1, (int)Math.Ceiling(maxX));
+            int iy0 = Math.Max(0, (int)Math.Floor(minY));
+            int iy1 = Math.Min(IconCellSize - 1, (int)Math.Ceiling(maxY));
+
+            float e01 = p1.X - p0.X;
+            float e02 = p1.Y - p0.Y;
+            float e11 = p2.X - p0.X;
+            float e12 = p2.Y - p0.Y;
+            float area = e01 * e12 - e02 * e11;
+            if (Math.Abs(area) < 1e-6f) return;
+
+            // Screen space has Y pointing DOWN, which flips winding vs the world/NDC. The mesher
+            // emits faces wound for the GPU's CounterClockwise front-face culling, so a visible
+            // face can project as either clockwise or counter-clockwise here depending on its
+            // normal. Instead of rejecting clockwise triangles (which would make a whole face
+            // disappear), normalize to a positive area by swapping the two edge vertices.
+            if (area < 0f)
+            {
+                area = -area;
+                (p1, p2) = (p2, p1);
+                (v1, v2) = (v2, v1);
+                e01 = p1.X - p0.X;
+                e02 = p1.Y - p0.Y;
+                e11 = p2.X - p0.X;
+                e12 = p2.Y - p0.Y;
+            }
+
+            for (int py = iy0; py <= iy1; py++)
+            {
+                for (int px = ix0; px <= ix1; px++)
+                {
+                    float fx = px - p0.X;
+                    float fy = py - p0.Y;
+                    float w1 = (fx * e12 - fy * e11) / area; // weight of vertex 1
+                    float w2 = (e01 * fy - e02 * fx) / area; // weight of vertex 2
+                    float w0 = 1f - w1 - w2;                 // weight of vertex 0
+                    if (w0 < -0.001f || w1 < -0.001f || w2 < -0.001f) continue;
+
+                    double wx = v0.X * w0 + v1.X * w1 + v2.X * w2;
+                    double wy = v0.Y * w0 + v1.Y * w1 + v2.Y * w2;
+                    double wz = v0.Z * w0 + v1.Z * w1 + v2.Z * w2;
+
+                    double du, dv;
+                    if (hasAxes)
+                    {
+                        du = (Dot(new Point3D(wx, wy, wz), uAxis) - minU) / Math.Max(maxU - minU, 1e-9) * spanU;
+                        dv = (Dot(new Point3D(wx, wy, wz), vAxis) - minV) / Math.Max(maxV - minV, 1e-9) * spanV;
+                    }
+                    else
+                    {
+                        // Fallback: fraction of the face axes (rare - always has axes in practice).
+                        du = (wx - Math.Floor(wx)) * spanU;
+                        dv = (wy - Math.Floor(wy)) * spanV;
+                    }
+                    du -= Math.Floor(du);
+                    dv -= Math.Floor(dv);
+                    if (du < 0.0) du += 1.0;
+                    if (dv < 0.0) dv += 1.0;
+
+                    int tx = tile.X + (int)(du * (tileW - 0.001f));
+                    int ty = tile.Y + (int)(dv * (tileH - 0.001f));
+                    int si = (ty * _atlasPixelsW + tx) * 4;
+                    int di = cellDi + (py * atlasW + px) * 4;
+                    int alpha = _atlasRgba[si + 3];
+                    if (cutout && alpha < 128) continue; // sprite background falls away
+
+                    int a = transparent ? 255 : (cutout ? alpha : 255);
+                    dst[di + 0] = (byte)(_atlasRgba[si + 0] * shade);
+                    dst[di + 1] = (byte)(_atlasRgba[si + 1] * shade);
+                    dst[di + 2] = (byte)(_atlasRgba[si + 2] * shade);
+                    dst[di + 3] = (byte)a;
+                }
+            }
+        }
+
+        // Projects one world-space vertex into the 48px icon cell. Affine derived from the classic
+        // MC/Cubuild cube icon corners (48px cell):
+        //   front-bottom (0,0,0)->(10.5,30.75), +X->(24,37.5), +Z->(24,24 hidden), +Y->(10.5,11.25)
+        //   => sx = 10.5 + 13.5*x + 13.5*z ; sy = 30.75 + 6.75*x - 6.75*z - 19.5*y
+        // This puts +X (right face) on the screen RIGHT and -Z (front-left face) on the screen LEFT,
+        // with +Y (top) as the diamond - the classic three-face isometric view.
+        private static Vector2 ProjectIconPoint(Point3D p)
+        {
+            float lx = (float)(p.X - 8.0); // block occupies world (8,8,8)-(9,9,9)
+            float ly = (float)(p.Y - 8.0);
+            float lz = (float)(p.Z - 8.0);
+            return new Vector2(
+                10.5f + 13.5f * lx + 13.5f * lz,
+                30.75f + 6.75f * lx - 6.75f * lz - 19.5f * ly);
+        }
+
+        // Cross-plant icon: draws the flat sprite tile stretched in the cell with Cubuild's
+        // padding (10/6 on a 64 canvas => ~7.5/4.5 on 48), so flowers/mushrooms/saplings show as
+        // their real sprite instead of a squished 3D diagonal.
+        private void DrawCrossSprite(byte[] dst, int cellDi, int atlasW, TextureRect tile)
+        {
+            const float padX = 7.5f;
+            const float padY = 4.5f;
+            for (int py = 0; py < IconCellSize; py++)
+            {
+                for (int px = 0; px < IconCellSize; px++)
+                {
+                    float u = (px - padX) / (IconCellSize - padX * 2f);
+                    float v = (py - padY) / (IconCellSize - padY * 2f);
+                    if (u >= 0f && u <= 1f && v >= 0f && v <= 1f)
+                    {
+                        int di = cellDi + (py * atlasW + px) * 4;
+                        SampleTile(dst, di, tile, u, v, 1.0f);
+                    }
+                }
             }
         }
 

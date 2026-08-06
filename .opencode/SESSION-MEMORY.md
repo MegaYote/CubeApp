@@ -87,3 +87,11 @@ Run target: `bin\Debug\net9.0-windows\win-x64\CubeApp.exe` — the `bin\Debug\ne
 - Optional: lava pass by copying the water simulation logic.
 - New world gen is committed — the user should test seeds/variety across several new worlds; check chunk-gen timing with the waterprobe harness if gen feels slow (field approach should be fast).
 - Sky gradient + hotbar textures committed (983921d..HEAD). Fog stays OFF per user preference.
+
+## 🗿 LEGENDARY: Infdev MONOLITHS found by accident (8/5) — SEED 1716789065
+- User stumbled on the legendary **Infdev monoliths** — giant stone pillars shooting up into the sky, the famous glitched terrain feature from real Infdev 2010 (noise spikes → massive vertical towers).
+- Discovered by ACCIDENT, just like the original players did. There are "a bunch all over" — a whole monolith field.
+- This is a huge validation of the exact Infdev noise port: the density field occasionally spikes into colossal columns just like the real thing.
+- SEED: `1716789065`. Save this so the world can always be revisited.
+- The monoliths come from the terrain noise spike — NOT a bug to fix. This is the authentic Infdev experience. DO NOT "fix" it. If anything, document/preserve it.
+- Icons/GUI: all block icons now software-render the REAL mesher output (Mesher.GenerateMesh on a tiny 16x16x16 chunk, block at (8,8,8)) into 48px cells — single source of truth, no hardcoded shape variants. Studio lighting (Infdev face multipliers top 1.0/bottom 0.5/E+W 0.6/N+S 0.8), GPU-exact face-axis UVs, isometric projection `sx = 10.5 + 13.5*x + 13.5*z, sy = 30.75 + 6.75*x - 6.75*z - 19.5*y`, painter's sort DESCENDING by depth key (-cx+cz-cy, larger = farther, far first). Cross plants = flat sprite. Stairs forced to meta 1 (low step toward viewer).
