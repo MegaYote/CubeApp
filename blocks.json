@@ -107,10 +107,24 @@
     { "id": "purple_cloth",    "displayName": "Purple Cloth",    "texture": "13,7", "mapColor": "#7A2BD0" },
     { "id": "magenta_cloth",   "displayName": "Magenta Cloth",   "texture": "14,7", "mapColor": "#D02BD0" },
 
-    { "id": "blue_glass",      "displayName": "Blue Glass",      "texture": "1,5", "shape": "glass", "opaque": false, "transparent": true, "mapColor": "#7A7AFF" },
-    { "id": "red_glass",       "displayName": "Red Glass",       "texture": "2,5", "shape": "glass", "opaque": false, "transparent": true, "mapColor": "#FF6A6A" },
-    { "id": "green_glass",     "displayName": "Green Glass",     "texture": "3,5", "shape": "glass", "opaque": false, "transparent": true, "mapColor": "#6AFF6A" },
-    { "id": "yellow_glass",    "displayName": "Yellow Glass",    "texture": "4,5", "shape": "glass", "opaque": false, "transparent": true, "mapColor": "#FFF06A" },
+    { "id": "blue_glass",      "displayName": "Blue Glass",      "texture": "1,5", "shape": "glass", "translucent": true, "opaque": false, "transparent": true, "mapColor": "#7A7AFF" },
+    { "id": "red_glass",       "displayName": "Red Glass",       "texture": "2,5", "shape": "glass", "translucent": true, "opaque": false, "transparent": true, "mapColor": "#FF6A6A" },
+    { "id": "green_glass",     "displayName": "Green Glass",     "texture": "3,5", "shape": "glass", "translucent": true, "opaque": false, "transparent": true, "mapColor": "#6AFF6A" },
+    { "id": "yellow_glass",    "displayName": "Yellow Glass",    "texture": "4,5", "shape": "glass", "translucent": true, "opaque": false, "transparent": true, "mapColor": "#FFF06A" },
+    { "id": "mosaic_glass",    "displayName": "Mosaic Glass",    "texture": "4,6", "shape": "glass", "translucent": true, "opaque": false, "transparent": true, "mapColor": "#9AD0E8" },
+
+    { "id": "purple_bricks",   "displayName": "Purple Bricks",   "texture": "5,6", "mapColor": "#7A4AB0" },
+    { "id": "orange_bricks",   "displayName": "Orange Bricks",   "texture": "6,6", "mapColor": "#E87A2A" },
+    { "id": "cobble_bricks",   "displayName": "Cobblestone Bricks","texture": "7,6", "mapColor": "#7A7A7A" },
+    { "id": "gray_bricks",     "displayName": "Gray Bricks",     "texture": "8,6", "mapColor": "#9A9A9A" },
+    { "id": "cobbled_quartz",  "displayName": "Cobbled Quartz",  "texture": "15,7", "mapColor": "#D8D2C8" },
+
+    { "id": "white_plastic",   "displayName": "White Plastic",   "texture": "1,8", "top": "0,8", "bottom": "2,8", "mapColor": "#E8E8E8" },
+    { "id": "yellow_plastic",  "displayName": "Yellow Plastic",  "texture": "1,9", "top": "0,9", "bottom": "2,9", "mapColor": "#F0D018" },
+    { "id": "blue_plastic",    "displayName": "Blue Plastic",    "texture": "1,10", "top": "0,10", "bottom": "2,10", "mapColor": "#3A6AF0" },
+    { "id": "green_plastic",   "displayName": "Green Plastic",   "texture": "1,11", "top": "0,11", "bottom": "2,11", "mapColor": "#3AB03A" },
+    { "id": "red_plastic",     "displayName": "Red Plastic",     "texture": "1,12", "top": "0,12", "bottom": "2,12", "mapColor": "#E03030" },
+    { "id": "black_plastic",   "displayName": "Black Plastic",   "texture": "1,13", "top": "0,13", "bottom": "2,13", "mapColor": "#2A2A2A" },
 
     { "id": "green_mushroom",  "displayName": "Green Mushroom",  "texture": "15,1", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#3A8A3A" }
   ]

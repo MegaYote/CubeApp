@@ -54,6 +54,35 @@ namespace CubeApp
             chunk.NeedsRemesh = true;
             chunk.IsMeshingQueued = true;
             _meshWorker.EnqueuePriority(coords);
+
+            // A block edit also affects the faces of the four cardinal neighbours (and the four
+            // diagonal neighbours at a chunk corner) that share the edited cell's border: the
+            // mesher culls border faces against the neighbour's blocks, and the water pass samples
+            // the 2x2 corner neighbourhood. MarkDirty already set NeedsRemesh on those neighbours,
+            // but nothing was ENQUEUING them - so a face touching the border stayed stale until the
+            // neighbour happened to be re-streamed. Enqueue any flagged border neighbours now so
+            // broken faces disappear and placed faces appear immediately.
+            int cx = coords.X;
+            int cz = coords.Z;
+            EnqueueIfDirty(new ChunkCoordinates(cx - 1, cz));
+            EnqueueIfDirty(new ChunkCoordinates(cx + 1, cz));
+            EnqueueIfDirty(new ChunkCoordinates(cx, cz - 1));
+            EnqueueIfDirty(new ChunkCoordinates(cx, cz + 1));
+            EnqueueIfDirty(new ChunkCoordinates(cx - 1, cz - 1));
+            EnqueueIfDirty(new ChunkCoordinates(cx + 1, cz - 1));
+            EnqueueIfDirty(new ChunkCoordinates(cx - 1, cz + 1));
+            EnqueueIfDirty(new ChunkCoordinates(cx + 1, cz + 1));
+        }
+
+        // Enqueues a neighbour for an immediate remesh if it is loaded AND was flagged dirty by the
+        // edit (MarkDirty set NeedsRemesh on it). Priority so the border face updates with the edit.
+        private void EnqueueIfDirty(ChunkCoordinates coords)
+        {
+            if (_manager.TryGetLoadedChunk(coords, out var chunk) && chunk.NeedsRemesh)
+            {
+                chunk.IsMeshingQueued = true;
+                _meshWorker.EnqueuePriority(coords);
+            }
         }
 
         public void Dispose() { }

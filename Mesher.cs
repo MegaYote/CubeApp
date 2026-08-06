@@ -766,7 +766,12 @@ namespace CubeApp
                     //                                  alpha-test, depth-write OFF, front-side)
                     var src = BlockRegistry.FaceTexture(entryType, axisNormal);
                     float alpha = BlockRegistry.Alpha(entryType);
-                    if (BlockRegistry.IsGlass(entryType)) alpha = -alpha - 100f;
+                    // Translucent (colored glass): sentinel alpha of -alpha - 200 routes to the GLASS
+                    // bucket (alpha < -10) so it draws with depth-write ON before water - its opaque
+                    // pixels occlude water behind it like regular glass. The shader branches on the
+                    // -200 offset to use the ATLAS PNG's per-pixel alpha instead of the cutout rule.
+                    if (BlockRegistry.IsTranslucent(entryType)) alpha = -alpha - 200f;
+                    else if (BlockRegistry.IsGlass(entryType)) alpha = -alpha - 100f;
                     else if (BlockRegistry.IsCutout(entryType)) alpha = -alpha;
                     mesh.Add(new MeshFace(corners[0], corners[1], corners[2], corners[3], src, axisNormal, blockPos, (float)brightness, tileWidth, tileHeight, alpha));
 
