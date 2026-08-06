@@ -595,6 +595,56 @@ namespace CubeApp
                 var length = Math.Sqrt(desiredDirection.X * desiredDirection.X + desiredDirection.Z * desiredDirection.Z);
                 desiredDirection *= 1.0 / length;
             }
+
+            bool feetInWater = PlayerSampleInWater(0.05);
+            bool bodyInWater = PlayerSampleInWater(PlayerHeight * 0.4);
+            bool headInWater = PlayerSampleInWater(PlayerHeight * 0.85);
+            bool inWater = feetInWater || bodyInWater || headInWater;
+            if (inWater)
+            {
+                // ---- Cubuild player water feel (Cubuild.html updatePlayerPhysics) ----
+                // Snappy and buoyant: horizontal velocity is set INSTANTLY to a fraction of walk
+                // speed, vertical gravity is scaled down by how deep you are, and holding Space is a
+                // hard upward thrust each frame. No velocity-damped float like Infdev's.
+                double submerged = (feetInWater ? 0.25 : 0) + (bodyInWater ? 0.5 : 0) + (headInWater ? 0.25 : 0);
+
+                // Horizontal: instant wish velocity at 42% walk speed.
+                var swimSpeed = desiredDirection * (WalkSpeed * 0.42);
+                playerVelocity = new Point3D(swimSpeed.X, playerVelocity.Y, swimSpeed.Z);
+
+                // Vertical: mild per-frame drag (0.96), then depth-scaled gravity
+                // (GRAVITY * max(0.16, 0.42 - submerged*0.20)) - deeper = lighter.
+                playerVelocity = new Point3D(
+                    playerVelocity.X,
+                    playerVelocity.Y * Math.Pow(0.96, deltaSeconds * 60.0),
+                    playerVelocity.Z);
+                double waterGravity = Gravity * Math.Max(0.16, 0.42 - submerged * 0.20);
+                playerVelocity = new Point3D(
+                    playerVelocity.X,
+                    playerVelocity.Y - waterGravity * deltaSeconds,
+                    playerVelocity.Z);
+
+                // Holding Space: hard upward thrust (JUMP_SPEED * 0.58 with body submerged, 0.7 in
+                // shallows) - sets the upward velocity, so you bob up briskly and stay up while held.
+                if (tickInput.MoveUp)
+                {
+                    double swimLift = bodyInWater ? 0.58 : 0.7;
+                    playerVelocity = new Point3D(
+                        playerVelocity.X,
+                        Math.Max(playerVelocity.Y, JumpVelocity * swimLift),
+                        playerVelocity.Z);
+                }
+
+                var swimDisplacement = playerVelocity * deltaSeconds;
+                MovePlayerWithCollisions(swimDisplacement);
+
+                // Walk cycle driven from horizontal speed like ground movement.
+                double swimHSpeed = Math.Sqrt(playerVelocity.X * playerVelocity.X + playerVelocity.Z * playerVelocity.Z);
+                playerWalkAmount = (float)Math.Min(1.0, swimHSpeed / WalkSpeed);
+                playerWalkPhase += deltaSeconds * playerWalkAmount * 10f;
+                return;
+            }
+
             var horizontalVelocity = desiredDirection * WalkSpeed;
             var verticalVelocity = playerVelocity.Y;
             if (tickInput.JumpPressed && playerGrounded)
@@ -655,6 +705,19 @@ namespace CubeApp
                 playerVelocity = new Point3D(playerVelocity.X, 0, playerVelocity.Z);
             }
             else playerGrounded = false;
+        }
+
+        // Samples a single block at the player's X/Z and feet+offset (matching Cubuild's
+        // playerFeetInWater/playerBodyInWater/playerHeadInWater: sample at pos.y + 0.05,
+        // + HEIGHT*0.4, + HEIGHT*0.85, where pos.y is the FEET). Our cameraPosition is the eye,
+        // so feet = eye - EyeHeight.
+        private bool PlayerSampleInWater(double heightOffset)
+        {
+            int id = BlockRegistry.GetId("water");
+            int x = (int)Math.Floor(cameraPosition.X);
+            int y = (int)Math.Floor(cameraPosition.Y - EyeHeight + heightOffset);
+            int z = (int)Math.Floor(cameraPosition.Z);
+            return manager.TryGetLoadedBlock(x, y, z, out var block) && block == id;
         }
 
         // Auto step-up: raise the player up to MaxStepHeight, retry the horizontal move, then
