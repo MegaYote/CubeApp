@@ -41,6 +41,11 @@ namespace CubeApp.Renderer
         // blocking it from ever drawing (which made border water walls render as ghosty
         // see-through when their chunk happened to draw before the terrain behind).
         private Pipeline _transparentPipeline;
+        // Translucent tint pass (colored glass): drawn AFTER water with depth-write OFF. Renders
+        // only the semi-transparent pixels of colored-glass faces (sentinel alpha ~ -200), blending
+        // the glass tint over whatever is behind it - so water behind glass stays visible through
+        // the transparent panes while the opaque frames (drawn in the glass pass) still occlude.
+        private Pipeline _translucentPipeline;
         private Pipeline _highlightPipeline;
         private DeviceBuffer _highlightVertexBuffer;
         private DeviceBuffer _highlightIndexBuffer;
@@ -693,7 +698,9 @@ namespace CubeApp.Renderer
             // E/W 0.6, N/S 0.8) - NOT the mesher's Shade, which bakes in the tiny chunk's simulated
             // light that attenuates by the block's y position and leaves partial shapes looking dark.
             float shade = FaceIconShade(f.Normal);
-            bool cutout = f.Alpha < 0f;       // cross plants / glass: per-pixel sprite alpha
+            // Cutout = per-pixel sprite alpha (cross plants, glass, and translucent colored glass
+            // sentinel -200) so the icon shows the PNG's real transparency.
+            bool cutout = f.Alpha < 0f;
             bool transparent = !cutout && f.Alpha < 1f; // water etc.
             int spanU = Math.Max(1, f.TileWidth);
             int spanV = Math.Max(1, f.TileHeight);
@@ -975,10 +982,12 @@ void main() {
                 Outputs = _sc.Framebuffer.OutputDescription
             });
 
-            // Glass: cutout rules (0.5 alpha discard, no blend) but with depth-write ON so the
-            // frames occlude things drawn later (water behind glass can't paint over the frame),
-            // while the discarded panes leave no depth - far glass/water still shows through the
-            // clear panes. BACK culling so inside faces never render through the panes.
+            // Glass frame pass: cutout rules (0.5 alpha discard, no blend) with depth-write ON so
+            // the opaque frames occlude things drawn later (water behind glass can't paint over the
+            // frame), while the discarded panes leave no depth - water shows through the clear
+            // panes. This pass handles BOTH regular glass and the opaque frame pixels of translucent
+            // colored glass (whose sentinel vColor.a ~ -200 still discards tex.a < 0.5 normally).
+            // BACK culling so inside faces never render through the panes.
             _glassPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
             {
                 BlendState = BlendStateDescription.SingleDisabled,
@@ -987,6 +996,47 @@ void main() {
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
                 ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
                 ShaderSet = cutoutShaderSet,
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
+
+            // Translucent tint pass (colored glass): drawn AFTER water. Only faces with the -200
+            // sentinel (translucent) render here, and only their semi-transparent pixels (tex.a <
+            // 0.5, which the frame pass discarded) - blended per-pixel with depth-write OFF, so the
+            // glass tint paints OVER whatever is behind it (water, terrain) without blocking it.
+            // Regular glass faces (sentinel -100) are culled by the shader and never reach here.
+            string tintFsCode = @"#version 450
+layout(location=0) in vec2 vLocalUV;
+layout(location=1) in vec4 vTileRect;
+layout(location=2) in vec4 vColor;
+layout(location=3) in vec3 vWorldPos;
+layout(set=1, binding=0) uniform sampler2D uAtlas;
+layout(set=2, binding=0) uniform FogParams {
+    vec4 fogColor;
+    vec2 fogRange;
+    vec4 cameraPos;
+};
+layout(location=0) out vec4 outColor;
+void main() {
+    if (vColor.a > -150.0) discard; // only translucent (colored) glass - sentinel ~ -200
+    vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
+    vec4 tex = texture(uAtlas, atlasUV);
+    if (tex.a >= 0.5) discard;      // opaque frame pixels already drawn by the glass pass
+    outColor = vec4(tex.rgb * vColor.rgb, tex.a);
+    float dist = length(vWorldPos - cameraPos.xyz);
+    float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
+    outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);
+}";
+            var tintFsSpirv = SpirvCompilation.CompileGlslToSpirv(tintFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var tintShaders = factory.CreateFromSpirv(vsDesc, new ShaderDescription(ShaderStages.Fragment, tintFsSpirv.SpirvBytes, "main"));
+            var tintShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { vs, tintShaders[1] });
+            _translucentPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleAlphaBlend,
+                DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
+                ShaderSet = tintShaderSet,
                 Outputs = _sc.Framebuffer.OutputDescription
             });
 
@@ -1385,6 +1435,13 @@ void main() {
                 {
                     SortPassBackToFront(_transparentDrawCommands);
                     DrawWorldPass(cl, _transparentDrawCommands, _transparentIndirectScratch, _transparentPipeline);
+                }
+                // Translucent tint (colored glass) draws AFTER water so its semi-transparent pixels
+                // paint over the water/terrain behind it without depth-blocking anything.
+                if (_glassDrawCommands.Count > 0)
+                {
+                    SortPassBackToFront(_glassDrawCommands);
+                    DrawWorldPass(cl, _glassDrawCommands, _glassIndirectScratch, _translucentPipeline);
                 }
             }
 
@@ -2832,6 +2889,7 @@ void main() {
             _cutoutPipeline?.Dispose();
             _glassPipeline?.Dispose();
             _transparentPipeline?.Dispose();
+            _translucentPipeline?.Dispose();
             if (_iconAtlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_iconAtlasTexture);
             if (_atlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_atlasTexture);
             if (_logoTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_logoTexture);

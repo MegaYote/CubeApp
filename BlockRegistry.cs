@@ -27,6 +27,7 @@ namespace CubeApp
         private static bool[] _cross = Array.Empty<bool>();
         private static bool[] _cutout = Array.Empty<bool>();
         private static bool[] _glass = Array.Empty<bool>();
+        private static bool[] _translucent = Array.Empty<bool>();
         private static bool[] _slab = Array.Empty<bool>();
         private static bool[] _slabTop = Array.Empty<bool>();
         private static bool[] _stair = Array.Empty<bool>();
@@ -59,6 +60,7 @@ namespace CubeApp
             public double Alpha { get; set; } = 1.0;
             public string? Shape { get; set; }
             public bool Inventory { get; set; } = true;
+            public bool Translucent { get; set; } = false;
             public int LightEmission { get; set; } = 0;
             public string? MapColor { get; set; } = "#000000";
         }
@@ -100,6 +102,7 @@ namespace CubeApp
                     Alpha = (float)dto.Alpha,
                     Shape = dto.Shape ?? "",
                     Inventory = dto.Inventory,
+                    Translucent = dto.Translucent,
                     LightEmission = dto.LightEmission,
                     MapColor = ParseMapColor(dto.MapColor ?? "#000000"),
                 };
@@ -127,6 +130,7 @@ namespace CubeApp
             _cross = new bool[Count];
             _cutout = new bool[Count];
             _glass = new bool[Count];
+            _translucent = new bool[Count];
             _slab = new bool[Count];
             _slabTop = new bool[Count];
             _stair = new bool[Count];
@@ -142,6 +146,7 @@ namespace CubeApp
                 _cross[i] = string.Equals(defs[i].Shape, "cross", StringComparison.OrdinalIgnoreCase);
                 _cutout[i] = _cross[i] || string.Equals(defs[i].Shape, "cutout", StringComparison.OrdinalIgnoreCase);
                 _glass[i] = string.Equals(defs[i].Shape, "glass", StringComparison.OrdinalIgnoreCase);
+                _translucent[i] = defs[i].Translucent;
                 _slab[i] = string.Equals(defs[i].Shape, "slab", StringComparison.OrdinalIgnoreCase);
                 _slabTop[i] = string.Equals(defs[i].Shape, "slab_top", StringComparison.OrdinalIgnoreCase);
                 _stair[i] = string.Equals(defs[i].Shape, "stairs", StringComparison.OrdinalIgnoreCase);
@@ -204,6 +209,7 @@ namespace CubeApp
         public static bool IsCross(int id) => id > 0 && id < Count && _cross[id];
         public static bool IsCutout(int id) => id > 0 && id < Count && _cutout[id];
         public static bool IsGlass(int id) => id > 0 && id < Count && _glass[id];
+        public static bool IsTranslucent(int id) => id > 0 && id < Count && _translucent[id];
         public static bool IsSlab(int id) => id > 0 && id < Count && _slab[id];
         public static bool IsSlabTop(int id) => id > 0 && id < Count && _slabTop[id];
         public static bool IsStair(int id) => id > 0 && id < Count && _stair[id];

@@ -40,6 +40,10 @@ namespace CubeApp
         /// <summary>Whether the block shows up in the E-menu inventory. Placement-only variants
         /// (like the auto-picked top slabs) set this false.</summary>
         public bool Inventory { get; set; } = true;
+        /// <summary>Per-pixel translucent (colored glass): the atlas texture's OWN alpha is used for
+        /// blending per fragment instead of the block's uniform vColor.a. Regular glass uses the
+        /// cutout pipeline (0.5 discard, no blend).</summary>
+        public bool Translucent { get; set; } = false;
         /// <summary>Reserved for block-light emission (torches, glowstone). 0..15, currently unused.</summary>
         public int LightEmission { get; set; }
         /// <summary>Hotbar / debug swatch colour, an ImGui packed U32 (0xAABBGGRR, full alpha).</summary>
