@@ -23,6 +23,9 @@
     <EmbeddedResource Include="blocks.json" />
     <!-- Title-screen logo graphic. -->
     <EmbeddedResource Include="cubuild.png" />
+    <!-- Hotbar frame (169x16, 10 slots) + selected-slot highlight (18x18), from Cubuild.html. -->
+    <EmbeddedResource Include="hotbar.png" />
+    <EmbeddedResource Include="hotbar_select.png" />
   </ItemGroup>
   <ItemGroup>
     <!-- Copy GLB models to output -->

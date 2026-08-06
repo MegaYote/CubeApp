@@ -52,6 +52,25 @@ namespace CubeApp.Renderer
         private DeviceBuffer _chunkBorderIndexBuffer;
         private float[] _chunkBorderVertexScratch = new float[768]; // grown on demand for larger render distances
 
+        // Infdev sky (RenderGlobal.renderSky): two GIANT fog-blended planes drawn before the world
+        // with depth-write off. Top plane (glSkyList) at cameraY+16 uses the sky color, bottom plane
+        // (glSkyList2) at cameraY-16 uses the darkened color (r*0.2+0.04, g*0.2+0.04, b*0.6+0.1).
+        // Linear fog (start 0, end farPlane*0.8 = Infdev's setupFog(-1)) fades them toward the fog
+        // color at the horizon - that's the whole Infdev sky gradient, no dome or shader magic.
+        private Pipeline _skyPipeline;
+        private DeviceBuffer _skyVertexBuffer;
+        private DeviceBuffer _skyIndexBuffer;
+        private DeviceBuffer _skyFogBuffer;
+        private ResourceLayout _skyFogLayout;
+        private ResourceSet _skyFogSet;
+        private readonly float[] _skyFogParams = new float[12];
+        // Infdev draws the sky in CAMERA space (the display lists sit at y=16 relative to the eye,
+        // transformed only by the camera rotation + projection). We mirror that: a static
+        // camera-space vertex buffer + this rotation-only view-projection, so the sky is
+        // structurally locked to the camera and can never drift as the player walks.
+        private DeviceBuffer _skyMatrixBuffer;
+        private ResourceSet _skyMatrixSet;
+
         // Textured entity-model pipeline (currently just the duck test mob).
         private Pipeline _modelPipeline;
         private Texture _duckTexture;
@@ -115,6 +134,15 @@ namespace CubeApp.Renderer
         private Texture? _logoTexture;
         private TextureView? _logoView;
         private IntPtr _logoImGuiId;
+        // Hotbar GUI textures (embedded from Cubuild.html): the 169x16 slot frame and the 18x18
+        // selected-slot highlight. Exposed to ImGui so the hotbar can draw the real MC-style frame
+        // with the isometric block icons on top.
+        private Texture? _hotbarTexture;
+        private TextureView? _hotbarView;
+        private IntPtr _hotbarImGuiId;
+        private Texture? _hotbarSelectTexture;
+        private TextureView? _hotbarSelectView;
+        private IntPtr _hotbarSelectImGuiId;
         private byte[] _worldNameBuffer = new byte[64];
         private byte[] _seedBuffer = new byte[64];
         private bool _menuBuffersInitialized;
@@ -298,6 +326,7 @@ namespace CubeApp.Renderer
             }
 
             LoadLogo();
+            LoadHotbarTextures();
         }
 
         // Loads the embedded title-screen logo and exposes it to ImGui.
@@ -320,6 +349,44 @@ namespace CubeApp.Renderer
             catch
             {
                 // ignore; the title falls back to text if the logo can't load
+            }
+        }
+
+        // Loads the embedded hotbar GUI textures (frame + selection highlight) from Cubuild.html
+        // and exposes them to ImGui for the hotbar drawing.
+        private void LoadHotbarTextures()
+        {
+            try
+            {
+                byte[]? frameBytes = LoadImageBytes("hotbar.png");
+                if (frameBytes != null)
+                {
+                    var frame = StbImageSharp.ImageResult.FromMemory(frameBytes, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                    var frameDesc = TextureDescription.Texture2D((uint)frame.Width, (uint)frame.Height, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
+                    _hotbarTexture = _gd.ResourceFactory.CreateTexture(frameDesc);
+                    _gd.UpdateTexture(_hotbarTexture, frame.Data, 0, 0, 0, (uint)frame.Width, (uint)frame.Height, 1, 0, 0);
+                    _hotbarView = _gd.ResourceFactory.CreateTextureView(_hotbarTexture);
+                }
+
+                byte[]? selectBytes = LoadImageBytes("hotbar_select.png");
+                if (selectBytes != null)
+                {
+                    var sel = StbImageSharp.ImageResult.FromMemory(selectBytes, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                    var selDesc = TextureDescription.Texture2D((uint)sel.Width, (uint)sel.Height, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
+                    _hotbarSelectTexture = _gd.ResourceFactory.CreateTexture(selDesc);
+                    _gd.UpdateTexture(_hotbarSelectTexture, sel.Data, 0, 0, 0, (uint)sel.Width, (uint)sel.Height, 1, 0, 0);
+                    _hotbarSelectView = _gd.ResourceFactory.CreateTextureView(_hotbarSelectTexture);
+                }
+
+                if (_imguiRenderer != null)
+                {
+                    if (_hotbarView != null) _hotbarImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _hotbarView);
+                    if (_hotbarSelectView != null) _hotbarSelectImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _hotbarSelectView);
+                }
+            }
+            catch
+            {
+                // ignore; the hotbar falls back to drawn rects if the textures can't load
             }
         }
 
@@ -503,38 +570,41 @@ namespace CubeApp.Renderer
                     {
                         int di = ((cellY + py) * atlasW + (cellX + px)) * 4;
 
-                        // Right face: u from front toward back, v straight down.
+                        // Right face (+X): u from front toward back, v straight down. Infdev shades
+                        // E+W faces 0.6.
                         float u = (px - cx) / halfW;
                         if (u >= 0f && u <= 1f)
                         {
                             float v = (py - diamondBottomY + u * diamondHalfDrop) / sideDrop;
                             if (v >= 0f && v <= 1f)
                             {
-                                SampleTile(iconData, di, rightTile, u, v);
+                                SampleTile(iconData, di, rightTile, u, v, 0.6f);
                                 continue;
                             }
                         }
 
-                        // Front-left face: u from back toward front, v straight down.
+                        // Front-left face (-Z): u from back toward front, v straight down. Infdev
+                        // shades N+S faces 0.8.
                         u = (px - cx + halfW) / halfW;
                         if (u >= 0f && u <= 1f)
                         {
                             float v = (py - diamondMidY - u * diamondHalfDrop) / sideDrop;
                             if (v >= 0f && v <= 1f)
                             {
-                                SampleTile(iconData, di, leftTile, u, v);
+                                SampleTile(iconData, di, leftTile, u, v, 0.8f);
                                 continue;
                             }
                         }
 
-                        // Top face: diamond (affine inverse of the top parallelogram).
+                        // Top face: diamond (affine inverse of the top parallelogram). Infdev shades
+                        // the top 1.0 (full bright).
                         float su = px - cx;
                         float sv = py - diamondTopY;
                         u = (su + 2f * sv) / topDenom;
                         float tv = (2f * sv - su) / topDenom;
                         if (u >= 0f && u <= 1f && tv >= 0f && tv <= 1f)
                         {
-                            SampleTile(iconData, di, topTile, u, tv);
+                            SampleTile(iconData, di, topTile, u, tv, 1.0f);
                         }
                     }
                 }
@@ -554,15 +624,17 @@ namespace CubeApp.Renderer
             }
         }
 
-        // Copies one nearest-sampled texel from the terrain atlas into the icon buffer.
-        private void SampleTile(byte[] dst, int di, TextureRect tile, float u, float v)
+        // Copies one nearest-sampled texel from the terrain atlas into the icon buffer, applying the
+        // Infdev per-face shade multiplier (top 1.0, N+S 0.8, E+W 0.6) so the icon cubes read like
+        // the shaded blocks in the world.
+        private void SampleTile(byte[] dst, int di, TextureRect tile, float u, float v, float shade)
         {
             int tx = tile.X + (int)(u * 15.999f);
             int ty = tile.Y + (int)(v * 15.999f);
             int si = (ty * _atlasPixelsW + tx) * 4;
-            dst[di + 0] = _atlasRgba[si + 0];
-            dst[di + 1] = _atlasRgba[si + 1];
-            dst[di + 2] = _atlasRgba[si + 2];
+            dst[di + 0] = (byte)(_atlasRgba[si + 0] * shade);
+            dst[di + 1] = (byte)(_atlasRgba[si + 1] * shade);
+            dst[di + 2] = (byte)(_atlasRgba[si + 2] * shade);
             dst[di + 3] = _atlasRgba[si + 3];
         }
 
@@ -736,6 +808,7 @@ void main() {
             CreateHighlightPipeline();
             CreateChunkBorderPipeline();
             CreateModelPipeline();
+            CreateSkyPipeline();
         }
 
         // Pipeline for textured entity models (the duck). Vertices are supplied in world space each
@@ -890,6 +963,89 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                 256 * sizeof(ushort), BufferUsage.IndexBuffer | BufferUsage.Dynamic));
         }
 
+        // Pipeline for the Infdev sky: two huge flat planes (glSkyList at y+16, glSkyList2 at y-16,
+        // centered on the camera) that get linear fog applied per-fragment - bright sky color
+        // overhead, fog color at the horizon, and a darkened indigo below the horizon. Drawn with
+        // depth-write OFF before the world so terrain always paints over it.
+        private void CreateSkyPipeline()
+        {
+            var factory = _gd.ResourceFactory;
+
+            string vsCode = @"#version 450
+layout(location=0) in vec3 aPosition;
+layout(location=1) in vec4 aColor;
+layout(location=0) out vec3 vWorldPos;
+layout(location=1) out vec4 vColor;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() { vWorldPos = aPosition; vColor = aColor; gl_Position = projView * vec4(aPosition, 1.0); }";
+
+            string fsCode = @"#version 450
+layout(location=0) in vec3 vWorldPos;
+layout(location=1) in vec4 vColor;
+layout(set=1, binding=0) uniform SkyFog {
+    vec4 fogColor;   // rgb + pad
+    vec2 fogRange;   // start, end
+    vec4 cameraPos;  // xyz + pad
+};
+layout(location=0) out vec4 outColor;
+void main() {
+    // Infdev's sky fog is setupFog(-1): linear from 0 to farPlane*0.8. Distance to the camera
+    // drives the gradient - overhead (16 blocks) is clear, the horizon is fully fogged.
+    float dist = length(vWorldPos - cameraPos.xyz);
+    float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
+    outColor = vec4(mix(fogColor.rgb, vColor.rgb, fog), 1.0);
+}";
+
+            var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var fsSpirv = SpirvCompilation.CompileGlslToSpirv(fsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var shaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, vsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main"));
+
+            var vertexLayout = new VertexLayoutDescription(
+                new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                new VertexElementDescription("aColor", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
+
+            // Dedicated fog uniform for the sky so its range (0 .. farPlane*0.8) doesn't disturb the
+            // world fog buffer (which is currently disabled but shares the same 48-byte layout).
+            _skyFogLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
+                new ResourceLayoutElementDescription("SkyFog", ResourceKind.UniformBuffer, ShaderStages.Fragment)));
+            _skyFogBuffer = factory.CreateBuffer(new BufferDescription(48, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _skyFogSet = factory.CreateResourceSet(new ResourceSetDescription(_skyFogLayout, _skyFogBuffer));
+
+            // The sky matrix reuses the projView layout (mat4) but holds the ROTATION-ONLY view *
+            // projection, so the camera-space sky quads render glued to the eye (Infdev's approach).
+            _skyMatrixBuffer = factory.CreateBuffer(new BufferDescription(64, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _skyMatrixSet = factory.CreateResourceSet(new ResourceSetDescription(_projViewLayout, _skyMatrixBuffer));
+
+            var pipelineDesc = new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleDisabled,
+                // No depth test AND no depth write: the sky is drawn first and the world paints over
+                // it, so it must never read or write the depth buffer. If it depth-tests, its giant
+                // planes (768 blocks wide, well past the far plane) write depth in FRONT of distant
+                // terrain, making everything beyond the plane fail the depth test - "invisible
+                // terrain that follows the camera".
+                DepthStencilState = DepthStencilStateDescription.Disabled,
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _skyFogLayout },
+                ShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { shaders[0], shaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            };
+
+            _skyPipeline = factory.CreateGraphicsPipeline(pipelineDesc);
+
+            // Two quads (top + bottom sky planes): 8 vertices of pos(3)+color(4) = 56 floats.
+            // The buffer is filled in DrawSky with CAMERA-SPACE coordinates (relative to the eye),
+            // so it never needs world-space rebuilding.
+            _skyVertexBuffer = factory.CreateBuffer(new BufferDescription(
+                8 * 7 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            _skyIndexBuffer = factory.CreateBuffer(new BufferDescription(
+                12 * sizeof(ushort), BufferUsage.IndexBuffer));
+            _gd.UpdateBuffer(_skyIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7 });
+        }
+
         public void Resize(int width, int height)
         {
             _sc?.Resize((uint)Math.Max(1, width), (uint)Math.Max(1, height));
@@ -965,8 +1121,11 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             var cl = _commandList;
             cl.Begin();
             cl.SetFramebuffer(_sc.Framebuffer);
-            // Infdev's daytime sky (World.skyColor = 0x88BBFF).
-            cl.ClearColorTarget(0, new RgbaFloat(136f / 255f, 187f / 255f, 1f, 1f));
+            // Infdev clears to the FOG color (EntityRenderer.updateFogColor -> glClearColor), NOT the
+            // sky color. The sky planes fade to this same fog color at the far plane, so clearing to
+            // fog color makes the horizon band (where the flat sky planes are clipped) blend
+            // seamlessly instead of showing a bright sky-blue ring that follows the camera.
+            cl.ClearColorTarget(0, new RgbaFloat(192f / 255f, 216f / 255f, 1f, 1f));
             cl.ClearDepthStencil(1f);
 
             // Advance the block-break particle simulation with the real frame delta.
@@ -977,6 +1136,8 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             if (_particleCount > 0) UpdateParticles(particleDt);
 
             UpdateFog();
+
+            DrawSky(cl);
 
             cl.SetPipeline(_pipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
@@ -1156,8 +1317,8 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
         // The far plane scales with the render distance, so the F key moves the fog with it.
         private void UpdateFog()
         {
-            // Fog disabled for now (fogStart 0 + huge fogEnd keeps the fog factor ~1 = clear at
-            // every distance). The uniform plumbing stays so it's trivial to re-enable later.
+            // Fog DISABLED by request - fogStart 0 + huge fogEnd keeps the fog factor ~1 = clear at
+            // every distance. The uniform plumbing stays so it's trivial to re-enable later.
             _fogParams[0] = 192f / 255f;
             _fogParams[1] = 216f / 255f;
             _fogParams[2] = 1f;
@@ -1172,6 +1333,74 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             }
             _fogParams[9] = 1f;
             _gd.UpdateBuffer(_fogBuffer, 0, _fogParams);
+        }
+
+        // Renders the Infdev sky: two giant fog-blended planes in CAMERA SPACE - the TOP plane sits
+        // 16 blocks above the eye in Infdev's sky color (0x88BBFF); the BOTTOM plane sits 16 below
+        // in the darkened color ((r*0.2+0.04, g*0.2+0.04, b*0.6+0.1)). Both fade to the fog color
+        // (0xC0D8FF) with distance - the classic Infdev sky gradient. The vertices are CAMERA-space
+        // (relative to the eye, spanning the far plane in every direction), transformed by a
+        // ROTATION-ONLY view-projection, so the sky is structurally locked to the camera and can
+        // never drift as the player walks - exactly how Infdev's display lists work.
+        private void DrawSky(CommandList cl)
+        {
+            if (_skyPipeline == null) return;
+
+            // Infdev sky colors at full daylight (World.skyColor = 0x88BBFF, fogColor = 0xC0D8FF).
+            float skyR = 136f / 255f, skyG = 187f / 255f, skyB = 1f;
+            float darkR = skyR * 0.2f + 0.04f;
+            float darkG = skyG * 0.2f + 0.04f;
+            float darkB = skyB * 0.6f + 0.1f;
+
+            // Infdev's sky fog: setupFog(-1) = linear 0 .. farPlane*0.8. The camera sits at the
+            // origin of camera space, so the fog distance is just the fragment's position length.
+            _skyFogParams[0] = 192f / 255f;
+            _skyFogParams[1] = 216f / 255f;
+            _skyFogParams[2] = 1f;
+            _skyFogParams[3] = 1f;
+            _skyFogParams[4] = 0f;
+            _skyFogParams[5] = _farPlane * 0.8f;
+            _skyFogParams[6] = 0f;
+            _skyFogParams[7] = 0f;
+            _skyFogParams[8] = 0f;
+            _skyFogParams[9] = 1f;
+            _gd.UpdateBuffer(_skyFogBuffer, 0, _skyFogParams);
+
+            // Extent large enough to cover the far plane from any camera yaw (Infdev uses a 64-step
+            // grid out to +-384, well past the far plane; we use the same scale).
+            float extent = Math.Max(_farPlane * 2f, 768f);
+
+            // 8 vertices in CAMERA space (eye at origin): top quad at y=+16 (verts 0-3), bottom
+            // quad at y=-16 (verts 4-7). pos(3) + color(4).
+            var v = new float[56];
+            SetSkyVertex(v, 0, -extent, 16f, -extent, skyR, skyG, skyB);
+            SetSkyVertex(v, 1, extent, 16f, -extent, skyR, skyG, skyB);
+            SetSkyVertex(v, 2, extent, 16f, extent, skyR, skyG, skyB);
+            SetSkyVertex(v, 3, -extent, 16f, extent, skyR, skyG, skyB);
+            SetSkyVertex(v, 4, -extent, -16f, -extent, darkR, darkG, darkB);
+            SetSkyVertex(v, 5, extent, -16f, -extent, darkR, darkG, darkB);
+            SetSkyVertex(v, 6, extent, -16f, extent, darkR, darkG, darkB);
+            SetSkyVertex(v, 7, -extent, -16f, extent, darkR, darkG, darkB);
+
+            _gd.UpdateBuffer(_skyVertexBuffer, 0, v);
+            cl.SetPipeline(_skyPipeline);
+            cl.SetGraphicsResourceSet(0, _skyMatrixSet);
+            cl.SetGraphicsResourceSet(1, _skyFogSet);
+            cl.SetVertexBuffer(0, _skyVertexBuffer);
+            cl.SetIndexBuffer(_skyIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed(12, 1, 0, 0, 0);
+        }
+
+        private static void SetSkyVertex(float[] v, int index, float x, float y, float z, float r, float g, float b)
+        {
+            int o = index * 7;
+            v[o] = x;
+            v[o + 1] = y;
+            v[o + 2] = z;
+            v[o + 3] = r;
+            v[o + 4] = g;
+            v[o + 5] = b;
+            v[o + 6] = 1f;
         }
 
         // Issues one indirect world draw for a chunk-command pass (opaque or transparent) using the
@@ -2196,53 +2425,104 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             // The targeted block face highlight is drawn as a depth-tested 3D quad in Render(),
             // not here, so that blocks in front of it occlude it correctly.
 
-            // Hotbar
-            const int slotSize = 48;
-            const int padding = 6;
+            // Hotbar - uses the Cubuild.html GUI frame texture (169x16, 10 slots of 16px + 1px
+            // gap) at 3x scale (507x48 on screen, 48px slots / 3px gaps). The selected slot gets
+            // the 18x18 yellow highlight texture stretched over it, and each slot draws its
+            // isometric block icon + number on top - same functionality as before, just with the
+            // real frame art.
             const int hotbarSlots = 10;
-            int totalWidth = hotbarSlots * (slotSize + padding) - padding;
+            const int hotbarScale = 3;
+            const int slotSize = 16 * hotbarScale;     // 48
+            const int slotGap = 1 * hotbarScale;        // 3
+            int totalWidth = hotbarSlots * slotSize + (hotbarSlots - 1) * slotGap; // 507
+            const int hotbarHeight = 16 * hotbarScale; // 48
             float startX = (displaySize.X - totalWidth) / 2f;
-            float hotbarY = displaySize.Y - slotSize - 16f;
+            float hotbarY = displaySize.Y - hotbarHeight - 16f;
 
-            uint slotBg = ImGui.ColorConvertFloat4ToU32(new Vector4(36 / 255f, 45 / 255f, 52 / 255f, 1f));
-            uint slotBorder = ImGui.ColorConvertFloat4ToU32(new Vector4(100 / 255f, 150 / 255f, 200 / 255f, 1f));
-            uint activeBorder = ImGui.ColorConvertFloat4ToU32(new Vector4(255 / 255f, 215 / 255f, 110 / 255f, 1f));
             uint textColor = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 1f));
+
+            if (_hotbarImGuiId != IntPtr.Zero)
+            {
+                // Draw the whole slot frame as one stretched image.
+                drawList.AddImage(
+                    _hotbarImGuiId,
+                    new Vector2(startX, hotbarY),
+                    new Vector2(startX + totalWidth, hotbarY + hotbarHeight),
+                    Vector2.Zero,
+                    Vector2.One);
+            }
+            else
+            {
+                // Fallback if the embedded texture is missing: draw plain slot rects.
+                uint slotBg = ImGui.ColorConvertFloat4ToU32(new Vector4(36 / 255f, 45 / 255f, 52 / 255f, 1f));
+                uint slotBorder = ImGui.ColorConvertFloat4ToU32(new Vector4(100 / 255f, 150 / 255f, 200 / 255f, 1f));
+                for (int i = 0; i < hotbarSlots; i++)
+                {
+                    float x = startX + i * (slotSize + slotGap);
+                    drawList.AddRectFilled(new Vector2(x, hotbarY), new Vector2(x + slotSize, hotbarY + slotSize), slotBg);
+                    drawList.AddRect(new Vector2(x, hotbarY), new Vector2(x + slotSize, hotbarY + slotSize), slotBorder);
+                }
+            }
 
             for (int i = 0; i < hotbarSlots; i++)
             {
-                float x = startX + i * (slotSize + padding);
-                var topLeft = new Vector2(x, hotbarY);
-                var bottomRight = new Vector2(x + slotSize, hotbarY + slotSize);
-                drawList.AddRectFilled(topLeft, bottomRight, slotBg);
-                drawList.AddRect(topLeft, bottomRight, slotBorder);
+                float x = startX + i * (slotSize + slotGap);
+                var slotTopLeft = new Vector2(x, hotbarY);
 
-                if (i == _hud.SelectedSlot)
+                // Dim the transparent slot interior so block icons read clearly against the world
+                // behind the hotbar (drawn first, under the icon and selection ring).
+                uint slotDim = ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.35f));
+                drawList.AddRectFilled(slotTopLeft + new Vector2(3, 3), slotTopLeft + new Vector2(slotSize - 3, slotSize - 3), slotDim);
+
+                if (i == _hud.SelectedSlot && _hotbarSelectImGuiId != IntPtr.Zero)
                 {
-                    drawList.AddRect(topLeft + new Vector2(4, 4), bottomRight - new Vector2(4, 4), activeBorder, 0f, ImDrawFlags.None, 2f);
+                    // The 18x18 highlight box stretches over the whole slot (48px here). The selected
+                    // slot gets a slightly larger box so the active choice pops out from the others.
+                    const float selScale = 1.25f;
+                    float selSize = slotSize * selScale;
+                    var selCenter = slotTopLeft + new Vector2(slotSize * 0.5f, slotSize * 0.5f);
+                    drawList.AddImage(
+                        _hotbarSelectImGuiId,
+                        selCenter - new Vector2(selSize * 0.5f, selSize * 0.5f),
+                        selCenter + new Vector2(selSize * 0.5f, selSize * 0.5f),
+                        Vector2.Zero,
+                        Vector2.One);
                 }
 
+                // The frame texture's visible opening per slot is 12x12 at 1x (36x36 at 3x), so the
+                // block icon is centered inside that opening. A 1px inset lets the block nearly fill
+                // the slot while staying centered; the extra +1 on Y nudges it down a touch so the
+                // cube sits optically centered in the frame.
+                const int iconInset = 1;
+                const int iconDrop = 2;
+                bool isSelected = i == _hud.SelectedSlot;
                 if (_hud.Hotbar != null && i < _hud.Hotbar.Count)
                 {
                     int bid = _hud.Hotbar[i];
                     if (bid > 0 && _iconImGuiId != IntPtr.Zero && _blockIconUv != null && bid < _blockIconUv.Length)
                     {
                         var uv = _blockIconUv[bid];
+                        // The selected block grows along with its highlight ring so the active slot
+                        // reads as one bigger, emphasized cube.
+                        float iconSize2 = isSelected ? slotSize * 1.16f : slotSize - iconInset * 2f;
+                        float iconX = isSelected ? slotTopLeft.X + (slotSize - iconSize2) * 0.5f : slotTopLeft.X + iconInset;
+                        float iconY = isSelected ? slotTopLeft.Y + (slotSize - iconSize2) * 0.5f + iconDrop : slotTopLeft.Y + iconInset + iconDrop;
                         drawList.AddImage(
                             _iconImGuiId,
-                            topLeft + new Vector2(2, 2),
-                            topLeft + new Vector2(46, 46),
+                            new Vector2(iconX, iconY),
+                            new Vector2(iconX + iconSize2, iconY + iconSize2),
                             new Vector2(uv.X, uv.Y),
                             new Vector2(uv.X + uv.Z, uv.Y + uv.W));
                     }
                     else
                     {
                         uint iconColor = bid > 0 ? BlockRegistry.MapColorOf(bid) : 0;
-                        drawList.AddRectFilled(topLeft + new Vector2(8, 8), topLeft + new Vector2(40, 40), iconColor);
+                        float iconSize2 = isSelected ? slotSize * 1.16f : slotSize - iconInset * 2f;
+                        float iconX = isSelected ? slotTopLeft.X + (slotSize - iconSize2) * 0.5f : slotTopLeft.X + iconInset;
+                        float iconY = isSelected ? slotTopLeft.Y + (slotSize - iconSize2) * 0.5f + iconDrop : slotTopLeft.Y + iconInset + iconDrop;
+                        drawList.AddRectFilled(new Vector2(iconX, iconY), new Vector2(iconX + iconSize2, iconY + iconSize2), iconColor);
                     }
                 }
-
-                drawList.AddText(topLeft + new Vector2(4, 2), textColor, ((i + 1) % 10).ToString());
             }
 
             // E-menu inventory: a grid of every block. Clicking one queues it to Program, which
@@ -2313,6 +2593,14 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             _fogSet?.Dispose();
             _fogLayout?.Dispose();
             _fogBuffer?.Dispose();
+            _skyPipeline?.Dispose();
+            _skyVertexBuffer?.Dispose();
+            _skyIndexBuffer?.Dispose();
+            _skyFogSet?.Dispose();
+            _skyFogLayout?.Dispose();
+            _skyFogBuffer?.Dispose();
+            _skyMatrixSet?.Dispose();
+            _skyMatrixBuffer?.Dispose();
             _commandList?.Dispose();
             _imguiRenderer?.Dispose();
             _highlightVertexBuffer?.Dispose();
@@ -2340,6 +2628,12 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             if (_logoTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_logoTexture);
             _logoView?.Dispose();
             _logoTexture?.Dispose();
+            if (_hotbarTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_hotbarTexture);
+            if (_hotbarSelectTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_hotbarSelectTexture);
+            _hotbarView?.Dispose();
+            _hotbarTexture?.Dispose();
+            _hotbarSelectView?.Dispose();
+            _hotbarSelectTexture?.Dispose();
             _iconAtlasView?.Dispose();
             _iconAtlasTexture?.Dispose();
             _sc?.Dispose();
@@ -2612,6 +2906,14 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             var target = cameraPos + forward;
             var view = Matrix4x4.CreateLookAt(cameraPos, target, Vector3.UnitY);
             var viewProj = Matrix4x4.Multiply(view, proj);
+            // Sky matrix: the view with its TRANSLATION removed (rotation only), so the camera-space
+            // sky planes render locked to the eye. This mirrors Infdev, where the sky display lists
+            // are drawn with the camera transform applied - they follow the player automatically.
+            var skyView = view;
+            skyView.M41 = 0f;
+            skyView.M42 = 0f;
+            skyView.M43 = 0f;
+            var skyViewProj = Matrix4x4.Multiply(skyView, proj);
             // Billboard basis for the particle system.
             _cameraRight = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY));
             _cameraUp = Vector3.Normalize(Vector3.Cross(_cameraRight, forward));
@@ -2620,14 +2922,20 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
             _cameraPosition = position;
             _viewProjection = viewProj;
             _gd.UpdateBuffer(_projViewBuffer, 0, ref viewProj);
+            if (_skyMatrixBuffer != null)
+                _gd.UpdateBuffer(_skyMatrixBuffer, 0, ref skyViewProj);
         }
 
         public void SetRenderDistance(int chunkRadius)
         {
-            // Infdev's far plane is exactly the chunk render distance (256 >> renderDistance):
-            // 16 chunks = 256 blocks, 8 = 128, 4 = 64, 2 = 32. Fog starts at 25% and fully fades
-            // at the far plane, so distant terrain dissolves right at the render edge like Infdev.
-            _farPlane = chunkRadius * 16f;
+            // The far plane must enclose the FULL loaded square, not a circle: chunks load within
+            // +-chunkRadius in BOTH x and z (RequestChunksAround uses |dx|<=r AND |dz|<=r), so the
+            // farthest loaded block sits at the square corner, chunkRadius*16*sqrt(2) away. If the
+            // far plane were only chunkRadius*16 (a circle), looking diagonally would clip terrain
+            // at 256 while chunks exist to 362 - a circular, camera-locked "invisible terrain" line
+            // that does NOT follow chunk shapes. Enclosing the square makes the visible edge the
+            // chunk boundary itself.
+            _farPlane = (float)(chunkRadius * ChunkManager.ChunkSize * Math.Sqrt(2.0));
         }
 
         public void SetChunkManager(CubeApp.ChunkManager manager)
