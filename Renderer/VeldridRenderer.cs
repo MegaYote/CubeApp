@@ -694,12 +694,14 @@ void main() {
                 Outputs = _sc.Framebuffer.OutputDescription
             });
 
-            // Glass: same discard shader, but depth-write OFF (far glass shows through near glass)
-            // and BACK culling (inside faces never render through the panes) - Cubuild glass rules.
+            // Glass: cutout rules (0.5 alpha discard, no blend) but with depth-write ON so the
+            // frames occlude things drawn later (water behind glass can't paint over the frame),
+            // while the discarded panes leave no depth - far glass/water still shows through the
+            // clear panes. BACK culling so inside faces never render through the panes.
             _glassPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
             {
                 BlendState = BlendStateDescription.SingleDisabled,
-                DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
+                DepthStencilState = new DepthStencilStateDescription(true, true, ComparisonKind.LessEqual),
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
                 ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
