@@ -14,6 +14,15 @@ namespace CubeApp.World
     public sealed class InfdevChunkProvider : IChunkProvider
     {
         private readonly int seed;
+        // Chunks whose deep zone has already been filled (world -252..-65). The fill is a one-shot:
+        // tracking it here (instead of inferring from a block) means a cave tunnel or the player
+        // digging through the probe cell can never cause a re-fill loop that flashes and wipes edits.
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<ChunkCoordinates, byte> _deepFilled = new();
+        // Proposal A (lazy deep fill): when true, GenerateChunk also fills the deep zone (world
+        // -252..-65) with stone + caves at generation time. Program sets this when the player is
+        // deep underground so NEW chunks are born with their deep terrain - no separate fill pass
+        // racing the mesh worker. Idempotent: DeepFillChunk skips already-filled zones.
+        public bool AutoDeepFill { get; set; }
         // Infdev's seven octave generators, in the same construction order as the Java:
         // noiseGen1/2 = 16 octaves (terrain body), noiseGen3 = 8 (upper/lower selector),
         // noiseGen4/5 = 4 (replaceBlocks biomes/dirt depth), noiseGen6 = 10 (continent),
@@ -45,12 +54,19 @@ namespace CubeApp.World
         {
             int originX = chunkX * chunkSize;
             int originZ = chunkZ * chunkSize;
-            const int originY = ChunkManager.WorldOriginY; // -64; local Y 0..255 = world -64..191
+            const int originY = ChunkManager.WorldOriginY; // -256; local Y 0..447 = world -256..191
             var chunk = new Chunk(chunkSize, chunkHeight, chunkSize, originX, originY, originZ);
 
-            // Infdev's terrain occupies local Y 0..127 (their world height 128, sea at 64).
-            // Our sea level is worldY 0 == localY 64, so Infdev's sea maps exactly onto ours.
-            const int seaLevelLocalY = 64;
+            // Proposal A (tall chunk, lazy deep fill):
+            //   - Infdev's terrain band occupies local Y TerrainBandStart..TerrainBandStart+127
+            //     (world -64..63). Their world height is 128 with sea at 64, so sea is at
+            //     TerrainBandStart+64 == worldY 0 == our sea level.
+            //   - Local 0..DeepFloor (world -256..-65) is the DEEP ZONE. For now it is only a
+            //     bedrock floor; the air between fills lazily when the player descends (so surface
+            //     chunk gen stays cheap, but a surface-dug hole still has a visible bottom).
+            const int terrainBandStart = 192; // local Y where the Infdev band begins (world -64)
+            const int seaLevelLocalY = terrainBandStart + 64;
+            const int deepFloor = 4;          // bedrock floor thickness at the very bottom
 
             int idBedrock = BlockRegistry.GetId("bedrock");
             int idWater = BlockRegistry.GetId("water");
@@ -136,9 +152,11 @@ namespace CubeApp.World
             }
 
             // ---- generateTerrain: trilinear-interpolate the field into blocks ----
-            // Local Y 0..127 only; above that is open sky (matches Infdev's 128-tall world).
+            // The Infdev band occupies local Y terrainBandStart..terrainBandStart+127; above it is
+            // open sky. Water below the band's sea level.
             for (int ly = 0; ly < 128; ly++)
             {
+                int localY = terrainBandStart + ly;
                 double gy = ly / 8.0;
                 int fy0 = (int)gy;
                 int fy1 = fy0 + 1;
@@ -165,21 +183,40 @@ namespace CubeApp.World
 
                         int block;
                         if (density > 0.0) block = idStone;
-                        else if (ly < seaLevelLocalY) block = idWater;
+                        else if (localY < seaLevelLocalY) block = idWater;
                         else block = 0;
-                        chunk[lx, ly, lz] = block;
+                        chunk[lx, localY, lz] = block;
                     }
                 }
             }
 
-            // Upper half of the chunk (local Y 128..255) stays air (already zero-initialized).
+            // Deep zone bedrock floor at the very bottom (local 0..deepFloor-1). Everything between
+            // the floor and the terrain band (local deepFloor..terrainBandStart-1) stays AIR - the
+            // lazy deep fill (see DeepFillChunk) carves real terrain there when the player descends.
+            for (int lx = 0; lx < chunkSize; lx++)
+            {
+                for (int lz = 0; lz < chunkSize; lz++)
+                {
+                    for (int ly = 0; ly < deepFloor; ly++)
+                    {
+                        chunk[lx, ly, lz] = idBedrock;
+                    }
+                }
+            }
 
             // ---- replaceBlocks: surface materials + bedrock ----
-            ReplaceBlocks(chunkX, chunkZ, chunk, idBedrock, idWater, idStone, idGrass, idDirt, idSand, idGravel);
+            ReplaceBlocks(chunkX, chunkZ, chunk, idBedrock, idWater, idStone, idGrass, idDirt, idSand, idGravel, terrainBandStart);
 
             // ---- caves and trees ----
-            GenerateCaves(chunkX, chunkZ, chunk);
+            GenerateCaves(chunkX, chunkZ, chunk, terrainBandStart);
             GenerateTrees(chunkX, chunkZ, chunk);
+
+            // When the player is already deep, fill the deep zone at generation time so newly
+            // loaded chunks ahead are born with terrain instead of an empty void.
+            if (AutoDeepFill)
+            {
+                DeepFillChunk(chunkX, chunkZ, chunk);
+            }
 
             chunk.NeedsRemesh = true;
             return chunk;
@@ -214,12 +251,13 @@ namespace CubeApp.World
         // Infdev's replaceBlocks: scans each column top-down, replaces the surface stone with
         // grass/dirt (or sand/gravel in their biomes), fills bedrock at the bottom.
         private void ReplaceBlocks(int chunkX, int chunkZ, Chunk chunk,
-            int idBedrock, int idWater, int idStone, int idGrass, int idDirt, int idSand, int idGravel)
+            int idBedrock, int idWater, int idStone, int idGrass, int idDirt, int idSand, int idGravel,
+            int terrainBandStart)
         {
             byte[] blocks = chunk.RawBlocks;
-            const int height = 256;
+            const int height = ChunkManager.ChunkHeight; // 448
             const int width = 16;
-            const int seaLevel = 64;
+            const int seaLevel = 64; // relative to the terrain band start (world 0)
             var rand = new Random(unchecked(chunkX * 341873128 + chunkZ * 132897987 ^ seed));
             const double inv32 = 1.0 / 32.0;
 
@@ -240,11 +278,13 @@ namespace CubeApp.World
                     int topBlock = idGrass;
                     int fillBlock = idDirt;
 
-                    for (int ly = 127; ly >= 0; ly--)
+                    // Scan the terrain band (band-relative 127..0, actual local terrainBandStart..+127).
+                    for (int bandLy = 127; bandLy >= 0; bandLy--)
                     {
+                        int ly = terrainBandStart + bandLy;
                         int idx = (x * width + z) * height + ly;
 
-                        if (ly <= rand.Next(6) - 1)
+                        if (bandLy <= rand.Next(6) - 1)
                         {
                             blocks[idx] = (byte)idBedrock;
                         }
@@ -261,7 +301,7 @@ namespace CubeApp.World
                                     topBlock = 0;
                                     fillBlock = idStone;
                                 }
-                                else if (ly >= seaLevel - 4 && ly <= seaLevel + 1)
+                                else if (bandLy >= seaLevel - 4 && bandLy <= seaLevel + 1)
                                 {
                                     topBlock = idGrass;
                                     fillBlock = idDirt;
@@ -276,9 +316,9 @@ namespace CubeApp.World
                                         fillBlock = idSand;
                                     }
                                 }
-                                if (ly < seaLevel && topBlock == 0) topBlock = idWater;
+                                if (bandLy < seaLevel && topBlock == 0) topBlock = idWater;
                                 depthRemaining = dirtDepth;
-                                blocks[idx] = (byte)(ly >= seaLevel - 1 ? topBlock : fillBlock);
+                                blocks[idx] = (byte)(bandLy >= seaLevel - 1 ? topBlock : fillBlock);
                             }
                             else if (depthRemaining > 0)
                             {
@@ -293,7 +333,7 @@ namespace CubeApp.World
 
         // Infdev-style cave generation: a per-chunk deterministic chance of spawning cave walkers
         // that carve winding, branching tubes through the stone.
-        private void GenerateCaves(int chunkX, int chunkZ, Chunk chunk)
+        private void GenerateCaves(int chunkX, int chunkZ, Chunk chunk, int terrainBandStart)
         {
             byte[] blocks = chunk.RawBlocks;
 
@@ -320,7 +360,8 @@ namespace CubeApp.World
                         // Walker starts in the NEIGHBOR chunk (var9/var10), so its tube can reach
                         // across the border into this chunk.
                         double x = var9 * 16 + rand2.Next(16);
-                        double y = rand2.Next(rand2.Next(230) + 8);
+                        // Y is confined to the terrain band (local terrainBandStart..+127).
+                        double y = terrainBandStart + rand2.Next(rand2.Next(120) + 8);
                         double z = var10 * 16 + rand2.Next(16);
 
                         int nodeCount = 1;
@@ -339,10 +380,9 @@ namespace CubeApp.World
 
                             // Yours truly: deep caves have a small chance to spawn 5x as fat - the
                             // walker's size drives the tube radius (1.5 + sin(...)*size), so x5 turns
-                            // a ~2-4 wide tunnel into a ~20-wide chamber. Only fires well below the
-                            // surface (local Y < 60, i.e. below world Y -4) and only on ~1 in 8
-                            // nodes, so it's a rare hidden find - not a world-wrecker.
-                            if (y < 60 && rand2.Next(8) == 0)
+                            // a ~2-4 wide tunnel into a ~20-wide chamber. Only fires in the lower
+                            // terrain band (below world Y -4) and only on ~1 in 8 nodes.
+                            if (y < terrainBandStart + 60 && rand2.Next(8) == 0)
                             {
                                 size *= 5f;
                             }
@@ -560,6 +600,54 @@ namespace CubeApp.World
                 byte b = blocks[idx];
                 if (b == 0 || b == idLeaves) blocks[idx] = idWood;
             }
+        }
+
+        // Lazy deep-fill (Proposal A): fills the empty deep zone (local deepFloor..terrainBandStart-1,
+        // world -256..-65) with solid stone plus a few large random caves. Called only when the
+        // player descends near this chunk, so surface chunk gen stays cheap. One-shot: the chunk's
+        // coordinate is recorded in _deepFilled, so a cave or the player digging through the probe
+        // cell can never cause a re-fill loop.
+        public void DeepFillChunk(int chunkX, int chunkZ, Chunk chunk)
+        {
+            var key = new ChunkCoordinates(chunkX, chunkZ);
+            if (!_deepFilled.TryAdd(key, 0))
+            {
+                return; // already filled once
+            }
+
+            const int terrainBandStart = 192;
+            const int deepFloor = 4;
+            int idStone = BlockRegistry.GetId("stone");
+            byte[] blocks = chunk.RawBlocks;
+            const int height = ChunkManager.ChunkHeight;
+            const int width = 16;
+
+            for (int x = 0; x < width; x++)
+            {
+                for (int z = 0; z < width; z++)
+                {
+                    for (int y = deepFloor; y < terrainBandStart; y++)
+                    {
+                        blocks[(x * width + z) * height + y] = (byte)idStone;
+                    }
+                }
+            }
+
+            // Carve a few large caves into the deep zone so it isn't boring solid rock.
+            var rand = new Random(unchecked(chunkX * 341873128 + chunkZ * 132897987 ^ seed));
+            int caveCount = 2 + rand.Next(4);
+            for (int i = 0; i < caveCount; i++)
+            {
+                double x = chunkX * 16 + rand.Next(16);
+                double y = deepFloor + rand.Next(terrainBandStart - deepFloor);
+                double z = chunkZ * 16 + rand.Next(16);
+                float yaw = (float)(rand.NextDouble() * Math.PI * 2.0);
+                float pitch = (float)((rand.NextDouble() - 0.5) * 2.0 / 8.0);
+                float size = 2f + (float)(rand.NextDouble() * 4.0);
+                GenerateCaveNode(chunk, blocks, chunkX, chunkZ, rand, x, y, z, size, yaw, pitch, -1, 0, 0.9);
+            }
+
+            chunk.NeedsRemesh = true;
         }
 
         public string BiomeNameAt(int worldX, int worldZ)
