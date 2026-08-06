@@ -296,31 +296,60 @@ namespace CubeApp.World
         private void GenerateCaves(int chunkX, int chunkZ, Chunk chunk)
         {
             byte[] blocks = chunk.RawBlocks;
-            var rand = new Random(unchecked(chunkX * 341873128 + chunkZ * 132897987 ^ seed));
 
-            int numCaves = rand.Next(rand.Next(rand.Next(40) + 1) + 1);
-            if (rand.Next(15) != 0) numCaves = 0;
+            // Faithful port of Infdev's generateCaves: iterate a 17x17 region of chunk seeds
+            // (var9/var10 from -8..+8) and spawn walkers at the NEIGHBOR chunk's coordinates,
+            // carving into THIS chunk's block array. That way a cave that starts in a neighboring
+            // chunk crosses the border and continues here - without this, every tube dies at the
+            // chunk edge because the walker can only carve the current chunk's blocks.
+            var rand = new Random(seed);
+            long var5 = rand.Next() * 2L + 1L;
+            long var7 = rand.Next() * 2L + 1L;
 
-            for (int i = 0; i < numCaves; i++)
+            for (int var9 = chunkX - 8; var9 <= chunkX + 8; var9++)
             {
-                double x = chunkX * 16 + rand.Next(16);
-                double y = rand.Next(rand.Next(230) + 8);
-                double z = chunkZ * 16 + rand.Next(16);
-
-                int nodeCount = 1;
-                if (rand.Next(4) == 0)
+                for (int var10 = chunkZ - 8; var10 <= chunkZ + 8; var10++)
                 {
-                    GenerateCaveNode(chunk, blocks, chunkX, chunkZ, rand,
-                        x, y, z, (float)(rand.NextDouble() * 2.0 + rand.NextDouble()), 0f, 0f, -1, -1, 1.0);
-                    nodeCount += rand.Next(4);
-                }
+                    var rand2 = new Random(unchecked((int)((long)var9 * var5 + (long)var10 * var7 ^ seed)));
 
-                for (int n = 0; n < nodeCount; n++)
-                {
-                    float yaw = (float)(rand.NextDouble() * Math.PI * 2.0);
-                    float pitch = (float)((rand.NextDouble() - 0.5) * 2.0 / 8.0);
-                    float size = (float)(rand.NextDouble() * 2.0 + rand.NextDouble());
-                    GenerateCaveNode(chunk, blocks, chunkX, chunkZ, rand, x, y, z, size, yaw, pitch, 0, 0, 1.0);
+                    int numCaves = rand2.Next(rand2.Next(rand2.Next(40) + 1) + 1);
+                    if (rand2.Next(15) != 0) numCaves = 0;
+
+                    for (int i = 0; i < numCaves; i++)
+                    {
+                        // Walker starts in the NEIGHBOR chunk (var9/var10), so its tube can reach
+                        // across the border into this chunk.
+                        double x = var9 * 16 + rand2.Next(16);
+                        double y = rand2.Next(rand2.Next(230) + 8);
+                        double z = var10 * 16 + rand2.Next(16);
+
+                        int nodeCount = 1;
+                        if (rand2.Next(4) == 0)
+                        {
+                            GenerateCaveNode(chunk, blocks, chunkX, chunkZ, rand2,
+                                x, y, z, (float)(rand2.NextDouble() * 2.0 + rand2.NextDouble()), 0f, 0f, -1, -1, 1.0);
+                            nodeCount += rand2.Next(4);
+                        }
+
+                        for (int n = 0; n < nodeCount; n++)
+                        {
+                            float yaw = (float)(rand2.NextDouble() * Math.PI * 2.0);
+                            float pitch = (float)((rand2.NextDouble() - 0.5) * 2.0 / 8.0);
+                            float size = (float)(rand2.NextDouble() * 2.0 + rand2.NextDouble());
+
+                            // Yours truly: deep caves have a small chance to spawn 5x as fat - the
+                            // walker's size drives the tube radius (1.5 + sin(...)*size), so x5 turns
+                            // a ~2-4 wide tunnel into a ~20-wide chamber. Only fires well below the
+                            // surface (local Y < 60, i.e. below world Y -4) and only on ~1 in 8
+                            // nodes, so it's a rare hidden find - not a world-wrecker.
+                            if (y < 60 && rand2.Next(8) == 0)
+                            {
+                                size *= 5f;
+                            }
+
+                            GenerateCaveNode(chunk, blocks, chunkX, chunkZ, rand2, x, y, z, size, yaw, pitch, 0, 0, 1.0);
+                        }
+                    }
                 }
             }
         }

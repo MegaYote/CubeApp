@@ -558,8 +558,10 @@ namespace CubeApp
         {
             if (flyMode)
             {
-                // Free 3D flight: full look-direction movement (pitch-aware), space up / shift
-                // down, no gravity, no jump. Collisions stay on so you don't clip into terrain.
+                // Free 3D flight + NOCLIP: full look-direction movement (pitch-aware), space up /
+                // shift down, no gravity, no jump. The player phases straight through blocks so you
+                // can fly underground and see what's hidden - position moves directly, no collision
+                // checks at all (like Cubuild's noclipFlyMode).
                 var flyForward = GetCameraForward();
                 var flyRight = GetCameraRight(cameraYaw);
                 var flyDir = new Point3D(0, 0, 0);
@@ -575,8 +577,10 @@ namespace CubeApp
                     flyDir *= 1.0 / len;
                 }
                 playerVelocity = flyDir * FlySpeed;
-                playerVelocity = new Point3D(playerVelocity.X, playerVelocity.Y, playerVelocity.Z);
-                MovePlayerWithCollisions(playerVelocity * deltaSeconds);
+                cameraPosition = new Point3D(
+                    cameraPosition.X + playerVelocity.X * deltaSeconds,
+                    cameraPosition.Y + playerVelocity.Y * deltaSeconds,
+                    cameraPosition.Z + playerVelocity.Z * deltaSeconds);
                 playerGrounded = false;
                 playerWalkAmount = 0f;
                 return;
