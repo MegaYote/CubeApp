@@ -488,6 +488,14 @@ namespace CubeApp
             int blockToPlace = SelectedBlock;
             int meta = 0;
 
+            // Minecraft's "wait for it to fall" rule: you can't place INTO a cell a falling
+            // block is currently passing through. Otherwise a spam of placements in one column
+            // would stack into a moving block / collide mid-air.
+            if (BlockTicks != null && BlockTicks.IsCellOccupiedByFalling(place.x, place.y, place.z))
+            {
+                return false;
+            }
+
             if (BlockRegistry.IsSlab(blockToPlace) || BlockRegistry.IsSlabTop(blockToPlace))
             {
                 var hit = pickResult.Value.Remove;
@@ -532,6 +540,9 @@ namespace CubeApp
         /// local edit: sets the block, wakes fluids, remeshes, fires BlockEdited.</summary>
         public bool ApplyBlockEdit(int x, int y, int z, int blockId, int meta)
         {
+            // Same "wait for it to fall" rule on the authoritative path (host applying a client's
+            // edit): never place into a cell a falling block is passing through.
+            if (BlockTicks != null && BlockTicks.IsCellOccupiedByFalling(x, y, z)) return false;
             if (!Chunks.TrySetBlockLoadedOnly(x, y, z, blockId, meta)) return false;
             BlockTicks?.OnBlockChanged(x, y, z);
             var editedChunk = new ChunkCoordinates(WorldToChunkCoord(x), WorldToChunkCoord(z));

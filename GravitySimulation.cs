@@ -57,6 +57,24 @@ namespace CubeApp
         /// <summary>Read-only view of the blocks currently falling (for the renderer).</summary>
         public IReadOnlyList<FallingBlockData> FallingBlocks => _falling;
 
+        /// <summary>True when a falling block currently occupies the given world cell. Placement
+        /// refuses cells a falling block is passing through (Minecraft's "wait for it to fall out
+        /// of the way" behaviour - you can't stack a new block into a moving one).</summary>
+        public bool IsCellOccupiedByFalling(int x, int y, int z)
+        {
+            // n is small (a handful during normal play); a big cave-in rarely sees simultaneous
+            // placements, so a linear scan is fine and avoids a per-frame occupancy structure.
+            for (int i = 0; i < _falling.Count; i++)
+            {
+                var f = _falling[i];
+                if ((int)Math.Floor(f.X) == x && (int)Math.Floor(f.Y) == y && (int)Math.Floor(f.Z) == z)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         /// <summary>Called when any block in the world changes. If the changed cell (or the cell
         /// above it) is now an unsupported gravity block, schedule it to fall.</summary>
         public void OnBlockChanged(int x, int y, int z)

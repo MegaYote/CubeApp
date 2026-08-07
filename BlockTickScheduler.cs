@@ -37,6 +37,9 @@ namespace CubeApp
         public FluidSimulation Fluid => _fluid;
         public GravitySimulation Gravity => _gravity;
 
+        /// <summary>True when a falling block currently occupies the cell (placement should wait).</summary>
+        public bool IsCellOccupiedByFalling(int x, int y, int z) => _gravity.IsCellOccupiedByFalling(x, y, z);
+
         /// <summary>Schedule <paramref name="cell"/> to tick in <paramref name="delayTicks"/>
         /// game ticks. Duplicate schedules collapse; only the earliest due time survives.</summary>
         public void Schedule(int x, int y, int z, int delayTicks)

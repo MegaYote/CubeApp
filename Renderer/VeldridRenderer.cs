@@ -1138,13 +1138,32 @@ void main() {
             });
 
             // Static cube mesh (uploaded once): 24 verts (6 faces x 4) + 36 indices.
+            // The FaceVertices table's +Z/-Z entries are wound opposite their normals (the greedy
+            // pass corrects them); we must apply the SAME flip here or back-face culling culls
+            // the back/front faces and falling blocks render half-invisible.
             var cubeVerts = new float[FallingCubeVerts * (3 + 2 + 4)];
             int cv = 0;
             for (int face = 0; face < 6; face++)
             {
-                var verts = FallingCubeFaces[face];
+                var src = FallingCubeFaces[face];
                 float shade = FallingFaceShade[face];
                 const float uvMax = 0.999f;
+                // Winding correction on a local copy: if the face's first triangle winds opposite
+                // its normal, swap verts 1 and 3 (same as Mesher.EmitBox).
+                float[] verts = new float[12];
+                Array.Copy(src, verts, 12);
+                var p0 = new Point3D(verts[0], verts[1], verts[2]);
+                var p1 = new Point3D(verts[3], verts[4], verts[5]);
+                var p2 = new Point3D(verts[6], verts[7], verts[8]);
+                var e1 = p1 - p0;
+                var e2 = p2 - p0;
+                var cross = new Point3D(e1.Y * e2.Z - e1.Z * e2.Y, e1.Z * e2.X - e1.X * e2.Z, e1.X * e2.Y - e1.Y * e2.X);
+                var n = FallingFaceNormals[face];
+                if (cross.X * n.X + cross.Y * n.Y + cross.Z * n.Z < 0)
+                {
+                    (verts[3], verts[4], verts[5], verts[9], verts[10], verts[11]) =
+                        (verts[9], verts[10], verts[11], verts[3], verts[4], verts[5]);
+                }
                 for (int c = 0; c < 4; c++)
                 {
                     cubeVerts[cv++] = verts[c * 3 + 0];
