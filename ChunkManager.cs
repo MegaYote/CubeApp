@@ -5,19 +5,34 @@ using CubeApp.World;
 
 namespace CubeApp
 {
+    /// <summary>
+    /// Chunk storage + streaming for the whole world. The world is two vertically-stacked layers
+    /// (two independent world generators):
+    ///
+    ///   Ground layer (0): OriginY=-256, Height=640, world -256..383.
+    ///     Terrain band + caves + monoliths; deep zone filled lazily on descent.
+    ///   Sky layer (1):    OriginY=384,  Height=640, world 384..1023.
+    ///     Empty air at generation; sky islands filled lazily when the player climbs high.
+    ///
+    /// Both layers share the (X, Z) column grid, so chunk keys carry the layer
+    /// (<see cref="ChunkCoordinates.Layer"/>). Block access by world Y routes to the correct layer.
+    /// </summary>
     public sealed class ChunkManager
     {
         public const int ChunkSize = 16;
-        // World Y origin: local y=0 maps to this world Y. World spans WorldOriginY..(WorldOriginY + ChunkHeight).
-        // Proposal A (tall chunk, lazy deep fill): the chunk is 448 tall so the world reaches down to
-        // Y=-256. The Infdev terrain band occupies local Y 192..319 (world -64..63); local 0..191
-        // (world -256..-65) is the DEEP ZONE - filled lazily when the player descends, with a bedrock
-        // floor at local 0 so a surface-dug hole always has a visible bottom.
-public const int WorldOriginY = -256;
-    // Tall enough for the stratosphere: world spans -256..1023. The region above the terrain
-    // band (world 64..1023) is pure air at generation time - sky islands fill it LAZILY via
-    // SkyIslandSculptor.HighFillChunk when the player gets close, exactly like the deep zone.
-    public const int ChunkHeight = 1280;
+        public const int GroundLayer = 0;
+        public const int SkyLayer = 1;
+        public const int GroundOriginY = -256;
+        public const int GroundHeight = 640;
+        public const int SkyOriginY = 384;
+        public const int SkyHeight = 640;
+        // Back-compat aliases (most code means the ground layer when it says "the world").
+        public const int WorldOriginY = GroundOriginY;
+        public const int ChunkHeight = GroundHeight;
+
+        private static readonly int[] LayerOriginY = { GroundOriginY, SkyOriginY };
+        private static readonly int[] LayerHeight = { GroundHeight, SkyHeight };
+
         private readonly ConcurrentDictionary<ChunkCoordinates, Chunk> loadedChunks = new();
         // Chunk coords that have been modified (player edits / fluid flow) since load; these are
         // the only chunks a world save needs to serialize.
@@ -26,19 +41,27 @@ public const int WorldOriginY = -256;
         private readonly PriorityQueue<ChunkRequest, double> queue = new();
         private readonly object queueLock = new();
         private readonly ConcurrentDictionary<ChunkCoordinates, byte> pendingGeneration = new();
-        private readonly IChunkProvider chunkProvider;
+        private readonly IChunkProvider[] chunkProviders = new IChunkProvider[2];
 
-        public ChunkManager(IChunkProvider? chunkProvider = null)
+        public ChunkManager(IChunkProvider? groundProvider = null, IChunkProvider? skyProvider = null)
         {
-            this.chunkProvider = chunkProvider ?? new InfdevChunkProvider();
+            chunkProviders[GroundLayer] = groundProvider ?? new InfdevChunkProvider();
+            chunkProviders[SkyLayer] = skyProvider ?? new SkyChunkProvider();
         }
 
-        public Chunk GetOrCreateChunk(int chunkX, int chunkZ)
-        {            var key = new ChunkCoordinates(chunkX, chunkZ);
+        public static int LayerForWorldY(int worldY) => worldY >= SkyOriginY ? SkyLayer : GroundLayer;
+        public static int OriginYForLayer(int layer) => layer == SkyLayer ? SkyOriginY : GroundOriginY;
+        public static int HeightForLayer(int layer) => layer == SkyLayer ? SkyHeight : GroundHeight;
+
+        public Chunk GetOrCreateChunk(int chunkX, int chunkZ) => GetOrCreateChunk(GroundLayer, chunkX, chunkZ);
+
+        public Chunk GetOrCreateChunk(int layer, int chunkX, int chunkZ)
+        {
+            var key = new ChunkCoordinates(layer, chunkX, chunkZ);
             bool created = false;
             var result = loadedChunks.GetOrAdd(key, _ =>
             {
-                var chunk = chunkProvider.GenerateChunk(chunkX, chunkZ, ChunkSize, ChunkHeight);
+                var chunk = chunkProviders[layer].GenerateChunk(chunkX, chunkZ, ChunkSize, HeightForLayer(layer));
                 chunk.NeedsRemesh = true;
                 created = true;
                 return chunk;
@@ -50,13 +73,13 @@ public const int WorldOriginY = -256;
                 // (border faces are culled against neighbors, and an absent neighbor is treated
                 // as air). Mark those neighbors dirty so their border faces get rebuilt now,
                 // instead of staying wrong until some unrelated edit/unload triggers a remesh.
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(chunkX - 1, chunkZ), out var left))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ), out var left))
                     left.NeedsRemesh = true;
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(chunkX + 1, chunkZ), out var right))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ), out var right))
                     right.NeedsRemesh = true;
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ - 1), out var back))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ - 1), out var back))
                     back.NeedsRemesh = true;
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ + 1), out var front))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ + 1), out var front))
                     front.NeedsRemesh = true;
             }
 
@@ -64,25 +87,29 @@ public const int WorldOriginY = -256;
         }
 
         // Stamps a saved chunk's block+meta data over the (re)generated chunk on world load.
-        public void ApplySavedChunk(int chunkX, int chunkZ, byte[] blocks, byte[] meta)
+        public void ApplySavedChunk(int layer, int chunkX, int chunkZ, byte[] blocks, byte[] meta)
         {
-            var chunk = GetOrCreateChunk(chunkX, chunkZ);
+            var chunk = GetOrCreateChunk(layer, chunkX, chunkZ);
             if (blocks != null) Array.Copy(blocks, chunk.RawBlocks, Math.Min(blocks.Length, chunk.RawBlocks.Length));
             if (meta != null) Array.Copy(meta, chunk.RawMeta, Math.Min(meta.Length, chunk.RawMeta.Length));
             chunk.NeedsRemesh = true;
-            _modifiedChunks.Add(new ChunkCoordinates(chunkX, chunkZ));
+            _modifiedChunks.Add(new ChunkCoordinates(layer, chunkX, chunkZ));
         }
 
-public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
+        public void ApplySavedChunk(int chunkX, int chunkZ, byte[] blocks, byte[] meta)
+            => ApplySavedChunk(GroundLayer, chunkX, chunkZ, blocks, meta);
+
+        public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
         {
             return TrySetBlock(worldX, worldY, worldZ, blockId, 0);
         }
 
         public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId, int meta)
         {
+            int layer = LayerForWorldY(worldY);
             int chunkX = FloorDiv(worldX, ChunkSize);
             int chunkZ = FloorDiv(worldZ, ChunkSize);
-            var chunk = GetOrCreateChunk(chunkX, chunkZ);
+            var chunk = GetOrCreateChunk(layer, chunkX, chunkZ);
             int localX = worldX - chunk.OriginX;
             int localZ = worldZ - chunk.OriginZ;
             int localY = chunk.WorldYToLocal(worldY);
@@ -93,7 +120,7 @@ public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
 
             chunk[localX, localY, localZ] = blockId;
             chunk.SetMeta(localX, localY, localZ, (byte)meta);
-            MarkDirty(chunkX, chunkZ, localX, localZ);
+            MarkDirty(chunkX, chunkZ, localX, localZ, layer);
             return true;
         }
 
@@ -104,9 +131,10 @@ public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
         /// </summary>
         public bool TrySetBlockLoadedOnly(int worldX, int worldY, int worldZ, int blockId, int meta)
         {
+            int layer = LayerForWorldY(worldY);
             int chunkX = FloorDiv(worldX, ChunkSize);
             int chunkZ = FloorDiv(worldZ, ChunkSize);
-            if (!loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ), out var chunk))
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk))
             {
                 return false;
             }
@@ -121,53 +149,46 @@ public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
 
             chunk[localX, localY, localZ] = blockId;
             chunk.SetMeta(localX, localY, localZ, (byte)meta);
-            MarkDirty(chunkX, chunkZ, localX, localZ);
+            MarkDirty(chunkX, chunkZ, localX, localZ, layer);
             return true;
         }
 
-        private void MarkDirty(int chunkX, int chunkZ, int localX, int localZ)
+        private void MarkDirty(int chunkX, int chunkZ, int localX, int localZ, int layer)
         {
-            if (!loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ), out var chunk))
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk))
             {
                 return;
             }
 
-            // Remember this chunk for world saving (only modified chunks get serialized; the
-            // rest regenerate from the seed).
-            _modifiedChunks.Add(new ChunkCoordinates(chunkX, chunkZ));
+            _modifiedChunks.Add(new ChunkCoordinates(layer, chunkX, chunkZ));
 
-            // mark this chunk dirty so it will be remeshed
             chunk.NeedsRemesh = true;
 
-            // if modification touches chunk boundaries, mark neighbor chunks dirty as well
-            if (localX == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX - 1, chunkZ), out var left))
+            if (localX == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ), out var left))
                 left.NeedsRemesh = true;
-            if (localX == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX + 1, chunkZ), out var right))
+            if (localX == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ), out var right))
                 right.NeedsRemesh = true;
-            if (localZ == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ - 1), out var back))
+            if (localZ == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ - 1), out var back))
                 back.NeedsRemesh = true;
-            if (localZ == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ + 1), out var front))
+            if (localZ == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ + 1), out var front))
                 front.NeedsRemesh = true;
 
-            // A change on a chunk corner also affects the diagonal neighbour: the water pass
-            // samples the 2x2 block neighbourhood around each corner, so the corner cell of a
-            // diagonal chunk feeds the surface height of the four-chunk junction. Without this,
-            // an edit/flow at a corner would leave the diagonal chunk's junction water stale.
-            if (localX == 0 && localZ == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX - 1, chunkZ - 1), out var diagNW))
+            if (localX == 0 && localZ == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ - 1), out var diagNW))
                 diagNW.NeedsRemesh = true;
-            if (localX == ChunkSize - 1 && localZ == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX + 1, chunkZ - 1), out var diagNE))
+            if (localX == ChunkSize - 1 && localZ == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ - 1), out var diagNE))
                 diagNE.NeedsRemesh = true;
-            if (localX == 0 && localZ == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX - 1, chunkZ + 1), out var diagSW))
+            if (localX == 0 && localZ == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ + 1), out var diagSW))
                 diagSW.NeedsRemesh = true;
-            if (localX == ChunkSize - 1 && localZ == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(chunkX + 1, chunkZ + 1), out var diagSE))
+            if (localX == ChunkSize - 1 && localZ == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ + 1), out var diagSE))
                 diagSE.NeedsRemesh = true;
         }
 
         public bool TryGetLoadedBlock(int worldX, int worldY, int worldZ, out int blockId)
         {
+            int layer = LayerForWorldY(worldY);
             int chunkX = FloorDiv(worldX, ChunkSize);
             int chunkZ = FloorDiv(worldZ, ChunkSize);
-            if (!loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ), out var chunk))
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk))
             {
                 blockId = BlockRegistry.AirId;
                 return false;
@@ -188,9 +209,10 @@ public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
 
         public bool TryGetLoadedBlockAndMeta(int worldX, int worldY, int worldZ, out int blockId, out byte meta)
         {
+            int layer = LayerForWorldY(worldY);
             int chunkX = FloorDiv(worldX, ChunkSize);
             int chunkZ = FloorDiv(worldZ, ChunkSize);
-            if (!loadedChunks.TryGetValue(new ChunkCoordinates(chunkX, chunkZ), out var chunk))
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk))
             {
                 blockId = BlockRegistry.AirId;
                 meta = 0;
@@ -247,7 +269,7 @@ public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
         /// </summary>
         public ICollection<Chunk> GetLoadedChunks() => loadedChunks.Values;
 
-        public bool EnsureChunksAround(int centerChunkX, int centerChunkZ, int radius)
+        public bool EnsureChunksAround(int centerChunkX, int centerChunkZ, int radius, int layer = GroundLayer)
         {
             bool addedNewChunk = false;
             for (int dz = -radius; dz <= radius; dz++)
@@ -256,13 +278,13 @@ public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
                 {
                     int chunkX = centerChunkX + dx;
                     int chunkZ = centerChunkZ + dz;
-                    var key = new ChunkCoordinates(chunkX, chunkZ);
+                    var key = new ChunkCoordinates(layer, chunkX, chunkZ);
                     if (!loadedChunks.ContainsKey(key))
                     {
                         addedNewChunk = true;
                     }
 
-                    GetOrCreateChunk(chunkX, chunkZ);
+                    GetOrCreateChunk(layer, chunkX, chunkZ);
                 }
             }
 
@@ -275,7 +297,7 @@ public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
         /// chunks are skipped. Actual generation happens off the main thread via
         /// <see cref="TryGenerateNext"/>.
         /// </summary>
-        public void RequestChunksAround(int centerChunkX, int centerChunkZ, int radius, Point3D cameraPosition)
+        public void RequestChunksAround(int centerChunkX, int centerChunkZ, int radius, Point3D cameraPosition, int layer = GroundLayer)
         {
             for (int dz = -radius; dz <= radius; dz++)
             {
@@ -283,16 +305,15 @@ public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
                 {
                     int chunkX = centerChunkX + dx;
                     int chunkZ = centerChunkZ + dz;
-                    var key = new ChunkCoordinates(chunkX, chunkZ);
+                    var key = new ChunkCoordinates(layer, chunkX, chunkZ);
                     if (loadedChunks.ContainsKey(key))
                     {
                         continue;
                     }
 
-                    // pendingGeneration dedupes so a chunk is only queued once at a time.
                     if (pendingGeneration.TryAdd(key, 0))
                     {
-                        EnqueueChunk(chunkX, chunkZ, cameraPosition);
+                        EnqueueChunk(layer, chunkX, chunkZ, cameraPosition);
                     }
                 }
             }
@@ -309,12 +330,10 @@ public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
                 return false;
             }
 
-            var key = new ChunkCoordinates(request.X, request.Z);
+            var key = new ChunkCoordinates(request.Layer, request.X, request.Z);
             bool created = !loadedChunks.ContainsKey(key);
 
-            // GetOrCreateChunk generates + inserts + dirties existing neighbors (idempotent if
-            // another path loaded it in the meantime).
-            GetOrCreateChunk(request.X, request.Z);
+            GetOrCreateChunk(request.Layer, request.X, request.Z);
             pendingGeneration.TryRemove(key, out _);
             return created;
         }
@@ -333,15 +352,13 @@ public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
                         removed.Add(key);
                         pendingGeneration.TryRemove(key, out _);
 
-                        // A removed chunk can expose faces on adjacent loaded chunks.
-                        // Mark those neighbors dirty so border faces get rebuilt.
-                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.X - 1, key.Z), out var left))
+                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X - 1, key.Z), out var left))
                             left.NeedsRemesh = true;
-                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.X + 1, key.Z), out var right))
+                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X + 1, key.Z), out var right))
                             right.NeedsRemesh = true;
-                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.X, key.Z - 1), out var back))
+                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X, key.Z - 1), out var back))
                             back.NeedsRemesh = true;
-                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.X, key.Z + 1), out var front))
+                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X, key.Z + 1), out var front))
                             front.NeedsRemesh = true;
                     }
                 }
@@ -351,11 +368,14 @@ public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
         }
 
         public void EnqueueChunk(int chunkX, int chunkZ, Point3D cameraPosition)
+            => EnqueueChunk(GroundLayer, chunkX, chunkZ, cameraPosition);
+
+        public void EnqueueChunk(int layer, int chunkX, int chunkZ, Point3D cameraPosition)
         {
             double priority = ComputeDistancePriority(chunkX, chunkZ, cameraPosition);
             lock (queueLock)
             {
-                queue.Enqueue(new ChunkRequest(chunkX, chunkZ), priority);
+                queue.Enqueue(new ChunkRequest(layer, chunkX, chunkZ), priority);
             }
         }
 
@@ -384,3 +404,4 @@ public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
         }
     }
 }
+

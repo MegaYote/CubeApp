@@ -38,6 +38,10 @@ namespace CubeApp
         private readonly bool[] opaque;
         private readonly byte[] light;
 
+        /// <summary>World Y of the region's origin. All chunks in a mesh region share a layer, so
+        /// local light-index Y = worldY - OriginY.</summary>
+        public int OriginY { get; }
+
         // Meshing runs on a small fixed set of worker threads and each builds at most one
         // ChunkLighting at a time, so the big scratch arrays (~590k cells for a 3x3-chunk region)
         // are pooled per thread instead of being reallocated (and GC'd) on every single remesh.
@@ -51,13 +55,22 @@ namespace CubeApp
 
             int minChunkX = int.MaxValue, maxChunkX = int.MinValue;
             int minChunkZ = int.MaxValue, maxChunkZ = int.MinValue;
-            foreach (var c in chunks.Keys)
+            int originY = 0;
+            bool haveOrigin = false;
+            foreach (var kv in chunks)
             {
+                var c = kv.Key;
                 if (c.X < minChunkX) minChunkX = c.X;
                 if (c.X > maxChunkX) maxChunkX = c.X;
                 if (c.Z < minChunkZ) minChunkZ = c.Z;
                 if (c.Z > maxChunkZ) maxChunkZ = c.Z;
+                if (!haveOrigin)
+                {
+                    originY = kv.Value.OriginY;
+                    haveOrigin = true;
+                }
             }
+            OriginY = originY;
 
             if (chunks.Count == 0)
             {
@@ -79,14 +92,69 @@ namespace CubeApp
             }
             opaque = _opaquePool;
             light = _lightPool!;
-            Array.Clear(opaque, 0, cells);
-            Array.Clear(light, 0, cells);
 
-            // Fill occupancy straight from each chunk's raw block bytes. Both layouts keep the
-            // vertical column contiguous, so the inner copy is a tight sequential loop - no
-            // delegate calls, no dictionary lookups, no per-cell coordinate math. Chunks missing
-            // from the region (e.g. unloaded diagonal corners) simply stay air.
+            // LAZY-BAND trick (mirrors the mesher's blockAtY): with 1280-tall chunks the region
+            // arrays are ~3M cells but only the terrain band (+ sky islands) has blocks. The
+            // flood fill can never need light above the highest solid or below the lowest solid,
+            // so clear + fill only the occupied vertical band. Everything outside the band stays
+            // 0 (air/light 0) - identical results, far less memory traffic per remesh.
             int regionTopSolidY = -1;
+            int regionBottomSolidY = height - 1;
+            {
+                foreach (var kv in chunks)
+                {
+                    var c = kv.Value;
+                    byte[] raw = c.RawBlocks;
+                    int baseLX = kv.Key.X * chunkSize - minX;
+                    int baseLZ = kv.Key.Z * chunkSize - minZ;
+                    for (int x = 0; x < chunkSize; x++)
+                    {
+                        for (int z = 0; z < chunkSize; z++)
+                        {
+                            int src = (x * chunkSize + z) * chunkHeight;
+                            for (int y = 0; y < chunkHeight; y++)
+                            {
+                                if (raw[src + y] != 0)
+                                {
+                                    if (y < regionBottomSolidY) regionBottomSolidY = y;
+                                    if (y > regionTopSolidY) regionTopSolidY = y;
+                                }
+                            }
+                        }
+                    }
+                }
+                if (regionTopSolidY < 0)
+                {
+                    regionTopSolidY = height - 1;
+                    regionBottomSolidY = 0;
+                }
+            }
+
+            int bandLo = Math.Max(0, regionBottomSolidY - 1); // one row below for safety
+            int bandHi = Math.Min(height - 1, regionTopSolidY + 1); // one row above (sky seed)
+            int bandCells = dimX * (bandHi - bandLo + 1) * dimZ;
+
+            // Clear only the band (keep the pooled arrays' tails untouched - they're reused).
+            if (bandLo > 0)
+            {
+                for (int y = bandLo; y <= bandHi; y++)
+                {
+                    int baseIdx = y;
+                    for (int lx = 0; lx < dimX; lx++)
+                    {
+                        int row = (lx * dimZ) * height;
+                        Array.Clear(opaque, row + baseIdx, dimZ);
+                        Array.Clear(light, row + baseIdx, dimZ);
+                    }
+                }
+            }
+            else
+            {
+                Array.Clear(opaque, 0, bandCells);
+                Array.Clear(light, 0, bandCells);
+            }
+
+            // Fill occupancy straight from each chunk's raw block bytes - only within the band.
             foreach (var kv in chunks)
             {
                 var c = kv.Value;
@@ -99,13 +167,10 @@ namespace CubeApp
                     {
                         int src = (x * chunkSize + z) * chunkHeight;
                         int dst = Index(baseLX + x, 0, baseLZ + z);
-                        for (int y = 0; y < chunkHeight; y++)
+                        for (int y = bandLo; y <= bandHi; y++)
                         {
-                            // Opaque blocks skylight flood-fill (stone, dirt, planks...). Transparent-to-light blocks
-                            // (water, glass, leaves) let light pass through so caves under water aren't black.
                             bool o = BlockRegistry.IsOpaque(raw[src + y]);
                             opaque[dst + y] = o;
-                            if (o && y > regionTopSolidY) regionTopSolidY = y;
                         }
                     }
                 }

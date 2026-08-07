@@ -339,6 +339,7 @@ namespace CubeApp
                     {
                         save.Chunks.Add(new SavedChunk
                         {
+                            Layer = coord.Layer,
                             X = coord.X,
                             Z = coord.Z,
                             Blocks = (byte[])chunk.RawBlocks.Clone(),
@@ -360,7 +361,7 @@ namespace CubeApp
             StartNewWorld(save.Seed, save.Name);
             foreach (var c in save.Chunks)
             {
-                World.Chunks.ApplySavedChunk(c.X, c.Z, c.Blocks, c.Meta);
+                World.Chunks.ApplySavedChunk(c.Layer, c.X, c.Z, c.Blocks, c.Meta);
             }
             World.PlayerPosition = new Point3D(save.PlayerX, save.PlayerY, save.PlayerZ);
             World.PlayerYaw = save.Yaw;

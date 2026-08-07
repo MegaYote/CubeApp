@@ -61,7 +61,8 @@ namespace CubeApp
 
             foreach (var c in chunkList)
             {
-                var chunkCoord = new ChunkCoordinates(FloorDiv(c.OriginX, ChunkManager.ChunkSize), FloorDiv(c.OriginZ, ChunkManager.ChunkSize));
+                int layer = ChunkManager.LayerForWorldY(c.OriginY);
+                var chunkCoord = new ChunkCoordinates(layer, FloorDiv(c.OriginX, ChunkManager.ChunkSize), FloorDiv(c.OriginZ, ChunkManager.ChunkSize));
                 chunkLookup[chunkCoord] = c;
             }
 
@@ -82,8 +83,9 @@ namespace CubeApp
             byte[] raw = chunk.RawBlocks;
             int targetCX = FloorDiv(chunk.OriginX, ChunkManager.ChunkSize);
             int targetCZ = FloorDiv(chunk.OriginZ, ChunkManager.ChunkSize);
-            chunkLookup.TryGetValue(new ChunkCoordinates(targetCX + 1, targetCZ), out var neighborPosX);
-            chunkLookup.TryGetValue(new ChunkCoordinates(targetCX, targetCZ + 1), out var neighborPosZ);
+            int targetLayer = ChunkManager.LayerForWorldY(chunk.OriginY);
+            chunkLookup.TryGetValue(new ChunkCoordinates(targetLayer, targetCX + 1, targetCZ), out var neighborPosX);
+            chunkLookup.TryGetValue(new ChunkCoordinates(targetLayer, targetCX, targetCZ + 1), out var neighborPosZ);
             byte[]? rawPosX = neighborPosX?.RawBlocks;
             byte[]? rawPosZ = neighborPosZ?.RawBlocks;
 
@@ -284,9 +286,10 @@ namespace CubeApp
             float h10 = GetFluidHeight(lookup, waterId, wx + 1, wy, wz);
 
             var blockPos = new Point3D(wx, wy, wz);
-            // ChunkLighting indexes its light array by LOCAL y (0..chunkHeight-1, OriginY=-64),
-            // while wx/wy/wz here are world coordinates - so the light samples must convert.
-            int ly = wy - ChunkManager.WorldOriginY;
+            // ChunkLighting indexes its light array by LOCAL y (0..chunkHeight-1) relative to the
+            // region's layer origin, while wx/wy/wz here are world coordinates - convert via the
+            // region origin (ground -256 or sky 384), not a hardcoded world origin.
+            int ly = wy - lighting.OriginY;
 
             // Top face (only when the cell above isn't water). Flowing water uses the side tile,
             // still water the base tile, matching BlockFluid.getBlockTextureFromSideAndMetadata.
@@ -356,7 +359,7 @@ namespace CubeApp
                 return;
             }
 
-            double brightness = shade * ChunkLighting.Brightness(lighting.GetLight(neighborX, wy - ChunkManager.WorldOriginY, neighborZ));
+            double brightness = shade * ChunkLighting.Brightness(lighting.GetLight(neighborX, wy - lighting.OriginY, neighborZ));
             var blockPos = new Point3D(wx, wy, wz);
             mesh.Add(new MeshFace(
                 p0, p1, p2, p3,
@@ -393,7 +396,7 @@ namespace CubeApp
                         int wx = chunk.OriginX + x;
                         int wy = chunk.OriginY + y;
                         int wz = chunk.OriginZ + z;
-                        int ly = wy - ChunkManager.WorldOriginY;
+                        int ly = wy - lighting.OriginY;
                         double brightness = ChunkLighting.Brightness(lighting.GetLight(wx, ly, wz));
                         var blockPos = new Point3D(wx, wy, wz);
 
@@ -507,7 +510,7 @@ namespace CubeApp
                     }
                 }
 
-                int nly = ny - ChunkManager.WorldOriginY;
+                int nly = ny - lighting.OriginY;
                 double shade = off.dy > 0 ? 1.0 : (off.dy < 0 ? 0.5 : (off.dx != 0 ? 0.6 : 0.8));
                 double brightness = shade * ChunkLighting.Brightness(lighting.GetLight(nx, nly, nz));
 

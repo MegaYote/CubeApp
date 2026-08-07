@@ -8,6 +8,7 @@ namespace CubeApp
 {
     public sealed class SavedChunk
     {
+        public int Layer;
         public int X, Z;
         public byte[] Blocks = Array.Empty<byte>();
         public byte[] Meta = Array.Empty<byte>();
@@ -28,7 +29,7 @@ namespace CubeApp
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 1;
+        public const int Version = 2;
 
         public string Name = "World 1";
         public int Seed;
@@ -59,6 +60,7 @@ namespace CubeApp
                 w.Write(Chunks.Count);
                 foreach (var c in Chunks)
                 {
+                    w.Write(c.Layer);
                     w.Write(c.X);
                     w.Write(c.Z);
                     w.Write(c.Blocks.Length);
@@ -111,7 +113,10 @@ namespace CubeApp
                 int chunkCount = reader.ReadInt32();
                 for (int i = 0; i < chunkCount; i++)
                 {
-                    var c = new SavedChunk { X = reader.ReadInt32(), Z = reader.ReadInt32() };
+                    var c = new SavedChunk();
+                    if (version >= 2) c.Layer = reader.ReadInt32();
+                    c.X = reader.ReadInt32();
+                    c.Z = reader.ReadInt32();
                     int blen = reader.ReadInt32();
                     c.Blocks = reader.ReadBytes(blen);
                     int mlen = reader.ReadInt32();

@@ -25,6 +25,7 @@ namespace CubeApp
         public string Name { get; private set; } = "World 1";
         public ChunkManager Chunks { get; private set; }
         public World.InfdevChunkProvider ChunkProvider { get; private set; }
+        public World.SkyChunkProvider SkyChunkProvider { get; private set; }
         public EntityManager Entities { get; private set; }
         public MeshScheduler Mesher { get; private set; }
         public BlockTickScheduler BlockTicks { get; private set; }
@@ -93,7 +94,8 @@ namespace CubeApp
             _getRenderer = getRenderer ?? throw new ArgumentNullException(nameof(getRenderer));
 
             ChunkProvider = new World.InfdevChunkProvider(seed);
-            Chunks = new ChunkManager(ChunkProvider);
+            SkyChunkProvider = new World.SkyChunkProvider(seed);
+            Chunks = new ChunkManager(ChunkProvider, SkyChunkProvider);
             Entities = new EntityManager(Chunks);
             // Mesh workers scale with the machine: at least 2, up to ~cores/4. Chunk gen already
             // takes ProcessorCount-2 threads, so meshing gets a share of what's left without
@@ -188,13 +190,21 @@ namespace CubeApp
                 _forceChunkStream = false;
                 _lastStreamChunkX = chunkX;
                 _lastStreamChunkZ = chunkZ;
-                Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position);
+                Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, ChunkManager.GroundLayer);
+                // The sky layer only streams when the player climbs into the stratosphere
+                // (lazy allocation: sky chunks don't exist at all until you go high).
+                if (LocalPlayer.Position.Y > SkyStreamThreshold)
+                {
+                    Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, ChunkManager.SkyLayer);
+                }
                 var unloaded = Chunks.UnloadChunksOutside(chunkX, chunkZ, ChunkRenderRadius);
                 foreach (var uc in unloaded) ChunkUnloaded?.Invoke(uc);
             }
             UpdateDeepFill();
             UpdateHighFill();
         }
+
+        private const double SkyStreamThreshold = 350.0;
 
         /// <summary>Simulates remote players without touching the local player's camera/chunks.
         /// The host calls this each frame with each client's received input.</summary>
@@ -767,11 +777,11 @@ namespace CubeApp
         // air until the player climbs toward it.
         private void UpdateHighFill()
         {
-            if (Chunks == null || ChunkProvider == null || ChunkProvider.SkyIslands == null) return;
+            if (Chunks == null || SkyChunkProvider == null) return;
             // Start filling when the player is above the cloud deck by a good margin.
             const double highThreshold = 450.0;
             bool isHigh = LocalPlayer.Position.Y > highThreshold;
-            ChunkProvider.SkyIslands.AutoHighFill = isHigh;
+            SkyChunkProvider.Islands.AutoHighFill = isHigh;
             if (!isHigh) return;
 
             int cx = (int)Math.Floor(LocalPlayer.Position.X / ChunkManager.ChunkSize);
@@ -779,14 +789,18 @@ namespace CubeApp
 
             foreach (var ch in Chunks.GetLoadedChunks())
             {
+                if (ch.OriginY != ChunkManager.SkyOriginY) continue; // only sky-layer chunks
                 int dx = ch.OriginX / ChunkManager.ChunkSize - cx;
                 int dz = ch.OriginZ / ChunkManager.ChunkSize - cz;
                 if (dx * dx + dz * dz > 64) continue; // within ~8 chunks of the player
-                ChunkProvider.SkyIslands.HighFillChunk(ch.OriginX / ChunkManager.ChunkSize, ch.OriginZ / ChunkManager.ChunkSize, ch, 16, ChunkManager.ChunkHeight);
+                int layer = ChunkManager.SkyLayer;
+                int chunkX = ch.OriginX / ChunkManager.ChunkSize;
+                int chunkZ = ch.OriginZ / ChunkManager.ChunkSize;
+                SkyChunkProvider.Islands.HighFillChunk(chunkX, chunkZ, ch, 16, ChunkManager.SkyHeight);
                 if (ch.NeedsRemesh)
                 {
                     ch.IsMeshingQueued = false;
-                    Mesher?.RequestImmediateRemesh(new ChunkCoordinates(ch.OriginX / ChunkManager.ChunkSize, ch.OriginZ / ChunkManager.ChunkSize));
+                    Mesher?.RequestImmediateRemesh(new ChunkCoordinates(layer, chunkX, chunkZ));
                 }
             }
         }

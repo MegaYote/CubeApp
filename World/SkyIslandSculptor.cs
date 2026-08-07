@@ -61,10 +61,12 @@ namespace CubeApp.World
         public void HighFillChunk(int chunkX, int chunkZ, Chunk chunk, int chunkSize, int chunkHeight)
         {
             if (!Enabled) return;
-            var key = new ChunkCoordinates(chunkX, chunkZ);
+            var key = new ChunkCoordinates(ChunkManager.SkyLayer, chunkX, chunkZ);
             if (!_filled.TryAdd(key, 0)) return; // already filled once
 
-            const int originY = ChunkManager.WorldOriginY;
+            // Sky chunks live above the ground layer, so their own OriginY is the correct base
+            // for the local-Y conversion (NOT the ground world origin).
+            const int originY = ChunkManager.SkyOriginY;
             bool wroteAnything = false;
             for (int lx = 0; lx < chunkSize; lx++)
             {
