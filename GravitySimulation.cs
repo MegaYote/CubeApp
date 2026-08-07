@@ -128,10 +128,32 @@ namespace CubeApp
                 top++;
             }
 
+            // DOMINO CASCADE: waking a block's own column is not enough. A floating dirt platform
+            // beside the falling column is "supported" by nothing but was never updated, so it
+            // would stay frozen forever. Wake the 4 horizontal neighbors of every popped cell
+            // (before the block actually falls) - if they're unsupported gravity blocks they get
+            // scheduled, fall next tick, wake THEIR neighbors, and the whole structure dominoes.
+            // This runs for each popped cell so a tall column wakes neighbors all the way down.
+            int first = y;
+            for (int yy = first; yy < top; yy++)
+            {
+                WakeNeighbors(x, yy, z);
+            }
+
             // The vacated column wakes what's above it (a gravity block resting on this column's
             // top) and the water below (displaced air lets it flow in).
             _tickScheduler.OnBlockChanged(x, top, z);
             _tickScheduler.OnBlockChanged(x, y - 1, z);
+        }
+
+        // Notifies the four horizontal neighbours of a cell so unsupported gravity blocks next
+        // to a falling column start falling too (the "if one goes, the rest go" domino effect).
+        private void WakeNeighbors(int x, int y, int z)
+        {
+            _tickScheduler.OnBlockChanged(x + 1, y, z);
+            _tickScheduler.OnBlockChanged(x - 1, y, z);
+            _tickScheduler.OnBlockChanged(x, y, z + 1);
+            _tickScheduler.OnBlockChanged(x, y, z - 1);
         }
 
         /// <summary>Advance all falling blocks by one rendered frame (main thread). Integrates
