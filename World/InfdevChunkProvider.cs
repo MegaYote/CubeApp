@@ -22,6 +22,10 @@ namespace CubeApp.World
         /// <summary>Sedimentary quartz veins (see QuartzVeinGenerator): layered underground veins
         /// that follow the terrain surface like real cliff strata.</summary>
         public QuartzVeinGenerator QuartzVeins { get; private set; }
+
+        /// <summary>Coal ore blobs (see CoalOreGenerator): prefer just under the living layer
+        /// (decomposed biomass), rare deep pockets anywhere.</summary>
+        public CoalOreGenerator CoalOres { get; private set; }
         // Infdev's seven octave generators, in the same construction order as the Java:
         // noiseGen1/2 = 16 octaves (terrain body), noiseGen3 = 8 (upper/lower selector),
         // noiseGen4/5 = 4 (replaceBlocks biomes/dirt depth), noiseGen6 = 10 (continent),
@@ -49,6 +53,7 @@ namespace CubeApp.World
             _gen7 = new InfdevOctaves(rand, 8, 8);
             Monoliths = new MonolithSculptor(seed);
             QuartzVeins = new QuartzVeinGenerator(seed);
+            CoalOres = new CoalOreGenerator(seed);
         }
 
         public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeight)
@@ -199,6 +204,9 @@ namespace CubeApp.World
 
             // ---- sedimentary quartz veins (follows terrain, like cliff strata) ----
             QuartzVeins.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
+
+            // ---- coal ore (biomass coal just under the living layer, rare deep pockets) ----
+            CoalOres.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
 
             chunk.NeedsRemesh = true;
             return chunk;

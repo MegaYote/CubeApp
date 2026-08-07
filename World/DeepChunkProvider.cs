@@ -15,10 +15,18 @@ namespace CubeApp.World
     public sealed class DeepChunkProvider : IChunkProvider
     {
         private readonly int seed;
+        /// <summary>Coal ore in the deep layer: rare pockets at ANY depth (older buried forests).</summary>
+        public CoalOreGenerator CoalOres { get; private set; }
 
         public DeepChunkProvider(int seed = 0)
         {
             this.seed = seed;
+            CoalOres = new CoalOreGenerator(seed)
+            {
+                PreferSurface = false, // no surface here - any Y in the deep stone
+                AttemptsPerChunk = 3,  // rare down here (older buried forests)
+                BlobScale = 1.3f,      // slightly chunky pockets
+            };
         }
 
         public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeight)
@@ -72,6 +80,9 @@ namespace CubeApp.World
                     blocks[(lx * chunkSize + lz) * height + cy] = 0;
                 }
             }
+
+            // Coal at any depth in the deep stone (rare).
+            CoalOres.Generate(chunk, chunkX, chunkZ, 0, chunkSize, chunkHeight);
 
             return chunk;
         }
