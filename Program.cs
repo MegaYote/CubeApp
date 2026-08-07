@@ -324,10 +324,14 @@ namespace CubeApp
                     var t4 = stageStopwatch.ElapsedTicks;
                     if (gpuRenderer != null)
                     {
+                        // Always push the HUD (even without a world: menu-only state). On the title
+                        // screen the renderer MUST operate on Program's real MenuState instance, not
+                        // HudState.Empty's detached copy - otherwise button clicks set flags nobody
+                        // reads. BuildHud handles the null-world case safely.
+                        gpuRenderer.SetHud(BuildHud());
                         if (World != null)
                         {
                             gpuRenderer.UpdateCamera(thirdPersonView ? GetThirdPersonCameraPosition() : World.PlayerPosition, World.PlayerYaw, World.PlayerPitch);
-                            gpuRenderer.SetHud(BuildHud());
                             var withPlayer = new List<MobRenderData>(World.Entities.MobRenderData.Count + 1);
                             withPlayer.AddRange(World.Entities.MobRenderData);
                             if (thirdPersonView) withPlayer.Add(BuildLocalPlayerRenderData());
