@@ -2678,8 +2678,8 @@ void main() {
             }
             else if (m.Screen == GameScreen.Paused)
             {
-                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 120f, size.Y / 2f - 90f), ImGuiCond.Always);
-                ImGui.SetNextWindowSize(new Vector2(240, 180), ImGuiCond.Always);
+                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 120f, size.Y / 2f - 110f), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(240, 220), ImGuiCond.Always);
                 ImGui.Begin("##paused", windowFlags);
                 ImGui.SetWindowFontScale(1.6f);
                 ImGui.TextColored(new Vector4(1f, 1f, 1f, 1f), "Paused");
@@ -2688,7 +2688,14 @@ void main() {
                 ImGui.Spacing();
                 if (ImGui.Button("Resume", new Vector2(200, 32))) m.ResumeClicked = true;
                 ImGui.Spacing();
+                if (ImGui.Button("Open to LAN", new Vector2(200, 32))) m.OpenToLanClicked = true;
+                ImGui.Spacing();
                 if (ImGui.Button("Quit to Title", new Vector2(200, 32))) m.QuitToTitleClicked = true;
+                if (!string.IsNullOrEmpty(_hud.NetStatus))
+                {
+                    ImGui.Spacing();
+                    ImGui.TextColored(new Vector4(0.6f, 1f, 0.6f, 1f), _hud.NetStatus);
+                }
                 ImGui.End();
             }
         }

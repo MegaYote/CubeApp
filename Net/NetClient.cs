@@ -50,6 +50,10 @@ namespace CubeApp.Net
         // thread-safe; the network thread only queues them).
         private readonly ConcurrentQueue<NetSnapshot.Edit> _incomingEdits = new();
 
+        // Full chunk payloads (host's modified chunks) also land on the main thread via
+        // ApplySavedChunk - same thread-safety rule.
+        private readonly ConcurrentQueue<(int X, int Z, byte[] Blocks, byte[] Meta)> _incomingChunks = new();
+
         public NetClient(GameWorld? world = null) => _world = world;
 
         public NetSnapshot? LatestSnapshot
@@ -124,6 +128,12 @@ namespace CubeApp.Net
                             // Queue edits for the main thread; never touch the world here.
                             foreach (var e in snap.Edits) _incomingEdits.Enqueue(e);
                             break;
+                        case NetMsgType.ChunkData:
+                            if (NetSnapshot.TryDeserializeChunkData(frame.Value.body, out int cx, out int cz, out byte[] cblocks, out byte[] cmeta))
+                            {
+                                _incomingChunks.Enqueue((cx, cz, cblocks, cmeta));
+                            }
+                            break;
                         case NetMsgType.Pong:
                             // latency can be measured later
                             break;
@@ -167,9 +177,10 @@ namespace CubeApp.Net
             catch { }
         }
 
-        /// <summary>Applies all host-echoed edits to the given world. MUST be called on the main
-        /// thread (the world is not thread-safe). Idempotent: an edit is skipped if the cell
-        /// already holds the target block (our own echo).</summary>
+        /// <summary>Applies all host-echoed edits + chunk payloads to the given world. MUST be
+        /// called on the main thread (the world is not thread-safe). Edits are idempotent: an
+        /// edit is skipped if the cell already holds the target block (our own echo). Chunks use
+        /// ApplySavedChunk which stamps block data over the regenerated chunk.</summary>
         public void DrainIncomingEdits(GameWorld world)
         {
             while (_incomingEdits.TryDequeue(out var e))
@@ -178,6 +189,10 @@ namespace CubeApp.Net
                 {
                     world.ApplyBlockEdit(e.X, e.Y, e.Z, e.BlockId, e.Meta);
                 }
+            }
+            while (_incomingChunks.TryDequeue(out var c))
+            {
+                world.Chunks.ApplySavedChunk(c.X, c.Z, c.Blocks, c.Meta);
             }
         }
 

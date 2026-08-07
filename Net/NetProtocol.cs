@@ -21,6 +21,7 @@ namespace CubeApp.Net
         Welcome = 10,       // clientId int, world seed int, world name string
         Snapshot = 11,      // players[] + edits[]
         Pong = 12,          // client time long (echo)
+        ChunkData = 13,     // chunkX int, chunkZ int, blockCount int, blocks bytes, meta bytes
     }
 
     /// <summary>Writer for NetMsg bodies (little-endian).</summary>
@@ -46,6 +47,14 @@ namespace CubeApp.Net
             Ensure(byteCount);
             _enc.GetBytes(value, 0, value.Length, _buf, _len);
             _len += byteCount;
+        }
+
+        public void WriteBytes(byte[] data)
+        {
+            WriteInt(data.Length);
+            Ensure(data.Length);
+            Buffer.BlockCopy(data, 0, _buf, _len, data.Length);
+            _len += data.Length;
         }
 
         private void Ensure(int extra)
@@ -108,6 +117,16 @@ namespace CubeApp.Net
             value = string.Empty;
             if (!TryReadInt(out int byteCount) || byteCount < 0 || byteCount > 1 << 16 || _pos + byteCount > _buf.Length) return false;
             value = _enc.GetString(_buf, _pos, byteCount);
+            _pos += byteCount;
+            return true;
+        }
+
+        public bool TryReadBytes(out byte[] value)
+        {
+            value = Array.Empty<byte>();
+            if (!TryReadInt(out int byteCount) || byteCount < 0 || byteCount > 1 << 24 || _pos + byteCount > _buf.Length) return false;
+            value = new byte[byteCount];
+            Buffer.BlockCopy(_buf, _pos, value, 0, byteCount);
             _pos += byteCount;
             return true;
         }
@@ -232,6 +251,27 @@ namespace CubeApp.Net
             w.WriteFloat(yaw);
             w.WriteFloat(pitch);
             return w.ToFrame(NetMsgType.Input);
+        }
+
+        /// <summary>Serialized full chunk data (host -> client): chunk coords + raw blocks/meta.
+        /// Used when opening a singleplayer world to multiplayer so joining clients get the host's
+        /// edits, not just the seed terrain.</summary>
+        public static byte[] SerializeChunkData(int chunkX, int chunkZ, byte[] blocks, byte[] meta)
+        {
+            var w = new NetWriter();
+            w.WriteInt(chunkX); w.WriteInt(chunkZ);
+            w.WriteBytes(blocks);
+            w.WriteBytes(meta);
+            return w.ToFrame(NetMsgType.ChunkData);
+        }
+
+        public static bool TryDeserializeChunkData(byte[] body, out int chunkX, out int chunkZ, out byte[] blocks, out byte[] meta)
+        {
+            chunkX = 0; chunkZ = 0; blocks = Array.Empty<byte>(); meta = Array.Empty<byte>();
+            var r = new NetReader(body);
+            if (!r.TryReadInt(out chunkX) || !r.TryReadInt(out chunkZ)) return false;
+            if (!r.TryReadBytes(out blocks) || !r.TryReadBytes(out meta)) return false;
+            return true;
         }
 
         public static bool TryDeserializeInput(byte[] body, out TickInputState input, out float yaw, out float pitch)

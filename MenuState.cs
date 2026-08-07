@@ -27,6 +27,7 @@ namespace CubeApp
         public bool QuitToTitleClicked;
         public bool QuitClicked;
         public bool LoadWorldClicked;
+        public bool OpenToLanClicked;
         public int SelectedWorldIndex = -1;
         /// <summary>Display names of saved worlds (from the saves folder), for the title list.</summary>
         public List<string> SavedWorlds = new();
@@ -45,6 +46,7 @@ namespace CubeApp
             QuitToTitleClicked = false;
             QuitClicked = false;
             LoadWorldClicked = false;
+            OpenToLanClicked = false;
             HostGameClicked = false;
             JoinGameClicked = false;
             MultiplayerBackClicked = false;

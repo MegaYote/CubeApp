@@ -57,6 +57,7 @@ namespace CubeApp
         private string _joinError = "";
         private float _inputSendTimer;
         private bool _netConnected;
+        private int _activeHostPort = Net.NetHost.DefaultPort;
         private string _playerName = "Player" + Environment.ProcessId % 1000;
 
         /// <summary>The simulation world (null on the title screen).</summary>
@@ -143,6 +144,10 @@ namespace CubeApp
             {
                 menu.Screen = GameScreen.Title;
             }
+            else if (menu.OpenToLanClicked)
+            {
+                OpenToLan();
+            }
             else if (menu.ResumeClicked)
             {
                 ResumeToPlaying();
@@ -165,8 +170,7 @@ namespace CubeApp
         // Hosts a new world and opens a listener on the configured port. Friends connect by
         // joining the host's IP:port; the host's world is authoritative.
         private void HostGame()
-        {
-            if (!int.TryParse(menu.HostPort.Trim(), out int port) || port < 1024 || port > 65535)
+        {            if (!int.TryParse(menu.HostPort.Trim(), out int port) || port < 1024 || port > 65535)
             {
                 _joinError = $"Invalid port '{menu.HostPort}' (use 1024-65535)";
                 return;
@@ -181,7 +185,41 @@ namespace CubeApp
                 _joinError = $"Could not listen on port {port}. Is it in use?";
                 _netHost.Dispose();
                 _netHost = null;
+                return;
             }
+            _activeHostPort = port;
+        }
+
+        // Opens the CURRENT singleplayer world to multiplayer (like MC's Open to LAN). Friends
+        // join and get this world's seed + all modified chunks (their edits from the session).
+        // The host keeps playing; pause menu stays open so the friend can see the port.
+        private void OpenToLan()
+        {
+            if (World == null) return;
+            if (_netHost != null && _netHost.IsRunning)
+            {
+                // Already hosting - just resume playing.
+                ResumeToPlaying();
+                return;
+            }
+            int port = Net.NetHost.DefaultPort;
+            if (int.TryParse(menu.HostPort.Trim(), out int parsed) && parsed >= 1024 && parsed <= 65535)
+            {
+                port = parsed;
+            }
+            _joinError = "";
+            _netHost = new Net.NetHost(World, port);
+            _netHost.Log += msg => System.Console.WriteLine($"[NET] {msg}");
+            _netHost.SetLocalPlayerState(World.LocalPlayer);
+            if (!_netHost.Start())
+            {
+                _joinError = $"Could not listen on port {port}. Is it in use?";
+                _netHost.Dispose();
+                _netHost = null;
+                return;
+            }
+            _activeHostPort = port;
+            // Stay paused so the friend can read the port; Resume returns to play.
         }
 
         // Joins a host: creates a world from the host's seed (received in Welcome), positions at
@@ -704,13 +742,32 @@ namespace CubeApp
 
         private string BuildNetStatus()
         {
-            if (_netHost != null && _netHost.IsRunning) return "Hosting on port " + menu.HostPort;
+            if (_netHost != null && _netHost.IsRunning) return "Hosting on " + GetLanAddresses() + ":" + _activeHostPort;
             if (_netClient != null)
             {
                 if (_netConnected) return "Joined " + menu.JoinAddress + " as #" + _netClient.ClientId;
                 return "Join error: " + _joinError;
             }
             return string.Empty;
+        }
+
+        // The host's LAN IPs, so the friend knows what address to type on Join Game.
+        private static string GetLanAddresses()
+        {
+            try
+            {
+                var addrs = new List<string>();
+                foreach (var ip in System.Net.Dns.GetHostEntry(System.Net.Dns.GetHostName()).AddressList)
+                {
+                    if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && !System.Net.IPAddress.IsLoopback(ip))
+                    {
+                        addrs.Add(ip.ToString());
+                    }
+                }
+                if (addrs.Count == 0) addrs.Add("127.0.0.1");
+                return string.Join("/", addrs);
+            }
+            catch { return "127.0.0.1"; }
         }
 
         private string BuildMultiplayerError()

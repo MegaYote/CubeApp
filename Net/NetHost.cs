@@ -181,6 +181,10 @@ namespace CubeApp.Net
                 await conn.Stream.WriteAsync(welcome.ToFrame(NetMsgType.Welcome), _cts.Token);
                 Log?.Invoke($"Client {conn.Id} ('{conn.Name}') joined world '{_world.Name}' (seed {_world.Seed})");
 
+                // Send the host's modified chunks so the client's world matches (edits from a
+                // singleplayer session aren't derivable from the seed alone).
+                await SendModifiedChunks(conn);
+
                 // Read loop: inputs + edits until the connection drops.
                 while (!_cts.IsCancellationRequested)
                 {
@@ -230,6 +234,36 @@ namespace CubeApp.Net
                 _world.RemoveRemotePlayer(conn.Id);
                 Log?.Invoke($"Client {conn.Id} disconnected");
             }
+        }
+
+        // Sends every chunk the world marked as modified (player edits, saved-world edits) so a
+        // joining client replays them on top of its seed-generated terrain. Chunk data is stable
+        // to read here: modified chunks have finished generation and are only mutated via
+        // ApplyBlockEdit (main thread) + the mesh worker (which reads, never writes blocks).
+        private async Task SendModifiedChunks(ClientConnection conn)
+        {
+            var coords = new List<ChunkCoordinates>(_world.Chunks.ModifiedChunks);
+            int sent = 0;
+            foreach (var c in coords)
+            {
+                if (_cts.IsCancellationRequested) break;
+                if (!_world.Chunks.TryGetLoadedChunk(c, out var chunk)) continue;
+                try
+                {
+                    byte[] blocks;
+                    byte[] meta;
+                    lock (chunk.MeshLock)
+                    {
+                        blocks = (byte[])chunk.RawBlocks.Clone();
+                        meta = (byte[])chunk.RawMeta.Clone();
+                    }
+                    var frame = NetSnapshot.SerializeChunkData(c.X, c.Z, blocks, meta);
+                    await conn.Stream.WriteAsync(frame, _cts.Token);
+                    sent++;
+                }
+                catch { break; }
+            }
+            if (sent > 0) Log?.Invoke($"Sent {sent} modified chunks to client {conn.Id}");
         }
 
         // Reads one length-prefixed frame. Returns null on EOF/timeout/invalid.
