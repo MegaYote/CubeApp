@@ -1550,10 +1550,11 @@ void main() {
                 Outputs = _sc.Framebuffer.OutputDescription
             });
 
-            // One big camera-space quad (2 triangles) per layer. The buffer is filled in
-            // DrawClouds with the eye at origin so it never needs rebuilding.
+            // One big camera-space quad (2 triangles) per layer. The buffer holds all layers:
+            // CloudLayerCount quads x 4 verts x 5 floats (pos3 + uv2). Filled in DrawClouds with
+            // the eye at origin so it never needs rebuilding.
             _cloudVertexBuffer = factory.CreateBuffer(new BufferDescription(
-                4 * 5 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+                CloudLayerCount * 4 * 5 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
             _cloudIndexBuffer = factory.CreateBuffer(new BufferDescription(
                 6 * sizeof(ushort), BufferUsage.IndexBuffer));
             _gd.UpdateBuffer(_cloudIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3 });
