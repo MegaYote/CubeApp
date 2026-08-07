@@ -184,20 +184,27 @@ namespace CubeApp
             int chunkX = WorldToChunkCoord(LocalPlayer.Position.X);
             int chunkZ = WorldToChunkCoord(LocalPlayer.Position.Z);
             // Request/unload scans cost O(radius^2) + O(loadedChunks); only run them when the
-            // player actually enters a new chunk column (or the render distance changed).
-            if (_forceChunkStream || chunkX != _lastStreamChunkX || chunkZ != _lastStreamChunkZ)
+            // player actually enters a new chunk column, the render distance changed, OR the
+            // player crosses a vertical streaming threshold (digging straight down in one column
+            // keeps X/Z constant but must still wake the deep/sky layer streams).
+            double py = LocalPlayer.Position.Y;
+            bool crossedDeep = (py < DeepStreamThreshold) != _lastBelowDeep;
+            bool crossedSky = (py > SkyStreamThreshold) != _lastAboveSky;
+            if (_forceChunkStream || chunkX != _lastStreamChunkX || chunkZ != _lastStreamChunkZ || crossedDeep || crossedSky)
             {
                 _forceChunkStream = false;
                 _lastStreamChunkX = chunkX;
                 _lastStreamChunkZ = chunkZ;
+                _lastBelowDeep = py < DeepStreamThreshold;
+                _lastAboveSky = py > SkyStreamThreshold;
                 Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, ChunkManager.GroundLayer);
                 // The deep layer only streams when the player digs down (lazy allocation).
-                if (LocalPlayer.Position.Y < DeepStreamThreshold)
+                if (py < DeepStreamThreshold)
                 {
                     Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, ChunkManager.DeepLayer);
                 }
                 // The sky layer only streams when the player climbs into the stratosphere.
-                if (LocalPlayer.Position.Y > SkyStreamThreshold)
+                if (py > SkyStreamThreshold)
                 {
                     Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, ChunkManager.SkyLayer);
                 }
@@ -209,6 +216,8 @@ namespace CubeApp
 
         private const double DeepStreamThreshold = 0.0;
         private const double SkyStreamThreshold = 350.0;
+        private bool _lastBelowDeep;
+        private bool _lastAboveSky;
 
         /// <summary>Simulates remote players without touching the local player's camera/chunks.
         /// The host calls this each frame with each client's received input.</summary>
