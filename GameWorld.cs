@@ -95,7 +95,11 @@ namespace CubeApp
             ChunkProvider = new World.InfdevChunkProvider(seed);
             Chunks = new ChunkManager(ChunkProvider);
             Entities = new EntityManager(Chunks);
-            _meshQueue = new MeshWorker(Chunks, getRenderer);
+            // Mesh workers scale with the machine: at least 2, up to ~cores/4. Chunk gen already
+            // takes ProcessorCount-2 threads, so meshing gets a share of what's left without
+            // starving the render thread on low-end machines.
+            int meshWorkers = Math.Clamp(Environment.ProcessorCount / 4, 2, 8);
+            _meshQueue = new MeshWorker(Chunks, getRenderer, meshWorkers);
             Mesher = new MeshScheduler(Chunks, _meshQueue);
             BlockTicks = new BlockTickScheduler(Chunks, Mesher);
             _chunkGenWorker = new ChunkGenWorker(Chunks, () => ChunkGenerated?.Invoke(), Math.Max(1, chunkGenWorkers));

@@ -86,6 +86,7 @@ namespace CubeApp
             // vertical column contiguous, so the inner copy is a tight sequential loop - no
             // delegate calls, no dictionary lookups, no per-cell coordinate math. Chunks missing
             // from the region (e.g. unloaded diagonal corners) simply stay air.
+            int regionTopSolidY = -1;
             foreach (var kv in chunks)
             {
                 var c = kv.Value;
@@ -102,7 +103,9 @@ namespace CubeApp
                         {
                             // Opaque blocks skylight flood-fill (stone, dirt, planks...). Transparent-to-light blocks
                             // (water, glass, leaves) let light pass through so caves under water aren't black.
-                            opaque[dst + y] = BlockRegistry.IsOpaque(raw[src + y]);
+                            bool o = BlockRegistry.IsOpaque(raw[src + y]);
+                            opaque[dst + y] = o;
+                            if (o && y > regionTopSolidY) regionTopSolidY = y;
                         }
                     }
                 }
@@ -110,7 +113,7 @@ namespace CubeApp
 
             var queue = _queuePool ??= new Queue<int>();
             queue.Clear();
-            SeedSkyLight(queue);
+            SeedSkyLight(queue, regionTopSolidY);
             Propagate(queue);
         }
 
@@ -121,8 +124,13 @@ namespace CubeApp
             return (lx * dimZ + lz) * height + y;
         }
 
-        private void SeedSkyLight(Queue<int> queue)
+        private void SeedSkyLight(Queue<int> queue, int regionTopSolidY)
         {
+            // Everything above the region's highest solid block is guaranteed air at full sky
+            // light, so the per-column walk can start just above it instead of the top of the
+            // 448-tall chunk - identical results (all those cells were MaxLight anyway), but
+            // skips seeding the empty air roof that towers above the terrain band.
+            int startY = Math.Max(0, Math.Min(regionTopSolidY + 1, height - 1));
             for (int lx = 0; lx < dimX; lx++)
             {
                 for (int lz = 0; lz < dimZ; lz++)
@@ -131,7 +139,7 @@ namespace CubeApp
                     // opaque block, which casts everything below it into shadow (to be filled in by
                     // the flood fill from the sides). Columns are contiguous in the new layout.
                     int colBase = Index(lx, 0, lz);
-                    for (int y = height - 1; y >= 0; y--)
+                    for (int y = startY; y >= 0; y--)
                     {
                         int idx = colBase + y;
                         if (opaque[idx])

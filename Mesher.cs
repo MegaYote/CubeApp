@@ -89,6 +89,29 @@ namespace CubeApp
 
             int[] dims = new[] { width, height, depth };
 
+            // Occupied Y rows of the target chunk (any non-air block). Chunks are 448 tall but the
+            // terrain band only occupies a slice of that, so most Y rows are pure air. The greedy
+            // loops below skip those rows entirely - faces only ever exist where a block is. A
+            // tower built up to y=430 is naturally included (we scan the LIVE blocks, not a cached
+            // bound), so "players build up high" needs no special handling.
+            bool[] blockAtY = new bool[height];
+            bool anyBlock = false;
+            for (int y = 0; y < height; y++)
+            {
+                bool has = false;
+                int stride = depth * height;
+                for (int x = 0; x < width && !has; x++)
+                {
+                    int colBase = x * stride;
+                    for (int z = 0; z < depth && !has; z++)
+                    {
+                        if (raw[colBase + z * height + y] != BlockRegistry.AirId) { has = true; break; }
+                    }
+                }
+                blockAtY[y] = has;
+                anyBlock |= has;
+            }
+
             for (int d = 0; d < 3; d++)
             {
                 int u = (d + 1) % 3;
@@ -108,8 +131,21 @@ namespace CubeApp
                 var maskPos = new int[dimU * dimV];
                 var maskNeg = new int[dimU * dimV];
 
+                // Skip pure-air slices along the slice axis (d==1 = Y). A face between slice and
+                // slice+1 needs a block in at least one of them; both air => nothing to emit.
+                bool[]? sliceHasContent = null;
+                if (d == 1) sliceHasContent = blockAtY;
+
                 for (int slice = 0; slice < dimD; slice++)
                 {
+                    // Y-axis: skip both-air slices (fully safe - the Y axis never crosses into a
+                    // neighbor chunk; the block above the world top is always air).
+                    if (sliceHasContent != null && !sliceHasContent[slice]
+                        && (slice + 1 >= dimD || !sliceHasContent[slice + 1]))
+                    {
+                        continue;
+                    }
+
                     Array.Clear(maskPos, 0, maskPos.Length);
                     Array.Clear(maskNeg, 0, maskNeg.Length);
 
@@ -123,6 +159,11 @@ namespace CubeApp
                         // X slices: u = local Y, v = local Z.
                         for (int iu = 0; iu < dimU; iu++)
                         {
+                            // Y-axis rows with no block in this chunk can't produce faces on the
+                            // non-final slices (A and B are both air). The FINAL slice is kept in
+                            // full so the provisional border face into the +X neighbour is preserved
+                            // exactly (the neighbour re-emits it authoritatively when it meshes).
+                            if (!lastSlice && !blockAtY[iu]) continue;
                             for (int jv = 0; jv < dimV; jv++)
                             {
                                 int A = raw[(slice * depth + jv) * height + iu];
@@ -158,6 +199,7 @@ namespace CubeApp
                         {
                             for (int jv = 0; jv < dimV; jv++)
                             {
+                                if (!lastSlice && !blockAtY[jv]) continue;
                                 int A = raw[(iu * depth + slice) * height + jv];
                                 int B = lastSlice
                                     ? (rawPosZ != null ? rawPosZ[iu * depth * height + jv] : BlockRegistry.AirId)
