@@ -11,15 +11,19 @@ namespace CubeApp
     /// (or water, or a cave-in) changes a block near them - then gravity remembers them and they
     /// drop. This makes cave-ins "waiting to happen" without making world-gen collapse on itself.
     ///
-    /// Triggering: BlockTickScheduler.OnBlockChanged calls us with every changed cell. We check
-    /// that cell and the cell directly above it. If either is an unsupported gravity block we
-    /// schedule it to tick (delay 1) so it falls on the next 20 TPS step.
+    /// PERFORMANCE (hundreds falling at once): when a block loses support the ENTIRE contiguous
+    /// gravity column above it is popped into falling entities in a SINGLE tick (not one block
+    /// per tick), so an avalanche starts moving immediately. The entity list uses swap-remove
+    /// (O(1) removal, no List.RemoveAt shifts) and the landing pass marks landed blocks in place
+    /// (no per-step allocations, no Contains() scans) - a 500-block collapse costs O(n) per step.
     ///
-    /// Falling: an unsupported gravity block is removed from the world grid and spawns a
-    /// <see cref="FallingBlockData"/> entity that the renderer draws as a 3D cube. The entity
-    /// accelerates downward under gravity each frame (Minecraft-style), falling through air AND
-    /// water, until its bottom reaches a solid support. Then it lands back into the world grid
-    /// (displacing water, like MC) and wakes neighbours so the cascade continues upward.
+    /// Triggering: BlockTickScheduler.OnBlockChanged calls us with every changed cell. We check
+    /// that cell and the cell directly above it; an unsupported gravity block is scheduled to
+    /// tick, and TickBlock pops the whole column.
+    ///
+    /// Falling: blocks pop out of the world grid and spawn FallingBlockData entities rendered as
+    /// 3D cubes. They accelerate downward (Minecraft-style), falling through air AND water, until
+    /// the bottom reaches a solid support, then land back into the grid (displacing water).
     ///
     /// NOTE: only ever touches the world on the main thread (the tick loop and UpdateFalling
     /// both run inside the game loop), so it is safe alongside the networking main-thread rule.
@@ -34,10 +38,11 @@ namespace CubeApp
         private readonly ChunkManager _manager;
         private readonly BlockTickScheduler _tickScheduler;
         private readonly int _waterId;
+        private readonly int _worldTopY; // exclusive: one past the highest block row
 
-        // Active falling blocks (entity list; NOT in the world grid).
+        // Active falling blocks (entity list; NOT in the world grid). Parallel speeds.
         private readonly List<FallingBlockData> _falling = new();
-        private readonly List<int> _fallingSpeeds = new(); // parallel: current velocity per block
+        private readonly List<float> _fallSpeeds = new();
 
         private float _fallAccumulator;
 
@@ -46,6 +51,7 @@ namespace CubeApp
             _manager = manager ?? throw new ArgumentNullException(nameof(manager));
             _tickScheduler = tickScheduler ?? throw new ArgumentNullException(nameof(tickScheduler));
             _waterId = BlockRegistry.GetId("water");
+            _worldTopY = ChunkManager.WorldOriginY + ChunkManager.ChunkHeight;
         }
 
         /// <summary>Read-only view of the blocks currently falling (for the renderer).</summary>
@@ -75,27 +81,37 @@ namespace CubeApp
             return belowId == BlockRegistry.AirId || belowId == _waterId;
         }
 
-        /// <summary>One scheduled tick for a gravity block: if still unsupported, pop it out of
-        /// the grid and start it falling as an entity.</summary>
+        /// <summary>One scheduled tick for a gravity block: if still unsupported, pop the ENTIRE
+        /// contiguous gravity column above it into falling entities in a single operation.</summary>
         public void TickBlock(int x, int y, int z)
         {
             if (!_manager.TryGetLoadedBlock(x, y, z, out var id) || !BlockRegistry.IsGravity(id)) return;
             if (!IsUnsupported(x, y, z)) return;
 
-            // Remove from the world and spawn the falling entity at the exact cell.
-            if (!_manager.TrySetBlockLoadedOnly(x, y, z, BlockRegistry.AirId, 0)) return;
-            lock (_falling)
+            // Walk up the column while the block above is also an (now-unsupported) gravity
+            // block, popping each into a falling entity. O(column height) total - a 100-block
+            // tower starts falling in ONE tick, not 100.
+            int top = y;
+            while (top < _worldTopY)
             {
-                _falling.Add(new FallingBlockData(id, x + 0f, y, z + 0f));
-                _fallingSpeeds.Add(0);
+                if (!_manager.TryGetLoadedBlock(x, top, z, out var upId) || !BlockRegistry.IsGravity(upId)) break;
+                if (!_manager.TrySetBlockLoadedOnly(x, top, z, BlockRegistry.AirId, 0)) break;
+                lock (_falling)
+                {
+                    _falling.Add(new FallingBlockData(upId, x + 0f, top, z + 0f));
+                    _fallSpeeds.Add(0f);
+                }
+                top++;
             }
-            // The cell we just vacated wakes the block ABOVE it (and water below), so a column
-            // of gravity blocks cascades: each loses support one tick after the one below it.
-            _tickScheduler.OnBlockChanged(x, y, z);
+
+            // The vacated column wakes what's above it (a gravity block resting on this column's
+            // top) and the water below (displaced air lets it flow in).
+            _tickScheduler.OnBlockChanged(x, top, z);
+            _tickScheduler.OnBlockChanged(x, y - 1, z);
         }
 
-        /// <summary>Advance all falling blocks by one game-loop frame (called from the main
-        /// thread). Uses a fixed integration step so the fall speed is frame-rate independent.</summary>
+        /// <summary>Advance all falling blocks by one game-loop frame (main thread). Uses a fixed
+        /// integration step so fall speed is frame-rate independent.</summary>
         public void UpdateFalling(float deltaSeconds)
         {
             if (_falling.Count == 0) return;
@@ -111,52 +127,49 @@ namespace CubeApp
 
         private void StepFalling()
         {
-            // Integrate velocities + positions, then resolve landings in a second pass so
-            // multiple blocks in one column stack correctly (lower lands first).
+            // Integrate velocities (O(n)).
             for (int i = 0; i < _falling.Count; i++)
             {
-                int vel = _fallingSpeeds[i];
-                vel = (int)(vel + FallGravity * StepRate);
-                if (vel > MaxFallSpeed) vel = (int)MaxFallSpeed;
-                _fallingSpeeds[i] = vel;
+                float vel = _fallSpeeds[i] + FallGravity * StepRate;
+                if (vel > MaxFallSpeed) vel = MaxFallSpeed;
+                _fallSpeeds[i] = vel;
             }
 
-            // Landing pass: collect which blocks have solid ground under their bottom now.
-            var landed = new List<int>();
-            for (int i = 0; i < _falling.Count; i++)
+            // Landing + position pass (O(n), in place, no allocations). Iterate forward; when a
+            // block lands, swap-remove it into the current slot (O(1)) and re-check the slot.
+            for (int i = 0; i < _falling.Count;)
             {
                 var f = _falling[i];
-                float y = f.Y - _fallingSpeeds[i] * StepRate; // new bottom this step
-                int cellY = (int)Math.Floor(y);
-                // Land when the cell BELOW the cube is a solid support (air/water = keep falling).
-                if (HasSupportBelow((int)Math.Floor(f.X), cellY - 1, (int)Math.Floor(f.Z)))
+                float newY = f.Y - _fallSpeeds[i] * StepRate;
+                int floorX = (int)Math.Floor(f.X);
+                int floorZ = (int)Math.Floor(f.Z);
+                int cellY = (int)Math.Floor(newY);
+
+                if (HasSupportBelow(floorX, cellY - 1, floorZ))
                 {
-                    // Round to the cell grid; if the target cell is occupied (e.g. by another
-                    // falling block's future spot), keep going - the lower one lands first.
+                    // Landing cell; if it's already occupied (another block settled there this
+                    // pass), push up onto it so columns restack.
                     int finalY = cellY;
-                    if (_manager.TryGetLoadedBlock((int)Math.Floor(f.X), finalY, (int)Math.Floor(f.Z), out var occ) && IsSupport(occ))
+                    if (_manager.TryGetLoadedBlock(floorX, finalY, floorZ, out var occ) && IsSupport(occ))
                     {
-                        finalY = cellY + 1; // push up onto it
+                        finalY = cellY + 1;
                     }
-                    landed.Add(i);
-                    _manager.TrySetBlockLoadedOnly((int)Math.Floor(f.X), finalY, (int)Math.Floor(f.Z), f.BlockId, 0);
-                    _tickScheduler.OnBlockChanged((int)Math.Floor(f.X), finalY, (int)Math.Floor(f.Z));
-                }
-            }
+                    _manager.TrySetBlockLoadedOnly(floorX, finalY, floorZ, f.BlockId, 0);
+                    _tickScheduler.OnBlockChanged(floorX, finalY, floorZ);
 
-            // Apply positions (only for blocks that didn't land) and remove landed in reverse.
-            for (int i = _falling.Count - 1; i >= 0; i--)
-            {
-                var f = _falling[i];
-                bool didLand = landed.Contains(i);
-                if (didLand)
-                {
-                    _falling.RemoveAt(i);
-                    _fallingSpeeds.RemoveAt(i);
-                    continue;
+                    // Swap-remove: overwrite this slot with the last element, drop the tail.
+                    int last = _falling.Count - 1;
+                    _falling[i] = _falling[last];
+                    _fallSpeeds[i] = _fallSpeeds[last];
+                    _falling.RemoveAt(last);
+                    _fallSpeeds.RemoveAt(last);
+                    // Do NOT increment i: the swapped-in element must be re-examined.
                 }
-                int vel = _fallingSpeeds[i];
-                _falling[i] = new FallingBlockData(f.BlockId, f.X, f.Y - vel * StepRate, f.Z);
+                else
+                {
+                    _falling[i] = new FallingBlockData(f.BlockId, f.X, newY, f.Z);
+                    i++;
+                }
             }
         }
 

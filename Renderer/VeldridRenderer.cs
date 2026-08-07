@@ -185,16 +185,20 @@ namespace CubeApp.Renderer
         private long _lastParticleTicks;
 
         // ---- Falling blocks (Minecraft falling sand/gravel) ------------------------------
-        // Real 3D cubes of the block's tiles, drawn with the world pipeline so they depth-test
-        // against terrain. Each frame Program pushes the active falling-block list via
-        // SetFallingBlocks; the renderer builds cube geometry into a scratch buffer and draws it.
+        // Real 3D cubes of the block's tiles, drawn with an INSTANCED pipeline: one static cube
+        // mesh is uploaded once, and each frame only a tiny per-instance buffer (world pos +
+        // tile rect) is updated. For hundreds of falling blocks this uploads ~2.8KB instead of
+        // rebuilding + re-uploading full cube geometry (~500KB) - the difference between a big
+        // cave-in being smooth vs stuttering.
         private IReadOnlyList<CubeApp.FallingBlockData> _fallingBlocks = Array.Empty<CubeApp.FallingBlockData>();
-        private DeviceBuffer? _fallingVertexBuffer;
-        private DeviceBuffer? _fallingIndexBuffer;
-        private uint _fallingVertexCapacityBytes;
-        private uint _fallingIndexCapacityBytes;
-        private float[] _fallingVertexScratch = Array.Empty<float>();
-        private ushort[] _fallingIndexScratch = Array.Empty<ushort>();
+        private DeviceBuffer? _fallingVertexBuffer;  // static cube mesh (once)
+        private DeviceBuffer? _fallingIndexBuffer;   // static cube indices (once)
+        private DeviceBuffer? _fallingInstanceBuffer; // per-frame instance data (dynamic)
+        private uint _fallingInstanceCapacity;
+        private float[] _fallingInstanceScratch = Array.Empty<float>();
+        private Pipeline? _fallingPipeline;
+        private const int FallingCubeVerts = 24;  // 6 faces x 4
+        private const int FallingCubeIndices = 36;
         // Cube face geometry (same as Mesher.FaceVertices): back/front/bottom/top/right/left.
         private static readonly float[][] FallingCubeFaces = new float[][]
         {
@@ -1086,6 +1090,88 @@ void main() {
                 Outputs = _sc.Framebuffer.OutputDescription
             });
 
+            // Instanced falling-block pipeline: one static cube mesh per block, with per-instance
+            // world position + tile rect. Vertex: local cube corner (3) + local UV (2) + shade (4).
+            // Instance: worldPos (3) + tileRect (4). Same atlas+fog sets as the world.
+            string fallingVsCode = @"#version 450
+layout(location=0) in vec3 aCorner;
+layout(location=1) in vec2 aLocalUV;
+layout(location=2) in vec4 aShade;
+layout(location=3) in vec3 iWorldPos;
+layout(location=4) in vec4 iTileRect;
+layout(location=0) out vec2 vLocalUV;
+layout(location=1) out vec4 vTileRect;
+layout(location=2) out vec4 vColor;
+layout(location=3) out vec3 vWorldPos;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() {
+    vec3 worldPos = aCorner + iWorldPos;
+    vLocalUV = aLocalUV;
+    vTileRect = iTileRect;
+    vColor = aShade;
+    vWorldPos = worldPos;
+    gl_Position = projView * vec4(worldPos, 1.0);
+}";
+            var fallingVsSpirv = SpirvCompilation.CompileGlslToSpirv(fallingVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var fallingShaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, fallingVsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main")); // reuse world opaque fragment shader
+
+            var fallingVertexLayout = new VertexLayoutDescription(
+                new VertexElementDescription("aCorner", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                new VertexElementDescription("aLocalUV", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float2),
+                new VertexElementDescription("aShade", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
+            var fallingInstanceLayout = new VertexLayoutDescription(
+                new VertexElementDescription("iWorldPos", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                new VertexElementDescription("iTileRect", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
+            fallingInstanceLayout.InstanceStepRate = 1;
+            var fallingShaderSet = new ShaderSetDescription(new[] { fallingVertexLayout, fallingInstanceLayout }, new[] { fallingShaders[0], fallingShaders[1] });
+            _fallingPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleAlphaBlend,
+                DepthStencilState = new DepthStencilStateDescription(true, true, ComparisonKind.LessEqual),
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
+                ShaderSet = fallingShaderSet,
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
+
+            // Static cube mesh (uploaded once): 24 verts (6 faces x 4) + 36 indices.
+            var cubeVerts = new float[FallingCubeVerts * (3 + 2 + 4)];
+            int cv = 0;
+            for (int face = 0; face < 6; face++)
+            {
+                var verts = FallingCubeFaces[face];
+                float shade = FallingFaceShade[face];
+                const float uvMax = 0.999f;
+                for (int c = 0; c < 4; c++)
+                {
+                    cubeVerts[cv++] = verts[c * 3 + 0];
+                    cubeVerts[cv++] = verts[c * 3 + 1];
+                    cubeVerts[cv++] = verts[c * 3 + 2];
+                    cubeVerts[cv++] = (c == 1 || c == 2) ? uvMax : 0f;
+                    cubeVerts[cv++] = (c == 2 || c == 3) ? uvMax : 0f;
+                    cubeVerts[cv++] = shade; cubeVerts[cv++] = shade; cubeVerts[cv++] = shade; cubeVerts[cv++] = 1f;
+                }
+            }
+            _fallingVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)cubeVerts.Length * sizeof(float), BufferUsage.VertexBuffer));
+            _gd.UpdateBuffer(_fallingVertexBuffer, 0, cubeVerts);
+            var cubeIndices = new ushort[FallingCubeIndices];
+            int ci = 0;
+            for (int face = 0; face < 6; face++)
+            {
+                int fv = face * 4;
+                cubeIndices[ci++] = (ushort)(fv + 0);
+                cubeIndices[ci++] = (ushort)(fv + 1);
+                cubeIndices[ci++] = (ushort)(fv + 2);
+                cubeIndices[ci++] = (ushort)(fv + 0);
+                cubeIndices[ci++] = (ushort)(fv + 2);
+                cubeIndices[ci++] = (ushort)(fv + 3);
+            }
+            _fallingIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)cubeIndices.Length * sizeof(ushort), BufferUsage.IndexBuffer));
+            _gd.UpdateBuffer(_fallingIndexBuffer, 0, cubeIndices);
+
             // create texture resource set if atlas loaded
             if (_atlasView != null && _atlasSampler != null)
             {
@@ -1356,91 +1442,55 @@ void main() {
 
         // Builds cube geometry for all falling blocks into the scratch buffers and draws them.
         // Modeled on DrawParticles but with real 3D cube faces (per-face tile + Infdev shading).
+        // Instanced draw: the static cube mesh is bound once; only the per-instance buffer
+        // (worldPos + tileRect per block) is re-uploaded each frame. For n falling blocks that's
+        // 7 floats of instance data vs. 312 floats of full geometry - the cave-in-friendly path.
         private void DrawFallingBlocks(CommandList cl)
         {
             int n = _fallingBlocks.Count;
-            if (n == 0) return;
+            if (n == 0 || _fallingPipeline == null) return;
             float atlasW = Math.Max(1f, _atlasWidth);
             float atlasH = Math.Max(1f, _atlasHeight);
 
-            // 6 faces x 4 verts x 13 floats per block.
-            int vertFloats = n * 6 * 4 * 13;
-            if (_fallingVertexScratch.Length < vertFloats) _fallingVertexScratch = new float[vertFloats];
-            int indexCount = n * 6 * 6;
-            if (_fallingIndexScratch.Length < indexCount) _fallingIndexScratch = new ushort[indexCount];
-
+            // 7 floats per instance: worldPos (3) + tileRect (4).
+            int instFloats = n * 7;
+            if (_fallingInstanceScratch.Length < instFloats) _fallingInstanceScratch = new float[instFloats];
             int vf = 0;
-            int ii = 0;
             for (int i = 0; i < n; i++)
             {
                 var fb = _fallingBlocks[i];
                 var def = BlockRegistry.GetById(fb.BlockId);
-                int baseV = i * 24;
-                for (int face = 0; face < 6; face++)
-                {
-                    var verts = FallingCubeFaces[face];
-                    var tr = def.FaceTexture(FallingFaceNormals[face]);
-                    float u0 = tr.X / atlasW;
-                    float v0 = tr.Y / atlasH;
-                    float uw = tr.Width / atlasW;
-                    float vh = tr.Height / atlasH;
-                    float shade = FallingFaceShade[face];
-                    const float uvMax = 0.999f;
-                    for (int c = 0; c < 4; c++)
-                    {
-                        _fallingVertexScratch[vf++] = fb.X + verts[c * 3 + 0];
-                        _fallingVertexScratch[vf++] = fb.Y + verts[c * 3 + 1];
-                        _fallingVertexScratch[vf++] = fb.Z + verts[c * 3 + 2];
-                        // local UV (0..1 across the face)
-                        _fallingVertexScratch[vf++] = (c == 1 || c == 2) ? uvMax : 0f;
-                        _fallingVertexScratch[vf++] = (c == 2 || c == 3) ? uvMax : 0f;
-                        _fallingVertexScratch[vf++] = u0;
-                        _fallingVertexScratch[vf++] = v0;
-                        _fallingVertexScratch[vf++] = uw;
-                        _fallingVertexScratch[vf++] = vh;
-                        _fallingVertexScratch[vf++] = shade;
-                        _fallingVertexScratch[vf++] = shade;
-                        _fallingVertexScratch[vf++] = shade;
-                        _fallingVertexScratch[vf++] = 1f;
-                    }
-                    int fv = baseV + face * 4;
-                    _fallingIndexScratch[ii++] = (ushort)(fv + 0);
-                    _fallingIndexScratch[ii++] = (ushort)(fv + 1);
-                    _fallingIndexScratch[ii++] = (ushort)(fv + 2);
-                    _fallingIndexScratch[ii++] = (ushort)(fv + 0);
-                    _fallingIndexScratch[ii++] = (ushort)(fv + 2);
-                    _fallingIndexScratch[ii++] = (ushort)(fv + 3);
-                }
+                var tr = def.AllTexture ?? default;
+                _fallingInstanceScratch[vf++] = fb.X;
+                _fallingInstanceScratch[vf++] = fb.Y;
+                _fallingInstanceScratch[vf++] = fb.Z;
+                _fallingInstanceScratch[vf++] = tr.X / atlasW;
+                _fallingInstanceScratch[vf++] = tr.Y / atlasH;
+                _fallingInstanceScratch[vf++] = tr.Width / atlasW;
+                _fallingInstanceScratch[vf++] = tr.Height / atlasH;
             }
 
-            EnsureFallingBuffers((uint)(vertFloats * sizeof(float)), (uint)(indexCount * sizeof(ushort)));
-            _gd.UpdateBuffer(_fallingVertexBuffer, 0, _fallingVertexScratch);
-            _gd.UpdateBuffer(_fallingIndexBuffer, 0, _fallingIndexScratch);
+            EnsureFallingInstanceBuffer((uint)(instFloats * sizeof(float)));
+            _gd.UpdateBuffer(_fallingInstanceBuffer, 0, _fallingInstanceScratch);
 
-            cl.SetPipeline(_pipeline);
+            cl.SetPipeline(_fallingPipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
             if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
             cl.SetGraphicsResourceSet(2, _fogSet);
             cl.SetVertexBuffer(0, _fallingVertexBuffer);
+            cl.SetVertexBuffer(1, _fallingInstanceBuffer);
             cl.SetIndexBuffer(_fallingIndexBuffer, IndexFormat.UInt16);
-            cl.DrawIndexed((uint)indexCount);
+            cl.DrawIndexed(FallingCubeIndices, (uint)n, 0, 0, 0);
         }
 
-        private void EnsureFallingBuffers(uint vbBytes, uint ibBytes)
+        private void EnsureFallingInstanceBuffer(uint bytes)
         {
-            if (_fallingVertexBuffer == null || _fallingVertexCapacityBytes < vbBytes)
+            if (_fallingInstanceBuffer == null || _fallingInstanceCapacity < bytes)
             {
-                _fallingVertexBuffer?.Dispose();
-                _fallingVertexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
-                    Math.Max(vbBytes, 4096), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
-                _fallingVertexCapacityBytes = Math.Max(vbBytes, 4096);
-            }
-            if (_fallingIndexBuffer == null || _fallingIndexCapacityBytes < ibBytes)
-            {
-                _fallingIndexBuffer?.Dispose();
-                _fallingIndexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
-                    Math.Max(ibBytes, 2048), BufferUsage.IndexBuffer | BufferUsage.Dynamic));
-                _fallingIndexCapacityBytes = Math.Max(ibBytes, 2048);
+                _fallingInstanceBuffer?.Dispose();
+                _fallingInstanceBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                    Math.Max(bytes, 512), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+                _fallingInstanceCapacity = Math.Max(bytes, 512);
             }
         }
 
