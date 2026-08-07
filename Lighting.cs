@@ -260,7 +260,7 @@ namespace CubeApp
             {
                 for (int lz = 0; lz < dimZ; lz++)
                 {
-                    int hm = heightMap[lz * dimZ + lx];
+                    int hm = heightMap[lx * dimZ + lz]; // x-major, matches the fill
                     int colBase = Index(lx, 0, lz);
                     for (int y = startY; y >= bandLo; y--)
                     {
