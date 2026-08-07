@@ -22,8 +22,9 @@ namespace CubeApp.World
     public sealed class MonolithSculptor
     {
         public bool Enabled = true;
-        /// <summary>0..1 placement-noise threshold; lower = more monoliths (0.8 = fairly common).</summary>
-        public float Frequency = 0.80f;
+        /// <summary>Raw placement-noise threshold (noise range ~-2.6..2.5). Higher = rarer.
+        /// ~1.4 common, ~1.7 rare, ~1.9 very rare.</summary>
+        public float Frequency = 1.75f;
 
         /// <summary>Raw placement noise at a world column (debug / tuning helper).</summary>
         public double PlacementValue(int wx, int wz) => _placement.Noise2D(wx * 0.02, wz * 0.02);        /// <summary>Base radius in blocks (scaled smoothly by the noise field).</summary>
@@ -71,13 +72,11 @@ namespace CubeApp.World
                     // Placement: a smooth 2D noise decides whether this column hosts a monolith.
                     // The noise ranges roughly -2..+1.5, so normalize to 0..1 before comparing
                     // against the Frequency threshold (which is 0..1: lower = more monoliths).
+                    // Placement: a smooth 2D noise decides whether this column hosts a monolith.
+                    // Compare the RAW noise to the Frequency threshold (noise spans ~-2.6..2.5;
+                    // higher threshold = rarer peaks). strength 0..1 scales size/height.
                     double p = _placement.Noise2D(wx * 0.02, wz * 0.02);
-                    double pn = (p + 2.0) / 3.5; // normalize -2..1.5 -> 0..1
-                    if (pn > 1.0) pn = 1.0;
-                    if (pn < 0.0) pn = 0.0;
-                    // Frequency is a 0..1 THRESHOLD on the placement noise: lower = more of the
-                    // map is monolith country. strength scales 0..1 as pn rises above it.
-                    double strength = (pn - Frequency) / (1.0 - Frequency);
+                    double strength = (p - Frequency) / (2.6 - Frequency);
                     if (strength <= 0.0) continue;
                     if (strength > 1.0) strength = 1.0;
 
