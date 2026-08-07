@@ -203,6 +203,7 @@ namespace CubeApp.World
                 double f = Math.Pow(2.0, startIndex + i);
                 _invFreq[i] = 1.0 / f;
                 _weight[i] = f;
+                _weightSum += f;
             }
         }
 
@@ -221,5 +222,16 @@ namespace CubeApp.World
                 sum += _octaves[i].Noise(x * _invFreq[i], y * _invFreq[i], z * _invFreq[i]) * _weight[i];
             return sum;
         }
+
+        /// <summary>Normalized 2D noise: divides the octave accumulation by the total weight sum,
+        /// so the result is approximately -1..1 (like standard FBM). The raw Infdev accumulation
+        /// grows large because low-frequency octaves dominate; callers who want a bounded field
+        /// (veins, features, spawn logic) should use this.</summary>
+        public double Noise2DNormalized(double x, double z) => Noise2D(x, z) / _weightSum;
+
+        /// <summary>Normalized 3D noise, see <see cref="Noise2DNormalized"/>.</summary>
+        public double Noise3DNormalized(double x, double y, double z) => Noise3D(x, y, z) / _weightSum;
+
+        private readonly double _weightSum;
     }
 }

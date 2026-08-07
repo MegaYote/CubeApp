@@ -18,6 +18,10 @@ namespace CubeApp.World
         /// <summary>Controllable monolith feature (see MonolithSculptor). The classic Infdev
         /// "glitch" made explicit: tunable frequency/size/height/carve, seed-driven.</summary>
         public MonolithSculptor Monoliths { get; private set; }
+
+        /// <summary>Sedimentary quartz veins (see QuartzVeinGenerator): layered underground veins
+        /// that follow the terrain surface like real cliff strata.</summary>
+        public QuartzVeinGenerator QuartzVeins { get; private set; }
         // Infdev's seven octave generators, in the same construction order as the Java:
         // noiseGen1/2 = 16 octaves (terrain body), noiseGen3 = 8 (upper/lower selector),
         // noiseGen4/5 = 4 (replaceBlocks biomes/dirt depth), noiseGen6 = 10 (continent),
@@ -44,6 +48,7 @@ namespace CubeApp.World
             _gen6 = new InfdevOctaves(rand, 8, 2);
             _gen7 = new InfdevOctaves(rand, 8, 8);
             Monoliths = new MonolithSculptor(seed);
+            QuartzVeins = new QuartzVeinGenerator(seed);
         }
 
         public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeight)
@@ -191,6 +196,9 @@ namespace CubeApp.World
 
             // ---- monoliths (controllable feature; runs after caves so towers stand on ground) ----
             Monoliths.Sculpt(chunk, terrainBandStart, chunkSize, chunkHeight);
+
+            // ---- sedimentary quartz veins (follows terrain, like cliff strata) ----
+            QuartzVeins.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
 
             chunk.NeedsRemesh = true;
             return chunk;
