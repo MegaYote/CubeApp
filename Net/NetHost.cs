@@ -111,6 +111,18 @@ namespace CubeApp.Net
         }
 
         private readonly List<NetSnapshot.Edit> _pendingEdits = new();
+        private readonly System.Collections.Concurrent.ConcurrentQueue<NetSnapshot.Edit> _incomingEdits = new();
+
+        /// <summary>Applies all client edits to the world. MUST be called on the main thread
+        /// (Program drains this each frame). Host-authoritative: applying fires BlockEdited, which
+        /// queues the edit into the next snapshot for every client.</summary>
+        public void DrainIncomingEdits()
+        {
+            while (_incomingEdits.TryDequeue(out var e))
+            {
+                _world.ApplyBlockEdit(e.X, e.Y, e.Z, e.BlockId, e.Meta);
+            }
+        }
 
         private async Task AcceptLoop()
         {
@@ -191,10 +203,11 @@ namespace CubeApp.Net
                             var edit = NetSnapshot.DeserializeEdit(frame.Value.body);
                             if (edit.HasValue)
                             {
-                                // Host-authoritative: apply to the world. BlockEdited fires ->
-                                // OnWorldEdit queues it into the next snapshot for everyone.
+                                // Queue for the MAIN thread. The world is not thread-safe; applying
+                                // here would race with the host's sim and crash (dropping the
+                                // client). Program drains these via DrainIncomingEdits each frame.
                                 Log?.Invoke($"Client {conn.Id} edit: ({edit.Value.x},{edit.Value.y},{edit.Value.z}) -> {edit.Value.blockId}");
-                                _world.ApplyBlockEdit(edit.Value.x, edit.Value.y, edit.Value.z, edit.Value.blockId, edit.Value.meta);
+                                _incomingEdits.Enqueue(new NetSnapshot.Edit { X = edit.Value.x, Y = edit.Value.y, Z = edit.Value.z, BlockId = edit.Value.blockId, Meta = edit.Value.meta });
                             }
                             break;
                         case NetMsgType.Ping:

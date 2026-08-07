@@ -55,6 +55,10 @@ namespace CubeApp.Renderer
         /// "Joined host"). Empty = no session.</summary>
         public string NetStatus;
 
+        /// <summary>Multiplayer error to display on the multiplayer menu (e.g. failed join).
+        /// Empty = no error.</summary>
+        public string MultiplayerError;
+
         public static HudState Empty => new HudState
         {
             ShowDebug = false,
@@ -78,6 +82,7 @@ namespace CubeApp.Renderer
             PlayerChunkZ = 0,
             RenderDistance = 0,
             NetStatus = string.Empty,
+            MultiplayerError = string.Empty,
         };
     }
 }

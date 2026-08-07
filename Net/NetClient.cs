@@ -46,6 +46,10 @@ namespace CubeApp.Net
         // The local world, used to apply edits + place remote players.
         private GameWorld? _world;
 
+        // Edits received from the host must be applied on the MAIN thread (the world is not
+        // thread-safe; the network thread only queues them).
+        private readonly ConcurrentQueue<NetSnapshot.Edit> _incomingEdits = new();
+
         public NetClient(GameWorld? world = null) => _world = world;
 
         public NetSnapshot? LatestSnapshot
@@ -117,17 +121,8 @@ namespace CubeApp.Net
                         case NetMsgType.Snapshot:
                             var snap = NetSnapshot.Deserialize(frame.Value.body);
                             lock (_snapshotLock) _latest = snap;
-                            // Apply edits to the local world so terrain stays in sync.
-                            if (_world != null)
-                            {
-                                foreach (var e in snap.Edits)
-                                {
-                                    if (!_world.Chunks.TryGetLoadedBlock(e.X, e.Y, e.Z, out var cur) || cur != e.BlockId)
-                                    {
-                                        _world.ApplyBlockEdit(e.X, e.Y, e.Z, e.BlockId, e.Meta);
-                                    }
-                                }
-                            }
+                            // Queue edits for the main thread; never touch the world here.
+                            foreach (var e in snap.Edits) _incomingEdits.Enqueue(e);
                             break;
                         case NetMsgType.Pong:
                             // latency can be measured later
@@ -170,6 +165,20 @@ namespace CubeApp.Net
                 _stream.Write(frame, 0, frame.Length);
             }
             catch { }
+        }
+
+        /// <summary>Applies all host-echoed edits to the given world. MUST be called on the main
+        /// thread (the world is not thread-safe). Idempotent: an edit is skipped if the cell
+        /// already holds the target block (our own echo).</summary>
+        public void DrainIncomingEdits(GameWorld world)
+        {
+            while (_incomingEdits.TryDequeue(out var e))
+            {
+                if (!world.Chunks.TryGetLoadedBlock(e.X, e.Y, e.Z, out var cur) || cur != e.BlockId)
+                {
+                    world.ApplyBlockEdit(e.X, e.Y, e.Z, e.BlockId, e.Meta);
+                }
+            }
         }
 
         public void SendPing()

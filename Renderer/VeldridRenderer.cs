@@ -2666,6 +2666,12 @@ void main() {
                 {
                     m.JoinGameClicked = true;
                 }
+                if (!string.IsNullOrEmpty(_hud.MultiplayerError))
+                {
+                    ImGui.Spacing();
+                    ImGui.TextColored(new Vector4(1f, 0.45f, 0.45f, 1f), _hud.MultiplayerError);
+                    ImGui.Spacing();
+                }
                 ImGui.Spacing();
                 if (ImGui.Button("Back", new Vector2(300, 28))) m.MultiplayerBackClicked = true;
                 ImGui.End();

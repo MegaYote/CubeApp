@@ -216,6 +216,10 @@ namespace CubeApp
                 _joinError = "Could not connect. Check the address and that the host is running.";
                 _netClient.Dispose();
                 _netClient = null;
+                // Undo the placeholder world and go back to the multiplayer menu so the player
+                // can fix the address instead of being stuck in a fake "Connecting..." world.
+                ReturnToTitle();
+                menu.Screen = GameScreen.Multiplayer;
             }
         }
 
@@ -237,9 +241,18 @@ namespace CubeApp
 
         private void OnClientDisconnected(string reason)
         {
+            bool wasConnected = _netConnected;
             _netConnected = false;
             _joinError = reason;
-            // Stay in the world (host gone = frozen) but note it in the pause/title flow.
+            // If the connection drops while playing, don't strand the player in a frozen world.
+            // Return to the title screen; the error is surfaced via BuildNetStatus on the menu.
+            if (wasConnected && screen == GameScreen.Playing)
+            {
+                try { World.BlockEdited -= OnLocalEdit; } catch { }
+                screen = GameScreen.Title;
+                menu.Screen = GameScreen.Title;
+                DisableMouseLook();
+            }
         }
 
         private void StopNetworking()
@@ -584,9 +597,26 @@ namespace CubeApp
             _netClient?.SendBlockEdit(x, y, z, blockId, meta);
         }
 
-        // Builds MobRenderData for remote players from the latest host snapshot (as a client).
+        // Builds MobRenderData for remote players: from the host snapshot (as a client) or from
+        // the host's own simulated RemotePlayers (as a host). Both directions get rendered.
         private void AddRemotePlayersToRender(List<MobRenderData> list)
         {
+            if (World == null) return;
+            // Host side: render each connected client's simulated state.
+            if (_netHost != null)
+            {
+                foreach (var p in World.RemotePlayers)
+                {
+                    list.Add(new MobRenderData(
+                        "player",
+                        new Point3D(p.Position.X, p.Position.Y - GameWorld.EyeHeight, p.Position.Z),
+                        p.Yaw * (float)Math.PI / 180f,
+                        0f, p.WalkPhase, p.WalkAmount, 0f,
+                        (float)p.Velocity.Y, p.Grounded, false, 0f, 0f, 0f));
+                }
+                return;
+            }
+            // Client side: render everyone in the snapshot except ourselves.
             if (_netClient == null || !_netConnected) return;
             var snap = _netClient.LatestSnapshot;
             if (snap == null) return;
@@ -609,10 +639,12 @@ namespace CubeApp
             if (World == null) return;
             if (_netHost != null)
             {
+                _netHost.DrainIncomingEdits();
                 _netHost.SetLocalPlayerState(World.LocalPlayer);
             }
             if (_netClient != null && _netConnected)
             {
+                _netClient.DrainIncomingEdits(World);
                 _inputSendTimer += deltaSeconds;
                 if (_inputSendTimer >= 0.05f)
                 {
@@ -629,6 +661,7 @@ namespace CubeApp
         private HudState BuildHud()
         {
             string netStatus = BuildNetStatus();
+            string mpError = BuildMultiplayerError();
             if (World == null)
             {
                 return new HudState
@@ -641,6 +674,7 @@ namespace CubeApp
                     PlayerX = 0, PlayerY = 0, PlayerZ = 0,
                     RenderDistance = ChunkRenderRadius,
                     NetStatus = netStatus,
+                    MultiplayerError = mpError,
                 };
             }
             var forward = World.GetCameraForward();
@@ -664,6 +698,7 @@ namespace CubeApp
                 PlayerChunkZ = GameWorld.WorldToChunkCoord(World.PlayerPosition.Z),
                 RenderDistance = ChunkRenderRadius,
                 NetStatus = netStatus,
+                MultiplayerError = mpError,
             };
         }
 
@@ -675,6 +710,13 @@ namespace CubeApp
                 if (_netConnected) return "Joined " + menu.JoinAddress + " as #" + _netClient.ClientId;
                 return "Join error: " + _joinError;
             }
+            return string.Empty;
+        }
+
+        private string BuildMultiplayerError()
+        {
+            if (string.IsNullOrEmpty(_joinError)) return string.Empty;
+            if (_netClient == null && _netHost == null) return _joinError;
             return string.Empty;
         }
 
