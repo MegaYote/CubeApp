@@ -20,6 +20,7 @@ namespace CubeApp
         private readonly MeshScheduler _meshScheduler;
         private readonly FluidSimulation _fluid;
         private readonly GravitySimulation _gravity;
+        private readonly GrassSpreadSimulation _grass;
         private readonly Dictionary<ChunkCoordinates, Dictionary<(int x, int y, int z), int>> _pending = new();
         private readonly List<(int x, int y, int z)> _due = new();
         private readonly List<ChunkCoordinates> _emptyBuckets = new();
@@ -32,10 +33,12 @@ namespace CubeApp
             _meshScheduler = meshScheduler ?? throw new ArgumentNullException(nameof(meshScheduler));
             _fluid = new FluidSimulation(manager, this);
             _gravity = new GravitySimulation(manager, this, meshScheduler);
+            _grass = new GrassSpreadSimulation(manager, this);
         }
 
         public FluidSimulation Fluid => _fluid;
         public GravitySimulation Gravity => _gravity;
+        public GrassSpreadSimulation Grass => _grass;
 
         /// <summary>True when a falling block currently occupies the cell (placement should wait).</summary>
         public bool IsCellOccupiedByFalling(int x, int y, int z) => _gravity.IsCellOccupiedByFalling(x, y, z);
@@ -66,11 +69,12 @@ namespace CubeApp
             bucket[(x, y, z)] = due;
         }
 
-        /// <summary>Wake nearby water + gravity after any world change (block placed/removed).</summary>
+        /// <summary>Wake nearby water + gravity + grass after any world change (block placed/removed).</summary>
         public void OnBlockChanged(int x, int y, int z)
         {
             _fluid.OnBlockChanged(x, y, z);
             _gravity.OnBlockChanged(x, y, z);
+            _grass.OnBlockChanged(x, y, z);
         }
 
         /// <summary>Advance the simulation using real frame time, firing fixed 20 TPS tick steps.</summary>
@@ -125,6 +129,7 @@ namespace CubeApp
                 {
                     _gravity.TickBlock(x, y, z);
                     _fluid.TickBlock(x, y, z);
+                    _grass.TickBlock(x, y, z);
                     processed++;
                 }
             }
