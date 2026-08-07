@@ -76,6 +76,31 @@ namespace CubeApp.Renderer
         private DeviceBuffer _skyMatrixBuffer;
         private ResourceSet _skyMatrixSet;
 
+        // ---- Clouds (Cubuild port, camera-locked planes) ----------------------------
+        // Three flat camera-locked planes at different heights, each textured with a procedurally
+        // generated white puff texture that scrolls via a shader offset (cheap: no geometry
+        // movement). depth-write OFF, no fog, drawn right after the sky so terrain paints over.
+        private Pipeline? _cloudPipeline;
+        private DeviceBuffer? _cloudVertexBuffer;
+        private DeviceBuffer? _cloudIndexBuffer;
+        private DeviceBuffer? _cloudParamsBuffer;
+        private ResourceSet? _cloudParamsSet;
+        private ResourceLayout? _cloudParamsLayout;
+        private Texture? _cloudTexture;
+        private TextureView? _cloudTextureView;
+        private ResourceSet? _cloudTextureSet;
+        private ResourceLayout? _cloudTextureLayout;
+        private float[] _cloudOffsets = new float[CloudLayerCount * 2];
+        private float[] _cloudDrift = new float[CloudLayerCount];
+        private float[] _cloudDriftPhase = new float[CloudLayerCount];
+        private static readonly float[] CloudLayerY = { 110f, 115f, 120f };
+        private static readonly float[] CloudLayerSpeed = { 0.0018f, 0.0026f, 0.0034f };
+        private static readonly float[] CloudLayerDriftAmp = { 0.7f, 1.0f, 1.2f };
+        private static readonly float[] CloudLayerOpacity = { 0.94f, 0.82f, 0.60f };
+        private const int CloudLayerCount = 3;
+        private readonly System.Diagnostics.Stopwatch _cloudClock = System.Diagnostics.Stopwatch.StartNew();
+        private long _lastCloudTicks;
+
         // Textured entity-model pipeline (currently just the duck test mob).
         private Pipeline _modelPipeline;
         private Texture _duckTexture;
@@ -1204,6 +1229,7 @@ void main() {
             CreateChunkBorderPipeline();
             CreateModelPipeline();
             CreateSkyPipeline();
+            CreateCloudPipeline();
         }
 
         // Pipeline for textured entity models (the duck). Vertices are supplied in world space each
@@ -1441,6 +1467,180 @@ void main() {
             _gd.UpdateBuffer(_skyIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7 });
         }
 
+        // Clouds (Cubuild port, camera-locked): three flat planes at fixed heights relative to the
+        // eye, textured with a procedurally generated white-puff texture that scrolls via shader
+        // offsets. Depth-write OFF and drawn right after the sky so terrain always paints over.
+        private void CreateCloudPipeline()
+        {
+            var factory = _gd.ResourceFactory;
+
+            // The cloud texture is generated ONCE on the CPU (noise blob walkers + cellular
+            // smoothing, the same recipe as Cubuild's createCloudMaskGrid). White puffs only -
+            // weather/tinting can come later.
+            _cloudTexture = factory.CreateTexture(TextureDescription.Texture2D(
+                512, 512, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled));
+            _cloudTextureView = factory.CreateTextureView(_cloudTexture);
+            _gd.UpdateTexture(_cloudTexture, GenerateCloudTexture(), 0, 0, 0, 512, 512, 1, 0, 0);
+
+            string vsCode = @"#version 450
+layout(location=0) in vec3 aPosition;
+layout(location=1) in vec2 aUV;
+layout(location=0) out vec2 vUV;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() { vUV = aUV; gl_Position = projView * vec4(aPosition, 1.0); }";
+
+            string fsCode = @"#version 450
+layout(location=0) in vec2 vUV;
+layout(set=1, binding=0) uniform sampler2D uCloud;
+layout(set=2, binding=0) uniform CloudParams {
+    vec4 scrollXZ;   // x=scrollX, y=scrollZ, z=layerOpacity, w=unused
+};
+layout(location=0) out vec4 outColor;
+void main() {
+    vec2 uv = fract(vUV + scrollXZ.xy);
+    float alpha = texture(uCloud, uv).a * scrollXZ.z;
+    if (alpha < 0.01) discard;
+    outColor = vec4(1.0, 1.0, 1.0, alpha);
+}";
+
+            var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var fsSpirv = SpirvCompilation.CompileGlslToSpirv(fsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var shaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, vsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main"));
+
+            var vertexLayout = new VertexLayoutDescription(
+                new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                new VertexElementDescription("aUV", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float2));
+
+            // Params set (set 2): scroll offsets + opacity per layer.
+            _cloudParamsLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
+                new ResourceLayoutElementDescription("CloudParams", ResourceKind.UniformBuffer, ShaderStages.Fragment)));
+            _cloudParamsBuffer = factory.CreateBuffer(new BufferDescription(16, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _cloudParamsSet = factory.CreateResourceSet(new ResourceSetDescription(_cloudParamsLayout, _cloudParamsBuffer));
+
+            // Texture set (set 1).
+            _cloudTextureLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
+                new ResourceLayoutElementDescription("uCloud", ResourceKind.TextureReadOnly, ShaderStages.Fragment),
+                new ResourceLayoutElementDescription("uCloudSampler", ResourceKind.Sampler, ShaderStages.Fragment)));
+            _cloudTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_cloudTextureLayout, _cloudTextureView,
+                factory.CreateSampler(new SamplerDescription(
+                    SamplerAddressMode.Wrap,
+                    SamplerAddressMode.Wrap,
+                    SamplerAddressMode.Wrap,
+                    SamplerFilter.MinLinear_MagLinear_MipLinear,
+                    null,
+                    1,
+                    0,
+                    uint.MaxValue,
+                    0,
+                    SamplerBorderColor.TransparentBlack))));
+
+            // Camera-locked matrix (rotation-only view-projection), same trick as the sky.
+            _cloudPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleAlphaBlend,
+                // No depth test / write: clouds are drawn after the sky, before the world; terrain
+                // paints over them. They must never write depth or they'd block terrain behind them.
+                DepthStencilState = DepthStencilStateDescription.Disabled,
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _cloudTextureLayout, _cloudParamsLayout },
+                ShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { shaders[0], shaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
+
+            // One big camera-space quad (2 triangles) per layer. The buffer is filled in
+            // DrawClouds with the eye at origin so it never needs rebuilding.
+            _cloudVertexBuffer = factory.CreateBuffer(new BufferDescription(
+                4 * 5 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            _cloudIndexBuffer = factory.CreateBuffer(new BufferDescription(
+                6 * sizeof(ushort), BufferUsage.IndexBuffer));
+            _gd.UpdateBuffer(_cloudIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3 });
+
+            // Seed drift phases so each layer bobs on its own clock.
+            for (int i = 0; i < CloudLayerCount; i++) _cloudDriftPhase[i] = (float)(Random.Shared.NextDouble() * Math.PI * 2.0);
+        }
+
+        // Cubuild's createCloudMaskGrid ported to CPU RGBA: random blob walkers paint diamond-ish
+        // puffs, then 2 rounds of cellular smoothing. White (255,255,255) with soft alpha.
+        private static byte[] GenerateCloudTexture()
+        {
+            const int size = 512;
+            const int cell = 8;
+            const int cols = size / cell; // 64
+            const int rows = size / cell;
+            var mask = new byte[cols * rows];
+
+            int CellIndex(int x, int y) => y * cols + x;
+            var rng = new Random(12345);
+
+            for (int i = 0; i < 28; i++)
+            {
+                int x = 2 + rng.Next(cols - 4);
+                int y = 2 + rng.Next(rows - 4);
+                int steps = 8 + rng.Next(18);
+                int radius = 1 + rng.Next(2);
+                for (int s = 0; s < steps; s++)
+                {
+                    int rx = radius + (rng.NextDouble() > 0.7 ? 1 : 0);
+                    int ry = radius;
+                    for (int oy = -ry; oy <= ry; oy++)
+                    for (int ox = -rx; ox <= rx; ox++)
+                    {
+                        int nx = x + ox;
+                        int ny = y + oy;
+                        if (nx < 1 || ny < 1 || nx >= cols - 1 || ny >= rows - 1) continue;
+                        if ((Math.Abs(ox) + Math.Abs(oy)) <= radius + 1 || rng.NextDouble() > 0.18)
+                            mask[CellIndex(nx, ny)] = 1;
+                    }
+                    x = Math.Max(1, Math.Min(cols - 2, x + rng.Next(3) - 1));
+                    y = Math.Max(1, Math.Min(rows - 2, y + rng.Next(3) - 1));
+                }
+            }
+
+            // 2 rounds of cellular smoothing: a cell survives if >=4 neighbours, dies if <=2.
+            for (int pass = 0; pass < 2; pass++)
+            {
+                var next = (byte[])mask.Clone();
+                for (int y = 1; y < rows - 1; y++)
+                for (int x = 1; x < cols - 1; x++)
+                {
+                    int neighbors = 0;
+                    for (int oy = -1; oy <= 1; oy++)
+                    for (int ox = -1; ox <= 1; ox++)
+                        neighbors += mask[CellIndex(x + ox, y + oy)];
+                    int idx = CellIndex(x, y);
+                    next[idx] = (neighbors >= 4) ? (byte)1 : (neighbors <= 2) ? (byte)0 : mask[idx];
+                }
+                mask = next;
+            }
+
+            // Paint cells: soft white. Puff edges get a slightly lower alpha for a fluffy look.
+            var rgba = new byte[size * size * 4];
+            for (int y = 0; y < rows; y++)
+            for (int x = 0; x < cols; x++)
+            {
+                bool on = mask[CellIndex(x, y)] != 0;
+                // Edge detection (fewer than 8 neighbours on = a border cell).
+                int n = 0;
+                for (int oy = -1; oy <= 1; oy++)
+                for (int ox = -1; ox <= 1; ox++)
+                    if (x + ox >= 0 && y + oy >= 0 && x + ox < cols && y + oy < rows && mask[CellIndex(x + ox, y + oy)] != 0) n++;
+                byte alpha = (byte)(on ? (n < 8 ? 150 : 245) : 0);
+                for (int py = 0; py < cell; py++)
+                for (int px = 0; px < cell; px++)
+                {
+                    int dst = ((y * cell + py) * size + (x * cell + px)) * 4;
+                    rgba[dst] = 255;
+                    rgba[dst + 1] = 255;
+                    rgba[dst + 2] = 255;
+                    rgba[dst + 3] = alpha;
+                }
+            }
+            return rgba;
+        }
+
         public void Resize(int width, int height)
         {
             _sc?.Resize((uint)Math.Max(1, width), (uint)Math.Max(1, height));
@@ -1594,6 +1794,15 @@ void main() {
             UpdateFog();
 
             DrawSky(cl);
+
+            // Clouds drift + scroll each frame (cheap: texture-offset animation on camera-locked
+            // planes), then draw right after the sky so terrain always paints over them.
+            long cloudNow = _cloudClock.ElapsedTicks;
+            float cloudDt = (float)((cloudNow - _lastCloudTicks) / (double)System.Diagnostics.Stopwatch.Frequency);
+            _lastCloudTicks = cloudNow;
+            if (cloudDt > 0.1f) cloudDt = 0.1f;
+            UpdateClouds(cloudDt);
+            DrawClouds(cl);
 
             cl.SetPipeline(_pipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
@@ -1865,6 +2074,67 @@ void main() {
             v[o + 4] = g;
             v[o + 5] = b;
             v[o + 6] = 1f;
+        }
+
+        // Advances the cloud scroll offsets + drift with real frame time (called from Render).
+        private void UpdateClouds(float deltaSeconds)
+        {
+            if (_cloudPipeline == null) return;
+            float time = (float)_cloudClock.Elapsed.TotalSeconds;
+            for (int i = 0; i < CloudLayerCount; i++)
+            {
+                _cloudOffsets[i * 2] = (_cloudOffsets[i * 2] + CloudLayerSpeed[i] * deltaSeconds) % 1f;
+                _cloudOffsets[i * 2 + 1] = (_cloudOffsets[i * 2 + 1] + CloudLayerSpeed[i] * 0.22f * deltaSeconds) % 1f;
+                _cloudDrift[i] = (float)Math.Sin(time * 0.18 + _cloudDriftPhase[i]) * CloudLayerDriftAmp[i];
+            }
+        }
+
+        // Draws the three camera-locked cloud planes after the sky. Vertices are rebuilt in
+        // camera space each frame (eye at origin) because the drift offset moves them slightly;
+        // the matrix is the rotation-only sky matrix so they stay glued to the eye.
+        private void DrawClouds(CommandList cl)
+        {
+            if (_cloudPipeline == null || _cloudVertexBuffer == null) return;
+            float extent = Math.Max(_farPlane * 2f, 768f);
+            // pos(3) + uv(2) per vertex, 4 verts per layer.
+            var v = new float[CloudLayerCount * 4 * 5];
+            for (int i = 0; i < CloudLayerCount; i++)
+            {
+                int o = i * 20;
+                float y = CloudLayerY[i];
+                float dz = _cloudDrift[i];
+                SetCloudVertex(v, o + 0, -extent, y, -extent + dz, 0f, 0f);
+                SetCloudVertex(v, o + 4, extent, y, -extent + dz, 1f, 0f);
+                SetCloudVertex(v, o + 8, extent, y, extent + dz, 1f, 1f);
+                SetCloudVertex(v, o + 12, -extent, y, extent + dz, 0f, 1f);
+            }
+            _gd.UpdateBuffer(_cloudVertexBuffer, 0, v);
+
+            cl.SetPipeline(_cloudPipeline);
+            // Reuse the sky's rotation-only view-projection (identical for clouds: camera-locked).
+            cl.SetGraphicsResourceSet(0, _skyMatrixSet);
+            if (_cloudTextureSet != null) cl.SetGraphicsResourceSet(1, _cloudTextureSet);
+            if (_cloudParamsSet != null) cl.SetGraphicsResourceSet(2, _cloudParamsSet);
+            cl.SetVertexBuffer(0, _cloudVertexBuffer);
+            cl.SetIndexBuffer(_cloudIndexBuffer, IndexFormat.UInt16);
+
+            // One quad per layer; each drawn with its own scroll + opacity via the params buffer.
+            for (int i = 0; i < CloudLayerCount; i++)
+            {
+                _cloudParams[0] = _cloudOffsets[i * 2];
+                _cloudParams[1] = _cloudOffsets[i * 2 + 1];
+                _cloudParams[2] = CloudLayerOpacity[i];
+                _cloudParams[3] = 0f;
+                _gd.UpdateBuffer(_cloudParamsBuffer, 0, _cloudParams);
+                cl.DrawIndexed(6, 1, 0, i * 4, 0);
+            }
+        }
+
+        private readonly float[] _cloudParams = new float[4];
+
+        private static void SetCloudVertex(float[] v, int o, float x, float y, float z, float u, float vv)
+        {
+            v[o] = x; v[o + 1] = y; v[o + 2] = z; v[o + 3] = u; v[o + 4] = vv;
         }
 
         // Issues one indirect world draw for a chunk-command pass (opaque or transparent) using the
@@ -3119,6 +3389,16 @@ void main() {
             _skyFogBuffer?.Dispose();
             _skyMatrixSet?.Dispose();
             _skyMatrixBuffer?.Dispose();
+            _cloudPipeline?.Dispose();
+            _cloudVertexBuffer?.Dispose();
+            _cloudIndexBuffer?.Dispose();
+            _cloudParamsSet?.Dispose();
+            _cloudParamsLayout?.Dispose();
+            _cloudParamsBuffer?.Dispose();
+            _cloudTextureSet?.Dispose();
+            _cloudTextureLayout?.Dispose();
+            _cloudTextureView?.Dispose();
+            _cloudTexture?.Dispose();
             _commandList?.Dispose();
             _imguiRenderer?.Dispose();
             _highlightVertexBuffer?.Dispose();
