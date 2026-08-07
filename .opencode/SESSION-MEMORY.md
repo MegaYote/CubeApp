@@ -53,6 +53,23 @@ Run target: `bin\Debug\net9.0-windows\win-x64\CubeApp.exe` — the `bin\Debug\ne
 - **Friend + invite system** (design discussed, deferred): LAN UDP auto-discovery (mDNS-style broadcast, zero config) is the easy first piece; then a tiny directory server for internet presence; finally NAT hole-punching for no-port-forward internet. Player identity via GUID + per-friend shared secrets (practical, offline) or Ed25519 keypairs (`System.Security.Cryptography.Curve25519.Ed25519` is built into .NET 9, public key IS identity). Deferred by user — "work this part out later".
 - **Steady-state FPS** drivers not yet touched (note for future): the per-frame `SortPassBackToFront` on glass/transparent passes (O(n log n) every frame); the deep-zone air gap when unfilled (minSolidY=0 due to bedrock floor prevents skipping the 188-row gap — could optimize with occupied-Y-span list); lighting occupancy-clear on the 3x3 region (1M cells, sequential, cheap but fixed cost).
 
+## GRAVITY SYSTEM — survival pillar 1 (8/6, commits c420b0a..9205648, user-verified "perfect")
+Part of the survival-mode vision (user's design: wood rots, dirt/sand/gravel have gravity so no dirt shacks, fortress engineering vs. night/rot). Falling-block system built in stages:
+
+- **Design rule (user's call)**: blocks only fall when UPDATED — generated floating overhangs stay until disturbed; cave-ins "waiting to happen". No world-gen collapse.
+- **blocks.json `"gravity": true`** on dirt, sand, gravel, redclay. BlockDefinition.Gravity + BlockRegistry._gravity/IsGravity.
+- **GravitySimulation** (hooked into BlockTickScheduler like FluidSimulation):
+  - `OnBlockChanged(x,y,z)`: checks cell + cell above; unsupported gravity block scheduled to fall (delay 1 tick).
+  - `TickBlock`: pops the ENTIRE contiguous gravity column into falling entities in ONE operation (O(column height); a 100-block tower starts in one tick, not 100).
+  - **Domino cascade**: `WakeNeighbors` notifies the 4 horizontal neighbors of every popped cell BEFORE the block falls, so unsupported floating platforms beside the falling column collapse too ("if one goes, the rest go"). Verified 12/12 columns fall, 11/11 neighbors from single trigger, no infinite loops.
+  - Falling integrates PER RENDERED FRAME with real delta (smooth, was choppy 20Hz), sub-stepped at max 0.5 blocks/integration to prevent tunneling at low framerate. Gravity 24, max speed 32. Falls through air AND water; lands on first solid (slabs/stairs support).
+  - **No invisible-on-landing**: landed cubes stay in the render list (snapped to cell, speed 0) until the chunk's mesh actually rebuilds (MeshVersion bump after RequestImmediateRemesh). Headless/no-op mesh queues release immediately via `MeshScheduler.HasRealMeshQueue`.
+  - **Placement rule (MC "wait for it to fall")**: TryPlaceSelectedBlock + ApplyBlockEdit refuse to place into a cell a falling block occupies (`IsCellOccupiedByFalling`), on both local + network/authoritative paths. Verified.
+- **Rendering = GPU instancing** (VeldridRenderer): one static cube mesh (24 verts/36 idx, wound-corrected — the shared FaceVertices +Z/-Z faces are wound opposite their normals, same flip as Mesher.EmitBox) uploaded once; per-frame only a per-instance buffer (worldPos + tileRect, 7 floats/block) is updated via a dedicated instanced pipeline + vertex shader (aCorner/aLocalUV/aShade + iWorldPos/iTileRect) reusing world atlas + fog sets. 1152 blocks = ~28KB/frame vs ~1.4MB full geometry. Stress test: 1152-block platform pops in 3ms, settles 14ms.
+- **Probes**: `C:\Users\jimza\AppData\Local\Temp\opencode\gravityprobe\` — 17/17 tests + separate DominoTest 4/4 + CascadeStress 2/2 (1152-block collapse) + SmoothnessCheck (50 distinct positions per fall = smooth). nettest 15/15, headlessprobe PASSED throughout.
+- **Survival roadmap (user's design, next after this)**: wood rot needing sap treatment (BlockTickScheduler already exists for the rot tick), then night/darkness pressure and the fortress-engineering enemies. Dirt gravity already makes dirt untrustworthy for building.
+
+
 
 
 ## Water (Infdev 20100630 port) — COMPLETED
