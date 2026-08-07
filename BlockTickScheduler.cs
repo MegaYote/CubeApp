@@ -49,7 +49,8 @@ namespace CubeApp
                 return;
             }
 
-            var key = new ChunkCoordinates((int)Math.Floor(x / (double)ChunkManager.ChunkSize), (int)Math.Floor(z / (double)ChunkManager.ChunkSize));
+            var key = new ChunkCoordinates(ChunkManager.LayerForWorldY(y),
+                (int)Math.Floor(x / (double)ChunkManager.ChunkSize), (int)Math.Floor(z / (double)ChunkManager.ChunkSize));
             if (!_pending.TryGetValue(key, out var bucket))
             {
                 bucket = new Dictionary<(int, int, int), int>();
