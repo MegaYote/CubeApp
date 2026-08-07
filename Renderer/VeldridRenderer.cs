@@ -3536,6 +3536,7 @@ void main() {
                 Line($"Particles: {_particleCount}");
                 Line($"Seed: {_hud.WorldSeed}");
                 Line($"Fly: {(_hud.FlyMode ? "ON" : "OFF")}");
+                Line($"Fullbright: {(_hud.Fullbright ? "ON" : "OFF")}  [F6]");
                 if (!string.IsNullOrEmpty(_hud.NetStatus)) Line($"Net: {_hud.NetStatus}");
                 if (!string.IsNullOrEmpty(_hud.BiomeText)) Line($"Biome: {_hud.BiomeText}");
                 Line($"XYZ: {_hud.PlayerX:0.000} / {_hud.PlayerY:0.000} / {_hud.PlayerZ:0.000}");

@@ -562,6 +562,16 @@ namespace CubeApp
             if (screen == GameScreen.Playing && World != null)
             {
                 if (frameInput.ToggleFlyPressed) World.FlyMode = !World.FlyMode;
+                if (frameInput.ToggleFullbrightPressed)
+                {
+                    ChunkLighting.Fullbright = !ChunkLighting.Fullbright;
+                    // Brightness is baked into each face's shade at mesh time, so flipping the
+                    // flag must re-mesh every loaded chunk to take effect.
+                    foreach (var c in World.Chunks.GetLoadedChunks())
+                    {
+                        c.NeedsRemesh = true;
+                    }
+                }
                 if (frameInput.ToggleInventoryPressed)
                 {
                     inventoryOpen = !inventoryOpen;
@@ -724,7 +734,7 @@ namespace CubeApp
             if (pickResult.HasValue) highlightQuad = ComputeHighlightWorldQuad(pickResult.Value);
             return new HudState
             {
-                ShowDebug = showFps, InventoryOpen = inventoryOpen, FlyMode = World.FlyMode, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
+                ShowDebug = showFps, InventoryOpen = inventoryOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
                 MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                 FacingText = $"{GetCompassDirection(World.PlayerYaw)} ({GameWorld.NormalizeYaw(World.PlayerYaw):0.0} deg)",
                 SelectedBlockText = $"Selected: {BlockRegistry.GetName(World.SelectedBlock)}",

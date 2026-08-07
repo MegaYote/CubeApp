@@ -412,9 +412,17 @@ namespace CubeApp
         ///     f1 = 1 - light/15
         ///     table[light] = (1 - f1) / (f1*3 + 1)
         /// Light 15 = 1.0, light 0 = 0.0 (deep caves are genuinely black).
+        ///
+        /// When <see cref="Fullbright"/> is set (F6 debug/peek mode), every light level maps to
+        /// 1.0 so the whole world renders as if fully lit - lets you see into the pitch-black
+        /// deep without torches. The mesher bakes brightness per face, so toggling it must also
+        /// flag all loaded chunks for remesh.
         /// </summary>
+        public static bool Fullbright { get; set; }
+
         public static float Brightness(int lightLevel)
         {
+            if (Fullbright) return 1.0f;
             int clamped = Math.Clamp(lightLevel, 0, MaxLight);
             float f1 = 1f - clamped / (float)MaxLight;
             return (1f - f1) / (f1 * 3f + 1f);
