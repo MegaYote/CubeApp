@@ -95,6 +95,14 @@ namespace CubeApp
                 _opacityPool = new byte[cells];
                 _skyPool = new byte[cells];
                 _blockPool = new byte[cells];
+            }
+            // The height map is sized by the XZ footprint only (no height term). It MUST be sized
+            // independently of the byte-array pools: a short layer (deep=192) with a large XZ
+            // region can have FEWER cells than a tall layer (ground=448) with a small region, so
+            // the cells-based realloc would leave heightMap undersized -> IndexOutOfRange in
+            // SeedSkyLight -> every deep-layer mesh fails -> the deep world vanishes.
+            if (_heightMapPool == null || _heightMapPool.Length < dimX * dimZ)
+            {
                 _heightMapPool = new int[dimX * dimZ];
             }
             opacity = _opacityPool;
