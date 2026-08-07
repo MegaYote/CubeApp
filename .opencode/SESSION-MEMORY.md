@@ -10,6 +10,19 @@ Run target: `bin\Debug\net9.0-windows\win-x64\CubeApp.exe` — the `bin\Debug\ne
 - Chunks 16x256x16, `OriginY = -64`, sea level Y=0; sky light 0..15, Manhattan falloff, spreads horizontal/down only (no +Y in `SkyDirs`).
 - D3D11: indirect-args buffers must NOT be `BufferUsage.Dynamic` (else `E_INVALIDARG`). `IndirectCommandStride = 20`, initial VB cap 4MB / IB cap 2MB, chunk-local UInt16 indices, `FirstIndex`/`VertexOffset`.
 
+## MULTIPLAYER: Phase 2 — GameWorld refactor (8/6, committed 4840f5f) 
+- **Goal**: host/client P2P model (one player hosts, friends join), no relay server, no port-forward (UPnP), optional dedicated server, owner-set max players. Architecture validated in phases.
+- **Phase 1 done (8/6)**: netcode POC in `C:\Users\jimza\AppData\Local\Temp\opencode\netprobe\` — two processes over TCP, length-prefixed JSON, host-authoritative state broadcast at 20Hz + client block-edit round-trip. Numbers: ~276 bytes/state/player @ 20Hz ≈ 5.5 KB/s/client. TCP alone is plenty.
+- **Phase 2 done (8/6, committed 4840f5f)**: **`GameWorld` extracted** (`C:\Users\jimza\CubeApp\GameWorld.cs`) — ALL sim state/logic moved out of Program.cs: chunks, provider, entities, block ticks, player physics (walk/water/fly), block editing, deep-fill, chunk streaming, saves. Zero renderer/window/input dependencies. Program.cs is now a thin presentation layer (window, GPU, HUD, screen state).
+  - `GameWorld(seed, name, getRenderer, chunkRenderRadius, chunkGenWorkers)` = renderer-backed (host/client). Headless ctor `(seed, name, chunkRenderRadius, chunkGenWorkers)` uses `NoOpMeshQueue` (no mesh uploads at all).
+  - `IMeshQueue` abstraction (MeshWorker implements it) — MeshScheduler/BlockTickScheduler now depend on the interface, not the renderer.
+  - Events for networking/render hooks: `BlockEdited(x,y,z,blockId,meta)`, `ChunkGenerated`, `ChunkUnloaded(coords)`. Program subscribes (particles/upload) — networking will subscribe the same way.
+  - `TryBreakBlock(origin, dir, out removedId, out removedPos)` + `TryPlaceSelectedBlock(origin, dir)` are the edit entry points; `TryPickBlock` public for HUD highlight.
+  - Player state now `World.PlayerPosition/PlayerYaw/PlayerPitch/PlayerVelocity/...`; physics constants (`WalkSpeed/FlySpeed/JumpVelocity/Gravity/...`) are `GameWorld` consts so Program's third-person view reads them.
+  - Verified: game runs in-game; `headlessprobe` (`C:\Users\jimza\AppData\Local\Temp\opencode\headlessprobe\`) runs a full world with no GPU — 25 chunks streamed, spawn, place, break, save all work.
+- **Phase 3 (next)**: host/client in-game over TCP — host runs a GameWorld + listener, client connects, sends TickInputState upstream, receives player/entity/block state downstream. Then UPnP for internet, then dedicated server mode (headless GameWorld + host loop = already possible!).
+
+
 ## Water (Infdev 20100630 port) — COMPLETED
 - **All four phases build clean**: Phase 1 meta in `Chunk.cs`, Phase 2 `ChunkManager` meta + loaded-only writes, Phase 3 `FluidSimulation` + `BlockTickScheduler` (20 TPS, `MaxUpdatesPerTick=2048`, flushes `_meshScheduler.Update()`), Phase 4 water meshing in `Mesher.cs`.
 - `FluidSimulation.BlockFlowing` is a faithful port of `BlockFlowing.java`; water tick 5; `OnBlockChanged` wakes self + neighbors; `onBlockAdded` self-wake fix.
