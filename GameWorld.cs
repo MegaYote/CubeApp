@@ -1,0 +1,776 @@
+using System;
+using System.Collections.Generic;
+using System.Numerics;
+
+namespace CubeApp
+{
+    /// <summary>
+    /// The authoritative simulation world. Everything the game simulates lives here and runs
+    /// without any renderer, window or input device: chunk streaming, terrain generation, fluid
+    /// ticking, entities, the local player's physics and block editing, deep-fill, and saves.
+    /// Rendering (Program) is a pure presentation layer over GameWorld; multiplayer networking
+    /// (Phase 3+) will host a GameWorld headless and broadcast its state to clients.
+    ///
+    /// Block edits made through <see cref="TryBreakBlock"/>/<see cref="TryPlaceSelectedBlock"/>
+    /// raise <see cref="BlockEdited"/> so listeners (renderer particles, network broadcaster)
+    /// can react without the sim knowing anything about them.
+    /// </summary>
+    public sealed class GameWorld : IDisposable
+    {
+        // ---- world identity / services ----
+        public int Seed { get; private set; }
+        public string Name { get; private set; } = "World 1";
+        public ChunkManager Chunks { get; private set; }
+        public World.InfdevChunkProvider ChunkProvider { get; private set; }
+        public EntityManager Entities { get; private set; }
+        public MeshScheduler Mesher { get; private set; }
+        public BlockTickScheduler BlockTicks { get; private set; }
+        private ChunkGenWorker _chunkGenWorker;
+        private IMeshQueue _meshQueue;
+        private readonly Func<Renderer.IRenderer?> _getRenderer;
+
+        // ---- events (networking / render hooks) ----
+        /// <summary>Raised after a local block edit is applied. Args: x, y, z, blockId, meta.</summary>
+        public event Action<int, int, int, int, int>? BlockEdited;
+        /// <summary>Raised when chunk generation completes (renderer wants to re-upload).</summary>
+        public event Action? ChunkGenerated;
+        /// <summary>Raised after a chunk is unloaded (renderer wants to free GPU buffers).</summary>
+        public event Action<ChunkCoordinates>? ChunkUnloaded;
+
+        // ---- player state ----
+        public Point3D PlayerPosition; // eye position
+        public float PlayerYaw;
+        public float PlayerPitch;
+        public Point3D PlayerVelocity = new(0, 0, 0);
+        public bool PlayerGrounded;
+        public bool FlyMode;
+        public float PlayerWalkPhase;
+        public float PlayerWalkAmount;
+        public int SelectedSlot;
+        public int SelectedBlock;
+        public int[] Hotbar;
+
+        // ---- physics constants (shared with render layer for third-person view) ----
+        public const float WalkSpeed = 4.317f;
+        public const float FlySpeed = 10.8f;
+        public const float JumpVelocity = 8.0f;
+        public const float Gravity = 24.0f;
+        public const float MaxFallSpeed = 36.0f;
+        public const double PlayerHeight = 1.8;
+        public const double PlayerRadius = 0.30;
+        public const double EyeHeight = 1.62;
+        public const double CollisionStep = 0.05;
+        public const float BlockReach = 6.5f;
+
+        // ---- streaming ----
+        private int _lastStreamChunkX = int.MinValue;
+        private int _lastStreamChunkZ = int.MinValue;
+        private bool _forceChunkStream = true;
+        public const int SpawnSyncRadius = 2;
+        public int ChunkRenderRadius = 16;
+
+        public const int HotbarSlots = 10;
+
+        public GameWorld(int seed, string name, Func<Renderer.IRenderer?> getRenderer, int chunkRenderRadius, int chunkGenWorkers)
+        {
+            Seed = seed;
+            Name = string.IsNullOrWhiteSpace(name) ? "World 1" : name;
+            ChunkRenderRadius = chunkRenderRadius;
+            _getRenderer = getRenderer ?? throw new ArgumentNullException(nameof(getRenderer));
+
+            ChunkProvider = new World.InfdevChunkProvider(seed);
+            Chunks = new ChunkManager(ChunkProvider);
+            Entities = new EntityManager(Chunks);
+            _meshQueue = new MeshWorker(Chunks, getRenderer);
+            Mesher = new MeshScheduler(Chunks, _meshQueue);
+            BlockTicks = new BlockTickScheduler(Chunks, Mesher);
+            _chunkGenWorker = new ChunkGenWorker(Chunks, () => ChunkGenerated?.Invoke(), Math.Max(1, chunkGenWorkers));
+
+            Hotbar = new int[HotbarSlots];
+            for (int i = 0; i < HotbarSlots; i++)
+            {
+                Hotbar[i] = i < BlockRegistry.Hotbar.Count ? BlockRegistry.Hotbar[i] : BlockRegistry.AirId;
+            }
+            SelectedBlock = Math.Max(0, Hotbar[0]);
+        }
+
+        /// <summary>Headless constructor for the dedicated server: no renderer, no mesh uploads.</summary>
+        public GameWorld(int seed, string name, int chunkRenderRadius, int chunkGenWorkers)
+            : this(seed, name, () => null, chunkRenderRadius, chunkGenWorkers)
+        {
+            _meshQueue = new NoOpMeshQueue();
+            Mesher = new MeshScheduler(Chunks, _meshQueue);
+            BlockTicks = new BlockTickScheduler(Chunks, Mesher);
+        }
+
+        // ------------------------------------------------------------------
+        // lifecycle
+        // ------------------------------------------------------------------
+
+        public void EnsureVisibleChunks() => Chunks.EnsureChunksAround(
+            WorldToChunkCoord(PlayerPosition.X), WorldToChunkCoord(PlayerPosition.Z), SpawnSyncRadius);
+
+        public void PlaceCameraAtSafeSpawn()
+        {
+            var spawn = FindSafeSpawnPosition();
+            if (spawn.HasValue) PlayerPosition = spawn.Value;
+            PlayerVelocity = new Point3D(0, 0, 0);
+            PlayerGrounded = true;
+        }
+
+        public void SetSelectedSlot(int slot)
+        {
+            if (slot < 0 || slot >= HotbarSlots) return;
+            SelectedSlot = slot;
+            SelectedBlock = Hotbar[slot];
+        }
+
+        public void ApplyLookInput(Vector2 lookDelta)
+        {
+            PlayerYaw -= lookDelta.X;
+            PlayerYaw = NormalizeYaw(PlayerYaw);
+            PlayerPitch = Math.Clamp(PlayerPitch - lookDelta.Y, -89f, 89f);
+        }
+
+        /// <summary>Advance the simulation by one frame. Pure logic; no rendering here.</summary>
+        public void StepSimulation(TickInputState tickInput, float deltaSeconds)
+        {
+            BlockTicks?.Tick(deltaSeconds);
+            UpdatePlayerMovement(tickInput, deltaSeconds);
+            Entities.Update(deltaSeconds);
+            int chunkX = WorldToChunkCoord(PlayerPosition.X);
+            int chunkZ = WorldToChunkCoord(PlayerPosition.Z);
+            // Request/unload scans cost O(radius^2) + O(loadedChunks); only run them when the
+            // player actually enters a new chunk column (or the render distance changed).
+            if (_forceChunkStream || chunkX != _lastStreamChunkX || chunkZ != _lastStreamChunkZ)
+            {
+                _forceChunkStream = false;
+                _lastStreamChunkX = chunkX;
+                _lastStreamChunkZ = chunkZ;
+                Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, PlayerPosition);
+                var unloaded = Chunks.UnloadChunksOutside(chunkX, chunkZ, ChunkRenderRadius);
+                foreach (var uc in unloaded) ChunkUnloaded?.Invoke(uc);
+            }
+            UpdateDeepFill();
+        }
+
+        // ------------------------------------------------------------------
+        // player movement (ported from Program.cs, same constants & feel)
+        // ------------------------------------------------------------------
+
+        private void UpdatePlayerMovement(TickInputState tickInput, float deltaSeconds)
+        {
+            if (FlyMode)
+            {
+                var flyForward = GetCameraForward();
+                var flyRight = GetCameraRight(PlayerYaw);
+                var flyDir = new Point3D(0, 0, 0);
+                if (tickInput.MoveForward) flyDir += flyForward;
+                if (tickInput.MoveBackward) flyDir -= flyForward;
+                if (tickInput.MoveLeft) flyDir += flyRight;
+                if (tickInput.MoveRight) flyDir -= flyRight;
+                if (tickInput.MoveUp) flyDir += new Point3D(0, 1, 0);
+                if (tickInput.MoveDown) flyDir += new Point3D(0, -1, 0);
+                if (flyDir.X != 0 || flyDir.Y != 0 || flyDir.Z != 0)
+                {
+                    double len = Math.Sqrt(flyDir.X * flyDir.X + flyDir.Y * flyDir.Y + flyDir.Z * flyDir.Z);
+                    flyDir *= 1.0 / len;
+                }
+                PlayerVelocity = flyDir * FlySpeed;
+                PlayerPosition = new Point3D(
+                    PlayerPosition.X + PlayerVelocity.X * deltaSeconds,
+                    PlayerPosition.Y + PlayerVelocity.Y * deltaSeconds,
+                    PlayerPosition.Z + PlayerVelocity.Z * deltaSeconds);
+                PlayerGrounded = false;
+                PlayerWalkAmount = 0f;
+                return;
+            }
+
+            var forwardWalk = GetCameraForward();
+            var forwardHorizontal = new Point3D(forwardWalk.X, 0, forwardWalk.Z).Normalized();
+            var right = GetCameraRight(PlayerYaw);
+            var desiredDirection = new Point3D(0, 0, 0);
+            if (tickInput.MoveForward) desiredDirection += forwardHorizontal;
+            if (tickInput.MoveBackward) desiredDirection -= forwardHorizontal;
+            if (tickInput.MoveLeft) desiredDirection += right;
+            if (tickInput.MoveRight) desiredDirection -= right;
+            if (desiredDirection.X != 0 || desiredDirection.Z != 0)
+            {
+                var length = Math.Sqrt(desiredDirection.X * desiredDirection.X + desiredDirection.Z * desiredDirection.Z);
+                desiredDirection *= 1.0 / length;
+            }
+
+            bool feetInWater = PlayerSampleInWater(0.05);
+            bool bodyInWater = PlayerSampleInWater(PlayerHeight * 0.4);
+            bool headInWater = PlayerSampleInWater(PlayerHeight * 0.85);
+            bool inWater = feetInWater || bodyInWater || headInWater;
+            if (inWater)
+            {
+                double submerged = (feetInWater ? 0.25 : 0) + (bodyInWater ? 0.5 : 0) + (headInWater ? 0.25 : 0);
+                var swimSpeed = desiredDirection * (WalkSpeed * 0.42);
+                PlayerVelocity = new Point3D(swimSpeed.X, PlayerVelocity.Y, swimSpeed.Z);
+                PlayerVelocity = new Point3D(
+                    PlayerVelocity.X,
+                    PlayerVelocity.Y * Math.Pow(0.96, deltaSeconds * 60.0),
+                    PlayerVelocity.Z);
+                double waterGravity = Gravity * Math.Max(0.16, 0.42 - submerged * 0.20);
+                PlayerVelocity = new Point3D(
+                    PlayerVelocity.X,
+                    PlayerVelocity.Y - waterGravity * deltaSeconds,
+                    PlayerVelocity.Z);
+                if (tickInput.MoveUp)
+                {
+                    double swimLift = bodyInWater ? 0.58 : 0.7;
+                    PlayerVelocity = new Point3D(
+                        PlayerVelocity.X,
+                        Math.Max(PlayerVelocity.Y, JumpVelocity * swimLift),
+                        PlayerVelocity.Z);
+                }
+                var swimDisplacement = PlayerVelocity * deltaSeconds;
+                MovePlayerWithCollisions(swimDisplacement);
+                double swimHSpeed = Math.Sqrt(PlayerVelocity.X * PlayerVelocity.X + PlayerVelocity.Z * PlayerVelocity.Z);
+                PlayerWalkAmount = (float)Math.Min(1.0, swimHSpeed / WalkSpeed);
+                PlayerWalkPhase += deltaSeconds * PlayerWalkAmount * 10f;
+                return;
+            }
+
+            var horizontalVelocity = desiredDirection * WalkSpeed;
+            var verticalVelocity = PlayerVelocity.Y;
+            if (tickInput.JumpPressed && PlayerGrounded)
+            {
+                verticalVelocity = JumpVelocity;
+                PlayerGrounded = false;
+            }
+            verticalVelocity -= Gravity * deltaSeconds;
+            if (verticalVelocity < -MaxFallSpeed) verticalVelocity = -MaxFallSpeed;
+            PlayerVelocity = new Point3D(horizontalVelocity.X, verticalVelocity, horizontalVelocity.Z);
+            var frameDisplacement = PlayerVelocity * deltaSeconds;
+            MovePlayerWithCollisions(frameDisplacement);
+
+            double hSpeed = Math.Sqrt(PlayerVelocity.X * PlayerVelocity.X + PlayerVelocity.Z * PlayerVelocity.Z);
+            PlayerWalkAmount = (float)Math.Min(1.0, hSpeed / WalkSpeed);
+            PlayerWalkPhase += deltaSeconds * PlayerWalkAmount * 10f;
+        }
+
+        private void MovePlayerWithCollisions(Point3D displacement)
+        {
+            bool hitX = false, hitY = false, hitZ = false;
+            var start = PlayerPosition;
+            PlayerPosition = MoveAlongAxis(PlayerPosition, displacement.X, Axis.X, ref hitX);
+            PlayerPosition = MoveAlongAxis(PlayerPosition, displacement.Y, Axis.Y, ref hitY);
+            PlayerPosition = MoveAlongAxis(PlayerPosition, displacement.Z, Axis.Z, ref hitZ);
+            if (hitX || hitZ)
+            {
+                var stepped = TryStepUp(start, displacement);
+                if (stepped.HasValue)
+                {
+                    PlayerPosition = stepped.Value;
+                    hitX = hitZ = false;
+                    hitY = true;
+                    PlayerGrounded = true;
+                }
+            }
+            if (hitX) PlayerVelocity = new Point3D(0, PlayerVelocity.Y, PlayerVelocity.Z);
+            if (hitZ) PlayerVelocity = new Point3D(PlayerVelocity.X, PlayerVelocity.Y, 0);
+            if (hitY)
+            {
+                if (PlayerVelocity.Y <= 0) PlayerGrounded = true;
+                PlayerVelocity = new Point3D(PlayerVelocity.X, 0, PlayerVelocity.Z);
+            }
+            else PlayerGrounded = false;
+        }
+
+        private bool PlayerSampleInWater(double heightOffset)
+        {
+            int id = BlockRegistry.GetId("water");
+            int x = (int)Math.Floor(PlayerPosition.X);
+            int y = (int)Math.Floor(PlayerPosition.Y - EyeHeight + heightOffset);
+            int z = (int)Math.Floor(PlayerPosition.Z);
+            return Chunks.TryGetLoadedBlock(x, y, z, out var block) && block == id;
+        }
+
+        private Point3D? TryStepUp(Point3D start, Point3D displacement)
+        {
+            const double maxStepHeight = 0.5;
+            var raised = new Point3D(start.X, start.Y + maxStepHeight, start.Z);
+            if (IsPlayerColliding(raised)) return null;
+            bool hx = false, hz = false;
+            var moved = MoveAlongAxis(raised, displacement.X, Axis.X, ref hx);
+            moved = MoveAlongAxis(moved, displacement.Z, Axis.Z, ref hz);
+            if (hx || hz) return null;
+            var down = moved;
+            while (down.Y > start.Y)
+            {
+                var candidate = new Point3D(down.X, down.Y - CollisionStep, down.Z);
+                if (IsPlayerColliding(candidate)) break;
+                down = candidate;
+            }
+            return down;
+        }
+
+        private Point3D MoveAlongAxis(Point3D start, double amount, Axis axis, ref bool collided)
+        {
+            if (amount == 0.0) return start;
+            int steps = Math.Max(1, (int)Math.Ceiling(Math.Abs(amount) / CollisionStep));
+            double step = amount / steps;
+            var current = start;
+            for (int i = 0; i < steps; i++)
+            {
+                var next = axis switch
+                {
+                    Axis.X => new Point3D(current.X + step, current.Y, current.Z),
+                    Axis.Y => new Point3D(current.X, current.Y + step, current.Z),
+                    Axis.Z => new Point3D(current.X, current.Y, current.Z + step),
+                    _ => current,
+                };
+                if (IsPlayerColliding(next))
+                {
+                    collided = true;
+                    return current;
+                }
+                current = next;
+            }
+            return current;
+        }
+
+        public bool IsPlayerColliding(Point3D eyePosition)
+        {
+            double minX = eyePosition.X - PlayerRadius;
+            double maxX = eyePosition.X + PlayerRadius;
+            double minY = eyePosition.Y - EyeHeight;
+            double maxY = minY + PlayerHeight;
+            double minZ = eyePosition.Z - PlayerRadius;
+            double maxZ = eyePosition.Z + PlayerRadius;
+            int blockMinX = (int)Math.Floor(minX);
+            int blockMaxX = (int)Math.Floor(maxX);
+            int blockMinY = (int)Math.Floor(minY);
+            int blockMaxY = (int)Math.Floor(maxY - 1e-5);
+            int blockMinZ = (int)Math.Floor(minZ);
+            int blockMaxZ = (int)Math.Floor(maxZ);
+            for (int x = blockMinX; x <= blockMaxX; x++)
+            for (int y = blockMinY; y <= blockMaxY; y++)
+            for (int z = blockMinZ; z <= blockMaxZ; z++)
+            {
+                if (Chunks.TryGetLoadedBlockAndMeta(x, y, z, out var block, out var meta) && BlockRegistry.IsSolid(block))
+                {
+                    if (BoxesOverlapPlayer(GetBlockCollisionBoxes(block, meta), x, y, z, minX, maxX, minY, maxY, minZ, maxZ))
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        public static (double minX, double minY, double minZ, double maxX, double maxY, double maxZ)[] GetBlockCollisionBoxes(int id, int meta)
+        {
+            if (BlockRegistry.IsSlab(id)) return new[] { (0.0, 0.0, 0.0, 1.0, 0.5, 1.0) };
+            if (BlockRegistry.IsSlabTop(id)) return new[] { (0.0, 0.5, 0.0, 1.0, 1.0, 1.0) };
+            if (BlockRegistry.IsStair(id))
+            {
+                return meta switch
+                {
+                    0 => new[] { (0.0, 0.0, 0.0, 0.5, 0.5, 1.0), (0.5, 0.0, 0.0, 1.0, 1.0, 1.0) },
+                    1 => new[] { (0.0, 0.0, 0.0, 0.5, 1.0, 1.0), (0.5, 0.0, 0.0, 1.0, 0.5, 1.0) },
+                    2 => new[] { (0.0, 0.0, 0.0, 1.0, 0.5, 0.5), (0.0, 0.0, 0.5, 1.0, 1.0, 1.0) },
+                    _ => new[] { (0.0, 0.0, 0.0, 1.0, 1.0, 0.5), (0.0, 0.0, 0.5, 1.0, 0.5, 1.0) },
+                };
+            }
+            if (BlockRegistry.IsCross(id)) return new[] { (0.25, 0.0, 0.25, 0.75, 0.8, 0.75) };
+            return new[] { (0.0, 0.0, 0.0, 1.0, 1.0, 1.0) };
+        }
+
+        private static bool BoxesOverlapPlayer((double minX, double minY, double minZ, double maxX, double maxY, double maxZ)[] boxes,
+            int bx, int by, int bz, double pMinX, double pMaxX, double pMinY, double pMaxY, double pMinZ, double pMaxZ)
+        {
+            foreach (var b in boxes)
+            {
+                if (bx + b.maxX > pMinX && bx + b.minX < pMaxX
+                    && by + b.maxY > pMinY && by + b.minY < pMaxY
+                    && bz + b.maxZ > pMinZ && bz + b.minZ < pMaxZ)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // ------------------------------------------------------------------
+        // block editing (single source of truth; raises BlockEdited)
+        // ------------------------------------------------------------------
+
+        /// <summary>Breaks the block the player is looking at. Returns true if a block was removed,
+        /// with the block's world position and previous id (for particle spawning).</summary>
+        public bool TryBreakBlock(Point3D origin, Point3D direction, out int removedBlockId, out (int x, int y, int z) removedPos)
+        {
+            removedBlockId = 0;
+            removedPos = default;
+            var pickResult = TryPickBlock(origin, direction);
+            if (!pickResult.HasValue) return false;
+            var remove = pickResult.Value.Remove;
+            if (!Chunks.TryGetLoadedBlock(remove.x, remove.y, remove.z, out removedBlockId)) return false;
+            if (!Chunks.TrySetBlock(remove.x, remove.y, remove.z, BlockRegistry.AirId)) return false;
+            removedPos = remove;
+            BlockTicks?.OnBlockChanged(remove.x, remove.y, remove.z);
+            var editedChunk = new ChunkCoordinates(WorldToChunkCoord(remove.x), WorldToChunkCoord(remove.z));
+            Mesher.RequestImmediateRemesh(editedChunk);
+            BlockEdited?.Invoke(remove.x, remove.y, remove.z, 0, 0);
+            return true;
+        }
+
+        /// <summary>Places the currently selected block at the targeted face. Returns true if placed.</summary>
+        public bool TryPlaceSelectedBlock(Point3D origin, Point3D direction)
+        {
+            var pickResult = TryPickBlock(origin, direction, out double hitDistance);
+            if (!pickResult.HasValue) return false;
+            var place = pickResult.Value.Place;
+            var normal = pickResult.Value.Normal;
+            var hitPoint = origin + direction * hitDistance;
+
+            int blockToPlace = SelectedBlock;
+            int meta = 0;
+
+            if (BlockRegistry.IsSlab(blockToPlace) || BlockRegistry.IsSlabTop(blockToPlace))
+            {
+                var hit = pickResult.Value.Remove;
+                if (TryMergeSlab(hit.x, hit.y, hit.z, normal, blockToPlace)) return true;
+
+                bool placeTop = normal.Y < 0 || (normal.Y == 0 && (hitPoint.Y - place.y) > 0.5);
+                if (BlockRegistry.IsSlab(blockToPlace) && placeTop)
+                {
+                    blockToPlace = SlabTopIdFor(blockToPlace);
+                }
+
+                if (Chunks.TryGetLoadedBlockAndMeta(place.x, place.y, place.z, out var oldId, out _)
+                    && oldId != BlockRegistry.AirId && !IsReplaceableFluid(oldId))
+                {
+                    if (TryFillSlabCell(place.x, place.y, place.z, blockToPlace)) return true;
+                    return false;
+                }
+            }
+            else if (BlockRegistry.IsStair(blockToPlace))
+            {
+                meta = StairFacingMeta();
+            }
+            else
+            {
+                if (Chunks.TryGetLoadedBlockAndMeta(place.x, place.y, place.z, out var occupied, out _)
+                    && occupied != BlockRegistry.AirId && !IsReplaceableFluid(occupied))
+                {
+                    return false;
+                }
+            }
+
+            if (WouldBlockIntersectPlayer(place.x, place.y, place.z, blockToPlace, meta)) return false;
+            if (!Chunks.TrySetBlock(place.x, place.y, place.z, blockToPlace, meta)) return false;
+            BlockTicks?.OnBlockChanged(place.x, place.y, place.z);
+            var editedChunk = new ChunkCoordinates(WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));
+            Mesher.RequestImmediateRemesh(editedChunk);
+            BlockEdited?.Invoke(place.x, place.y, place.z, blockToPlace, meta);
+            return true;
+        }
+
+        private bool TryMergeSlab(int x, int y, int z, Point3D normal, int heldBlock)
+        {
+            if (!Chunks.TryGetLoadedBlockAndMeta(x, y, z, out var hitId, out _)) return false;
+            if (!BlockRegistry.IsSlab(hitId) && !BlockRegistry.IsSlabTop(hitId)) return false;
+            if (SlabMaterialOf(hitId) != SlabMaterialOf(heldBlock)) return false;
+            if (!((BlockRegistry.IsSlab(hitId) && normal.Y > 0) || (BlockRegistry.IsSlabTop(hitId) && normal.Y < 0))) return false;
+
+            int fullId = BlockRegistry.GetId(SlabMaterialOf(hitId));
+            if (!Chunks.TrySetBlock(x, y, z, fullId, 0)) return false;
+            BlockTicks?.OnBlockChanged(x, y, z);
+            Mesher.RequestImmediateRemesh(new ChunkCoordinates(WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            BlockEdited?.Invoke(x, y, z, fullId, 0);
+            return true;
+        }
+
+        private bool TryFillSlabCell(int x, int y, int z, int placingId)
+        {
+            if (!Chunks.TryGetLoadedBlockAndMeta(x, y, z, out var oldId, out _)) return false;
+            if (!BlockRegistry.IsSlab(oldId) && !BlockRegistry.IsSlabTop(oldId)) return false;
+            if (SlabMaterialOf(oldId) != SlabMaterialOf(placingId)) return false;
+            bool oldTop = BlockRegistry.IsSlabTop(oldId);
+            bool newTop = BlockRegistry.IsSlabTop(placingId);
+            if (oldTop == newTop) return false;
+
+            int fullId = BlockRegistry.GetId(SlabMaterialOf(oldId));
+            if (!Chunks.TrySetBlock(x, y, z, fullId, 0)) return false;
+            BlockTicks?.OnBlockChanged(x, y, z);
+            Mesher.RequestImmediateRemesh(new ChunkCoordinates(WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            BlockEdited?.Invoke(x, y, z, fullId, 0);
+            return true;
+        }
+
+        private static bool IsReplaceableFluid(int id) => id == BlockRegistry.GetId("water");
+
+        private static string SlabMaterialOf(int id)
+        {
+            string name = BlockRegistry.GetName(id);
+            return name.EndsWith("_slab_top", StringComparison.Ordinal)
+                ? name[..^"_slab_top".Length]
+                : name.EndsWith("_slab", StringComparison.Ordinal) ? name[..^"_slab".Length] : name;
+        }
+
+        private static int SlabTopIdFor(int slabId)
+            => BlockRegistry.GetId(SlabMaterialOf(slabId) + "_slab_top");
+
+        private int StairFacingMeta()
+        {
+            float yawRad = PlayerYaw * (float)Math.PI / 180f;
+            double dirX = Math.Sin(yawRad);
+            double dirZ = Math.Cos(yawRad);
+            if (Math.Abs(dirX) > Math.Abs(dirZ))
+                return dirX > 0 ? 0 : 1;
+            return dirZ > 0 ? 2 : 3;
+        }
+
+        private bool WouldBlockIntersectPlayer(int x, int y, int z, int blockId, int meta)
+        {
+            double minX = PlayerPosition.X - PlayerRadius;
+            double maxX = PlayerPosition.X + PlayerRadius;
+            double minY = PlayerPosition.Y - EyeHeight;
+            double maxY = minY + PlayerHeight;
+            double minZ = PlayerPosition.Z - PlayerRadius;
+            double maxZ = PlayerPosition.Z + PlayerRadius;
+            return BoxesOverlapPlayer(GetBlockCollisionBoxes(blockId, meta), x, y, z, minX, maxX, minY, maxY, minZ, maxZ);
+        }
+
+        // ------------------------------------------------------------------
+        // ray picking (ported from Program.cs)
+        // ------------------------------------------------------------------
+
+        public PickBlockResult? TryPickBlock(Point3D origin, Point3D direction) => TryPickBlock(origin, direction, out _);
+
+        public PickBlockResult? TryPickBlock(Point3D origin, Point3D direction, out double hitDistance)
+        {
+            hitDistance = double.PositiveInfinity;
+            direction = direction.Normalized();
+            int blockX = (int)Math.Floor(origin.X);
+            int blockY = (int)Math.Floor(origin.Y);
+            int blockZ = (int)Math.Floor(origin.Z);
+            var stepX = Math.Sign(direction.X);
+            var stepY = Math.Sign(direction.Y);
+            var stepZ = Math.Sign(direction.Z);
+            var tDeltaX = stepX != 0 ? Math.Abs(1.0 / direction.X) : double.PositiveInfinity;
+            var tDeltaY = stepY != 0 ? Math.Abs(1.0 / direction.Y) : double.PositiveInfinity;
+            var tDeltaZ = stepZ != 0 ? Math.Abs(1.0 / direction.Z) : double.PositiveInfinity;
+            var tMaxX = stepX > 0 ? (blockX + 1.0 - origin.X) * tDeltaX : (origin.X - blockX) * tDeltaX;
+            var tMaxY = stepY > 0 ? (blockY + 1.0 - origin.Y) * tDeltaY : (origin.Y - blockY) * tDeltaY;
+            var tMaxZ = stepZ > 0 ? (blockZ + 1.0 - origin.Z) * tDeltaZ : (origin.Z - blockZ) * tDeltaZ;
+            int currentX = blockX, currentY = blockY, currentZ = blockZ;
+            var maxDistance = BlockReach;
+            var distance = 0.0;
+            for (int iteration = 0; iteration < 400 && distance <= maxDistance; iteration++)
+            {
+                if (Chunks.TryGetLoadedBlockAndMeta(currentX, currentY, currentZ, out var block, out var meta)
+                    && block != BlockRegistry.AirId
+                    && block != BlockRegistry.GetId("water"))
+                {
+                    double cellExit = Math.Min(tMaxX, Math.Min(tMaxY, tMaxZ));
+                    var boxes = GetBlockCollisionBoxes(block, meta);
+                    foreach (var b in boxes)
+                    {
+                        if (RayBoxHit(origin, direction,
+                                currentX + b.minX, currentY + b.minY, currentZ + b.minZ,
+                                currentX + b.maxX, currentY + b.maxY, currentZ + b.maxZ,
+                                distance - 1e-9, cellExit + 1e-9, out double t, out var n))
+                        {
+                            hitDistance = Math.Max(0.0, t);
+                            var face = ComputeFaceRect(currentX, currentY, currentZ, b, n);
+                            var place = ((int)Math.Floor(currentX + n.X + 0.5), (int)Math.Floor(currentY + n.Y + 0.5), (int)Math.Floor(currentZ + n.Z + 0.5));
+                            return new PickBlockResult((currentX, currentY, currentZ), place, n, face);
+                        }
+                    }
+                }
+
+                if (tMaxX < tMaxY)
+                {
+                    if (tMaxX < tMaxZ) { currentX += stepX; distance = tMaxX; tMaxX += tDeltaX; }
+                    else { currentZ += stepZ; distance = tMaxZ; tMaxZ += tDeltaZ; }
+                }
+                else
+                {
+                    if (tMaxY < tMaxZ) { currentY += stepY; distance = tMaxY; tMaxY += tDeltaY; }
+                    else { currentZ += stepZ; distance = tMaxZ; tMaxZ += tDeltaZ; }
+                }
+            }
+            return null;
+        }
+
+        // ------------------------------------------------------------------
+        // spawn / deep-fill
+        // ------------------------------------------------------------------
+
+        private Point3D? FindSafeSpawnPosition()
+        {
+            int baseX = (int)Math.Floor(PlayerPosition.X);
+            int baseZ = (int)Math.Floor(PlayerPosition.Z);
+            const int seaLevelWorldY = 0;
+            for (int radius = 0; radius <= 64; radius++)
+            {
+                int bestY = int.MinValue, bestX = 0, bestZ = 0;
+                for (int dx = -radius; dx <= radius; dx++)
+                for (int dz = -radius; dz <= radius; dz++)
+                {
+                    if (radius > 0 && Math.Abs(dx) != radius && Math.Abs(dz) != radius) continue;
+                    int wx = baseX + dx;
+                    int wz = baseZ + dz;
+                    Chunks.GetOrCreateChunk(WorldToChunkCoord(wx), WorldToChunkCoord(wz));
+                    int surfaceY = FindSurfaceWorldY(wx, wz);
+                    if (surfaceY < seaLevelWorldY) continue;
+                    if (surfaceY > bestY)
+                    {
+                        bestY = surfaceY;
+                        bestX = wx;
+                        bestZ = wz;
+                    }
+                }
+                if (bestY == int.MinValue) continue;
+
+                double px = bestX + 0.5;
+                double pz = bestZ + 0.5;
+                double minEyeY = bestY + EyeHeight + 0.01;
+                double maxEyeY = ChunkManager.ChunkHeight + 1.0;
+                for (double eyeY = minEyeY; eyeY <= maxEyeY; eyeY += 0.25)
+                {
+                    var candidate = new Point3D(px, eyeY, pz);
+                    if (!IsPlayerColliding(candidate)) return candidate;
+                }
+            }
+            return null;
+        }
+
+        private int FindSurfaceWorldY(int wx, int wz)
+        {
+            for (int wy = 191; wy >= ChunkManager.WorldOriginY; wy--)
+            {
+                if (Chunks.TryGetLoadedBlock(wx, wy, wz, out var block) && BlockRegistry.IsSolid(block))
+                {
+                    return wy;
+                }
+            }
+            return ChunkManager.WorldOriginY - 1;
+        }
+
+        private void UpdateDeepFill()
+        {
+            if (Chunks == null || ChunkProvider == null) return;
+            const double deepThreshold = -32.0;
+            bool isDeep = PlayerPosition.Y < deepThreshold;
+            ChunkProvider.AutoDeepFill = isDeep;
+            if (!isDeep) return;
+
+            int cx = (int)Math.Floor(PlayerPosition.X / ChunkManager.ChunkSize);
+            int cz = (int)Math.Floor(PlayerPosition.Z / ChunkManager.ChunkSize);
+
+            foreach (var ch in Chunks.GetLoadedChunks())
+            {
+                int dx = ch.OriginX / ChunkManager.ChunkSize - cx;
+                int dz = ch.OriginZ / ChunkManager.ChunkSize - cz;
+                if (dx * dx + dz * dz > 49) continue;
+                ChunkProvider.DeepFillChunk(ch.OriginX / ChunkManager.ChunkSize, ch.OriginZ / ChunkManager.ChunkSize, ch);
+                if (ch.NeedsRemesh)
+                {
+                    ch.IsMeshingQueued = false;
+                    Mesher?.RequestImmediateRemesh(new ChunkCoordinates(ch.OriginX / ChunkManager.ChunkSize, ch.OriginZ / ChunkManager.ChunkSize));
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // helpers (camera math used by both sim and render)
+        // ------------------------------------------------------------------
+
+        public Point3D GetCameraForward()
+        {
+            var yawRad = PlayerYaw * Math.PI / 180.0;
+            var pitchRad = PlayerPitch * Math.PI / 180.0;
+            var cosPitch = Math.Cos(pitchRad);
+            return new Point3D(cosPitch * Math.Sin(yawRad), Math.Sin(pitchRad), cosPitch * Math.Cos(yawRad)).Normalized();
+        }
+
+        public static Point3D GetCameraRight(float yaw)
+        {
+            var yawRad = yaw * Math.PI / 180.0;
+            return new Point3D(Math.Cos(yawRad), 0, -Math.Sin(yawRad)).Normalized();
+        }
+
+        public static int WorldToChunkCoord(double value) => (int)Math.Floor(value / ChunkManager.ChunkSize);
+
+        public static float NormalizeYaw(float yaw)
+        {
+            float result = yaw % 360f;
+            if (result < 0f) result += 360f;
+            return result;
+        }
+
+        private static bool RayBoxHit(Point3D o, Point3D d,
+            double bMinX, double bMinY, double bMinZ, double bMaxX, double bMaxY, double bMaxZ,
+            double tMinLimit, double tMaxLimit, out double t, out Point3D normal)
+        {
+            t = 0; normal = Point3D.Zero;
+            double tMin = tMinLimit, tMax = tMaxLimit;
+            int axis = -1;
+            double ox = o.X, oy = o.Y, oz = o.Z, dx = d.X, dy = d.Y, dz = d.Z;
+            double[] bmin = { bMinX, bMinY, bMinZ };
+            double[] bmax = { bMaxX, bMaxY, bMaxZ };
+            double[] oa = { ox, oy, oz };
+            double[] da = { dx, dy, dz };
+            for (int a = 0; a < 3; a++)
+            {
+                if (Math.Abs(da[a]) < 1e-12)
+                {
+                    if (oa[a] < bmin[a] || oa[a] > bmax[a]) return false;
+                }
+                else
+                {
+                    double t1 = (bmin[a] - oa[a]) / da[a];
+                    double t2 = (bmax[a] - oa[a]) / da[a];
+                    if (t1 > t2) { (t1, t2) = (t2, t1); }
+                    if (t1 > tMin) { tMin = t1; axis = a; }
+                    if (t2 < tMax) tMax = t2;
+                    if (tMin > tMax) return false;
+                }
+            }
+            t = tMin;
+            normal = axis switch
+            {
+                0 => new Point3D(-Math.Sign(dx), 0, 0),
+                1 => new Point3D(0, -Math.Sign(dy), 0),
+                _ => new Point3D(0, 0, -Math.Sign(dz)),
+            };
+            return true;
+        }
+
+        private static (double minX, double minY, double minZ, double maxX, double maxY, double maxZ) ComputeFaceRect(
+            int cx, int cy, int cz, (double minX, double minY, double minZ, double maxX, double maxY, double maxZ) b, Point3D n)
+        {
+            if (n.X > 0.5) return (cx + b.maxX, cy + b.minY, cz + b.minZ, cx + b.maxX, cy + b.maxY, cz + b.maxZ);
+            if (n.X < -0.5) return (cx + b.minX, cy + b.minY, cz + b.minZ, cx + b.minX, cy + b.maxY, cz + b.maxZ);
+            if (n.Y > 0.5) return (cx + b.minX, cy + b.maxY, cz + b.minZ, cx + b.maxX, cy + b.maxY, cz + b.maxZ);
+            if (n.Y < -0.5) return (cx + b.minX, cy + b.minY, cz + b.minZ, cx + b.maxX, cy + b.minY, cz + b.maxZ);
+            if (n.Z > 0.5) return (cx + b.minX, cy + b.minY, cz + b.maxZ, cx + b.maxX, cy + b.maxY, cz + b.maxZ);
+            return (cx + b.minX, cy + b.minY, cz + b.minZ, cx + b.maxX, cy + b.maxY, cz + b.minZ);
+        }
+
+        public void Dispose()
+        {
+            try { _chunkGenWorker?.Dispose(); } catch { }
+            try { (_meshQueue as MeshWorker)?.Dispose(); } catch { }
+        }
+
+        private enum Axis { X, Y, Z }
+
+        public readonly struct PickBlockResult
+        {
+            public (int x, int y, int z) Remove { get; }
+            public (int x, int y, int z) Place { get; }
+            public Point3D Normal { get; }
+            public (double minX, double minY, double minZ, double maxX, double maxY, double maxZ) Face { get; }
+            public PickBlockResult((int x, int y, int z) remove, (int x, int y, int z) place, Point3D normal,
+                (double minX, double minY, double minZ, double maxX, double maxY, double maxZ) face)
+            {
+                Remove = remove; Place = place; Normal = normal; Face = face;
+            }
+        }
+    }
+}

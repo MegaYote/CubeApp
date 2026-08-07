@@ -5,14 +5,14 @@ namespace CubeApp
     public sealed class MeshScheduler
     {
         private readonly ChunkManager _manager;
-        private readonly MeshWorker _meshWorker;
+        private readonly IMeshQueue _meshQueue;
 
         public bool NeedsMeshUpdate { get; set; }
 
-        public MeshScheduler(ChunkManager manager, MeshWorker meshWorker)
+        public MeshScheduler(ChunkManager manager, IMeshQueue meshQueue)
         {
             _manager = manager ?? throw new ArgumentNullException(nameof(manager));
-            _meshWorker = meshWorker ?? throw new ArgumentNullException(nameof(meshWorker));
+            _meshQueue = meshQueue ?? throw new ArgumentNullException(nameof(meshQueue));
         }
 
         public int Update()
@@ -32,7 +32,7 @@ namespace CubeApp
                 int chunkX = chunk.OriginX / ChunkManager.ChunkSize;
                 int chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
 
-                _meshWorker.Enqueue(new ChunkCoordinates(chunkX, chunkZ));
+                _meshQueue.Enqueue(new ChunkCoordinates(chunkX, chunkZ));
 
                 queued++;
             }
@@ -53,7 +53,7 @@ namespace CubeApp
             // Always set NeedsRemesh so the chunk will be remeshed
             chunk.NeedsRemesh = true;
             chunk.IsMeshingQueued = true;
-            _meshWorker.EnqueuePriority(coords);
+            _meshQueue.EnqueuePriority(coords);
 
             // A block edit also affects the faces of the four cardinal neighbours (and the four
             // diagonal neighbours at a chunk corner) that share the edited cell's border: the
@@ -81,7 +81,7 @@ namespace CubeApp
             if (_manager.TryGetLoadedChunk(coords, out var chunk) && chunk.NeedsRemesh)
             {
                 chunk.IsMeshingQueued = true;
-                _meshWorker.EnqueuePriority(coords);
+                _meshQueue.EnqueuePriority(coords);
             }
         }
 

@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace CubeApp
 {
-    public sealed class MeshWorker : IDisposable
+    public sealed class MeshWorker : IDisposable, IMeshQueue
     {
         private readonly ChunkManager _manager;
         private readonly Func<Renderer.IRenderer?> _getRenderer;
