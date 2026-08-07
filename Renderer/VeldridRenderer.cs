@@ -3380,14 +3380,23 @@ void main() {
                 return;
             }
 
-            // Crosshair
+            // Crosshair: classic four-arm + (like Minecraft) - a clean gap in the center, no dot.
             var center = new Vector2(displaySize.X / 2f, displaySize.Y / 2f);
             uint crosshairColor = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 1f));
-            drawList.AddLine(new Vector2(center.X - 8, center.Y), new Vector2(center.X - 2, center.Y), crosshairColor, 2f);
-            drawList.AddLine(new Vector2(center.X + 2, center.Y), new Vector2(center.X + 8, center.Y), crosshairColor, 2f);
-            drawList.AddLine(new Vector2(center.X, center.Y - 8), new Vector2(center.X, center.Y - 2), crosshairColor, 2f);
-            drawList.AddLine(new Vector2(center.X, center.Y + 2), new Vector2(center.X, center.Y + 8), crosshairColor, 2f);
-            drawList.AddCircleFilled(center, 2f, crosshairColor);
+            float arm = 6f;   // arm length from the center gap
+            float gap = 3f;   // empty space around the exact center
+            const float thickness = 1.5f;
+            // Subtle dark outline so the white shows against bright sky/water.
+            uint outlineColor = ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.65f));
+            for (int pass = 0; pass < 2; pass++)
+            {
+                uint c = pass == 0 ? outlineColor : crosshairColor;
+                float w = pass == 0 ? thickness + 1.5f : thickness;
+                drawList.AddLine(new Vector2(center.X - arm - gap - 0.75f, center.Y), new Vector2(center.X - gap + 0.75f, center.Y), c, w);
+                drawList.AddLine(new Vector2(center.X + gap - 0.75f, center.Y), new Vector2(center.X + arm + gap + 0.75f, center.Y), c, w);
+                drawList.AddLine(new Vector2(center.X, center.Y - arm - gap - 0.75f), new Vector2(center.X, center.Y - gap + 0.75f), c, w);
+                drawList.AddLine(new Vector2(center.X, center.Y + gap - 0.75f), new Vector2(center.X, center.Y + arm + gap + 0.75f), c, w);
+            }
 
             // The targeted block face highlight is drawn as a depth-tested 3D quad in Render(),
             // not here, so that blocks in front of it occlude it correctly.

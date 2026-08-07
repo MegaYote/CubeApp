@@ -23,3 +23,5 @@ AnyCPU/
 *.wmv
 
 imgui.ini
+*.log
+
