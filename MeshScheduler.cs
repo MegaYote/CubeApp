@@ -9,10 +9,15 @@ namespace CubeApp
 
         public bool NeedsMeshUpdate { get; set; }
 
+        /// <summary>False when running headless with a no-op queue (dedicated server / tests):
+        /// mesh versions never advance, so callers that wait on remesh must release immediately.</summary>
+        public bool HasRealMeshQueue { get; }
+
         public MeshScheduler(ChunkManager manager, IMeshQueue meshQueue)
         {
             _manager = manager ?? throw new ArgumentNullException(nameof(manager));
             _meshQueue = meshQueue ?? throw new ArgumentNullException(nameof(meshQueue));
+            HasRealMeshQueue = meshQueue is not NoOpMeshQueue;
         }
 
         public int Update()

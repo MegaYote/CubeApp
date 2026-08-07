@@ -31,7 +31,7 @@ namespace CubeApp
             _manager = manager ?? throw new ArgumentNullException(nameof(manager));
             _meshScheduler = meshScheduler ?? throw new ArgumentNullException(nameof(meshScheduler));
             _fluid = new FluidSimulation(manager, this);
-            _gravity = new GravitySimulation(manager, this);
+            _gravity = new GravitySimulation(manager, this, meshScheduler);
         }
 
         public FluidSimulation Fluid => _fluid;

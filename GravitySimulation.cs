@@ -17,13 +17,15 @@ namespace CubeApp
     /// (O(1) removal, no List.RemoveAt shifts) and the landing pass marks landed blocks in place
     /// (no per-step allocations, no Contains() scans) - a 500-block collapse costs O(n) per step.
     ///
+    /// SMOOTHNESS: falling integrates PER RENDERED FRAME with the real delta (no fixed 20Hz
+    /// steps), sub-stepped to at most 0.5 blocks per integration so a low-framerate frame can't
+    /// tunnel through a thin floor. On landing, the cube STAYS rendered (placed in the world
+    /// grid + priority remesh requested) until the chunk's mesh actually refreshes - so there is
+    /// never an invisible gap between the entity disappearing and the mesh catching up.
+    ///
     /// Triggering: BlockTickScheduler.OnBlockChanged calls us with every changed cell. We check
     /// that cell and the cell directly above it; an unsupported gravity block is scheduled to
     /// tick, and TickBlock pops the whole column.
-    ///
-    /// Falling: blocks pop out of the world grid and spawn FallingBlockData entities rendered as
-    /// 3D cubes. They accelerate downward (Minecraft-style), falling through air AND water, until
-    /// the bottom reaches a solid support, then land back into the grid (displacing water).
     ///
     /// NOTE: only ever touches the world on the main thread (the tick loop and UpdateFalling
     /// both run inside the game loop), so it is safe alongside the networking main-thread rule.
@@ -33,28 +35,34 @@ namespace CubeApp
         private const int FallDelayTicks = 1;
         private const float FallGravity = 24.0f;   // matches player gravity; snappy cave-ins
         private const float MaxFallSpeed = 32.0f;
-        private const float StepRate = 1f / 20f;   // gravity integration step
+        private const float MaxStepPerIntegration = 0.5f; // prevents tunneling at low framerate
 
         private readonly ChunkManager _manager;
         private readonly BlockTickScheduler _tickScheduler;
+        private readonly MeshScheduler _meshScheduler;
         private readonly int _waterId;
         private readonly int _worldTopY; // exclusive: one past the highest block row
 
         // Active falling blocks (entity list; NOT in the world grid). Parallel speeds.
+        // A block that has landed but is waiting for its chunk to remesh stays in this list
+        // (speed 0, position snapped to the landing cell) so the renderer keeps drawing it.
         private readonly List<FallingBlockData> _falling = new();
         private readonly List<float> _fallSpeeds = new();
+        // For each falling entry: mesh-wait state, or null if still falling. When non-null the
+        // block has landed and we hold it until chunk.MeshVersion exceeds the snapshot.
+        private readonly List<(ChunkCoordinates coords, int version)?> _meshWait = new();
 
-        private float _fallAccumulator;
-
-        public GravitySimulation(ChunkManager manager, BlockTickScheduler tickScheduler)
+        public GravitySimulation(ChunkManager manager, BlockTickScheduler tickScheduler, MeshScheduler meshScheduler)
         {
             _manager = manager ?? throw new ArgumentNullException(nameof(manager));
             _tickScheduler = tickScheduler ?? throw new ArgumentNullException(nameof(tickScheduler));
+            _meshScheduler = meshScheduler ?? throw new ArgumentNullException(nameof(meshScheduler));
             _waterId = BlockRegistry.GetId("water");
             _worldTopY = ChunkManager.WorldOriginY + ChunkManager.ChunkHeight;
         }
 
-        /// <summary>Read-only view of the blocks currently falling (for the renderer).</summary>
+        /// <summary>Read-only view of the blocks currently falling or waiting for their landing
+        /// mesh (for the renderer).</summary>
         public IReadOnlyList<FallingBlockData> FallingBlocks => _falling;
 
         /// <summary>True when a falling block currently occupies the given world cell. Placement
@@ -114,11 +122,9 @@ namespace CubeApp
             {
                 if (!_manager.TryGetLoadedBlock(x, top, z, out var upId) || !BlockRegistry.IsGravity(upId)) break;
                 if (!_manager.TrySetBlockLoadedOnly(x, top, z, BlockRegistry.AirId, 0)) break;
-                lock (_falling)
-                {
-                    _falling.Add(new FallingBlockData(upId, x + 0f, top, z + 0f));
-                    _fallSpeeds.Add(0f);
-                }
+                _falling.Add(new FallingBlockData(upId, x + 0f, top, z + 0f));
+                _fallSpeeds.Add(0f);
+                _meshWait.Add(null);
                 top++;
             }
 
@@ -128,67 +134,119 @@ namespace CubeApp
             _tickScheduler.OnBlockChanged(x, y - 1, z);
         }
 
-        /// <summary>Advance all falling blocks by one game-loop frame (main thread). Uses a fixed
-        /// integration step so fall speed is frame-rate independent.</summary>
+        /// <summary>Advance all falling blocks by one rendered frame (main thread). Integrates
+        /// with the real delta for smooth motion; sub-steps prevent tunneling at low framerates.</summary>
         public void UpdateFalling(float deltaSeconds)
         {
+            // First, release any landed blocks whose chunk has finished remeshing.
+            ReleaseMeshedLandings();
+
             if (_falling.Count == 0) return;
 
-            _fallAccumulator += Math.Min(deltaSeconds, 0.1f);
-            while (_fallAccumulator >= StepRate && _falling.Count > 0)
-            {
-                StepFalling();
-                _fallAccumulator -= StepRate;
-            }
-            if (_fallAccumulator > StepRate * 2) _fallAccumulator = 0;
-        }
+            deltaSeconds = Math.Min(deltaSeconds, 0.1f);
 
-        private void StepFalling()
-        {
-            // Integrate velocities (O(n)).
-            for (int i = 0; i < _falling.Count; i++)
-            {
-                float vel = _fallSpeeds[i] + FallGravity * StepRate;
-                if (vel > MaxFallSpeed) vel = MaxFallSpeed;
-                _fallSpeeds[i] = vel;
-            }
-
-            // Landing + position pass (O(n), in place, no allocations). Iterate forward; when a
-            // block lands, swap-remove it into the current slot (O(1)) and re-check the slot.
+            // Integrate velocities, then resolve movement + landings in one pass.
             for (int i = 0; i < _falling.Count;)
             {
+                // Skipped while waiting for a mesh (landed, speed 0, no physics).
+                if (_meshWait[i] != null)
+                {
+                    i++;
+                    continue;
+                }
+
                 var f = _falling[i];
-                float newY = f.Y - _fallSpeeds[i] * StepRate;
+                float vel = _fallSpeeds[i] + FallGravity * deltaSeconds;
+                if (vel > MaxFallSpeed) vel = MaxFallSpeed;
+                _fallSpeeds[i] = vel;
+
+                float remaining = vel * deltaSeconds;
+                float newY = f.Y;
                 int floorX = (int)Math.Floor(f.X);
                 int floorZ = (int)Math.Floor(f.Z);
-                int cellY = (int)Math.Floor(newY);
+                bool landed = false;
 
-                if (HasSupportBelow(floorX, cellY - 1, floorZ))
+                // Sub-step: at most MaxStepPerIntegration blocks per move so a heavy frame can't
+                // punch through a floor between two checks.
+                while (remaining > 0f)
                 {
-                    // Landing cell; if it's already occupied (another block settled there this
-                    // pass), push up onto it so columns restack.
-                    int finalY = cellY;
-                    if (_manager.TryGetLoadedBlock(floorX, finalY, floorZ, out var occ) && IsSupport(occ))
-                    {
-                        finalY = cellY + 1;
-                    }
-                    _manager.TrySetBlockLoadedOnly(floorX, finalY, floorZ, f.BlockId, 0);
-                    _tickScheduler.OnBlockChanged(floorX, finalY, floorZ);
+                    float step = Math.Min(remaining, MaxStepPerIntegration);
+                    newY -= step;
+                    remaining -= step;
 
-                    // Swap-remove: overwrite this slot with the last element, drop the tail.
-                    int last = _falling.Count - 1;
-                    _falling[i] = _falling[last];
-                    _fallSpeeds[i] = _fallSpeeds[last];
-                    _falling.RemoveAt(last);
-                    _fallSpeeds.RemoveAt(last);
-                    // Do NOT increment i: the swapped-in element must be re-examined.
+                    int cellY = (int)Math.Floor(newY);
+                    if (HasSupportBelow(floorX, cellY - 1, floorZ))
+                    {
+                        // Landed. If the landing cell is already occupied (another block settled
+                        // there this frame), push up onto it so columns restack.
+                        int finalY = cellY;
+                        if (_manager.TryGetLoadedBlock(floorX, finalY, floorZ, out var occ) && IsSupport(occ))
+                        {
+                            finalY = cellY + 1;
+                        }
+                        _manager.TrySetBlockLoadedOnly(floorX, finalY, floorZ, f.BlockId, 0);
+                        _tickScheduler.OnBlockChanged(floorX, finalY, floorZ);
+
+                        // Request a PRIORITY remesh and keep this cube rendered until it lands.
+                        var coords = new ChunkCoordinates(GameWorld.WorldToChunkCoord(floorX), GameWorld.WorldToChunkCoord(floorZ));
+                        int before = 0;
+                        if (_manager.TryGetLoadedChunk(coords, out var chunk)) before = chunk.MeshVersion;
+                        _meshScheduler.RequestImmediateRemesh(coords);
+
+                        // Snap to the landing cell and hold until the chunk's mesh refreshes.
+                        _falling[i] = new FallingBlockData(f.BlockId, floorX, finalY, floorZ);
+                        _fallSpeeds[i] = 0f;
+                        _meshWait[i] = (coords, before);
+                        landed = true;
+                        break;
+                    }
                 }
-                else
+
+                if (!landed)
                 {
                     _falling[i] = new FallingBlockData(f.BlockId, f.X, newY, f.Z);
                     i++;
                 }
             }
+        }
+
+        // Removes landed cubes once their chunk's mesh has been rebuilt (MeshVersion changed),
+        // so the cube never flickers out before the world shows the new block. Headless (no-op
+        // mesh queue) never advances versions - release immediately in that case.
+        private void ReleaseMeshedLandings()
+        {
+            bool waitForMesh = _meshScheduler.HasRealMeshQueue;
+            for (int i = _falling.Count - 1; i >= 0; i--)
+            {
+                var wait = _meshWait[i];
+                if (wait == null) continue;
+
+                bool release = !waitForMesh;
+                if (!release && _manager.TryGetLoadedChunk(wait.Value.coords, out var chunk))
+                {
+                    if (chunk.MeshVersion != wait.Value.version) release = true;
+                }
+                else if (!release)
+                {
+                    release = true; // chunk unloaded; cube is gone anyway
+                }
+
+                if (release)
+                {
+                    SwapRemove(i);
+                }
+            }
+        }
+
+        private void SwapRemove(int i)
+        {
+            int last = _falling.Count - 1;
+            _falling[i] = _falling[last];
+            _fallSpeeds[i] = _fallSpeeds[last];
+            _meshWait[i] = _meshWait[last];
+            _falling.RemoveAt(last);
+            _fallSpeeds.RemoveAt(last);
+            _meshWait.RemoveAt(last);
         }
 
         private bool HasSupportBelow(int x, int y, int z)
