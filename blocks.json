@@ -3,7 +3,7 @@
   "blocks": [
     { "id": "air",             "displayName": "Air",             "solid": false, "opaque": false, "transparent": false, "alpha": 1.0,  "mapColor": "#000000" },
     { "id": "grass",           "displayName": "Grass",           "texture": "0,0", "mapColor": "#228B22" },
-    { "id": "grass_spreading", "displayName": "Grass (Spreading)", "texture": "2,0", "top": "0,0", "bottom": "2,0", "side": "2,0", "inventory": false, "mapColor": "#228B22" },
+    { "id": "grass_spreading", "displayName": "Grass (Spreading)", "texture": "2,0", "top": "0,0", "bottom": "2,0", "side": "3,0", "inventory": false, "mapColor": "#228B22" },
     { "id": "dirt",            "displayName": "Dirt",            "texture": "2,0", "gravity": true, "mapColor": "#8B4513" },
     { "id": "stone",           "displayName": "Stone",           "texture": "1,0", "mapColor": "#808080" },
     { "id": "cobblestone",     "displayName": "Cobblestone",     "texture": "0,1", "mapColor": "#707070" },
