@@ -6,32 +6,37 @@ using CubeApp.World;
 namespace CubeApp
 {
     /// <summary>
-    /// Chunk storage + streaming for the whole world. The world is two vertically-stacked layers
-    /// (two independent world generators):
+    /// Chunk storage + streaming for the whole world. The world is three vertically-stacked
+    /// layers (three independent world generators):
     ///
-    ///   Ground layer (0): OriginY=-256, Height=640, world -256..383.
-    ///     Terrain band + caves + monoliths; deep zone filled lazily on descent.
-    ///   Sky layer (1):    OriginY=384,  Height=640, world 384..1023.
-    ///     Empty air at generation; sky islands filled lazily when the player climbs high.
+    ///   Deep layer (0): OriginY=-256, Height=192, world -256..-65.
+    ///     Lazy stone+caves; generated on demand when the player digs deep.
+    ///   Ground layer (1): OriginY=-64, Height=448, world -64..383.
+    ///     Terrain band + caves + monoliths; sky above.
+    ///   Sky layer (2):    OriginY=384, Height=640, world 384..1023.
+    ///     Empty air at generation; sky islands fill lazily when the player climbs high.
     ///
-    /// Both layers share the (X, Z) column grid, so chunk keys carry the layer
+    /// Layers share the (X, Z) column grid, so chunk keys carry the layer
     /// (<see cref="ChunkCoordinates.Layer"/>). Block access by world Y routes to the correct layer.
     /// </summary>
     public sealed class ChunkManager
     {
         public const int ChunkSize = 16;
-        public const int GroundLayer = 0;
-        public const int SkyLayer = 1;
-        public const int GroundOriginY = -256;
-        public const int GroundHeight = 640;
+        public const int DeepLayer = 0;
+        public const int GroundLayer = 1;
+        public const int SkyLayer = 2;
+        public const int DeepOriginY = -256;
+        public const int DeepHeight = 192;
+        public const int GroundOriginY = -64;
+        public const int GroundHeight = 448;
         public const int SkyOriginY = 384;
         public const int SkyHeight = 640;
         // Back-compat aliases (most code means the ground layer when it says "the world").
         public const int WorldOriginY = GroundOriginY;
         public const int ChunkHeight = GroundHeight;
 
-        private static readonly int[] LayerOriginY = { GroundOriginY, SkyOriginY };
-        private static readonly int[] LayerHeight = { GroundHeight, SkyHeight };
+        private static readonly int[] LayerOriginY = { DeepOriginY, GroundOriginY, SkyOriginY };
+        private static readonly int[] LayerHeight = { DeepHeight, GroundHeight, SkyHeight };
 
         private readonly ConcurrentDictionary<ChunkCoordinates, Chunk> loadedChunks = new();
         // Chunk coords that have been modified (player edits / fluid flow) since load; these are
@@ -41,17 +46,33 @@ namespace CubeApp
         private readonly PriorityQueue<ChunkRequest, double> queue = new();
         private readonly object queueLock = new();
         private readonly ConcurrentDictionary<ChunkCoordinates, byte> pendingGeneration = new();
-        private readonly IChunkProvider[] chunkProviders = new IChunkProvider[2];
+        private readonly IChunkProvider[] chunkProviders = new IChunkProvider[3];
 
-        public ChunkManager(IChunkProvider? groundProvider = null, IChunkProvider? skyProvider = null)
+        public ChunkManager(IChunkProvider? deepProvider = null, IChunkProvider? groundProvider = null, IChunkProvider? skyProvider = null)
         {
+            chunkProviders[DeepLayer] = deepProvider ?? new DeepChunkProvider();
             chunkProviders[GroundLayer] = groundProvider ?? new InfdevChunkProvider();
             chunkProviders[SkyLayer] = skyProvider ?? new SkyChunkProvider();
         }
 
-        public static int LayerForWorldY(int worldY) => worldY >= SkyOriginY ? SkyLayer : GroundLayer;
-        public static int OriginYForLayer(int layer) => layer == SkyLayer ? SkyOriginY : GroundOriginY;
-        public static int HeightForLayer(int layer) => layer == SkyLayer ? SkyHeight : GroundHeight;
+        public static int LayerForWorldY(int worldY)
+        {
+            if (worldY < GroundOriginY) return DeepLayer;
+            if (worldY >= SkyOriginY) return SkyLayer;
+            return GroundLayer;
+        }
+        public static int OriginYForLayer(int layer) => layer switch
+        {
+            DeepLayer => DeepOriginY,
+            SkyLayer => SkyOriginY,
+            _ => GroundOriginY,
+        };
+        public static int HeightForLayer(int layer) => layer switch
+        {
+            DeepLayer => DeepHeight,
+            SkyLayer => SkyHeight,
+            _ => GroundHeight,
+        };
 
         public Chunk GetOrCreateChunk(int chunkX, int chunkZ) => GetOrCreateChunk(GroundLayer, chunkX, chunkZ);
 

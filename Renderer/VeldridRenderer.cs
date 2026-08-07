@@ -99,6 +99,28 @@ namespace CubeApp.Renderer
         private readonly System.Diagnostics.Stopwatch _cloudClock = System.Diagnostics.Stopwatch.StartNew();
         private int _cloudSeed = 12345;
 
+        // Wide far plane for clouds / world-from-above: a dedicated projection with far = 3x the
+        // world far plane, so the cloud deck and the fake "earth seen from above" stretch much
+        // further than terrain without affecting depth precision of the world.
+        private DeviceBuffer? _cloudMatrixBuffer;
+        private ResourceSet? _cloudMatrixSet;
+        private float _cloudFarPlane = 2100f;
+
+        // "World from above" ground plane: a giant flat green+water textured plane at the terrain
+        // level that only appears when the player climbs high. Drawn with depth disabled BEFORE
+        // the world, so real terrain always paints over it - mimics looking down on a distant
+        // earth. Follows the camera in X/Z at a fixed world Y, extends to the wide far plane.
+        private Pipeline? _worldPlanePipeline;
+        private DeviceBuffer? _worldPlaneVertexBuffer;
+        private DeviceBuffer? _worldPlaneIndexBuffer;
+        private Texture? _worldPlaneTexture;
+        private TextureView? _worldPlaneTextureView;
+        private ResourceSet? _worldPlaneTextureSet;
+        private ResourceLayout? _worldPlaneLayout;
+        private ResourceSet? _worldPlaneMatrixSet;
+        private const float WorldPlaneY = 60f;         // terrain-ish altitude the fake earth sits at
+        private const double WorldPlaneShowThreshold = 260.0; // camera Y where it fades in
+
         // Textured entity-model pipeline (currently just the duck test mob).
         private Pipeline _modelPipeline;
         private Texture _duckTexture;
@@ -1533,10 +1555,16 @@ void main() {
                 DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
+                // Set 0 uses the WIDE-far matrix (see _cloudMatrixBuffer) so the cloud deck
+                // stretches ~3x beyond terrain before clipping.
                 ResourceLayouts = new[] { _projViewLayout, _cloudParamsLayout },
                 ShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { shaders[0], shaders[1] }),
                 Outputs = _sc.Framebuffer.OutputDescription
             });
+
+            // Dedicated wide-far matrix for the cloud deck (set 0), updated in UpdateCamera.
+            _cloudMatrixBuffer = factory.CreateBuffer(new BufferDescription(64, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _cloudMatrixSet = factory.CreateResourceSet(new ResourceSetDescription(_projViewLayout, _cloudMatrixBuffer));
 
             // One big world-space quad (2 triangles). Filled in DrawClouds each frame around the
             // camera's X/Z so the plane follows you while staying at the fixed world height.
@@ -1545,6 +1573,130 @@ void main() {
             _cloudIndexBuffer = factory.CreateBuffer(new BufferDescription(
                 6 * sizeof(ushort), BufferUsage.IndexBuffer));
             _gd.UpdateBuffer(_cloudIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3 });
+
+            CreateWorldPlanePipeline(factory, vsSpirv.SpirvBytes);
+        }
+
+        // The "world from above" plane: a giant flat green+water textured quad at WorldPlaneY,
+        // shown only when the player is very high. It uses the SAME wide-far matrix as clouds,
+        // depth-write OFF + drawn BEFORE the world, so real terrain always paints over it and the
+        // plane only shows in the distance (mimicking looking down on a distant earth).
+        private void CreateWorldPlanePipeline(ResourceFactory factory, byte[] cloudVsSpirv)
+        {
+            string fsCode = @"#version 450
+layout(location=0) in vec2 vUV;
+layout(set=1, binding=0) uniform sampler2D uEarth;
+layout(location=0) out vec4 outColor;
+void main() {
+    vec4 tex = texture(uEarth, vUV);
+    outColor = vec4(tex.rgb, 1.0);
+}";
+
+            var fsSpirv = SpirvCompilation.CompileGlslToSpirv(fsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var shaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, cloudVsSpirv, "main"),
+                new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main"));
+
+            var vertexLayout = new VertexLayoutDescription(
+                new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                new VertexElementDescription("aUV", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float2));
+
+            _worldPlaneLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
+                new ResourceLayoutElementDescription("uEarth", ResourceKind.TextureReadOnly, ShaderStages.Fragment),
+                new ResourceLayoutElementDescription("uEarthSampler", ResourceKind.Sampler, ShaderStages.Fragment)));
+            _worldPlaneTexture = factory.CreateTexture(TextureDescription.Texture2D(
+                256, 256, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled));
+            _worldPlaneTextureView = factory.CreateTextureView(_worldPlaneTexture);
+            _gd.UpdateTexture(_worldPlaneTexture, GenerateWorldPlaneTexture(_cloudSeed), 0, 0, 0, 256, 256, 1, 0, 0);
+            _worldPlaneTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_worldPlaneLayout, _worldPlaneTextureView,
+                factory.CreateSampler(new SamplerDescription(
+                    SamplerAddressMode.Wrap,
+                    SamplerAddressMode.Wrap,
+                    SamplerAddressMode.Wrap,
+                    SamplerFilter.MinLinear_MagLinear_MipLinear,
+                    null,
+                    1,
+                    0,
+                    uint.MaxValue,
+                    0,
+                    SamplerBorderColor.TransparentBlack))));
+            _worldPlaneMatrixSet = factory.CreateResourceSet(new ResourceSetDescription(_projViewLayout, _cloudMatrixBuffer));
+
+            _worldPlanePipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleDisabled,
+                // Drawn BEFORE the world with depth disabled: it only shows where terrain isn't.
+                DepthStencilState = DepthStencilStateDescription.Disabled,
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _worldPlaneLayout },
+                ShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { shaders[0], shaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
+
+            _worldPlaneVertexBuffer = factory.CreateBuffer(new BufferDescription(
+                4 * 5 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            _worldPlaneIndexBuffer = factory.CreateBuffer(new BufferDescription(
+                6 * sizeof(ushort), BufferUsage.IndexBuffer));
+            _gd.UpdateBuffer(_worldPlaneIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3 });
+        }
+
+        // Generates the green+water "earth seen from above" texture (noise blob walkers again):
+        // green land with blue water patches and lighter coastline, seeded per world.
+        private static byte[] GenerateWorldPlaneTexture(int seed)
+        {
+            const int size = 256;
+            const int cols = size;
+            const int rows = size;
+            var mask = new byte[cols * rows];
+            int CellIndex(int x, int y) => y * cols + x;
+            var rng = new Random(seed * 7 + 13);
+
+            void StampSquare(int x, int y, int half)
+            {
+                for (int oy = -half; oy <= half; oy++)
+                for (int ox = -half; ox <= half; ox++)
+                {
+                    int nx = x + ox, ny = y + oy;
+                    if (nx < 1 || ny < 1 || nx >= cols - 1 || ny >= rows - 1) continue;
+                    mask[CellIndex(nx, ny)] = 1;
+                }
+            }
+
+            // Water blobs (blue) on green land. Bigger patches + small lakes.
+            for (int i = 0; i < 10; i++)
+            {
+                int x = 4 + rng.Next(cols - 8);
+                int y = 4 + rng.Next(rows - 8);
+                int half = 2 + rng.Next(6);
+                int steps = 4 + rng.Next(12);
+                for (int s = 0; s < steps; s++)
+                {
+                    StampSquare(x, y, half);
+                    x = Math.Max(2, Math.Min(cols - 3, x + rng.Next(5) - 2));
+                    y = Math.Max(2, Math.Min(rows - 3, y + rng.Next(5) - 2));
+                }
+            }
+            for (int i = 0; i < 30; i++)
+            {
+                int x = 2 + rng.Next(cols - 4);
+                int y = 2 + rng.Next(rows - 4);
+                StampSquare(x, y, 1 + rng.Next(2));
+            }
+
+            var rgba = new byte[size * size * 4];
+            for (int y = 0; y < rows; y++)
+            for (int x = 0; x < cols; x++)
+            {
+                bool water = mask[CellIndex(x, y)] != 0;
+                // land: green; water: blue; coastline slightly lighter.
+                byte r = (byte)(water ? 40 : 60);
+                byte g = (byte)(water ? 110 : 150);
+                byte b = (byte)(water ? 180 : 60);
+                int dst = (y * size + x) * 4;
+                rgba[dst] = r; rgba[dst + 1] = g; rgba[dst + 2] = b; rgba[dst + 3] = 255;
+            }
+            return rgba;
         }
 
         // Draws the cloud plane. Vertices are WORLD-space, centered on the camera's X/Z at
@@ -1553,8 +1705,8 @@ void main() {
         private void DrawClouds(CommandList cl)
         {
             if (_cloudPipeline == null || _cloudVertexBuffer == null || !_cameraPosition.HasValue) return;
-            // Big enough that the plane's edges stay beyond the far plane from any view angle.
-            float extent = Math.Max(_farPlane * 3f, 1536f);
+            // Big enough that the plane's edges stay beyond the WIDE far plane (3x the world far).
+            float extent = Math.Max(_cloudFarPlane * 1.5f, 1536f);
             float camX = (float)_cameraPosition.Value.X;
             float camZ = (float)_cameraPosition.Value.Z;
             float y = CloudWorldY;
@@ -1587,10 +1739,49 @@ void main() {
             _gd.UpdateBuffer(_cloudParamsBuffer, 0, _cloudParams);
 
             cl.SetPipeline(_cloudPipeline);
-            cl.SetGraphicsResourceSet(0, _projViewSet);
+            // Use the WIDE-far matrix so the cloud deck extends ~3x beyond the terrain.
+            cl.SetGraphicsResourceSet(0, _cloudMatrixSet ?? _projViewSet);
             if (_cloudParamsSet != null) cl.SetGraphicsResourceSet(1, _cloudParamsSet);
             cl.SetVertexBuffer(0, _cloudVertexBuffer);
             cl.SetIndexBuffer(_cloudIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed(6, 1, 0, 0, 0);
+        }
+
+        // Draws the "world from above" plane when the player is high: a giant flat green+water
+        // textured quad at WorldPlaneY, using the WIDE-far matrix. Drawn BEFORE the world with
+        // depth disabled, so real terrain always paints over it - it only shows in the distance,
+        // mimicking looking down on a distant earth. Fades away as the player descends.
+        private void DrawWorldPlane(CommandList cl)
+        {
+            if (_worldPlanePipeline == null || _worldPlaneVertexBuffer == null || !_cameraPosition.HasValue) return;
+            var cam = _cameraPosition.Value;
+            // Only show when the camera is well above the fake earth altitude.
+            double alt = cam.Y - WorldPlaneY;
+            if (alt < WorldPlaneShowThreshold) return;
+            float fade = (float)Math.Clamp((alt - WorldPlaneShowThreshold) / 60.0, 0.0, 1.0);
+            if (fade <= 0.01f) return;
+
+            float extent = Math.Max(_cloudFarPlane * 1.5f, 1536f);
+            float camX = (float)cam.X;
+            float camZ = (float)cam.Z;
+            float y = WorldPlaneY;
+            float u0 = camX / 256f, u1 = (camX + extent * 2f) / 256f;
+            float v0 = camZ / 256f, v1 = (camZ + extent * 2f) / 256f;
+
+            float[] verts =
+            {
+                camX - extent, y, camZ - extent, u0, v0,
+                camX + extent, y, camZ - extent, u1, v0,
+                camX + extent, y, camZ + extent, u1, v1,
+                camX - extent, y, camZ + extent, u0, v1,
+            };
+            _gd.UpdateBuffer(_worldPlaneVertexBuffer, 0, verts);
+
+            cl.SetPipeline(_worldPlanePipeline);
+            cl.SetGraphicsResourceSet(0, _cloudMatrixSet ?? _projViewSet);
+            if (_worldPlaneTextureSet != null) cl.SetGraphicsResourceSet(1, _worldPlaneTextureSet);
+            cl.SetVertexBuffer(0, _worldPlaneVertexBuffer);
+            cl.SetIndexBuffer(_worldPlaneIndexBuffer, IndexFormat.UInt16);
             cl.DrawIndexed(6, 1, 0, 0, 0);
         }
 
@@ -1846,6 +2037,7 @@ void main() {
             UpdateFog();
 
             DrawSky(cl);
+            DrawWorldPlane(cl);
 
             cl.SetPipeline(_pipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
@@ -1928,7 +2120,7 @@ void main() {
         {
             float cx = coord.X * ChunkManager.ChunkSize + ChunkManager.ChunkSize * 0.5f;
             float cz = coord.Z * ChunkManager.ChunkSize + ChunkManager.ChunkSize * 0.5f;
-            float cy = ChunkManager.WorldOriginY + ChunkManager.ChunkHeight * 0.5f;
+            float cy = ChunkManager.OriginYForLayer(coord.Layer) + ChunkManager.HeightForLayer(coord.Layer) * 0.5f;
             float dx = cx - (float)cam.X;
             float dy = cy - (float)cam.Y;
             float dz = cz - (float)cam.Z;
@@ -2742,10 +2934,11 @@ void main() {
             float maxX = minX + ChunkManager.ChunkSize;
             float minZ = coord.Z * ChunkManager.ChunkSize;
             float maxZ = minZ + ChunkManager.ChunkSize;
-            // World Y bounds come from the world origin, not 0. With minY=0 the chunk under the
-            // camera gets culled the moment the eye drops below Y≈0 (near plane dips past the box).
-            const float minY = ChunkManager.WorldOriginY;
-            const float maxY = ChunkManager.WorldOriginY + ChunkManager.ChunkHeight;
+            // World Y bounds come from the chunk's LAYER (ground -256..383, sky 384..1023), not
+            // the ground origin. Using the ground bounds for sky chunks made them vanish when the
+            // camera was up in the stratosphere (their frustum box sat below them).
+            float minY = ChunkManager.OriginYForLayer(coord.Layer);
+            float maxY = minY + ChunkManager.HeightForLayer(coord.Layer);
 
             for (int i = 0; i < 6; i++)
             {
@@ -3384,6 +3577,16 @@ void main() {
             _cloudParamsBuffer?.Dispose();
             _cloudTextureView?.Dispose();
             _cloudTexture?.Dispose();
+            _cloudMatrixBuffer?.Dispose();
+            _cloudMatrixSet?.Dispose();
+            _worldPlanePipeline?.Dispose();
+            _worldPlaneVertexBuffer?.Dispose();
+            _worldPlaneIndexBuffer?.Dispose();
+            _worldPlaneTextureSet?.Dispose();
+            _worldPlaneLayout?.Dispose();
+            _worldPlaneTextureView?.Dispose();
+            _worldPlaneTexture?.Dispose();
+            _worldPlaneMatrixSet?.Dispose();
             _commandList?.Dispose();
             _imguiRenderer?.Dispose();
             _highlightVertexBuffer?.Dispose();
@@ -3708,6 +3911,14 @@ void main() {
             _gd.UpdateBuffer(_projViewBuffer, 0, ref viewProj);
             if (_skyMatrixBuffer != null)
                 _gd.UpdateBuffer(_skyMatrixBuffer, 0, ref skyViewProj);
+            if (_cloudMatrixBuffer != null)
+            {
+                // Same view, WIDER far plane (3x) so clouds / world-from-above stretch much
+                // further than terrain. Near plane raised slightly to keep depth precision sane.
+                var wideProj = Matrix4x4.CreatePerspectiveFieldOfView((float)(Math.PI / 2.0), (float)_sc.Framebuffer.Width / _sc.Framebuffer.Height, 1.0f, _cloudFarPlane);
+                var wideVP = Matrix4x4.Multiply(view, wideProj);
+                _gd.UpdateBuffer(_cloudMatrixBuffer, 0, ref wideVP);
+            }
         }
 
         public void SetRenderDistance(int chunkRadius)

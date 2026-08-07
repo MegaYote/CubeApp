@@ -95,7 +95,7 @@ namespace CubeApp
 
             ChunkProvider = new World.InfdevChunkProvider(seed);
             SkyChunkProvider = new World.SkyChunkProvider(seed);
-            Chunks = new ChunkManager(ChunkProvider, SkyChunkProvider);
+            Chunks = new ChunkManager(new World.DeepChunkProvider(seed), ChunkProvider, SkyChunkProvider);
             Entities = new EntityManager(Chunks);
             // Mesh workers scale with the machine: at least 2, up to ~cores/4. Chunk gen already
             // takes ProcessorCount-2 threads, so meshing gets a share of what's left without
@@ -191,8 +191,12 @@ namespace CubeApp
                 _lastStreamChunkX = chunkX;
                 _lastStreamChunkZ = chunkZ;
                 Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, ChunkManager.GroundLayer);
-                // The sky layer only streams when the player climbs into the stratosphere
-                // (lazy allocation: sky chunks don't exist at all until you go high).
+                // The deep layer only streams when the player digs down (lazy allocation).
+                if (LocalPlayer.Position.Y < DeepStreamThreshold)
+                {
+                    Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, ChunkManager.DeepLayer);
+                }
+                // The sky layer only streams when the player climbs into the stratosphere.
                 if (LocalPlayer.Position.Y > SkyStreamThreshold)
                 {
                     Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, ChunkManager.SkyLayer);
@@ -200,10 +204,10 @@ namespace CubeApp
                 var unloaded = Chunks.UnloadChunksOutside(chunkX, chunkZ, ChunkRenderRadius);
                 foreach (var uc in unloaded) ChunkUnloaded?.Invoke(uc);
             }
-            UpdateDeepFill();
             UpdateHighFill();
         }
 
+        private const double DeepStreamThreshold = 0.0;
         private const double SkyStreamThreshold = 350.0;
 
         /// <summary>Simulates remote players without touching the local player's camera/chunks.
@@ -745,32 +749,7 @@ namespace CubeApp
             return ChunkManager.WorldOriginY - 1;
         }
 
-        private void UpdateDeepFill()
-        {
-            if (Chunks == null || ChunkProvider == null) return;
-            const double deepThreshold = -32.0;
-            bool isDeep = LocalPlayer.Position.Y < deepThreshold;
-            ChunkProvider.AutoDeepFill = isDeep;
-            if (!isDeep) return;
-
-            int cx = (int)Math.Floor(LocalPlayer.Position.X / ChunkManager.ChunkSize);
-            int cz = (int)Math.Floor(LocalPlayer.Position.Z / ChunkManager.ChunkSize);
-
-            foreach (var ch in Chunks.GetLoadedChunks())
-            {
-                int dx = ch.OriginX / ChunkManager.ChunkSize - cx;
-                int dz = ch.OriginZ / ChunkManager.ChunkSize - cz;
-                if (dx * dx + dz * dz > 49) continue;
-                ChunkProvider.DeepFillChunk(ch.OriginX / ChunkManager.ChunkSize, ch.OriginZ / ChunkManager.ChunkSize, ch);
-                if (ch.NeedsRemesh)
-                {
-                    ch.IsMeshingQueued = false;
-                    Mesher?.RequestImmediateRemesh(new ChunkCoordinates(ch.OriginX / ChunkManager.ChunkSize, ch.OriginZ / ChunkManager.ChunkSize));
-                }
-            }
-        }
-
-        // Lazy stratosphere fill (mirror of UpdateDeepFill): while the player is very high up,
+        // Lazy stratosphere fill (mirror of the deep-fill idea): while the player is very high up,
         // fill the upper zone (world ~512..1000) of nearby chunks with sky islands. New chunks
         // generated while high are born with their islands (AutoHighFill); already-loaded chunks
         // are filled once here. This keeps surface chunk gen cheap - the stratosphere is empty
