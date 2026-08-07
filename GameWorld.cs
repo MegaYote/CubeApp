@@ -193,6 +193,7 @@ namespace CubeApp
                 foreach (var uc in unloaded) ChunkUnloaded?.Invoke(uc);
             }
             UpdateDeepFill();
+            UpdateHighFill();
         }
 
         /// <summary>Simulates remote players without touching the local player's camera/chunks.
@@ -751,6 +752,37 @@ namespace CubeApp
                 int dz = ch.OriginZ / ChunkManager.ChunkSize - cz;
                 if (dx * dx + dz * dz > 49) continue;
                 ChunkProvider.DeepFillChunk(ch.OriginX / ChunkManager.ChunkSize, ch.OriginZ / ChunkManager.ChunkSize, ch);
+                if (ch.NeedsRemesh)
+                {
+                    ch.IsMeshingQueued = false;
+                    Mesher?.RequestImmediateRemesh(new ChunkCoordinates(ch.OriginX / ChunkManager.ChunkSize, ch.OriginZ / ChunkManager.ChunkSize));
+                }
+            }
+        }
+
+        // Lazy stratosphere fill (mirror of UpdateDeepFill): while the player is very high up,
+        // fill the upper zone (world ~512..1000) of nearby chunks with sky islands. New chunks
+        // generated while high are born with their islands (AutoHighFill); already-loaded chunks
+        // are filled once here. This keeps surface chunk gen cheap - the stratosphere is empty
+        // air until the player climbs toward it.
+        private void UpdateHighFill()
+        {
+            if (Chunks == null || ChunkProvider == null || ChunkProvider.SkyIslands == null) return;
+            // Start filling when the player is above the cloud deck by a good margin.
+            const double highThreshold = 450.0;
+            bool isHigh = LocalPlayer.Position.Y > highThreshold;
+            ChunkProvider.SkyIslands.AutoHighFill = isHigh;
+            if (!isHigh) return;
+
+            int cx = (int)Math.Floor(LocalPlayer.Position.X / ChunkManager.ChunkSize);
+            int cz = (int)Math.Floor(LocalPlayer.Position.Z / ChunkManager.ChunkSize);
+
+            foreach (var ch in Chunks.GetLoadedChunks())
+            {
+                int dx = ch.OriginX / ChunkManager.ChunkSize - cx;
+                int dz = ch.OriginZ / ChunkManager.ChunkSize - cz;
+                if (dx * dx + dz * dz > 64) continue; // within ~8 chunks of the player
+                ChunkProvider.SkyIslands.HighFillChunk(ch.OriginX / ChunkManager.ChunkSize, ch.OriginZ / ChunkManager.ChunkSize, ch, 16, ChunkManager.ChunkHeight);
                 if (ch.NeedsRemesh)
                 {
                     ch.IsMeshingQueued = false;

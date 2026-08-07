@@ -224,8 +224,12 @@ namespace CubeApp.World
             // ---- monoliths (controllable feature; runs after caves so towers stand on ground) ----
             Monoliths.Sculpt(chunk, terrainBandStart, chunkSize, chunkHeight);
 
-            // ---- hidden sky islands (far above the clouds; only found by building up) ----
-            SkyIslands.Sculpt(chunk, terrainBandStart, chunkSize, chunkHeight);
+            // ---- hidden sky islands (lazy stratosphere): only filled at gen time when the
+            // player is already high; otherwise filled on demand via HighFillChunk ----
+            if (SkyIslands.AutoHighFill)
+            {
+                SkyIslands.HighFillChunk(chunkX, chunkZ, chunk, chunkSize, chunkHeight);
+            }
 
             // When the player is already deep, fill the deep zone at generation time so newly
             // loaded chunks ahead are born with terrain instead of an empty void.

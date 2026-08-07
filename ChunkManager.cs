@@ -14,7 +14,10 @@ namespace CubeApp
         // (world -256..-65) is the DEEP ZONE - filled lazily when the player descends, with a bedrock
         // floor at local 0 so a surface-dug hole always has a visible bottom.
 public const int WorldOriginY = -256;
-    public const int ChunkHeight = 640;
+    // Tall enough for the stratosphere: world spans -256..1023. The region above the terrain
+    // band (world 64..1023) is pure air at generation time - sky islands fill it LAZILY via
+    // SkyIslandSculptor.HighFillChunk when the player gets close, exactly like the deep zone.
+    public const int ChunkHeight = 1280;
         private readonly ConcurrentDictionary<ChunkCoordinates, Chunk> loadedChunks = new();
         // Chunk coords that have been modified (player edits / fluid flow) since load; these are
         // the only chunks a world save needs to serialize.
