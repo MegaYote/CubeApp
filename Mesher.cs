@@ -71,11 +71,19 @@ namespace CubeApp
             int width = chunk.Width;
             int height = chunk.Height;
             int depth = chunk.Depth;
+            int targetLayer = ChunkManager.LayerForWorldY(chunk.OriginY);
 
-            // Flood-fill light levels (0..15) across the target chunk and its neighbours so each
-            // face can be shaded by how much light reaches the empty block it's exposed to.
-            // Occupancy is read straight from each chunk's raw block storage.
-            var lighting = new ChunkLighting(chunkLookup, ChunkManager.ChunkSize, height);
+            // Flood-fill light levels (0..15) across the target chunk and its SAME-LAYER neighbours
+            // so each face can be shaded by how much light reaches the empty block it's exposed to.
+            // Vertical (other-layer) neighbours are deliberately excluded from lighting: chunks in
+            // different layers have different heights/origins, which the region's fixed-height
+            // arrays can't represent. They're only used for OCCLUSION at the layer seam.
+            var lightingChunks = new Dictionary<ChunkCoordinates, Chunk>();
+            foreach (var kv in chunkLookup)
+            {
+                if (kv.Key.Layer == targetLayer) lightingChunks[kv.Key] = kv.Value;
+            }
+            var lighting = new ChunkLighting(lightingChunks, ChunkManager.ChunkSize, height);
 
             // Direct block storage for the target chunk and its +X/+Z neighbours. All mask samples
             // hit the target chunk except the final slice's B sample, which crosses into exactly
@@ -83,9 +91,13 @@ namespace CubeApp
             byte[] raw = chunk.RawBlocks;
             int targetCX = FloorDiv(chunk.OriginX, ChunkManager.ChunkSize);
             int targetCZ = FloorDiv(chunk.OriginZ, ChunkManager.ChunkSize);
-            int targetLayer = ChunkManager.LayerForWorldY(chunk.OriginY);
             chunkLookup.TryGetValue(new ChunkCoordinates(targetLayer, targetCX + 1, targetCZ), out var neighborPosX);
             chunkLookup.TryGetValue(new ChunkCoordinates(targetLayer, targetCX, targetCZ + 1), out var neighborPosZ);
+            // The layer ABOVE this chunk (same X/Z): its bottom row is the block directly above the
+            // target's top row. Used for Y-axis occlusion at the layer seam (deep top vs ground
+            // bottom at world -65/-64, ground top vs sky bottom at 383/384).
+            chunkLookup.TryGetValue(new ChunkCoordinates(targetLayer + 1, targetCX, targetCZ), out var neighborPosY);
+            byte[]? rawPosY = neighborPosY?.RawBlocks;
             byte[]? rawPosX = neighborPosX?.RawBlocks;
             byte[]? rawPosZ = neighborPosZ?.RawBlocks;
 
@@ -180,14 +192,19 @@ namespace CubeApp
                     }
                     else if (d == 1)
                     {
-                        // Y slices: u = local Z, v = local X. B above the world top is always air.
+                        // Y slices: u = local Z, v = local X. B above the chunk's top row is the
+                        // layer-above chunk's bottom row (same local X/Z) when that layer is loaded;
+                        // otherwise air (top of the world / unloaded neighbour).
+                        int aboveHeight = neighborPosY != null ? neighborPosY.Height : 0;
                         for (int iu = 0; iu < dimU; iu++)
                         {
                             for (int jv = 0; jv < dimV; jv++)
                             {
                                 int baseIdx = (jv * depth + iu) * height + slice;
                                 int A = raw[baseIdx];
-                                int B = lastSlice ? BlockRegistry.AirId : raw[baseIdx + 1];
+                                int B = lastSlice
+                                    ? (rawPosY != null ? rawPosY[(jv * depth + iu) * aboveHeight + 0] : BlockRegistry.AirId)
+                                    : raw[baseIdx + 1];
                                 int cell = iu * dimV + jv;
                                 if (A != WaterId && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu));
                                 if (B != WaterId && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + jv, slice, chunk.OriginZ + iu));

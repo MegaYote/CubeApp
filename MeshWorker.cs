@@ -123,6 +123,13 @@ namespace CubeApp
                                 if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + 1, chunkZ - 1), out var diagNE)) chunksToPass.Add(diagNE);
                                 if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX - 1, chunkZ + 1), out var diagSW)) chunksToPass.Add(diagSW);
                                 if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + 1, chunkZ + 1), out var diagSE)) chunksToPass.Add(diagSE);
+                                // Vertical neighbours (layer above/below at the same X/Z): the
+                                // mesher's Y axis must occlude against the OTHER layer's blocks at
+                                // the seam (e.g. deep top row vs ground bottom row at world -65).
+                                // Without these, each layer thinks the other is air and emits the
+                                // whole seam face - a flat, fully-lit stone plane at the boundary.
+                                if (layer > 0 && _manager.TryGetLoadedChunk(new ChunkCoordinates(layer - 1, chunkX, chunkZ), out var below)) chunksToPass.Add(below);
+                                if (layer < 2 && _manager.TryGetLoadedChunk(new ChunkCoordinates(layer + 1, chunkX, chunkZ), out var above)) chunksToPass.Add(above);
 
                                 var renderer = _getRenderer();
                                 var faces = Mesher.GenerateMesh(chunksToPass);
