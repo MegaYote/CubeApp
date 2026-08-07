@@ -31,6 +31,15 @@ Run target: `bin\Debug\net9.0-windows\win-x64\CubeApp.exe` — the `bin\Debug\ne
   - Verified: `nettest` (`C:\Users\jimza\AppData\Local\Temp\opencode\nettest\`) 14/14 — handshake, seed/spawn sync, both-way player position, block edit round-trip (client→host→echo→client), snapshot cadence, remote sim.
 - **Phase 4 (next)**: UPnP for internet play (auto port-forward), then dedicated server mode (headless GameWorld + NetHost already possible). Also: player names above heads, movement interpolation, ping display.
 
+## MULTIPLAYER: Open to LAN (8/6, committed cdfe27c, user-verified "perfect~")
+- **Pause menu "Open to LAN"**: hosts the CURRENT singleplayer world (no new world created). Starts a NetHost on the current GameWorld, keeps pause open so the friend can read the port. Already-hosting → just resumes. Port from menu.HostPort (default 26065), stored in `_activeHostPort`.
+- **ChunkData message (NetMsgType 13)**: host sends ALL `ChunkManager.ModifiedChunks` right after Welcome so joining clients get the host's builds/edits — a singleplayer world's edits aren't derivable from the seed alone. `SerializeChunkData`/`TryDeserializeChunkData` (chunkX, chunkZ, blocks bytes, meta bytes). `NetWriter.WriteBytes`/`NetReader.TryReadBytes` added.
+- **Client side**: ChunkData payloads queue into `_incomingChunks` (ConcurrentQueue), applied on the main thread via `ChunkManager.ApplySavedChunk` in `NetClient.DrainIncomingEdits` — same thread-safety rule as edits (network threads NEVER touch the world).
+- **LAN IP display**: `BuildNetStatus` shows `Hosting on <LAN-IPs>:<port>` (via `GetLanAddresses`, filters IPv4 loopback); green text on the pause menu + F3 debug line. `NetStatus` in HudState; `MultiplayerError` shown red on the multiplayer menu.
+- **nettest = 15/15**: added test — host edits a block BEFORE any client connects, client joins, receives it via ChunkData, its world matches. Plus all 14 original sync tests.
+- **Thread-safety rule (CRITICAL, keep forever)**: the GameWorld is NOT thread-safe. All world mutation (ApplyBlockEdit, ApplySavedChunk, chunk gen) happens ONLY on the main thread. Network threads only queue work (ConcurrentQueue) — NetHost._incomingEdits, NetClient._incomingEdits/_incomingChunks — and Program's `UpdateNetworking` drains them each frame (`_netHost.DrainIncomingEdits()`, `_netClient.DrainIncomingEdits(World)`). Violating this crashes with disconnect-to-title.
+
+
 
 ## Water (Infdev 20100630 port) — COMPLETED
 - **All four phases build clean**: Phase 1 meta in `Chunk.cs`, Phase 2 `ChunkManager` meta + loaded-only writes, Phase 3 `FluidSimulation` + `BlockTickScheduler` (20 TPS, `MaxUpdatesPerTick=2048`, flushes `_meshScheduler.Update()`), Phase 4 water meshing in `Mesher.cs`.
