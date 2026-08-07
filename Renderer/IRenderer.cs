@@ -15,6 +15,7 @@ namespace CubeApp.Renderer
         void SetRenderDistance(int chunkRadius);
         void SetHud(HudState hud);
         void SetEntities(System.Collections.Generic.IReadOnlyList<CubeApp.MobRenderData> mobRenderData);
+        void SetFallingBlocks(System.Collections.Generic.IReadOnlyList<CubeApp.FallingBlockData> fallingBlocks);
         void SetChunkManager(CubeApp.ChunkManager manager);
         void MeshChunkImmediate(CubeApp.ChunkCoordinates coords);
         void ProcessPendingPriorityMeshes();

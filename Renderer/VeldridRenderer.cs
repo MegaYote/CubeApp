@@ -184,6 +184,35 @@ namespace CubeApp.Renderer
         private readonly System.Diagnostics.Stopwatch _particleClock = System.Diagnostics.Stopwatch.StartNew();
         private long _lastParticleTicks;
 
+        // ---- Falling blocks (Minecraft falling sand/gravel) ------------------------------
+        // Real 3D cubes of the block's tiles, drawn with the world pipeline so they depth-test
+        // against terrain. Each frame Program pushes the active falling-block list via
+        // SetFallingBlocks; the renderer builds cube geometry into a scratch buffer and draws it.
+        private IReadOnlyList<CubeApp.FallingBlockData> _fallingBlocks = Array.Empty<CubeApp.FallingBlockData>();
+        private DeviceBuffer? _fallingVertexBuffer;
+        private DeviceBuffer? _fallingIndexBuffer;
+        private uint _fallingVertexCapacityBytes;
+        private uint _fallingIndexCapacityBytes;
+        private float[] _fallingVertexScratch = Array.Empty<float>();
+        private ushort[] _fallingIndexScratch = Array.Empty<ushort>();
+        // Cube face geometry (same as Mesher.FaceVertices): back/front/bottom/top/right/left.
+        private static readonly float[][] FallingCubeFaces = new float[][]
+        {
+            new[] { 0f,0f,0f, 1f,0f,0f, 1f,1f,0f, 0f,1f,0f }, // back (-Z)
+            new[] { 1f,0f,1f, 0f,0f,1f, 0f,1f,1f, 1f,1f,1f }, // front (+Z)
+            new[] { 0f,0f,0f, 1f,0f,0f, 1f,0f,1f, 0f,0f,1f }, // bottom (-Y)
+            new[] { 0f,1f,0f, 0f,1f,1f, 1f,1f,1f, 1f,1f,0f }, // top (+Y)
+            new[] { 1f,0f,1f, 1f,0f,0f, 1f,1f,0f, 1f,1f,1f }, // right (+X)
+            new[] { 0f,0f,0f, 0f,0f,1f, 0f,1f,1f, 0f,1f,0f }, // left (-X)
+        };
+        // Infdev per-face shading multipliers (top 1.0 / bottom 0.5 / E+W 0.6 / N+S 0.8).
+        private static readonly float[] FallingFaceShade = new[] { 0.8f, 0.8f, 0.5f, 1.0f, 0.6f, 0.6f };
+        private static readonly Point3D[] FallingFaceNormals = new Point3D[]
+        {
+            new Point3D(0,0,-1), new Point3D(0,0,1), new Point3D(0,-1,0),
+            new Point3D(0,1,0), new Point3D(1,0,0), new Point3D(-1,0,0),
+        };
+
         // Chunk world mesh: one shared growable vertex/index buffer pair drawn with a single
         // DrawIndexedIndirect call (one IndirectDrawIndexedArguments per live chunk). Chunk-local
         // 16-bit indices stay zero-based; each draw command supplies the absolute FirstIndex
@@ -1318,6 +1347,103 @@ void main() {
             _hud = hud;
         }
 
+        /// <summary>Feeds the active falling-block entities to the renderer (drawn as 3D cubes
+        /// using the world pipeline so they depth-test against terrain).</summary>
+        public void SetFallingBlocks(IReadOnlyList<CubeApp.FallingBlockData> fallingBlocks)
+        {
+            _fallingBlocks = fallingBlocks ?? Array.Empty<CubeApp.FallingBlockData>();
+        }
+
+        // Builds cube geometry for all falling blocks into the scratch buffers and draws them.
+        // Modeled on DrawParticles but with real 3D cube faces (per-face tile + Infdev shading).
+        private void DrawFallingBlocks(CommandList cl)
+        {
+            int n = _fallingBlocks.Count;
+            if (n == 0) return;
+            float atlasW = Math.Max(1f, _atlasWidth);
+            float atlasH = Math.Max(1f, _atlasHeight);
+
+            // 6 faces x 4 verts x 13 floats per block.
+            int vertFloats = n * 6 * 4 * 13;
+            if (_fallingVertexScratch.Length < vertFloats) _fallingVertexScratch = new float[vertFloats];
+            int indexCount = n * 6 * 6;
+            if (_fallingIndexScratch.Length < indexCount) _fallingIndexScratch = new ushort[indexCount];
+
+            int vf = 0;
+            int ii = 0;
+            for (int i = 0; i < n; i++)
+            {
+                var fb = _fallingBlocks[i];
+                var def = BlockRegistry.GetById(fb.BlockId);
+                int baseV = i * 24;
+                for (int face = 0; face < 6; face++)
+                {
+                    var verts = FallingCubeFaces[face];
+                    var tr = def.FaceTexture(FallingFaceNormals[face]);
+                    float u0 = tr.X / atlasW;
+                    float v0 = tr.Y / atlasH;
+                    float uw = tr.Width / atlasW;
+                    float vh = tr.Height / atlasH;
+                    float shade = FallingFaceShade[face];
+                    const float uvMax = 0.999f;
+                    for (int c = 0; c < 4; c++)
+                    {
+                        _fallingVertexScratch[vf++] = fb.X + verts[c * 3 + 0];
+                        _fallingVertexScratch[vf++] = fb.Y + verts[c * 3 + 1];
+                        _fallingVertexScratch[vf++] = fb.Z + verts[c * 3 + 2];
+                        // local UV (0..1 across the face)
+                        _fallingVertexScratch[vf++] = (c == 1 || c == 2) ? uvMax : 0f;
+                        _fallingVertexScratch[vf++] = (c == 2 || c == 3) ? uvMax : 0f;
+                        _fallingVertexScratch[vf++] = u0;
+                        _fallingVertexScratch[vf++] = v0;
+                        _fallingVertexScratch[vf++] = uw;
+                        _fallingVertexScratch[vf++] = vh;
+                        _fallingVertexScratch[vf++] = shade;
+                        _fallingVertexScratch[vf++] = shade;
+                        _fallingVertexScratch[vf++] = shade;
+                        _fallingVertexScratch[vf++] = 1f;
+                    }
+                    int fv = baseV + face * 4;
+                    _fallingIndexScratch[ii++] = (ushort)(fv + 0);
+                    _fallingIndexScratch[ii++] = (ushort)(fv + 1);
+                    _fallingIndexScratch[ii++] = (ushort)(fv + 2);
+                    _fallingIndexScratch[ii++] = (ushort)(fv + 0);
+                    _fallingIndexScratch[ii++] = (ushort)(fv + 2);
+                    _fallingIndexScratch[ii++] = (ushort)(fv + 3);
+                }
+            }
+
+            EnsureFallingBuffers((uint)(vertFloats * sizeof(float)), (uint)(indexCount * sizeof(ushort)));
+            _gd.UpdateBuffer(_fallingVertexBuffer, 0, _fallingVertexScratch);
+            _gd.UpdateBuffer(_fallingIndexBuffer, 0, _fallingIndexScratch);
+
+            cl.SetPipeline(_pipeline);
+            cl.SetGraphicsResourceSet(0, _projViewSet);
+            if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
+            cl.SetGraphicsResourceSet(2, _fogSet);
+            cl.SetVertexBuffer(0, _fallingVertexBuffer);
+            cl.SetIndexBuffer(_fallingIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed((uint)indexCount);
+        }
+
+        private void EnsureFallingBuffers(uint vbBytes, uint ibBytes)
+        {
+            if (_fallingVertexBuffer == null || _fallingVertexCapacityBytes < vbBytes)
+            {
+                _fallingVertexBuffer?.Dispose();
+                _fallingVertexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                    Math.Max(vbBytes, 4096), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+                _fallingVertexCapacityBytes = Math.Max(vbBytes, 4096);
+            }
+            if (_fallingIndexBuffer == null || _fallingIndexCapacityBytes < ibBytes)
+            {
+                _fallingIndexBuffer?.Dispose();
+                _fallingIndexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                    Math.Max(ibBytes, 2048), BufferUsage.IndexBuffer | BufferUsage.Dynamic));
+                _fallingIndexCapacityBytes = Math.Max(ibBytes, 2048);
+            }
+        }
+
         public void SetEntities(IReadOnlyList<CubeApp.MobRenderData> mobRenderData)
         {
             // Route the unified MobRenderData snapshots to per-model instance lists. DuckInstance
@@ -1448,6 +1574,7 @@ void main() {
             }
 
             DrawParticles(cl);
+            DrawFallingBlocks(cl);
             DrawDucks(cl);
             DrawPlayers(cl);
             DrawHighlight(cl);

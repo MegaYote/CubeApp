@@ -72,6 +72,7 @@ namespace CubeApp
         /// <summary>Advance the simulation using real frame time, firing fixed 20 TPS tick steps.</summary>
         public void Tick(float deltaSeconds)
         {
+            _gravity.UpdateFalling(deltaSeconds);
             _accumulator += deltaSeconds;
             if (_accumulator < TickIntervalSeconds)
             {

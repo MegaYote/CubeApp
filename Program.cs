@@ -500,6 +500,7 @@ namespace CubeApp
                             if (thirdPersonView) withPlayer.Add(BuildLocalPlayerRenderData());
                             AddRemotePlayersToRender(withPlayer);
                             gpuRenderer.SetEntities(withPlayer);
+                            gpuRenderer.SetFallingBlocks(World.BlockTicks.Gravity.FallingBlocks);
                         }
                         gpuRenderer.ProcessPendingPriorityMeshes();
                         gpuRenderer.SetUiInputSnapshot(snapshot);
