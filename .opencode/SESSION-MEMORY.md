@@ -39,6 +39,17 @@ Run target: `bin\Debug\net9.0-windows\win-x64\CubeApp.exe` — the `bin\Debug\ne
 - **nettest = 15/15**: added test — host edits a block BEFORE any client connects, client joins, receives it via ChunkData, its world matches. Plus all 14 original sync tests.
 - **Thread-safety rule (CRITICAL, keep forever)**: the GameWorld is NOT thread-safe. All world mutation (ApplyBlockEdit, ApplySavedChunk, chunk gen) happens ONLY on the main thread. Network threads only queue work (ConcurrentQueue) — NetHost._incomingEdits, NetClient._incomingEdits/_incomingChunks — and Program's `UpdateNetworking` drains them each frame (`_netHost.DrainIncomingEdits()`, `_netClient.DrainIncomingEdits(World)`). Violating this crashes with disconnect-to-title.
 
+## THREE-LAYER WORLD + CLOUDS + SKY ISLANDS (8/6-8/7, commits 4981266..9e8f495)
+- **Clouds (committed 144fca7..2373a35)**: Cubuild-style. Procedurally generated puff texture (blob walkers, 256×256, one pixel = one cloud cell, hard squares + nearest filtering per user request), drawn as a flat plane at fixed world Y 128 (buildable/flyable), camera-follows in X/Z, tiles every CloudTileSize blocks. Sampler = nearest (sharp pixels). Opacity 0.7 (see-through, depth-test-on/write-off, drawn AFTER world so terrain shows through). Seeded per-world via SetWorldSeed (randomizes pattern). Wide-far cloud matrix (far = _cloudFarPlane 2100 = 3x world) so clouds stretch past terrain edge. **World-from-above plane** (committed 8/7): green+water textured earth at WorldPlaneY 60, shown only when camera Y > 260, uses the wide-far matrix, drawn before world (depth disabled) so terrain paints over — mimics seeing a distant earth. Far plane raised 362→700, near 0.1→0.3 (committed 8/7). CAVEAT: skybox = two camera-space flat planes at ±16 (Infdev), NOT a dome.
+- **Sky islands (committed 63c5d78..4981266)**: SkyIslandSculptor — rare flat-topped floating islands (grass/dirt/stone + tapered underside) at world 500-1000, only discoverable by building up. Frequency 2.15 raw-noise threshold (max ~2.7), Size 16, Thickness 14. Placement = raw noise threshold (must use RAW value, the 0..1 normalization collapsed peaks). Lazy: sky layer chunks DON'T exist until player climbs (SkyStreamThreshold 350).
+- **SkyChunkProvider**: sky layer chunks born EMPTY (nearly free), islands filled via HighFillChunk at gen time (AutoHighFill) or on approach. One-shot _filled tracking.
+- **DeepChunkProvider**: deep layer (world -256..-65) born SOLID stone+caves+bedrock floor — no fill pass racing the mesh worker.
+- **ChunkCoordinates carries Layer (deep=0, ground=1, sky=2)**. ChunkManager routes block access by world Y via LayerForWorldY. Ground band = world -64..63 (terrainBandStart 0). **CRITICAL GOTCHA (bit us 3x)**: every `new ChunkCoordinates(x,z)` defaults to layer 0 (deep) — MUST pass the layer explicitly from the chunk's OriginY/block's world Y everywhere: MeshScheduler.Update + RequestImmediateRemesh + neighbors, MeshWorker neighbor lookup, Mesher.FindChunk (now takes wy for routing), BlockTickScheduler.Schedule AND TickOnce keys, GameWorld edit-remesh coords, GravitySimulation landing, Program initial upload, PlayerController. Missing one = invisible blocks (mesh never queued) or water never flowing (schedule key vs lookup key mismatch).
+- **WorldSave v2**: SavedChunk has Layer (v1 loads as ground).
+
+## MULTIPLAYER: Open to LAN (8/6, committed cdfe27c, user-verified "perfect~")
+
+
 ## PERFORMANCE: low-end FPS pass (8/6, committed 539cde0, user-verified "perfect save it")
 - **Mesher skips empty-air Y rows**: `Mesher.GenerateMesh` scans the target chunk's live blocks ONCE into `bool[] blockAtY` (any non-air at that Y row), then skips pure-air rows in all three greedy passes. The world is 448 tall but terrain only occupies a band, so the mesher was iterating ~3x more rows than could ever contain faces. d==1 (Y slices) skips both-air slices; d==0 (X slices, u=Y) skips `!blockAtY[iu]` on non-last slices; d==2 (Z slices, v=Y) skips `!blockAtY[jv]` on non-last slices. The FINAL X/Z slice is kept IN FULL so provisional border faces into neighbors are preserved exactly (neighbor re-emits them authoritatively when it meshes).
 - **Towers automatically handled**: the bound is computed from CURRENT blocks every mesh, never a cached value. Build a tower to y=430 → mesh scan sees it → no staleness, no disappearing blocks, no special casing.
@@ -55,7 +66,6 @@ Run target: `bin\Debug\net9.0-windows\win-x64\CubeApp.exe` — the `bin\Debug\ne
 
 ## GRAVITY SYSTEM — survival pillar 1 (8/6, commits c420b0a..9205648, user-verified "perfect")
 Part of the survival-mode vision (user's design: wood rots, dirt/sand/gravel have gravity so no dirt shacks, fortress engineering vs. night/rot). Falling-block system built in stages:
-
 - **Design rule (user's call)**: blocks only fall when UPDATED — generated floating overhangs stay until disturbed; cave-ins "waiting to happen". No world-gen collapse.
 - **blocks.json `"gravity": true`** on dirt, sand, gravel, redclay. BlockDefinition.Gravity + BlockRegistry._gravity/IsGravity.
 - **GravitySimulation** (hooked into BlockTickScheduler like FluidSimulation):
