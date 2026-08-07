@@ -90,6 +90,23 @@ namespace CubeApp
 
             if (created)
             {
+                // A ground-layer cave can punch through the bedrock floor at world -64 (local 0).
+                // When the deep chunk below (world -65) generates, copy those openings onto its top
+                // row so the player can actually fall through into the deep layer instead of hitting
+                // a solid ceiling one block down. Same for the sky layer's bottom vs ground top.
+                if (layer == DeepLayer)
+                {
+                    SyncDeepAccess(chunkX, chunkZ, result);
+                }
+                else if (layer == GroundLayer)
+                {
+                    // Reverse order: the deep chunk may already be loaded (e.g. save load). Push
+                    // the ground chunk's bottom-row openings onto the deep chunk's top row.
+                    if (loadedChunks.TryGetValue(new ChunkCoordinates(DeepLayer, chunkX, chunkZ), out var deep))
+                    {
+                        SyncDeepAccess(chunkX, chunkZ, deep);
+                    }
+                }
                 // A newly loaded chunk can expose faces on adjacent, already-meshed chunks
                 // (border faces are culled against neighbors, and an absent neighbor is treated
                 // as air). Mark those neighbors dirty so their border faces get rebuilt now,
@@ -105,6 +122,36 @@ namespace CubeApp
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// When the deep chunk below a ground chunk is created, mirror any cave openings that
+        /// broke through the ground bedrock floor (world -64 = ground local 0) onto the deep
+        /// chunk's TOP row (world -65 = deep local 191). This is what lets players fall from a
+        /// ground-layer cave straight down into the deep layer. The deep chunk is generated
+        /// lazily AFTER the ground chunk, so the ground chunk is normally available.
+        /// </summary>
+        private void SyncDeepAccess(int chunkX, int chunkZ, Chunk deepChunk)
+        {
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(GroundLayer, chunkX, chunkZ), out var ground)) return;
+
+            byte[] groundRaw = ground.RawBlocks;
+            byte[] deepRaw = deepChunk.RawBlocks;
+            int groundH = ground.Height;
+            int deepH = deepChunk.Height;
+            for (int x = 0; x < ChunkSize; x++)
+            {
+                for (int z = 0; z < ChunkSize; z++)
+                {
+                    int groundIdx = (x * ChunkSize + z) * groundH + 0;   // world -64
+                    int deepIdx = (x * ChunkSize + z) * deepH + (deepH - 1); // world -65
+                    if (groundRaw[groundIdx] == BlockRegistry.AirId)
+                    {
+                        deepRaw[deepIdx] = 0;
+                    }
+                }
+            }
+            deepChunk.NeedsRemesh = true;
         }
 
         // Stamps a saved chunk's block+meta data over the (re)generated chunk on world load.

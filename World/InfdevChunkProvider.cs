@@ -350,8 +350,13 @@ namespace CubeApp.World
                         // Walker starts in the NEIGHBOR chunk (var9/var10), so its tube can reach
                         // across the border into this chunk.
                         double x = var9 * 16 + rand2.Next(16);
-                        // Y is confined to the terrain band (local terrainBandStart..+127).
-                        double y = terrainBandStart + rand2.Next(rand2.Next(120) + 8);
+                        // Y is confined to the terrain band (local terrainBandStart..+127). Some
+                        // caves spawn LOW in the band so they can descend through the bedrock floor
+                        // and open a passage down into the deep layer (the deep chunk below mirrors
+                        // these openings via ChunkManager.SyncDeepAccess).
+                        double y = (rand2.Next(3) == 0)
+                            ? terrainBandStart + rand2.Next(16)      // deep diver: digs toward the floor
+                            : terrainBandStart + rand2.Next(rand2.Next(120) + 8);
                         double z = var10 * 16 + rand2.Next(16);
 
                         int nodeCount = 1;
@@ -451,7 +456,7 @@ namespace CubeApp.World
                 int maxZ = (int)Math.Floor(z + radius) - chunkZ * 16 + 1;
                 if (minX < 0) minX = 0;
                 if (maxX > 16) maxX = 16;
-                if (minY < 1) minY = 1;
+                if (minY < 0) minY = 0; // allow caves to punch through the bedrock floor (local 0)
                 if (maxY > height - 1) maxY = height - 1;
                 if (minZ < 0) minZ = 0;
                 if (maxZ > 16) maxZ = 16;
