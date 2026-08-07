@@ -76,10 +76,12 @@ namespace CubeApp.Renderer
         private DeviceBuffer _skyMatrixBuffer;
         private ResourceSet _skyMatrixSet;
 
-        // ---- Clouds (Cubuild port, camera-locked planes) ----------------------------
-        // Three flat camera-locked planes at different heights, each textured with a procedurally
-        // generated white puff texture that scrolls via a shader offset (cheap: no geometry
-        // movement). depth-write OFF, no fog, drawn right after the sky so terrain paints over.
+        // ---- Clouds (world-space flat plane, buildable/flyable) -----------------------
+        // One flat plane at a FIXED WORLD HEIGHT (like MC's cloud layer at y~128) that follows
+        // the camera in X/Z so its edges stay beyond the far plane. The texture TILES (repeat
+        // every few blocks) so clouds look like proper puffs, not one stretched smear. Drawn
+        // with depth-write OFF after the sky, before the world; terrain paints over it when you
+        // stand below, and you can build up into it or fly above it.
         private Pipeline? _cloudPipeline;
         private DeviceBuffer? _cloudVertexBuffer;
         private DeviceBuffer? _cloudIndexBuffer;
@@ -88,18 +90,14 @@ namespace CubeApp.Renderer
         private ResourceLayout? _cloudParamsLayout;
         private Texture? _cloudTexture;
         private TextureView? _cloudTextureView;
-        private ResourceSet? _cloudTextureSet;
-        private ResourceLayout? _cloudTextureLayout;
-        private float[] _cloudOffsets = new float[CloudLayerCount * 2];
-        private float[] _cloudDrift = new float[CloudLayerCount];
-        private float[] _cloudDriftPhase = new float[CloudLayerCount];
-        private static readonly float[] CloudLayerY = { 110f, 115f, 120f };
-        private static readonly float[] CloudLayerSpeed = { 0.0018f, 0.0026f, 0.0034f };
-        private static readonly float[] CloudLayerDriftAmp = { 0.7f, 1.0f, 1.2f };
-        private static readonly float[] CloudLayerOpacity = { 0.94f, 0.82f, 0.60f };
-        private const int CloudLayerCount = 3;
+        private const float CloudWorldY = 128f;       // MC-like cloud altitude
+        private const float CloudTileSize = 1024f;    // blocks per 256px texture tile (each pixel = one cloud cell ~4 blocks)
+        private float _cloudScrollU;
+        private float _cloudScrollV;
+        private float _lastCloudTime;
+        private readonly float[] _cloudParams = new float[4];
         private readonly System.Diagnostics.Stopwatch _cloudClock = System.Diagnostics.Stopwatch.StartNew();
-        private long _lastCloudTicks;
+        private int _cloudSeed = 12345;
 
         // Textured entity-model pipeline (currently just the duck test mob).
         private Pipeline _modelPipeline;
@@ -147,6 +145,7 @@ namespace CubeApp.Renderer
         private ImGuiRenderer _imguiRenderer;
         private HudState _hud = HudState.Empty;
         private float _farPlane = 100f;
+        private float _nearPlane = 0.1f;
         private float _atlasWidth = 256f;
         private float _atlasHeight = 256f;
         // CPU copy of the atlas pixels (for generating hotbar/inventory block icons) and the
@@ -1442,11 +1441,6 @@ void main() {
             var pipelineDesc = new GraphicsPipelineDescription()
             {
                 BlendState = BlendStateDescription.SingleDisabled,
-                // No depth test AND no depth write: the sky is drawn first and the world paints over
-                // it, so it must never read or write the depth buffer. If it depth-tests, its giant
-                // planes (768 blocks wide, well past the far plane) write depth in FRONT of distant
-                // terrain, making everything beyond the plane fail the depth test - "invisible
-                // terrain that follows the camera".
                 DepthStencilState = DepthStencilStateDescription.Disabled,
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
@@ -1467,20 +1461,13 @@ void main() {
             _gd.UpdateBuffer(_skyIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7 });
         }
 
-        // Clouds (Cubuild port, camera-locked): three flat planes at fixed heights relative to the
-        // eye, textured with a procedurally generated white-puff texture that scrolls via shader
-        // offsets. Depth-write OFF and drawn right after the sky so terrain always paints over.
+        // A real flat cloud plane at a FIXED WORLD HEIGHT (CloudWorldY) that follows the camera
+        // in X/Z. The key to it looking right is TILED UVs: the texture repeats every CloudTileSize
+        // blocks, so clouds are proper puffs instead of one stretched smear. World-space vertices
+        // + full view-projection, depth-write OFF so terrain paints over it from below.
         private void CreateCloudPipeline()
         {
             var factory = _gd.ResourceFactory;
-
-            // The cloud texture is generated ONCE on the CPU (noise blob walkers + cellular
-            // smoothing, the same recipe as Cubuild's createCloudMaskGrid). White puffs only -
-            // weather/tinting can come later.
-            _cloudTexture = factory.CreateTexture(TextureDescription.Texture2D(
-                512, 512, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled));
-            _cloudTextureView = factory.CreateTextureView(_cloudTexture);
-            _gd.UpdateTexture(_cloudTexture, GenerateCloudTexture(), 0, 0, 0, 512, 512, 1, 0, 0);
 
             string vsCode = @"#version 450
 layout(location=0) in vec3 aPosition;
@@ -1491,16 +1478,16 @@ void main() { vUV = aUV; gl_Position = projView * vec4(aPosition, 1.0); }";
 
             string fsCode = @"#version 450
 layout(location=0) in vec2 vUV;
-layout(set=1, binding=0) uniform sampler2D uCloud;
-layout(set=2, binding=0) uniform CloudParams {
-    vec4 scrollXZ;   // x=scrollX, y=scrollZ, z=layerOpacity, w=unused
+layout(set=1, binding=0) uniform sampler2D uClouds;
+layout(set=1, binding=1) uniform CloudParams {
+    vec4 scrollOpacity; // x=scrollU, y=scrollV, z=opacity, w=unused
 };
 layout(location=0) out vec4 outColor;
 void main() {
-    vec2 uv = fract(vUV + scrollXZ.xy);
-    float alpha = texture(uCloud, uv).a * scrollXZ.z;
-    if (alpha < 0.01) discard;
-    outColor = vec4(1.0, 1.0, 1.0, alpha);
+    vec2 uv = fract(vUV + scrollOpacity.xy);
+    float a = texture(uClouds, uv).a * scrollOpacity.z;
+    if (a < 0.01) discard;
+    outColor = vec4(vec3(1.0), a);
 }";
 
             var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
@@ -1513,131 +1500,195 @@ void main() {
                 new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
                 new VertexElementDescription("aUV", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float2));
 
-            // Params set (set 2): scroll offsets + opacity per layer.
             _cloudParamsLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
+                new ResourceLayoutElementDescription("uClouds", ResourceKind.TextureReadOnly, ShaderStages.Fragment),
+                new ResourceLayoutElementDescription("uCloudsSampler", ResourceKind.Sampler, ShaderStages.Fragment),
                 new ResourceLayoutElementDescription("CloudParams", ResourceKind.UniformBuffer, ShaderStages.Fragment)));
             _cloudParamsBuffer = factory.CreateBuffer(new BufferDescription(16, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
-            _cloudParamsSet = factory.CreateResourceSet(new ResourceSetDescription(_cloudParamsLayout, _cloudParamsBuffer));
-
-            // Texture set (set 1).
-            _cloudTextureLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
-                new ResourceLayoutElementDescription("uCloud", ResourceKind.TextureReadOnly, ShaderStages.Fragment),
-                new ResourceLayoutElementDescription("uCloudSampler", ResourceKind.Sampler, ShaderStages.Fragment)));
-            _cloudTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_cloudTextureLayout, _cloudTextureView,
+            _cloudTexture = factory.CreateTexture(TextureDescription.Texture2D(
+                256, 256, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled));
+            _cloudTextureView = factory.CreateTextureView(_cloudTexture);
+            _gd.UpdateTexture(_cloudTexture, GenerateCloudTexture(_cloudSeed), 0, 0, 0, 256, 256, 1, 0, 0);
+            _cloudParamsSet = factory.CreateResourceSet(new ResourceSetDescription(_cloudParamsLayout, _cloudTextureView,
                 factory.CreateSampler(new SamplerDescription(
                     SamplerAddressMode.Wrap,
                     SamplerAddressMode.Wrap,
                     SamplerAddressMode.Wrap,
-                    SamplerFilter.MinLinear_MagLinear_MipLinear,
+                    SamplerFilter.MinPoint_MagPoint_MipPoint,
                     null,
                     1,
                     0,
                     uint.MaxValue,
                     0,
-                    SamplerBorderColor.TransparentBlack))));
+                    SamplerBorderColor.TransparentBlack)),
+                _cloudParamsBuffer));
 
-            // Camera-locked matrix (rotation-only view-projection), same trick as the sky.
             _cloudPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
             {
                 BlendState = BlendStateDescription.SingleAlphaBlend,
-                // No depth test / write: clouds are drawn after the sky, before the world; terrain
-                // paints over them. They must never write depth or they'd block terrain behind them.
-                DepthStencilState = DepthStencilStateDescription.Disabled,
+                // Depth TEST on, WRITE off: clouds draw AFTER the world and blend over it, so
+                // terrain shows through the translucent pixels. From below, closer terrain fails
+                // the cloud fragments (clouds hidden behind hills); from above, the cloud layer
+                // blends over the farther terrain - you see the world THROUGH the clouds.
+                DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
-                ResourceLayouts = new[] { _projViewLayout, _cloudTextureLayout, _cloudParamsLayout },
+                ResourceLayouts = new[] { _projViewLayout, _cloudParamsLayout },
                 ShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { shaders[0], shaders[1] }),
                 Outputs = _sc.Framebuffer.OutputDescription
             });
 
-            // One big camera-space quad (2 triangles) per layer. The buffer holds all layers:
-            // CloudLayerCount quads x 4 verts x 5 floats (pos3 + uv2). Filled in DrawClouds with
-            // the eye at origin so it never needs rebuilding.
+            // One big world-space quad (2 triangles). Filled in DrawClouds each frame around the
+            // camera's X/Z so the plane follows you while staying at the fixed world height.
             _cloudVertexBuffer = factory.CreateBuffer(new BufferDescription(
-                CloudLayerCount * 4 * 5 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+                4 * 5 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
             _cloudIndexBuffer = factory.CreateBuffer(new BufferDescription(
                 6 * sizeof(ushort), BufferUsage.IndexBuffer));
             _gd.UpdateBuffer(_cloudIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3 });
-
-            // Seed drift phases so each layer bobs on its own clock.
-            for (int i = 0; i < CloudLayerCount; i++) _cloudDriftPhase[i] = (float)(Random.Shared.NextDouble() * Math.PI * 2.0);
         }
 
+        // Draws the cloud plane. Vertices are WORLD-space, centered on the camera's X/Z at
+        // CloudWorldY; UVs are tiled by world position (CloudTileSize blocks per tile) so the
+        // puffs repeat like MC clouds instead of one stretched texture.
+        private void DrawClouds(CommandList cl)
+        {
+            if (_cloudPipeline == null || _cloudVertexBuffer == null || !_cameraPosition.HasValue) return;
+            // Big enough that the plane's edges stay beyond the far plane from any view angle.
+            float extent = Math.Max(_farPlane * 3f, 1536f);
+            float camX = (float)_cameraPosition.Value.X;
+            float camZ = (float)_cameraPosition.Value.Z;
+            float y = CloudWorldY;
+
+            // Tiled UVs from WORLD position (so clouds stay put as you walk; the scroll uniform
+            // drifts them slowly). u = worldX / tileSize, v = worldZ / tileSize.
+            float u0 = (camX - extent) / CloudTileSize;
+            float u1 = (camX + extent) / CloudTileSize;
+            float v0 = (camZ - extent) / CloudTileSize;
+            float v1 = (camZ + extent) / CloudTileSize;
+
+            float[] verts =
+            {
+                camX - extent, y, camZ - extent, u0, v0,
+                camX + extent, y, camZ - extent, u1, v0,
+                camX + extent, y, camZ + extent, u1, v1,
+                camX - extent, y, camZ + extent, u0, v1,
+            };
+            _gd.UpdateBuffer(_cloudVertexBuffer, 0, verts);
+
+            // Scroll + opacity.
+            float now = (float)_cloudClock.Elapsed.TotalSeconds;
+            _cloudScrollU = (float)Math.IEEERemainder(_cloudScrollU + 0.002f * (now - _lastCloudTime), 1.0);
+            _cloudScrollV = (float)Math.IEEERemainder(_cloudScrollV + 0.0007f * (now - _lastCloudTime), 1.0);
+            _lastCloudTime = now;
+            _cloudParams[0] = _cloudScrollU;
+            _cloudParams[1] = _cloudScrollV;
+            _cloudParams[2] = 0.7f; // cloud opacity: translucent but still clearly visible
+            _cloudParams[3] = 0f;
+            _gd.UpdateBuffer(_cloudParamsBuffer, 0, _cloudParams);
+
+            cl.SetPipeline(_cloudPipeline);
+            cl.SetGraphicsResourceSet(0, _projViewSet);
+            if (_cloudParamsSet != null) cl.SetGraphicsResourceSet(1, _cloudParamsSet);
+            cl.SetVertexBuffer(0, _cloudVertexBuffer);
+            cl.SetIndexBuffer(_cloudIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed(6, 1, 0, 0, 0);
+        }
+
+        // Clouds (Cubuild port, camera-locked): three flat planes at fixed heights relative to the
+        // eye, textured with a procedurally generated white-puff texture that scrolls via shader
+        // offsets. Depth-write OFF and drawn right after the sky so terrain always paints over.
         // Cubuild's createCloudMaskGrid ported to CPU RGBA: random blob walkers paint diamond-ish
         // puffs, then 2 rounds of cellular smoothing. White (255,255,255) with soft alpha.
-        private static byte[] GenerateCloudTexture()
+        // 256x256 texture where each PIXEL is one cloud cell (no supersampling) - so a pixel is
+        // a whole cloud when the tile is mapped to CloudTileSize blocks.
+        private static byte[] GenerateCloudTexture(int seed)
         {
-            const int size = 512;
-            const int cell = 8;
-            const int cols = size / cell; // 64
-            const int rows = size / cell;
+            const int size = 256;
+            const int cols = size; // one pixel = one cell
+            const int rows = size;
             var mask = new byte[cols * rows];
 
             int CellIndex(int x, int y) => y * cols + x;
-            var rng = new Random(12345);
+            // Seeded per-world so each world has its own cloud pattern.
+            var rng = new Random(seed);
 
-            for (int i = 0; i < 28; i++)
+            // Multi-scale blobs for organic variation:
+            //  - a few BIG billowy masses (radius 3-6) that carve out large cloud banks
+            //  - medium clusters (radius 2-3) that add density and texture
+            //  - small puffs (radius 1-2) that scatter detail between the masses
+            // Each scale walks a wandering path and stamps a hard SQUARE (authentic Infdev
+            // clouds were square grid cells, not round puffs), so the result mixes huge square
+            // cloud chunks, dense patches and sparse wisps instead of soft blobs.
+            void StampSquare(int x, int y, int half)
             {
-                int x = 2 + rng.Next(cols - 4);
-                int y = 2 + rng.Next(rows - 4);
-                int steps = 8 + rng.Next(18);
-                int radius = 1 + rng.Next(2);
-                for (int s = 0; s < steps; s++)
+                for (int oy = -half; oy <= half; oy++)
+                for (int ox = -half; ox <= half; ox++)
                 {
-                    int rx = radius + (rng.NextDouble() > 0.7 ? 1 : 0);
-                    int ry = radius;
-                    for (int oy = -ry; oy <= ry; oy++)
-                    for (int ox = -rx; ox <= rx; ox++)
+                    int nx = x + ox;
+                    int ny = y + oy;
+                    if (nx < 1 || ny < 1 || nx >= cols - 1 || ny >= rows - 1) continue;
+                    mask[CellIndex(nx, ny)] = 1;
+                }
+            }
+
+            void WalkBlobs(int count, int minR, int maxR, int minSteps, int maxSteps)
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    int x = 2 + rng.Next(cols - 4);
+                    int y = 2 + rng.Next(rows - 4);
+                    int steps = minSteps + rng.Next(maxSteps - minSteps + 1);
+                    int radius = minR + rng.Next(maxR - minR + 1);
+                    for (int s = 0; s < steps; s++)
                     {
-                        int nx = x + ox;
-                        int ny = y + oy;
-                        if (nx < 1 || ny < 1 || nx >= cols - 1 || ny >= rows - 1) continue;
-                        if ((Math.Abs(ox) + Math.Abs(oy)) <= radius + 1 || rng.NextDouble() > 0.18)
-                            mask[CellIndex(nx, ny)] = 1;
+                        int half = radius + (rng.NextDouble() > 0.6 ? 1 : 0);
+                        // Occasional elongation for streaky square cloud banks (wider than deep).
+                        if (rng.NextDouble() > 0.75)
+                        {
+                            int wide = half + 1;
+                            for (int oy = -half; oy <= half; oy++)
+                            for (int ox = -wide; ox <= wide; ox++)
+                            {
+                                int nx = x + ox;
+                                int ny = y + oy;
+                                if (nx < 1 || ny < 1 || nx >= cols - 1 || ny >= rows - 1) continue;
+                                mask[CellIndex(nx, ny)] = 1;
+                            }
+                        }
+                        else
+                        {
+                            StampSquare(x, y, half);
+                        }
+                        x = Math.Max(1, Math.Min(cols - 2, x + rng.Next(5) - 2));
+                        y = Math.Max(1, Math.Min(rows - 2, y + rng.Next(5) - 2));
                     }
-                    x = Math.Max(1, Math.Min(cols - 2, x + rng.Next(3) - 1));
-                    y = Math.Max(1, Math.Min(rows - 2, y + rng.Next(3) - 1));
                 }
             }
 
-            // 2 rounds of cellular smoothing: a cell survives if >=4 neighbours, dies if <=2.
-            for (int pass = 0; pass < 2; pass++)
-            {
-                var next = (byte[])mask.Clone();
-                for (int y = 1; y < rows - 1; y++)
-                for (int x = 1; x < cols - 1; x++)
-                {
-                    int neighbors = 0;
-                    for (int oy = -1; oy <= 1; oy++)
-                    for (int ox = -1; ox <= 1; ox++)
-                        neighbors += mask[CellIndex(x + ox, y + oy)];
-                    int idx = CellIndex(x, y);
-                    next[idx] = (neighbors >= 4) ? (byte)1 : (neighbors <= 2) ? (byte)0 : mask[idx];
-                }
-                mask = next;
-            }
+            // Big masses: few but huge, soft (low hardness) so they read as billowy banks.
+            WalkBlobs(count: 10, minR: 4, maxR: 8, minSteps: 12, maxSteps: 30);
+            // Medium clusters: many, denser, fill out the masses' interior.
+            WalkBlobs(count: 20, minR: 2, maxR: 4, minSteps: 8, maxSteps: 20);
+            // Small puffs: plenty, scattered, hard-edged detail.
+            WalkBlobs(count: 30, minR: 1, maxR: 2, minSteps: 5, maxSteps: 12);
 
-            // Paint cells: soft white. Puff edges get a slightly lower alpha for a fluffy look.
+            // NO smoothing pass: the square stamps are already cohesive, and smoothing would
+            // round off the hard corners. Infdev clouds are blocky grid cells.
+
+            // Paint each pixel directly (one pixel = one cloud cell). Hard-edged squares: every
+            // on pixel gets the same near-solid alpha - no edge softening (Infdev clouds are
+            // flat grid squares, not fluffy puffs).
             var rgba = new byte[size * size * 4];
             for (int y = 0; y < rows; y++)
             for (int x = 0; x < cols; x++)
             {
                 bool on = mask[CellIndex(x, y)] != 0;
-                // Edge detection (fewer than 8 neighbours on = a border cell).
-                int n = 0;
-                for (int oy = -1; oy <= 1; oy++)
-                for (int ox = -1; ox <= 1; ox++)
-                    if (x + ox >= 0 && y + oy >= 0 && x + ox < cols && y + oy < rows && mask[CellIndex(x + ox, y + oy)] != 0) n++;
-                byte alpha = (byte)(on ? (n < 8 ? 150 : 245) : 0);
-                for (int py = 0; py < cell; py++)
-                for (int px = 0; px < cell; px++)
-                {
-                    int dst = ((y * cell + py) * size + (x * cell + px)) * 4;
-                    rgba[dst] = 255;
-                    rgba[dst + 1] = 255;
-                    rgba[dst + 2] = 255;
-                    rgba[dst + 3] = alpha;
-                }
+                byte alpha = (byte)(on ? 245 : 0);
+                int dst = (y * size + x) * 4;
+                rgba[dst] = 255;
+                rgba[dst + 1] = 255;
+                rgba[dst + 2] = 255;
+                rgba[dst + 3] = alpha;
             }
             return rgba;
         }
@@ -1796,15 +1847,6 @@ void main() {
 
             DrawSky(cl);
 
-            // Clouds drift + scroll each frame (cheap: texture-offset animation on camera-locked
-            // planes), then draw right after the sky so terrain always paints over them.
-            long cloudNow = _cloudClock.ElapsedTicks;
-            float cloudDt = (float)((cloudNow - _lastCloudTicks) / (double)System.Diagnostics.Stopwatch.Frequency);
-            _lastCloudTicks = cloudNow;
-            if (cloudDt > 0.1f) cloudDt = 0.1f;
-            UpdateClouds(cloudDt);
-            DrawClouds(cl);
-
             cl.SetPipeline(_pipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
             if (_textureSet != null)
@@ -1851,6 +1893,10 @@ void main() {
                     DrawWorldPass(cl, _glassDrawCommands, _glassIndirectScratch, _translucentPipeline);
                 }
             }
+
+            // Clouds blend OVER the world (depth test on, write off) so terrain shows through them
+            // from above and they're hidden behind hills from below.
+            DrawClouds(cl);
 
             DrawParticles(cl);
             DrawFallingBlocks(cl);
@@ -2057,6 +2103,7 @@ void main() {
             SetSkyVertex(v, 7, -extent, -16f, extent, darkR, darkG, darkB);
 
             _gd.UpdateBuffer(_skyVertexBuffer, 0, v);
+
             cl.SetPipeline(_skyPipeline);
             cl.SetGraphicsResourceSet(0, _skyMatrixSet);
             cl.SetGraphicsResourceSet(1, _skyFogSet);
@@ -2075,67 +2122,6 @@ void main() {
             v[o + 4] = g;
             v[o + 5] = b;
             v[o + 6] = 1f;
-        }
-
-        // Advances the cloud scroll offsets + drift with real frame time (called from Render).
-        private void UpdateClouds(float deltaSeconds)
-        {
-            if (_cloudPipeline == null) return;
-            float time = (float)_cloudClock.Elapsed.TotalSeconds;
-            for (int i = 0; i < CloudLayerCount; i++)
-            {
-                _cloudOffsets[i * 2] = (_cloudOffsets[i * 2] + CloudLayerSpeed[i] * deltaSeconds) % 1f;
-                _cloudOffsets[i * 2 + 1] = (_cloudOffsets[i * 2 + 1] + CloudLayerSpeed[i] * 0.22f * deltaSeconds) % 1f;
-                _cloudDrift[i] = (float)Math.Sin(time * 0.18 + _cloudDriftPhase[i]) * CloudLayerDriftAmp[i];
-            }
-        }
-
-        // Draws the three camera-locked cloud planes after the sky. Vertices are rebuilt in
-        // camera space each frame (eye at origin) because the drift offset moves them slightly;
-        // the matrix is the rotation-only sky matrix so they stay glued to the eye.
-        private void DrawClouds(CommandList cl)
-        {
-            if (_cloudPipeline == null || _cloudVertexBuffer == null) return;
-            float extent = Math.Max(_farPlane * 2f, 768f);
-            // pos(3) + uv(2) per vertex, 4 verts per layer.
-            var v = new float[CloudLayerCount * 4 * 5];
-            for (int i = 0; i < CloudLayerCount; i++)
-            {
-                int o = i * 20;
-                float y = CloudLayerY[i];
-                float dz = _cloudDrift[i];
-                SetCloudVertex(v, o + 0, -extent, y, -extent + dz, 0f, 0f);
-                SetCloudVertex(v, o + 4, extent, y, -extent + dz, 1f, 0f);
-                SetCloudVertex(v, o + 8, extent, y, extent + dz, 1f, 1f);
-                SetCloudVertex(v, o + 12, -extent, y, extent + dz, 0f, 1f);
-            }
-            _gd.UpdateBuffer(_cloudVertexBuffer, 0, v);
-
-            cl.SetPipeline(_cloudPipeline);
-            // Reuse the sky's rotation-only view-projection (identical for clouds: camera-locked).
-            cl.SetGraphicsResourceSet(0, _skyMatrixSet);
-            if (_cloudTextureSet != null) cl.SetGraphicsResourceSet(1, _cloudTextureSet);
-            if (_cloudParamsSet != null) cl.SetGraphicsResourceSet(2, _cloudParamsSet);
-            cl.SetVertexBuffer(0, _cloudVertexBuffer);
-            cl.SetIndexBuffer(_cloudIndexBuffer, IndexFormat.UInt16);
-
-            // One quad per layer; each drawn with its own scroll + opacity via the params buffer.
-            for (int i = 0; i < CloudLayerCount; i++)
-            {
-                _cloudParams[0] = _cloudOffsets[i * 2];
-                _cloudParams[1] = _cloudOffsets[i * 2 + 1];
-                _cloudParams[2] = CloudLayerOpacity[i];
-                _cloudParams[3] = 0f;
-                _gd.UpdateBuffer(_cloudParamsBuffer, 0, _cloudParams);
-                cl.DrawIndexed(6, 1, 0, i * 4, 0);
-            }
-        }
-
-        private readonly float[] _cloudParams = new float[4];
-
-        private static void SetCloudVertex(float[] v, int o, float x, float y, float z, float u, float vv)
-        {
-            v[o] = x; v[o + 1] = y; v[o + 2] = z; v[o + 3] = u; v[o + 4] = vv;
         }
 
         // Issues one indirect world draw for a chunk-command pass (opaque or transparent) using the
@@ -3396,8 +3382,6 @@ void main() {
             _cloudParamsSet?.Dispose();
             _cloudParamsLayout?.Dispose();
             _cloudParamsBuffer?.Dispose();
-            _cloudTextureSet?.Dispose();
-            _cloudTextureLayout?.Dispose();
             _cloudTextureView?.Dispose();
             _cloudTexture?.Dispose();
             _commandList?.Dispose();
@@ -3698,7 +3682,7 @@ void main() {
 
         public void UpdateCamera(CubeApp.Point3D position, float yaw, float pitch)
         {
-            var proj = Matrix4x4.CreatePerspectiveFieldOfView((float)(Math.PI / 2.0), (float)_sc.Framebuffer.Width / _sc.Framebuffer.Height, 0.1f, _farPlane);
+            var proj = Matrix4x4.CreatePerspectiveFieldOfView((float)(Math.PI / 2.0), (float)_sc.Framebuffer.Width / _sc.Framebuffer.Height, _nearPlane, _farPlane);
             var yawRad = yaw * (float)Math.PI / 180f;
             var pitchRad = pitch * (float)Math.PI / 180f;
             var forward = new Vector3((float)(Math.Cos(pitchRad) * Math.Sin(yawRad)), (float)Math.Sin(pitchRad), (float)(Math.Cos(pitchRad) * Math.Cos(yawRad)));
@@ -3735,12 +3719,27 @@ void main() {
             // at 256 while chunks exist to 362 - a circular, camera-locked "invisible terrain" line
             // that does NOT follow chunk shapes. Enclosing the square makes the visible edge the
             // chunk boundary itself.
-            _farPlane = (float)(chunkRadius * ChunkManager.ChunkSize * Math.Sqrt(2.0));
+            // Far plane target is 700 blocks (user preference): sky/clouds/terrain stretch further
+            // before clipping. Keep the chunk square fully enclosed even if the render distance
+            // ever grows beyond 700's coverage. Near plane raised 0.1 -> 0.3 to keep depth
+            // precision healthy at the wider range (error ~ far^2 / near / 2^24).
+            float chunkEnclosure = (float)(chunkRadius * ChunkManager.ChunkSize * Math.Sqrt(2.0));
+            _farPlane = Math.Max(700f, chunkEnclosure);
+            _nearPlane = 0.3f;
         }
 
         public void SetChunkManager(CubeApp.ChunkManager manager)
         {
             _chunkManager = manager;
+        }
+
+        /// <summary>Regenerates the cloud texture from the world seed, so every world has its own
+        /// cloud pattern.</summary>
+        public void SetWorldSeed(int seed)
+        {
+            if (_cloudTexture == null) return;
+            _cloudSeed = seed;
+            _gd.UpdateTexture(_cloudTexture, GenerateCloudTexture(seed), 0, 0, 0, 256, 256, 1, 0, 0);
         }
 
         // Drains priority (player-edit) uploads every frame so edits appear immediately, ahead of

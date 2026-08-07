@@ -23,6 +23,10 @@ namespace CubeApp.World
         // deep underground so NEW chunks are born with their deep terrain - no separate fill pass
         // racing the mesh worker. Idempotent: DeepFillChunk skips already-filled zones.
         public bool AutoDeepFill { get; set; }
+
+        /// <summary>Controllable monolith feature (see MonolithSculptor). The classic Infdev
+        /// "glitch" made explicit: tunable frequency/size/height/carve, seed-driven.</summary>
+        public MonolithSculptor Monoliths { get; private set; }
         // Infdev's seven octave generators, in the same construction order as the Java:
         // noiseGen1/2 = 16 octaves (terrain body), noiseGen3 = 8 (upper/lower selector),
         // noiseGen4/5 = 4 (replaceBlocks biomes/dirt depth), noiseGen6 = 10 (continent),
@@ -48,6 +52,7 @@ namespace CubeApp.World
             _gen5 = new InfdevOctaves(rand, 4, 0);
             _gen6 = new InfdevOctaves(rand, 8, 2);
             _gen7 = new InfdevOctaves(rand, 8, 8);
+            Monoliths = new MonolithSculptor(seed);
         }
 
         public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeight)
@@ -210,6 +215,9 @@ namespace CubeApp.World
             // ---- caves and trees ----
             GenerateCaves(chunkX, chunkZ, chunk, terrainBandStart);
             GenerateTrees(chunkX, chunkZ, chunk);
+
+            // ---- monoliths (controllable feature; runs after caves so towers stand on ground) ----
+            Monoliths.Sculpt(chunk, terrainBandStart, chunkSize, chunkHeight);
 
             // When the player is already deep, fill the deep zone at generation time so newly
             // loaded chunks ahead are born with terrain instead of an empty void.

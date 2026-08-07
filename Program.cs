@@ -83,6 +83,7 @@ namespace CubeApp
             if (gpuRenderer != null)
             {
                 gpuRenderer.SetChunkManager(World.Chunks);
+                gpuRenderer.SetWorldSeed(World.Seed);
                 gpuRenderer.ResetWorld();
             }
             World.EnsureVisibleChunks();

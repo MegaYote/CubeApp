@@ -724,7 +724,7 @@ namespace CubeApp
 
         private int FindSurfaceWorldY(int wx, int wz)
         {
-            for (int wy = 191; wy >= ChunkManager.WorldOriginY; wy--)
+            for (int wy = ChunkManager.WorldOriginY + ChunkManager.ChunkHeight - 1; wy >= ChunkManager.WorldOriginY; wy--)
             {
                 if (Chunks.TryGetLoadedBlock(wx, wy, wz, out var block) && BlockRegistry.IsSolid(block))
                 {
