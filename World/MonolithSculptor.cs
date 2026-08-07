@@ -22,13 +22,14 @@ namespace CubeApp.World
     public sealed class MonolithSculptor
     {
         public bool Enabled = true;
-        /// <summary>Raw placement-noise threshold (noise range ~-2.6..2.5). Higher = rarer.
-        /// ~1.4 common, ~1.7 rare, ~1.9 very rare.</summary>
-        public float Frequency = 1.75f;
+        /// <summary>Raw placement-noise threshold (noise range ~-2.6..2.65). Higher = rarer.
+        /// ~1.4 common, ~1.75 rare, ~2.0 very rare, ~2.55 = only the tallest few peaks in a
+        /// thousand-block area (legendary). Values above ~2.66 disable monoliths entirely.</summary>
+        public float Frequency = 2.55f;
 
         /// <summary>Raw placement noise at a world column (debug / tuning helper).</summary>
         public double PlacementValue(int wx, int wz) => _placement.Noise2D(wx * 0.02, wz * 0.02);        /// <summary>Base radius in blocks (scaled smoothly by the noise field).</summary>
-        public float Size = 3.0f;
+        public float Size = 7.0f;
         /// <summary>Maximum height above local terrain in blocks.</summary>
         public float Height = 60f;
         /// <summary>1 = full width to the top; ~0.3 = towers taper to a point.</summary>
