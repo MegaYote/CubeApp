@@ -51,6 +51,10 @@ namespace CubeApp.Renderer
         public int PlayerChunkZ;
         public int RenderDistance;
 
+        /// <summary>Networking status line shown in the debug overlay (e.g. "Hosting :26065" or
+        /// "Joined host"). Empty = no session.</summary>
+        public string NetStatus;
+
         public static HudState Empty => new HudState
         {
             ShowDebug = false,
@@ -73,6 +77,7 @@ namespace CubeApp.Renderer
             PlayerChunkX = 0,
             PlayerChunkZ = 0,
             RenderDistance = 0,
+            NetStatus = string.Empty,
         };
     }
 }

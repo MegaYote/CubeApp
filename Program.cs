@@ -51,6 +51,14 @@ namespace CubeApp
         private readonly MenuState menu = new();
         private bool inventoryOpen;
 
+        // ---- multiplayer session ----
+        private Net.NetHost? _netHost;
+        private Net.NetClient? _netClient;
+        private string _joinError = "";
+        private float _inputSendTimer;
+        private bool _netConnected;
+        private string _playerName = "Player" + Environment.ProcessId % 1000;
+
         /// <summary>The simulation world (null on the title screen).</summary>
         public GameWorld World { get; private set; }
 
@@ -100,6 +108,7 @@ namespace CubeApp
 
         private void ReturnToTitle()
         {
+            StopNetworking();
             screen = GameScreen.Title;
             menu.Screen = GameScreen.Title;
             RefreshSavedWorlds();
@@ -122,6 +131,18 @@ namespace CubeApp
             {
                 LoadWorldFromList();
             }
+            else if (menu.HostGameClicked)
+            {
+                HostGame();
+            }
+            else if (menu.JoinGameClicked)
+            {
+                JoinGame();
+            }
+            else if (menu.MultiplayerBackClicked)
+            {
+                menu.Screen = GameScreen.Title;
+            }
             else if (menu.ResumeClicked)
             {
                 ResumeToPlaying();
@@ -137,6 +158,97 @@ namespace CubeApp
                 window?.Close();
             }
             menu.ResetFlags();
+        }
+
+        // ---- multiplayer ----
+
+        // Hosts a new world and opens a listener on the configured port. Friends connect by
+        // joining the host's IP:port; the host's world is authoritative.
+        private void HostGame()
+        {
+            if (!int.TryParse(menu.HostPort.Trim(), out int port) || port < 1024 || port > 65535)
+            {
+                _joinError = $"Invalid port '{menu.HostPort}' (use 1024-65535)";
+                return;
+            }
+            StopNetworking();
+            StartNewWorld(ParseSeed(menu.SeedInput), menu.WorldName + " (host)");
+            _netHost = new Net.NetHost(World, port);
+            _netHost.Log += msg => System.Console.WriteLine($"[NET] {msg}");
+            _netHost.SetLocalPlayerState(World.LocalPlayer);
+            if (!_netHost.Start())
+            {
+                _joinError = $"Could not listen on port {port}. Is it in use?";
+                _netHost.Dispose();
+                _netHost = null;
+            }
+        }
+
+        // Joins a host: creates a world from the host's seed (received in Welcome), positions at
+        // the host's spawn, and starts streaming input upstream.
+        private void JoinGame()
+        {
+            string addr = menu.JoinAddress.Trim();
+            if (string.IsNullOrWhiteSpace(addr))
+            {
+                _joinError = "Enter a server address (e.g. 192.168.1.5:26065)";
+                return;
+            }
+            string host = addr;
+            int port = Net.NetHost.DefaultPort;
+            int colon = addr.LastIndexOf(':');
+            if (colon > 0 && int.TryParse(addr[(colon + 1)..], out int parsed))
+            {
+                host = addr[..colon];
+                port = parsed;
+            }
+            StopNetworking();
+            // Start a placeholder world now; once Welcome arrives we get the real seed. If the
+            // seed differs we rebuild. This keeps the client renderable while connecting.
+            StartNewWorld(0, "Connecting...");
+            _joinError = "";
+            _netClient = new Net.NetClient(World);
+            _netClient.Log += msg => System.Console.WriteLine($"[NET] {msg}");
+            _netClient.Connected += OnClientConnected;
+            _netClient.Disconnected += OnClientDisconnected;
+            if (!_netClient.Connect(host, port, _playerName))
+            {
+                _joinError = "Could not connect. Check the address and that the host is running.";
+                _netClient.Dispose();
+                _netClient = null;
+            }
+        }
+
+        private void OnClientConnected()
+        {
+            _netConnected = true;
+            // Rebuild the world with the host's real seed (same terrain), then sit at spawn.
+            if (World == null || World.Seed != _netClient!.WorldSeed)
+            {
+                StartNewWorld(_netClient.WorldSeed, _netClient.WorldName);
+            }
+            World.PlayerPosition = new Point3D(_netClient.SpawnX, _netClient.SpawnY, _netClient.SpawnZ);
+            World.PlayerVelocity = new Point3D(0, 0, 0);
+            _lastMeshPosition = World.PlayerPosition;
+            World.EnsureVisibleChunks();
+            // Any local edit now goes to the host for authoritative application + broadcast.
+            World.BlockEdited += OnLocalEdit;
+        }
+
+        private void OnClientDisconnected(string reason)
+        {
+            _netConnected = false;
+            _joinError = reason;
+            // Stay in the world (host gone = frozen) but note it in the pause/title flow.
+        }
+
+        private void StopNetworking()
+        {
+            _netConnected = false;
+            try { _netHost?.Dispose(); } catch { }
+            try { _netClient?.Dispose(); } catch { }
+            _netHost = null;
+            _netClient = null;
         }
 
         private void LoadWorldFromList()
@@ -332,9 +444,10 @@ namespace CubeApp
                         if (World != null)
                         {
                             gpuRenderer.UpdateCamera(thirdPersonView ? GetThirdPersonCameraPosition() : World.PlayerPosition, World.PlayerYaw, World.PlayerPitch);
-                            var withPlayer = new List<MobRenderData>(World.Entities.MobRenderData.Count + 1);
+                            var withPlayer = new List<MobRenderData>(World.Entities.MobRenderData.Count + 8);
                             withPlayer.AddRange(World.Entities.MobRenderData);
                             if (thirdPersonView) withPlayer.Add(BuildLocalPlayerRenderData());
+                            AddRemotePlayersToRender(withPlayer);
                             gpuRenderer.SetEntities(withPlayer);
                         }
                         gpuRenderer.ProcessPendingPriorityMeshes();
@@ -433,6 +546,7 @@ namespace CubeApp
         private void StepSimulation(TickInputState tickInput, float deltaSeconds)
         {
             if (screen != GameScreen.Playing || World == null) return;
+            UpdateNetworking(tickInput, deltaSeconds);
             World.StepSimulation(tickInput, deltaSeconds);
         }
 
@@ -463,12 +577,58 @@ namespace CubeApp
             }
         }
 
+        // Sends local block edits to the host so they're applied authoritatively + echoed to all
+        // clients. Subscribed to GameWorld.BlockEdited when connected as a client.
+        private void OnLocalEdit(int x, int y, int z, int blockId, int meta)
+        {
+            _netClient?.SendBlockEdit(x, y, z, blockId, meta);
+        }
+
+        // Builds MobRenderData for remote players from the latest host snapshot (as a client).
+        private void AddRemotePlayersToRender(List<MobRenderData> list)
+        {
+            if (_netClient == null || !_netConnected) return;
+            var snap = _netClient.LatestSnapshot;
+            if (snap == null) return;
+            foreach (var p in snap.Players)
+            {
+                if (p.Id == _netClient.ClientId) continue; // that's us
+                list.Add(new MobRenderData(
+                    "player",
+                    new Point3D(p.X, p.Y - GameWorld.EyeHeight, p.Z),
+                    p.Yaw * (float)Math.PI / 180f,
+                    0f, p.WalkPhase, p.WalkAmount, 0f,
+                    p.VelY, p.Grounded, false, 0f, 0f, 0f));
+            }
+        }
+
+        // Sends the client's input + look to the host (~20Hz), and pushes the host's own local
+        // player state into the broadcast. Called every frame while playing.
+        private void UpdateNetworking(TickInputState tickInput, float deltaSeconds)
+        {
+            if (World == null) return;
+            if (_netHost != null)
+            {
+                _netHost.SetLocalPlayerState(World.LocalPlayer);
+            }
+            if (_netClient != null && _netConnected)
+            {
+                _inputSendTimer += deltaSeconds;
+                if (_inputSendTimer >= 0.05f)
+                {
+                    _inputSendTimer = 0f;
+                    _netClient.SendInput(tickInput, World.PlayerYaw, World.PlayerPitch);
+                }
+            }
+        }
+
         // ------------------------------------------------------------------
         // HUD / camera helpers (read world state; no sim logic)
         // ------------------------------------------------------------------
 
         private HudState BuildHud()
         {
+            string netStatus = BuildNetStatus();
             if (World == null)
             {
                 return new HudState
@@ -480,6 +640,7 @@ namespace CubeApp
                     Hotbar = Array.Empty<int>(),
                     PlayerX = 0, PlayerY = 0, PlayerZ = 0,
                     RenderDistance = ChunkRenderRadius,
+                    NetStatus = netStatus,
                 };
             }
             var forward = World.GetCameraForward();
@@ -502,7 +663,19 @@ namespace CubeApp
                 PlayerChunkX = GameWorld.WorldToChunkCoord(World.PlayerPosition.X),
                 PlayerChunkZ = GameWorld.WorldToChunkCoord(World.PlayerPosition.Z),
                 RenderDistance = ChunkRenderRadius,
+                NetStatus = netStatus,
             };
+        }
+
+        private string BuildNetStatus()
+        {
+            if (_netHost != null && _netHost.IsRunning) return "Hosting on port " + menu.HostPort;
+            if (_netClient != null)
+            {
+                if (_netConnected) return "Joined " + menu.JoinAddress + " as #" + _netClient.ClientId;
+                return "Join error: " + _joinError;
+            }
+            return string.Empty;
         }
 
         private Vector3[]? ComputeHighlightWorldQuad(GameWorld.PickBlockResult hit)
@@ -736,6 +909,7 @@ namespace CubeApp
 
         public void Dispose()
         {
+            StopNetworking();
             try { World?.Dispose(); } catch { }
             try { gpuRenderer?.Dispose(); } catch { }
             try { graphicsDevice?.Dispose(); } catch { }

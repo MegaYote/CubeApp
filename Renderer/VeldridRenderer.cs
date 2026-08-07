@@ -151,6 +151,8 @@ namespace CubeApp.Renderer
         private IntPtr _hotbarSelectImGuiId;
         private byte[] _worldNameBuffer = new byte[64];
         private byte[] _seedBuffer = new byte[64];
+        private byte[] _hostPortBuffer = new byte[16];
+        private byte[] _joinAddressBuffer = new byte[128];
         private bool _menuBuffersInitialized;
         // Real input for the ImGui UI (only wired when the mouse is free, e.g. the E-menu
         // inventory); otherwise ImGui stays inert via NullInputSnapshot.
@@ -2574,13 +2576,19 @@ void main() {
                 // Buttons hang lower, in the classic Minecraft vertical column, with any saved
                 // worlds listed beneath so one click loads a world.
                 int shownWorlds = Math.Min(m.SavedWorlds.Count, 6);
-                float winH = 130f + (shownWorlds > 0 ? 42f + shownWorlds * 30f : 0f);
+                float winH = 130f + 60f + (shownWorlds > 0 ? 42f + shownWorlds * 30f : 0f);
                 ImGui.SetNextWindowPos(new Vector2((size.X - 220f) / 2f, size.Y / 4f + 72f), ImGuiCond.Always);
                 ImGui.SetNextWindowSize(new Vector2(220, winH), ImGuiCond.Always);
                 ImGui.Begin("##title", windowFlags);
                 if (ImGui.Button("Singleplayer", new Vector2(200, 34)))
                 {
                     m.Screen = GameScreen.CreateWorld;
+                    _menuBuffersInitialized = false;
+                }
+                ImGui.Dummy(new Vector2(0, 18));
+                if (ImGui.Button("Multiplayer", new Vector2(200, 34)))
+                {
+                    m.Screen = GameScreen.Multiplayer;
                     _menuBuffersInitialized = false;
                 }
                 ImGui.Dummy(new Vector2(0, 18));
@@ -2626,6 +2634,40 @@ void main() {
                 }
                 ImGui.Spacing();
                 if (ImGui.Button("Back", new Vector2(220, 28))) m.Screen = GameScreen.Title;
+                ImGui.End();
+            }
+            else if (m.Screen == GameScreen.Multiplayer)
+            {
+                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 170f, size.Y / 2f - 150f), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(340, 300), ImGuiCond.Always);
+                ImGui.Begin("##multiplayer", windowFlags);
+                ImGui.Text("Multiplayer");
+                ImGui.Spacing();
+                ImGui.TextWrapped("Host a game for friends to join, or connect to a host's IP.");
+                ImGui.Spacing();
+                if (!_menuBuffersInitialized)
+                {
+                    WriteBuffer(_hostPortBuffer, m.HostPort);
+                    WriteBuffer(_joinAddressBuffer, m.JoinAddress);
+                    _menuBuffersInitialized = true;
+                }
+                ImGui.InputText("Host port", _hostPortBuffer, (uint)_hostPortBuffer.Length);
+                m.HostPort = ReadBuffer(_hostPortBuffer);
+                if (ImGui.Button("Host Game", new Vector2(300, 34)))
+                {
+                    m.HostGameClicked = true;
+                }
+                ImGui.Spacing();
+                ImGui.Separator();
+                ImGui.Spacing();
+                ImGui.InputText("Server address", _joinAddressBuffer, (uint)_joinAddressBuffer.Length);
+                m.JoinAddress = ReadBuffer(_joinAddressBuffer);
+                if (ImGui.Button("Join Game", new Vector2(300, 34)))
+                {
+                    m.JoinGameClicked = true;
+                }
+                ImGui.Spacing();
+                if (ImGui.Button("Back", new Vector2(300, 28))) m.MultiplayerBackClicked = true;
                 ImGui.End();
             }
             else if (m.Screen == GameScreen.Paused)
@@ -2826,6 +2868,7 @@ void main() {
                 Line($"Particles: {_particleCount}");
                 Line($"Seed: {_hud.WorldSeed}");
                 Line($"Fly: {(_hud.FlyMode ? "ON" : "OFF")}");
+                if (!string.IsNullOrEmpty(_hud.NetStatus)) Line($"Net: {_hud.NetStatus}");
                 if (!string.IsNullOrEmpty(_hud.BiomeText)) Line($"Biome: {_hud.BiomeText}");
                 Line($"XYZ: {_hud.PlayerX:0.000} / {_hud.PlayerY:0.000} / {_hud.PlayerZ:0.000}");
                 Line($"Block: {(int)Math.Floor(_hud.PlayerX)} / {(int)Math.Floor(_hud.PlayerY)} / {(int)Math.Floor(_hud.PlayerZ)}");

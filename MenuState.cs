@@ -7,6 +7,7 @@ namespace CubeApp
     {
         Title,
         CreateWorld,
+        Multiplayer,
         Playing,
         Paused,
     }
@@ -30,6 +31,13 @@ namespace CubeApp
         /// <summary>Display names of saved worlds (from the saves folder), for the title list.</summary>
         public List<string> SavedWorlds = new();
 
+        // ---- multiplayer screen ----
+        public bool HostGameClicked;
+        public bool JoinGameClicked;
+        public bool MultiplayerBackClicked;
+        public string JoinAddress = "127.0.0.1:26065";
+        public string HostPort = "26065";
+
         public void ResetFlags()
         {
             CreateWorldClicked = false;
@@ -37,6 +45,9 @@ namespace CubeApp
             QuitToTitleClicked = false;
             QuitClicked = false;
             LoadWorldClicked = false;
+            HostGameClicked = false;
+            JoinGameClicked = false;
+            MultiplayerBackClicked = false;
         }
     }
 }
