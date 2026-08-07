@@ -17,13 +17,13 @@ namespace CubeApp.World
     {
         public bool Enabled = true;
         /// <summary>Fraction of the terrain that hosts veins (0..1).</summary>
-        public float Frequency = 0.55f;
+        public float Frequency = 0.48f;
         /// <summary>Average depth of the vein's center below the surface (blocks).</summary>
-        public float BaseDepth = 9f;
+        public float BaseDepth = 18f;
         /// <summary>Average vein thickness (blocks).</summary>
         public float BaseThickness = 6f;
         /// <summary>How much the vein's depth undulates (blocks).</summary>
-        public float DepthWaviness = 6f;
+        public float DepthWaviness = 8f;
         /// <summary>Fraction of stone blocks converted (0..1); less than 1 leaves natural gaps.</summary>
         public float Fill = 0.8f;
 
