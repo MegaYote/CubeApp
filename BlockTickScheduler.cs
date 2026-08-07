@@ -19,6 +19,7 @@ namespace CubeApp
         private readonly ChunkManager _manager;
         private readonly MeshScheduler _meshScheduler;
         private readonly FluidSimulation _fluid;
+        private readonly GravitySimulation _gravity;
         private readonly Dictionary<ChunkCoordinates, Dictionary<(int x, int y, int z), int>> _pending = new();
         private readonly List<(int x, int y, int z)> _due = new();
         private readonly List<ChunkCoordinates> _emptyBuckets = new();
@@ -30,9 +31,11 @@ namespace CubeApp
             _manager = manager ?? throw new ArgumentNullException(nameof(manager));
             _meshScheduler = meshScheduler ?? throw new ArgumentNullException(nameof(meshScheduler));
             _fluid = new FluidSimulation(manager, this);
+            _gravity = new GravitySimulation(manager, this);
         }
 
         public FluidSimulation Fluid => _fluid;
+        public GravitySimulation Gravity => _gravity;
 
         /// <summary>Schedule <paramref name="cell"/> to tick in <paramref name="delayTicks"/>
         /// game ticks. Duplicate schedules collapse; only the earliest due time survives.</summary>
@@ -59,10 +62,11 @@ namespace CubeApp
             bucket[(x, y, z)] = due;
         }
 
-        /// <summary>Wake nearby water after any world change (block placed/removed).</summary>
+        /// <summary>Wake nearby water + gravity after any world change (block placed/removed).</summary>
         public void OnBlockChanged(int x, int y, int z)
         {
             _fluid.OnBlockChanged(x, y, z);
+            _gravity.OnBlockChanged(x, y, z);
         }
 
         /// <summary>Advance the simulation using real frame time, firing fixed 20 TPS tick steps.</summary>
@@ -113,6 +117,7 @@ namespace CubeApp
                 var key = new ChunkCoordinates((int)Math.Floor(x / (double)ChunkManager.ChunkSize), (int)Math.Floor(z / (double)ChunkManager.ChunkSize));
                 if (_pending.TryGetValue(key, out var bucket) && bucket.Remove((x, y, z)))
                 {
+                    _gravity.TickBlock(x, y, z);
                     _fluid.TickBlock(x, y, z);
                     processed++;
                 }

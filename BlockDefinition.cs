@@ -48,6 +48,9 @@ namespace CubeApp
         public int LightEmission { get; set; }
         /// <summary>Hotbar / debug swatch colour, an ImGui packed U32 (0xAABBGGRR, full alpha).</summary>
         public uint MapColor { get; set; }
+        /// <summary>Falls when unsupported (sand, gravel, dirt, red clay): if the block below is
+        /// removed or updated out from under it, it drops until it finds support.</summary>
+        public bool Gravity { get; set; }
 
         /// <summary>Picks the atlas tile for a given face normal, honouring top/bottom/side overrides.</summary>
         public TextureRect FaceTexture(Point3D normal)

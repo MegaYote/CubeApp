@@ -32,6 +32,7 @@ namespace CubeApp
         private static bool[] _slabTop = Array.Empty<bool>();
         private static bool[] _stair = Array.Empty<bool>();
         private static bool[] _inventory = Array.Empty<bool>();
+        private static bool[] _gravity = Array.Empty<bool>();
         private static float[] _alpha = Array.Empty<float>();
         private static uint[] _mapColor = Array.Empty<uint>();
         private static int[] _hotbar = Array.Empty<int>();
@@ -62,6 +63,7 @@ namespace CubeApp
             public bool Inventory { get; set; } = true;
             public bool Translucent { get; set; } = false;
             public int LightEmission { get; set; } = 0;
+            public bool Gravity { get; set; } = false;
             public string? MapColor { get; set; } = "#000000";
         }
 
@@ -104,6 +106,7 @@ namespace CubeApp
                     Inventory = dto.Inventory,
                     Translucent = dto.Translucent,
                     LightEmission = dto.LightEmission,
+                    Gravity = dto.Gravity,
                     MapColor = ParseMapColor(dto.MapColor ?? "#000000"),
                 };
 
@@ -135,6 +138,7 @@ namespace CubeApp
             _slabTop = new bool[Count];
             _stair = new bool[Count];
             _inventory = new bool[Count];
+            _gravity = new bool[Count];
             for (int i = 0; i < Count; i++)
             {
                 _solid[i] = defs[i].Solid;
@@ -150,6 +154,7 @@ namespace CubeApp
                 _slab[i] = string.Equals(defs[i].Shape, "slab", StringComparison.OrdinalIgnoreCase);
                 _slabTop[i] = string.Equals(defs[i].Shape, "slab_top", StringComparison.OrdinalIgnoreCase);
                 _stair[i] = string.Equals(defs[i].Shape, "stairs", StringComparison.OrdinalIgnoreCase);
+                _gravity[i] = defs[i].Gravity;
             }
 
             _hotbar = new int[Math.Min(file.Hotbar.Count, 10)];
@@ -215,6 +220,7 @@ namespace CubeApp
         public static bool IsStair(int id) => id > 0 && id < Count && _stair[id];
         public static bool IsPartialShape(int id) => id > 0 && id < Count && (_slab[id] || _slabTop[id] || _stair[id]);
         public static bool IsInInventory(int id) => id >= 0 && id < Count && _inventory[id];
+        public static bool IsGravity(int id) => id > 0 && id < Count && _gravity[id];
         public static float Alpha(int id) => _alpha[id];
         public static uint MapColorOf(int id) => _mapColor[id];
         public static TextureRect FaceTexture(int id, Point3D normal) => _defs[id].FaceTexture(normal);
