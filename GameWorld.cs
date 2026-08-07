@@ -485,7 +485,8 @@ namespace CubeApp
             if (!Chunks.TrySetBlock(remove.x, remove.y, remove.z, BlockRegistry.AirId)) return false;
             removedPos = remove;
             BlockTicks?.OnBlockChanged(remove.x, remove.y, remove.z);
-            var editedChunk = new ChunkCoordinates(WorldToChunkCoord(remove.x), WorldToChunkCoord(remove.z));
+            int rLayer = ChunkManager.LayerForWorldY(remove.y);
+            var editedChunk = new ChunkCoordinates(rLayer, WorldToChunkCoord(remove.x), WorldToChunkCoord(remove.z));
             Mesher.RequestImmediateRemesh(editedChunk);
             BlockEdited?.Invoke(remove.x, remove.y, remove.z, 0, 0);
             return true;
@@ -545,7 +546,8 @@ namespace CubeApp
             if (WouldBlockIntersectPlayer(p, place.x, place.y, place.z, blockToPlace, meta)) return false;
             if (!Chunks.TrySetBlock(place.x, place.y, place.z, blockToPlace, meta)) return false;
             BlockTicks?.OnBlockChanged(place.x, place.y, place.z);
-            var editedChunk = new ChunkCoordinates(WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));
+            int placeLayer = ChunkManager.LayerForWorldY(place.y);
+            var editedChunk = new ChunkCoordinates(placeLayer, WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));
             Mesher.RequestImmediateRemesh(editedChunk);
             BlockEdited?.Invoke(place.x, place.y, place.z, blockToPlace, meta);
             return true;
@@ -560,7 +562,8 @@ namespace CubeApp
             if (BlockTicks != null && BlockTicks.IsCellOccupiedByFalling(x, y, z)) return false;
             if (!Chunks.TrySetBlockLoadedOnly(x, y, z, blockId, meta)) return false;
             BlockTicks?.OnBlockChanged(x, y, z);
-            var editedChunk = new ChunkCoordinates(WorldToChunkCoord(x), WorldToChunkCoord(z));
+            int ebLayer = ChunkManager.LayerForWorldY(y);
+            var editedChunk = new ChunkCoordinates(ebLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
             Mesher.RequestImmediateRemesh(editedChunk);
             BlockEdited?.Invoke(x, y, z, blockId, meta);
             return true;
@@ -576,7 +579,8 @@ namespace CubeApp
             int fullId = BlockRegistry.GetId(SlabMaterialOf(hitId));
             if (!Chunks.TrySetBlock(x, y, z, fullId, 0)) return false;
             BlockTicks?.OnBlockChanged(x, y, z);
-            Mesher.RequestImmediateRemesh(new ChunkCoordinates(WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            int msLayer = ChunkManager.LayerForWorldY(y);
+            Mesher.RequestImmediateRemesh(new ChunkCoordinates(msLayer, WorldToChunkCoord(x), WorldToChunkCoord(z)));
             BlockEdited?.Invoke(x, y, z, fullId, 0);
             return true;
         }
@@ -593,7 +597,8 @@ namespace CubeApp
             int fullId = BlockRegistry.GetId(SlabMaterialOf(oldId));
             if (!Chunks.TrySetBlock(x, y, z, fullId, 0)) return false;
             BlockTicks?.OnBlockChanged(x, y, z);
-            Mesher.RequestImmediateRemesh(new ChunkCoordinates(WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            int fsLayer = ChunkManager.LayerForWorldY(y);
+            Mesher.RequestImmediateRemesh(new ChunkCoordinates(fsLayer, WorldToChunkCoord(x), WorldToChunkCoord(z)));
             BlockEdited?.Invoke(x, y, z, fullId, 0);
             return true;
         }

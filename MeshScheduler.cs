@@ -36,8 +36,9 @@ namespace CubeApp
 
                 int chunkX = chunk.OriginX / ChunkManager.ChunkSize;
                 int chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
+                int layer = ChunkManager.LayerForWorldY(chunk.OriginY);
 
-                _meshQueue.Enqueue(new ChunkCoordinates(chunkX, chunkZ));
+                _meshQueue.Enqueue(new ChunkCoordinates(layer, chunkX, chunkZ));
 
                 queued++;
             }
@@ -69,14 +70,15 @@ namespace CubeApp
             // broken faces disappear and placed faces appear immediately.
             int cx = coords.X;
             int cz = coords.Z;
-            EnqueueIfDirty(new ChunkCoordinates(cx - 1, cz));
-            EnqueueIfDirty(new ChunkCoordinates(cx + 1, cz));
-            EnqueueIfDirty(new ChunkCoordinates(cx, cz - 1));
-            EnqueueIfDirty(new ChunkCoordinates(cx, cz + 1));
-            EnqueueIfDirty(new ChunkCoordinates(cx - 1, cz - 1));
-            EnqueueIfDirty(new ChunkCoordinates(cx + 1, cz - 1));
-            EnqueueIfDirty(new ChunkCoordinates(cx - 1, cz + 1));
-            EnqueueIfDirty(new ChunkCoordinates(cx + 1, cz + 1));
+            int layer = coords.Layer;
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx - 1, cz));
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx + 1, cz));
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx, cz - 1));
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx, cz + 1));
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx - 1, cz - 1));
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx + 1, cz - 1));
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx - 1, cz + 1));
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx + 1, cz + 1));
         }
 
         // Enqueues a neighbour for an immediate remesh if it is loaded AND was flagged dirty by the

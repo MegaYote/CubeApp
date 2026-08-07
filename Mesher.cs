@@ -540,7 +540,7 @@ namespace CubeApp
 
         private static int GetBlockAt(Dictionary<ChunkCoordinates, Chunk> lookup, int wx, int wy, int wz)
         {
-            var chunk = FindChunk(lookup, wx, wz);
+            var chunk = FindChunk(lookup, wx, wy, wz);
             if (chunk == null)
             {
                 return BlockRegistry.AirId;
@@ -554,7 +554,7 @@ namespace CubeApp
 
         private static int GetMetaAt(Dictionary<ChunkCoordinates, Chunk> lookup, int wx, int wy, int wz)
         {
-            var chunk = FindChunk(lookup, wx, wz);
+            var chunk = FindChunk(lookup, wx, wy, wz);
             if (chunk == null)
             {
                 return 0;
@@ -566,11 +566,15 @@ namespace CubeApp
             return chunk.IsInBounds(lx, ly, lz) ? chunk.GetMeta(lx, ly, lz) : 0;
         }
 
-        private static Chunk? FindChunk(Dictionary<ChunkCoordinates, Chunk> lookup, int wx, int wz)
+        private static Chunk? FindChunk(Dictionary<ChunkCoordinates, Chunk> lookup, int wx, int wy, int wz)
         {
             int cx = FloorDiv(wx, ChunkManager.ChunkSize);
             int cz = FloorDiv(wz, ChunkManager.ChunkSize);
-            lookup.TryGetValue(new ChunkCoordinates(cx, cz), out var chunk);
+            // Route by the block's world Y to the correct layer (deep/ground/sky). Water and
+            // terrain live in the ground layer; without this, lookups hit the deep layer and
+            // neighbor sampling (fluid heights, occlusion) reads wrong blocks.
+            int layer = ChunkManager.LayerForWorldY(wy);
+            lookup.TryGetValue(new ChunkCoordinates(layer, cx, cz), out var chunk);
             return chunk;
         }
 

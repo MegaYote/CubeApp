@@ -909,7 +909,8 @@ namespace CubeApp
                         {
                             int chunkX = ch.OriginX / ChunkManager.ChunkSize;
                             int chunkZ = ch.OriginZ / ChunkManager.ChunkSize;
-                            gpuRenderer.UploadChunk(new ChunkCoordinates(chunkX, chunkZ), ch.MeshFaces);
+                            int layer = ChunkManager.LayerForWorldY(ch.OriginY);
+                            gpuRenderer.UploadChunk(new ChunkCoordinates(layer, chunkX, chunkZ), ch.MeshFaces);
                         }
                     }
                 }

@@ -118,7 +118,8 @@ namespace CubeApp
             for (int i = 0; i < _due.Count && processed < budget; i++)
             {
                 var (x, y, z) = _due[i];
-                var key = new ChunkCoordinates((int)Math.Floor(x / (double)ChunkManager.ChunkSize), (int)Math.Floor(z / (double)ChunkManager.ChunkSize));
+            var key = new ChunkCoordinates(ChunkManager.LayerForWorldY(y),
+                (int)Math.Floor(x / (double)ChunkManager.ChunkSize), (int)Math.Floor(z / (double)ChunkManager.ChunkSize));
                 if (_pending.TryGetValue(key, out var bucket) && bucket.Remove((x, y, z)))
                 {
                     _gravity.TickBlock(x, y, z);

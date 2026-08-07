@@ -210,7 +210,8 @@ namespace CubeApp
                         _tickScheduler.OnBlockChanged(floorX, finalY, floorZ);
 
                         // Request a PRIORITY remesh and keep this cube rendered until it lands.
-                        var coords = new ChunkCoordinates(GameWorld.WorldToChunkCoord(floorX), GameWorld.WorldToChunkCoord(floorZ));
+                        int gLayer = ChunkManager.LayerForWorldY(finalY);
+                        var coords = new ChunkCoordinates(gLayer, GameWorld.WorldToChunkCoord(floorX), GameWorld.WorldToChunkCoord(floorZ));
                         int before = 0;
                         if (_manager.TryGetLoadedChunk(coords, out var chunk)) before = chunk.MeshVersion;
                         _meshScheduler.RequestImmediateRemesh(coords);
