@@ -33,6 +33,7 @@ namespace CubeApp
         private static bool[] _stair = Array.Empty<bool>();
         private static bool[] _inventory = Array.Empty<bool>();
         private static bool[] _gravity = Array.Empty<bool>();
+        private static int[] _lightEmission = Array.Empty<int>();
         private static float[] _alpha = Array.Empty<float>();
         private static uint[] _mapColor = Array.Empty<uint>();
         private static int[] _hotbar = Array.Empty<int>();
@@ -139,6 +140,7 @@ namespace CubeApp
             _stair = new bool[Count];
             _inventory = new bool[Count];
             _gravity = new bool[Count];
+            _lightEmission = new int[Count];
             for (int i = 0; i < Count; i++)
             {
                 _solid[i] = defs[i].Solid;
@@ -147,6 +149,7 @@ namespace CubeApp
                 _alpha[i] = defs[i].Alpha;
                 _mapColor[i] = defs[i].MapColor;
                 _inventory[i] = defs[i].Inventory;
+                _lightEmission[i] = defs[i].LightEmission;
                 _cross[i] = string.Equals(defs[i].Shape, "cross", StringComparison.OrdinalIgnoreCase);
                 _cutout[i] = _cross[i] || string.Equals(defs[i].Shape, "cutout", StringComparison.OrdinalIgnoreCase);
                 _glass[i] = string.Equals(defs[i].Shape, "glass", StringComparison.OrdinalIgnoreCase);
@@ -221,6 +224,7 @@ namespace CubeApp
         public static bool IsPartialShape(int id) => id > 0 && id < Count && (_slab[id] || _slabTop[id] || _stair[id]);
         public static bool IsInInventory(int id) => id >= 0 && id < Count && _inventory[id];
         public static bool IsGravity(int id) => id > 0 && id < Count && _gravity[id];
+        public static int LightEmissionOf(int id) => id > 0 && id < Count ? _lightEmission[id] : 0;
         public static float Alpha(int id) => _alpha[id];
         public static uint MapColorOf(int id) => _mapColor[id];
         public static TextureRect FaceTexture(int id, Point3D normal) => _defs[id].FaceTexture(normal);
