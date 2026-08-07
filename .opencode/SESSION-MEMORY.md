@@ -184,6 +184,12 @@ Part of the survival-mode vision (user's design: wood rots, dirt/sand/gravel hav
 - **KEY: `InfdevOctaves` raw output is HUGE** (accumulates noise * 2^i, low-freq octaves dominate; range measured -7.25..10.73). Do NOT use raw `Noise2D/Noise3D` for feature thresholds. Added **`Noise2DNormalized` / `Noise3DNormalized`** (`NoiseGenerator.cs`) — divides by `_weightSum` so output ~ -1..1.
 - **Verified**: 20,918 quartz across 144 chunks, 54 vein chunks; profile shows vein tracking terrain (surface 28→52 while vein 23→44, depth ~4-8); cross-section shows organic bands with gaps. Seed 42 spawn has veins in view. `quartz` block = tile 11,0 in blocks.json.
 - **Lesson**: default spawn can land in a host-gap region (quartz=0 through GameWorld at first test) — that's "sometimes" working as designed, not a bug. Bumped Frequency to make it findable.
+- **Tuning (committed eb0ea7e)**: Frequency 0.55→0.48 (slightly rarer; A/B same region 187→146 vein chunks), BaseDepth 9→18 + DepthWaviness 6→8 (deeper; avg vein top ~15 blocks down vs ~5).
+
+## 💛 SERPENTINE + GOLD — PENDING (user said WAIT until they paint the serpentine texture)
+- **Idea (real geology, user's question)**: where quartz and serpentine meet in real life you have a good chance of finding gold (Mother Lode / contact-deposit style — quartz veins cutting or running against serpentine bodies act as chemical traps for gold-bearing fluids).
+- **Game plan (agreed)**: (1) `serpentine` block — user will paint a texture first (NOT implemented yet, NO placeholder — user chose "Wait until I paint the texture"). (2) Serpentine generates as big blobby bodies that sometimes underlay or shoulder against quartz veins. (3) `gold_ore` spawns ONLY at the quartz/serpentine contact + a thin skin inside the serpentine — pure quartz with no serpentine = no gold. Makes mining into prospecting.
+- **Next step**: when user provides serpentine art (and presumably a gold-ore tile), add blocks to blocks.json, extend the vein generator (or add a companion sculptors) to place serpentine bodies near veins + gold at the seam. Revisit this entry then.
 
 
 
