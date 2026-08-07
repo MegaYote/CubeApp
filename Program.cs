@@ -449,7 +449,7 @@ namespace CubeApp
         private void DeleteHighlightedBlock()
         {
             if (World == null) return;
-            if (!World.TryBreakBlock(World.PlayerPosition, World.GetCameraForward(), out int removedBlockId, out var removedPos)) return;
+            if (!World.TryBreakBlock(World.LocalPlayer, World.PlayerPosition, World.GetCameraForward(), out int removedBlockId, out var removedPos)) return;
             gpuRenderer?.SpawnBlockBreakParticles(removedPos.x, removedPos.y, removedPos.z, removedBlockId, 12);
             needsMeshUpdate = true;
         }
@@ -457,7 +457,7 @@ namespace CubeApp
         private void PlaceSelectedBlock()
         {
             if (World == null) return;
-            if (World.TryPlaceSelectedBlock(World.PlayerPosition, World.GetCameraForward()))
+            if (World.TryPlaceSelectedBlock(World.LocalPlayer, World.PlayerPosition, World.GetCameraForward()))
             {
                 needsMeshUpdate = true;
             }

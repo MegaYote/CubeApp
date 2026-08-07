@@ -7,13 +7,16 @@ namespace CubeApp
     /// <summary>
     /// The authoritative simulation world. Everything the game simulates lives here and runs
     /// without any renderer, window or input device: chunk streaming, terrain generation, fluid
-    /// ticking, entities, the local player's physics and block editing, deep-fill, and saves.
-    /// Rendering (Program) is a pure presentation layer over GameWorld; multiplayer networking
-    /// (Phase 3+) will host a GameWorld headless and broadcast its state to clients.
+    /// ticking, entities, player physics and block editing, deep-fill, and saves. Rendering
+    /// (Program) is a pure presentation layer over GameWorld; multiplayer networking (Phase 3+)
+    /// hosts a GameWorld and broadcasts its state to clients.
     ///
-    /// Block edits made through <see cref="TryBreakBlock"/>/<see cref="TryPlaceSelectedBlock"/>
-    /// raise <see cref="BlockEdited"/> so listeners (renderer particles, network broadcaster)
-    /// can react without the sim knowing anything about them.
+    /// All player movement runs through <see cref="StepPlayer"/> which is written against
+    /// <see cref="PlayerState"/>, so the exact same physics code drives the local player, remote
+    /// players simulated by the host, and (optionally) client-side prediction.
+    ///
+    /// Block edits raise <see cref="BlockEdited"/> so listeners (renderer particles, network
+    /// broadcaster) can react without the sim knowing anything about them.
     /// </summary>
     public sealed class GameWorld : IDisposable
     {
@@ -30,22 +33,33 @@ namespace CubeApp
         private readonly Func<Renderer.IRenderer?> _getRenderer;
 
         // ---- events (networking / render hooks) ----
-        /// <summary>Raised after a local block edit is applied. Args: x, y, z, blockId, meta.</summary>
+        /// <summary>Raised after ANY block edit is applied (local or remote). Args: x, y, z, blockId, meta.</summary>
         public event Action<int, int, int, int, int>? BlockEdited;
         /// <summary>Raised when chunk generation completes (renderer wants to re-upload).</summary>
         public event Action? ChunkGenerated;
         /// <summary>Raised after a chunk is unloaded (renderer wants to free GPU buffers).</summary>
         public event Action<ChunkCoordinates>? ChunkUnloaded;
 
-        // ---- player state ----
-        public Point3D PlayerPosition; // eye position
-        public float PlayerYaw;
-        public float PlayerPitch;
-        public Point3D PlayerVelocity = new(0, 0, 0);
-        public bool PlayerGrounded;
-        public bool FlyMode;
-        public float PlayerWalkPhase;
-        public float PlayerWalkAmount;
+        // ---- local player state ----
+        public PlayerState LocalPlayer = new();
+
+        // Convenience forwards for the presentation layer (Program.cs) so the local player's
+        // common fields read/write exactly like the old standalone fields.
+        public Point3D PlayerPosition { get => LocalPlayer.Position; set => LocalPlayer.Position = value; }
+        public float PlayerYaw { get => LocalPlayer.Yaw; set => LocalPlayer.Yaw = value; }
+        public float PlayerPitch { get => LocalPlayer.Pitch; set => LocalPlayer.Pitch = value; }
+        public Point3D PlayerVelocity { get => LocalPlayer.Velocity; set => LocalPlayer.Velocity = value; }
+        public bool PlayerGrounded { get => LocalPlayer.Grounded; set => LocalPlayer.Grounded = value; }
+        public bool FlyMode { get => LocalPlayer.FlyMode; set => LocalPlayer.FlyMode = value; }
+        public float PlayerWalkPhase { get => LocalPlayer.WalkPhase; set => LocalPlayer.WalkPhase = value; }
+        public float PlayerWalkAmount { get => LocalPlayer.WalkAmount; set => LocalPlayer.WalkAmount = value; }
+
+        // ---- remote player states (host-simulated clients, keyed by client id) ----
+        private readonly Dictionary<int, PlayerState> _remotePlayers = new();
+        private readonly object _remoteLock = new();
+        public IReadOnlyCollection<PlayerState> RemotePlayers => _remotePlayers.Values;
+
+        // ---- hotbar (local UI state; not simulated) ----
         public int SelectedSlot;
         public int SelectedBlock;
         public int[] Hotbar;
@@ -103,19 +117,40 @@ namespace CubeApp
             BlockTicks = new BlockTickScheduler(Chunks, Mesher);
         }
 
+        // ---- remote player management (host-side) ----
+        public PlayerState AddRemotePlayer(int clientId)
+        {
+            lock (_remoteLock)
+            {
+                var state = new PlayerState();
+                _remotePlayers[clientId] = state;
+                return state;
+            }
+        }
+
+        public bool TryGetRemotePlayer(int clientId, out PlayerState state)
+        {
+            lock (_remoteLock) return _remotePlayers.TryGetValue(clientId, out state!);
+        }
+
+        public void RemoveRemotePlayer(int clientId)
+        {
+            lock (_remoteLock) _remotePlayers.Remove(clientId);
+        }
+
         // ------------------------------------------------------------------
         // lifecycle
         // ------------------------------------------------------------------
 
         public void EnsureVisibleChunks() => Chunks.EnsureChunksAround(
-            WorldToChunkCoord(PlayerPosition.X), WorldToChunkCoord(PlayerPosition.Z), SpawnSyncRadius);
+            WorldToChunkCoord(LocalPlayer.Position.X), WorldToChunkCoord(LocalPlayer.Position.Z), SpawnSyncRadius);
 
         public void PlaceCameraAtSafeSpawn()
         {
             var spawn = FindSafeSpawnPosition();
-            if (spawn.HasValue) PlayerPosition = spawn.Value;
-            PlayerVelocity = new Point3D(0, 0, 0);
-            PlayerGrounded = true;
+            if (spawn.HasValue) LocalPlayer.Position = spawn.Value;
+            LocalPlayer.Velocity = new Point3D(0, 0, 0);
+            LocalPlayer.Grounded = true;
         }
 
         public void SetSelectedSlot(int slot)
@@ -125,21 +160,23 @@ namespace CubeApp
             SelectedBlock = Hotbar[slot];
         }
 
-        public void ApplyLookInput(Vector2 lookDelta)
+        public void ApplyLookInput(Vector2 lookDelta) => ApplyLookInput(LocalPlayer, lookDelta);
+
+        public void ApplyLookInput(PlayerState p, Vector2 lookDelta)
         {
-            PlayerYaw -= lookDelta.X;
-            PlayerYaw = NormalizeYaw(PlayerYaw);
-            PlayerPitch = Math.Clamp(PlayerPitch - lookDelta.Y, -89f, 89f);
+            p.Yaw -= lookDelta.X;
+            p.Yaw = NormalizeYaw(p.Yaw);
+            p.Pitch = Math.Clamp(p.Pitch - lookDelta.Y, -89f, 89f);
         }
 
         /// <summary>Advance the simulation by one frame. Pure logic; no rendering here.</summary>
         public void StepSimulation(TickInputState tickInput, float deltaSeconds)
         {
             BlockTicks?.Tick(deltaSeconds);
-            UpdatePlayerMovement(tickInput, deltaSeconds);
+            StepPlayer(LocalPlayer, tickInput, deltaSeconds);
             Entities.Update(deltaSeconds);
-            int chunkX = WorldToChunkCoord(PlayerPosition.X);
-            int chunkZ = WorldToChunkCoord(PlayerPosition.Z);
+            int chunkX = WorldToChunkCoord(LocalPlayer.Position.X);
+            int chunkZ = WorldToChunkCoord(LocalPlayer.Position.Z);
             // Request/unload scans cost O(radius^2) + O(loadedChunks); only run them when the
             // player actually enters a new chunk column (or the render distance changed).
             if (_forceChunkStream || chunkX != _lastStreamChunkX || chunkZ != _lastStreamChunkZ)
@@ -147,23 +184,42 @@ namespace CubeApp
                 _forceChunkStream = false;
                 _lastStreamChunkX = chunkX;
                 _lastStreamChunkZ = chunkZ;
-                Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, PlayerPosition);
+                Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position);
                 var unloaded = Chunks.UnloadChunksOutside(chunkX, chunkZ, ChunkRenderRadius);
                 foreach (var uc in unloaded) ChunkUnloaded?.Invoke(uc);
             }
             UpdateDeepFill();
         }
 
+        /// <summary>Simulates remote players without touching the local player's camera/chunks.
+        /// The host calls this each frame with each client's received input.</summary>
+        public void StepRemotePlayers(float deltaSeconds)
+        {
+            PlayerState[] states;
+            lock (_remoteLock)
+            {
+                states = new PlayerState[_remotePlayers.Count];
+                int i = 0;
+                foreach (var s in _remotePlayers.Values) states[i++] = s;
+            }
+            foreach (var s in states)
+            {
+                // Remote players use the same physics; their input is applied by the network
+                // layer via ApplyRemoteInput (latest received TickInputState).
+                StepPlayer(s, s.PendingInput, deltaSeconds);
+            }
+        }
+
         // ------------------------------------------------------------------
-        // player movement (ported from Program.cs, same constants & feel)
+        // player movement (generic on PlayerState; local + remote share this)
         // ------------------------------------------------------------------
 
-        private void UpdatePlayerMovement(TickInputState tickInput, float deltaSeconds)
+        public void StepPlayer(PlayerState p, TickInputState tickInput, float deltaSeconds)
         {
-            if (FlyMode)
+            if (p.FlyMode)
             {
-                var flyForward = GetCameraForward();
-                var flyRight = GetCameraRight(PlayerYaw);
+                var flyForward = GetCameraForward(p);
+                var flyRight = GetCameraRight(p.Yaw);
                 var flyDir = new Point3D(0, 0, 0);
                 if (tickInput.MoveForward) flyDir += flyForward;
                 if (tickInput.MoveBackward) flyDir -= flyForward;
@@ -176,19 +232,19 @@ namespace CubeApp
                     double len = Math.Sqrt(flyDir.X * flyDir.X + flyDir.Y * flyDir.Y + flyDir.Z * flyDir.Z);
                     flyDir *= 1.0 / len;
                 }
-                PlayerVelocity = flyDir * FlySpeed;
-                PlayerPosition = new Point3D(
-                    PlayerPosition.X + PlayerVelocity.X * deltaSeconds,
-                    PlayerPosition.Y + PlayerVelocity.Y * deltaSeconds,
-                    PlayerPosition.Z + PlayerVelocity.Z * deltaSeconds);
-                PlayerGrounded = false;
-                PlayerWalkAmount = 0f;
+                p.Velocity = flyDir * FlySpeed;
+                p.Position = new Point3D(
+                    p.Position.X + p.Velocity.X * deltaSeconds,
+                    p.Position.Y + p.Velocity.Y * deltaSeconds,
+                    p.Position.Z + p.Velocity.Z * deltaSeconds);
+                p.Grounded = false;
+                p.WalkAmount = 0f;
                 return;
             }
 
-            var forwardWalk = GetCameraForward();
+            var forwardWalk = GetCameraForward(p);
             var forwardHorizontal = new Point3D(forwardWalk.X, 0, forwardWalk.Z).Normalized();
-            var right = GetCameraRight(PlayerYaw);
+            var right = GetCameraRight(p.Yaw);
             var desiredDirection = new Point3D(0, 0, 0);
             if (tickInput.MoveForward) desiredDirection += forwardHorizontal;
             if (tickInput.MoveBackward) desiredDirection -= forwardHorizontal;
@@ -200,96 +256,96 @@ namespace CubeApp
                 desiredDirection *= 1.0 / length;
             }
 
-            bool feetInWater = PlayerSampleInWater(0.05);
-            bool bodyInWater = PlayerSampleInWater(PlayerHeight * 0.4);
-            bool headInWater = PlayerSampleInWater(PlayerHeight * 0.85);
+            bool feetInWater = PlayerSampleInWater(p, 0.05);
+            bool bodyInWater = PlayerSampleInWater(p, PlayerHeight * 0.4);
+            bool headInWater = PlayerSampleInWater(p, PlayerHeight * 0.85);
             bool inWater = feetInWater || bodyInWater || headInWater;
             if (inWater)
             {
                 double submerged = (feetInWater ? 0.25 : 0) + (bodyInWater ? 0.5 : 0) + (headInWater ? 0.25 : 0);
                 var swimSpeed = desiredDirection * (WalkSpeed * 0.42);
-                PlayerVelocity = new Point3D(swimSpeed.X, PlayerVelocity.Y, swimSpeed.Z);
-                PlayerVelocity = new Point3D(
-                    PlayerVelocity.X,
-                    PlayerVelocity.Y * Math.Pow(0.96, deltaSeconds * 60.0),
-                    PlayerVelocity.Z);
+                p.Velocity = new Point3D(swimSpeed.X, p.Velocity.Y, swimSpeed.Z);
+                p.Velocity = new Point3D(
+                    p.Velocity.X,
+                    p.Velocity.Y * Math.Pow(0.96, deltaSeconds * 60.0),
+                    p.Velocity.Z);
                 double waterGravity = Gravity * Math.Max(0.16, 0.42 - submerged * 0.20);
-                PlayerVelocity = new Point3D(
-                    PlayerVelocity.X,
-                    PlayerVelocity.Y - waterGravity * deltaSeconds,
-                    PlayerVelocity.Z);
+                p.Velocity = new Point3D(
+                    p.Velocity.X,
+                    p.Velocity.Y - waterGravity * deltaSeconds,
+                    p.Velocity.Z);
                 if (tickInput.MoveUp)
                 {
                     double swimLift = bodyInWater ? 0.58 : 0.7;
-                    PlayerVelocity = new Point3D(
-                        PlayerVelocity.X,
-                        Math.Max(PlayerVelocity.Y, JumpVelocity * swimLift),
-                        PlayerVelocity.Z);
+                    p.Velocity = new Point3D(
+                        p.Velocity.X,
+                        Math.Max(p.Velocity.Y, JumpVelocity * swimLift),
+                        p.Velocity.Z);
                 }
-                var swimDisplacement = PlayerVelocity * deltaSeconds;
-                MovePlayerWithCollisions(swimDisplacement);
-                double swimHSpeed = Math.Sqrt(PlayerVelocity.X * PlayerVelocity.X + PlayerVelocity.Z * PlayerVelocity.Z);
-                PlayerWalkAmount = (float)Math.Min(1.0, swimHSpeed / WalkSpeed);
-                PlayerWalkPhase += deltaSeconds * PlayerWalkAmount * 10f;
+                var swimDisplacement = p.Velocity * deltaSeconds;
+                MovePlayerWithCollisions(p, swimDisplacement);
+                double swimHSpeed = Math.Sqrt(p.Velocity.X * p.Velocity.X + p.Velocity.Z * p.Velocity.Z);
+                p.WalkAmount = (float)Math.Min(1.0, swimHSpeed / WalkSpeed);
+                p.WalkPhase += deltaSeconds * p.WalkAmount * 10f;
                 return;
             }
 
             var horizontalVelocity = desiredDirection * WalkSpeed;
-            var verticalVelocity = PlayerVelocity.Y;
-            if (tickInput.JumpPressed && PlayerGrounded)
+            var verticalVelocity = p.Velocity.Y;
+            if (tickInput.JumpPressed && p.Grounded)
             {
                 verticalVelocity = JumpVelocity;
-                PlayerGrounded = false;
+                p.Grounded = false;
             }
             verticalVelocity -= Gravity * deltaSeconds;
             if (verticalVelocity < -MaxFallSpeed) verticalVelocity = -MaxFallSpeed;
-            PlayerVelocity = new Point3D(horizontalVelocity.X, verticalVelocity, horizontalVelocity.Z);
-            var frameDisplacement = PlayerVelocity * deltaSeconds;
-            MovePlayerWithCollisions(frameDisplacement);
+            p.Velocity = new Point3D(horizontalVelocity.X, verticalVelocity, horizontalVelocity.Z);
+            var frameDisplacement = p.Velocity * deltaSeconds;
+            MovePlayerWithCollisions(p, frameDisplacement);
 
-            double hSpeed = Math.Sqrt(PlayerVelocity.X * PlayerVelocity.X + PlayerVelocity.Z * PlayerVelocity.Z);
-            PlayerWalkAmount = (float)Math.Min(1.0, hSpeed / WalkSpeed);
-            PlayerWalkPhase += deltaSeconds * PlayerWalkAmount * 10f;
+            double hSpeed = Math.Sqrt(p.Velocity.X * p.Velocity.X + p.Velocity.Z * p.Velocity.Z);
+            p.WalkAmount = (float)Math.Min(1.0, hSpeed / WalkSpeed);
+            p.WalkPhase += deltaSeconds * p.WalkAmount * 10f;
         }
 
-        private void MovePlayerWithCollisions(Point3D displacement)
+        private void MovePlayerWithCollisions(PlayerState p, Point3D displacement)
         {
             bool hitX = false, hitY = false, hitZ = false;
-            var start = PlayerPosition;
-            PlayerPosition = MoveAlongAxis(PlayerPosition, displacement.X, Axis.X, ref hitX);
-            PlayerPosition = MoveAlongAxis(PlayerPosition, displacement.Y, Axis.Y, ref hitY);
-            PlayerPosition = MoveAlongAxis(PlayerPosition, displacement.Z, Axis.Z, ref hitZ);
+            var start = p.Position;
+            p.Position = MoveAlongAxis(p.Position, displacement.X, Axis.X, ref hitX);
+            p.Position = MoveAlongAxis(p.Position, displacement.Y, Axis.Y, ref hitY);
+            p.Position = MoveAlongAxis(p.Position, displacement.Z, Axis.Z, ref hitZ);
             if (hitX || hitZ)
             {
-                var stepped = TryStepUp(start, displacement);
+                var stepped = TryStepUp(p, start, displacement);
                 if (stepped.HasValue)
                 {
-                    PlayerPosition = stepped.Value;
+                    p.Position = stepped.Value;
                     hitX = hitZ = false;
                     hitY = true;
-                    PlayerGrounded = true;
+                    p.Grounded = true;
                 }
             }
-            if (hitX) PlayerVelocity = new Point3D(0, PlayerVelocity.Y, PlayerVelocity.Z);
-            if (hitZ) PlayerVelocity = new Point3D(PlayerVelocity.X, PlayerVelocity.Y, 0);
+            if (hitX) p.Velocity = new Point3D(0, p.Velocity.Y, p.Velocity.Z);
+            if (hitZ) p.Velocity = new Point3D(p.Velocity.X, p.Velocity.Y, 0);
             if (hitY)
             {
-                if (PlayerVelocity.Y <= 0) PlayerGrounded = true;
-                PlayerVelocity = new Point3D(PlayerVelocity.X, 0, PlayerVelocity.Z);
+                if (p.Velocity.Y <= 0) p.Grounded = true;
+                p.Velocity = new Point3D(p.Velocity.X, 0, p.Velocity.Z);
             }
-            else PlayerGrounded = false;
+            else p.Grounded = false;
         }
 
-        private bool PlayerSampleInWater(double heightOffset)
+        private bool PlayerSampleInWater(PlayerState p, double heightOffset)
         {
             int id = BlockRegistry.GetId("water");
-            int x = (int)Math.Floor(PlayerPosition.X);
-            int y = (int)Math.Floor(PlayerPosition.Y - EyeHeight + heightOffset);
-            int z = (int)Math.Floor(PlayerPosition.Z);
+            int x = (int)Math.Floor(p.Position.X);
+            int y = (int)Math.Floor(p.Position.Y - EyeHeight + heightOffset);
+            int z = (int)Math.Floor(p.Position.Z);
             return Chunks.TryGetLoadedBlock(x, y, z, out var block) && block == id;
         }
 
-        private Point3D? TryStepUp(Point3D start, Point3D displacement)
+        private Point3D? TryStepUp(PlayerState p, Point3D start, Point3D displacement)
         {
             const double maxStepHeight = 0.5;
             var raised = new Point3D(start.X, start.Y + maxStepHeight, start.Z);
@@ -399,7 +455,7 @@ namespace CubeApp
 
         /// <summary>Breaks the block the player is looking at. Returns true if a block was removed,
         /// with the block's world position and previous id (for particle spawning).</summary>
-        public bool TryBreakBlock(Point3D origin, Point3D direction, out int removedBlockId, out (int x, int y, int z) removedPos)
+        public bool TryBreakBlock(PlayerState p, Point3D origin, Point3D direction, out int removedBlockId, out (int x, int y, int z) removedPos)
         {
             removedBlockId = 0;
             removedPos = default;
@@ -417,7 +473,7 @@ namespace CubeApp
         }
 
         /// <summary>Places the currently selected block at the targeted face. Returns true if placed.</summary>
-        public bool TryPlaceSelectedBlock(Point3D origin, Point3D direction)
+        public bool TryPlaceSelectedBlock(PlayerState p, Point3D origin, Point3D direction)
         {
             var pickResult = TryPickBlock(origin, direction, out double hitDistance);
             if (!pickResult.HasValue) return false;
@@ -448,7 +504,7 @@ namespace CubeApp
             }
             else if (BlockRegistry.IsStair(blockToPlace))
             {
-                meta = StairFacingMeta();
+                meta = StairFacingMeta(p);
             }
             else
             {
@@ -459,12 +515,24 @@ namespace CubeApp
                 }
             }
 
-            if (WouldBlockIntersectPlayer(place.x, place.y, place.z, blockToPlace, meta)) return false;
+            if (WouldBlockIntersectPlayer(p, place.x, place.y, place.z, blockToPlace, meta)) return false;
             if (!Chunks.TrySetBlock(place.x, place.y, place.z, blockToPlace, meta)) return false;
             BlockTicks?.OnBlockChanged(place.x, place.y, place.z);
             var editedChunk = new ChunkCoordinates(WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));
             Mesher.RequestImmediateRemesh(editedChunk);
             BlockEdited?.Invoke(place.x, place.y, place.z, blockToPlace, meta);
+            return true;
+        }
+
+        /// <summary>Applies a block edit from the network (host authority). Same side effects as a
+        /// local edit: sets the block, wakes fluids, remeshes, fires BlockEdited.</summary>
+        public bool ApplyBlockEdit(int x, int y, int z, int blockId, int meta)
+        {
+            if (!Chunks.TrySetBlockLoadedOnly(x, y, z, blockId, meta)) return false;
+            BlockTicks?.OnBlockChanged(x, y, z);
+            var editedChunk = new ChunkCoordinates(WorldToChunkCoord(x), WorldToChunkCoord(z));
+            Mesher.RequestImmediateRemesh(editedChunk);
+            BlockEdited?.Invoke(x, y, z, blockId, meta);
             return true;
         }
 
@@ -513,9 +581,9 @@ namespace CubeApp
         private static int SlabTopIdFor(int slabId)
             => BlockRegistry.GetId(SlabMaterialOf(slabId) + "_slab_top");
 
-        private int StairFacingMeta()
+        private int StairFacingMeta(PlayerState p)
         {
-            float yawRad = PlayerYaw * (float)Math.PI / 180f;
+            float yawRad = p.Yaw * (float)Math.PI / 180f;
             double dirX = Math.Sin(yawRad);
             double dirZ = Math.Cos(yawRad);
             if (Math.Abs(dirX) > Math.Abs(dirZ))
@@ -523,14 +591,14 @@ namespace CubeApp
             return dirZ > 0 ? 2 : 3;
         }
 
-        private bool WouldBlockIntersectPlayer(int x, int y, int z, int blockId, int meta)
+        private bool WouldBlockIntersectPlayer(PlayerState p, int x, int y, int z, int blockId, int meta)
         {
-            double minX = PlayerPosition.X - PlayerRadius;
-            double maxX = PlayerPosition.X + PlayerRadius;
-            double minY = PlayerPosition.Y - EyeHeight;
+            double minX = p.Position.X - PlayerRadius;
+            double maxX = p.Position.X + PlayerRadius;
+            double minY = p.Position.Y - EyeHeight;
             double maxY = minY + PlayerHeight;
-            double minZ = PlayerPosition.Z - PlayerRadius;
-            double maxZ = PlayerPosition.Z + PlayerRadius;
+            double minZ = p.Position.Z - PlayerRadius;
+            double maxZ = p.Position.Z + PlayerRadius;
             return BoxesOverlapPlayer(GetBlockCollisionBoxes(blockId, meta), x, y, z, minX, maxX, minY, maxY, minZ, maxZ);
         }
 
@@ -602,8 +670,8 @@ namespace CubeApp
 
         private Point3D? FindSafeSpawnPosition()
         {
-            int baseX = (int)Math.Floor(PlayerPosition.X);
-            int baseZ = (int)Math.Floor(PlayerPosition.Z);
+            int baseX = (int)Math.Floor(LocalPlayer.Position.X);
+            int baseZ = (int)Math.Floor(LocalPlayer.Position.Z);
             const int seaLevelWorldY = 0;
             for (int radius = 0; radius <= 64; radius++)
             {
@@ -655,12 +723,12 @@ namespace CubeApp
         {
             if (Chunks == null || ChunkProvider == null) return;
             const double deepThreshold = -32.0;
-            bool isDeep = PlayerPosition.Y < deepThreshold;
+            bool isDeep = LocalPlayer.Position.Y < deepThreshold;
             ChunkProvider.AutoDeepFill = isDeep;
             if (!isDeep) return;
 
-            int cx = (int)Math.Floor(PlayerPosition.X / ChunkManager.ChunkSize);
-            int cz = (int)Math.Floor(PlayerPosition.Z / ChunkManager.ChunkSize);
+            int cx = (int)Math.Floor(LocalPlayer.Position.X / ChunkManager.ChunkSize);
+            int cz = (int)Math.Floor(LocalPlayer.Position.Z / ChunkManager.ChunkSize);
 
             foreach (var ch in Chunks.GetLoadedChunks())
             {
@@ -680,10 +748,12 @@ namespace CubeApp
         // helpers (camera math used by both sim and render)
         // ------------------------------------------------------------------
 
-        public Point3D GetCameraForward()
+        public Point3D GetCameraForward() => GetCameraForward(LocalPlayer);
+
+        public Point3D GetCameraForward(PlayerState p)
         {
-            var yawRad = PlayerYaw * Math.PI / 180.0;
-            var pitchRad = PlayerPitch * Math.PI / 180.0;
+            var yawRad = p.Yaw * Math.PI / 180.0;
+            var pitchRad = p.Pitch * Math.PI / 180.0;
             var cosPitch = Math.Cos(pitchRad);
             return new Point3D(cosPitch * Math.Sin(yawRad), Math.Sin(pitchRad), cosPitch * Math.Cos(yawRad)).Normalized();
         }
