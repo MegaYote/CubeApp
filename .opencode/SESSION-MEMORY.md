@@ -214,6 +214,30 @@ Part of the survival-mode vision (user's design: wood rots, dirt/sand/gravel hav
 - **Lesson**: worker-exception logs (mesh_worker.log / chunkgen_worker.log) are the FIRST place to check when "the world is gone" — a silent per-chunk catch makes it LOOK like missing features instead of crashes.
 - Crosshair (committed 8/7): classic four-arm + with clean center gap (no dot), 6px arms / 3px gap / 1.5px lines, subtle dark outline for visibility against sky. `*.log` added to .gitignore.
 
+## 🕷️ NIGHTMARE DEEP CAVES (8/7, committed b580fc3, user asked "go ham wild - too scared to explore")
+- **User request**: make the super deep world (world -256..-65) have IMMENSELY crazy and scary caves. ONLY cave generation — NO extra blocks/decorations.
+- **DeepChunkProvider.GenerateNightmareCaves** (replaces the old 2-5 tiny walkers): systems spawn from a **17x17 neighbourhood of chunk seeds** (like ground caves) so tunnels/shafts/caverns carry SEAMLESSLY across chunk borders. ~1 in 3 neighbour seeds hosts a system, occasionally two.
+- **4 system types** (`CarveSystem`, recursive depth<=3, each spawns 1-4 branches of random type):
+  - **0 MEGA CAVERN**: radius 6-15, cathedral-scale, short+fat, **leaves a stone pillar core** (`leavePillar`, radius ~size*0.35+1) so chambers read as grand halls with columns.
+  - **1 WEB TUNNEL**: radius 2.5-5, long 30-85, branches 2-5.
+  - **2 VERTICAL SHAFT**: radius 2-5.5, pitch ±(0.88-0.99) near-straight pits/chimneys, 25-70 long.
+  - **3 CRAWL**: radius 1-2.5, thin winding claustrophobic, 40-110 long.
+- **Jagged raw walls**: `CarveNode` radius = sine-bulge * (0.7 + 0.5*sin(len*0.55 + wobbleSeed)) so nothing is smooth. Never carves bedrock floor (minY clamp 4). Result: **35% air** across the deep (vs <5% ground band).
+- **Why scary**: 1.12 lighting = pure black down there; 35% hollow; whole chunks fully carved; continuous cross-border labyrinth.
+
+## 🔦 FULLBRIGHT MODE (8/7, committed after b580fc3) — F6 toggle
+- **ChunkLighting.Fullbright** static flag: `Brightness()` returns 1.0 for every light level (whole world renders fully lit — peek into the black deep without torches).
+- Brightness is baked per-face at mesh time, so toggling in Program.cs (`frameInput.ToggleFullbrightPressed`) flips the flag AND marks every loaded chunk `NeedsRemesh` (one hitch on toggle).
+- Wired through FrameInputState + InputProcessor (Key.F6), HudState.Fullbright, F3 overlay shows `Fullbright: ON/OFF [F6]`.
+
+## 🕳️ BEDROCK PENETRATION (8/7, committed 9ff5aa0, user asked "regular layer caves should penetrate the 1st bedrock layer")
+- Ground-layer caves can now **bore through the bedrock floor** (world -64) into the deep:
+  1. `GenerateCaveNode` minY clamp 1→0 (tubes can open the very bottom row).
+  2. 1-in-3 caves spawn LOW in the band (`terrainBandStart + rand.Next(16)`) as "deep divers" that actually reach the floor.
+  3. **`ChunkManager.SyncDeepAccess`**: when the deep chunk (world -65) is created, copy the ground chunk's bottom-row AIR openings onto the deep chunk's TOP row (deep local 191) — so the player falls straight through into the deep instead of hitting a solid ceiling one block down. Runs on BOTH creation orders (deep created first: sync after gen; ground created first: push to already-loaded deep chunk).
+- Verified: 38/64 test chunks have ≥1 fall-through point (2487 total columns). Orphan deep-top holes (deep cave ceiling w/o ground opening) are natural deep-cave ceilings (bedrock above), not leaks.
+- **Design note**: this is the intended progression — dig into a ground cave that bottoms out below the bedrock line, drop down into the nightmare layer.
+
 
 
 
