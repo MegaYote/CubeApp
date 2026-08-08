@@ -13,6 +13,8 @@ namespace CubeApp.Renderer
         public bool InventoryOpen;
         public bool FlyMode;
         public bool Fullbright;
+        /// <summary>Day/night clock (world ticks). Used by the renderer to dim sky + world light.</summary>
+        public long WorldTime;
         /// <summary>Shared menu state (screen + create-world form + button flags).</summary>
         public MenuState Menu;
         public float Fps;

@@ -178,6 +178,9 @@ namespace CubeApp
         /// <summary>Advance the simulation by one frame. Pure logic; no rendering here.</summary>
         public void StepSimulation(TickInputState tickInput, float deltaSeconds)
         {
+            // Day/night clock: 1 world tick per simulation step (Infdev: worldTime advances once
+            // per tick, full cycle = 24000 ticks = 20 minutes).
+            WorldTime++;
             BlockTicks?.Tick(deltaSeconds);
             StepPlayer(LocalPlayer, tickInput, deltaSeconds);
             Entities.Update(deltaSeconds, LocalPlayer.Position, true);
@@ -218,6 +221,48 @@ namespace CubeApp
         private const double SkyStreamThreshold = 350.0;
         private bool _lastBelowDeep;
         private bool _lastAboveSky;
+
+        /// <summary>Day/night clock in world ticks. Full cycle = 24000 ticks (Infdev).</summary>
+        public long WorldTime { get; private set; }
+
+        /// <summary>
+        /// Infdev's getCelestialAngle: 0..1 sun position across the day (0.25 = dawn, 0.75 = dusk).
+        /// Faithful port of World.getCelestialAngle.
+        /// </summary>
+        public float GetCelestialAngle(float partialTick)
+        {
+            long t = WorldTime % 24000;
+            float ang = (float)(t + partialTick) / 24000.0f - 0.25f;
+            if (ang < 0f) ang += 1f;
+            if (ang > 1f) ang -= 1f;
+            float raw = ang;
+            ang = 1f - (float)((Math.Cos(ang * Math.PI) + 1.0) / 2.0);
+            ang = raw + (ang - raw) / 3f;
+            return ang;
+        }
+
+        /// <summary>
+        /// Infdev's calculateSkylightSubtracted: 0 (noon) .. 11 (midnight) amount subtracted from
+        /// sky light at render time. Faithful port of World.calculateSkylightSubtracted.
+        /// </summary>
+        public int CalculateSkylightSubtracted(float partialTick)
+        {
+            float celestial = GetCelestialAngle(partialTick);
+            float v = 1f - (float)(Math.Cos(celestial * Math.PI * 2.0) * 2.0 + 0.5);
+            if (v < 0f) v = 0f;
+            if (v > 1f) v = 1f;
+            return (int)(v * 11f);
+        }
+
+        /// <summary>Infdev's sky-color dimming factor (1.0 at noon, near 0 at midnight).</summary>
+        public float GetSkyBrightnessFactor(float partialTick)
+        {
+            float celestial = GetCelestialAngle(partialTick);
+            float v = (float)(Math.Cos(celestial * Math.PI * 2.0) * 2.0 + 0.5);
+            if (v < 0f) v = 0f;
+            if (v > 1f) v = 1f;
+            return v;
+        }
 
         /// <summary>Simulates remote players without touching the local player's camera/chunks.
         /// The host calls this each frame with each client's received input.</summary>

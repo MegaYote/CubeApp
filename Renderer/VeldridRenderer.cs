@@ -24,6 +24,13 @@ namespace CubeApp.Renderer
         private ResourceLayout _fogLayout;
         private ResourceSet _fogSet;
         private readonly float[] _fogParams = new float[12];
+        // Day/night: computed from HudState.WorldTime each frame. _nightDim scales world light,
+        // _nightSkyDim scales the fog color toward night dark.
+        private float _nightDim = 1f;
+        private float _nightSkyDim = 1f;
+        private float _nightSkyR = 136f / 255f;
+        private float _nightSkyG = 187f / 255f;
+        private float _nightSkyB = 1f;
         private Texture _atlasTexture;
         private TextureView _atlasView;
         private Sampler _atlasSampler;
@@ -1002,6 +1009,7 @@ layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;   // rgb + pad
     vec2 fogRange;   // start, end
     vec4 cameraPos;  // xyz + pad
+    vec2 night;      // x = world light dim (Infdev skylight subtraction), y = sky dim
 };
 layout(location=0) out vec4 outColor;
 void main() {
@@ -1015,6 +1023,8 @@ void main() {
     float dist = length(vWorldPos - cameraPos.xyz);
     float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
     outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);
+    // Day/night: dim the world by Infdev's skylight-subtraction factor.
+    outColor.rgb *= night.x;
 }";
 
             var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
@@ -1079,6 +1089,7 @@ layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;
     vec2 fogRange;
     vec4 cameraPos;
+    vec2 night;
 };
 layout(location=0) out vec4 outColor;
 void main() {
@@ -1089,6 +1100,7 @@ void main() {
     float dist = length(vWorldPos - cameraPos.xyz);
     float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
     outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);
+    outColor.rgb *= night.x;
 }";
             var cutoutFsSpirv = SpirvCompilation.CompileGlslToSpirv(cutoutFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
             var cutoutFsDesc = new ShaderDescription(ShaderStages.Fragment, cutoutFsSpirv.SpirvBytes, "main");
@@ -1137,6 +1149,7 @@ layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;
     vec2 fogRange;
     vec4 cameraPos;
+    vec2 night;
 };
 layout(location=0) out vec4 outColor;
 void main() {
@@ -1148,6 +1161,7 @@ void main() {
     float dist = length(vWorldPos - cameraPos.xyz);
     float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
     outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);
+    outColor.rgb *= night.x;
 }";
             var tintFsSpirv = SpirvCompilation.CompileGlslToSpirv(tintFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
             var tintShaders = factory.CreateFromSpirv(vsDesc, new ShaderDescription(ShaderStages.Fragment, tintFsSpirv.SpirvBytes, "main"));
@@ -2293,7 +2307,48 @@ void main() {
                 _fogParams[8] = (float)_cameraPosition.Value.Z;
             }
             _fogParams[9] = 1f;
+
+            // Day/night dim factor (Infdev skylight subtraction at render time). Reused slot: the
+            // world fragment shaders multiply their final color by this 0..1 value. The fog color
+            // itself also rides down at night so the horizon darkens with the sky.
+            ComputeNightFactors();
+            _fogParams[10] = _nightDim;      // world light multiplier
+            _fogParams[11] = _nightSkyDim;   // fog color multiplier (fades to dark)
             _gd.UpdateBuffer(_fogBuffer, 0, _fogParams);
+        }
+
+        // Infdev's celestial-angle based dimming. The world light multiplier follows
+        // calculateSkylightSubtracted (sky light 15 loses up to 11 at midnight); the fog color and
+        // sky gradient use getSkyColor's cosine factor. Faithful to World.java.
+        private void ComputeNightFactors()
+        {
+            long t = _hud.WorldTime % 24000;
+            float ang = (t) / 24000.0f - 0.25f;
+            if (ang < 0f) ang += 1f;
+            if (ang > 1f) ang -= 1f;
+            float raw = ang;
+            float eased = 1f - (float)((Math.Cos(ang * Math.PI) + 1.0) / 2.0);
+            ang = raw + (eased - raw) / 3f;
+
+            // getSkyColor cosine factor (1 at noon -> 0 at midnight).
+            float sky = (float)(Math.Cos(ang * Math.PI * 2.0) * 2.0 + 0.5);
+            if (sky < 0f) sky = 0f;
+            if (sky > 1f) sky = 1f;
+            _nightSkyDim = sky;
+
+            // World light: Infdev subtracts up to 11 from sky light at night, so brightness runs
+            // from full to a dim floor. Map subtracted 0..11 onto a 1..~0.15 multiplier.
+            float sub = 1f - (float)(Math.Cos(ang * Math.PI * 2.0) * 2.0 + 0.5);
+            if (sub < 0f) sub = 0f;
+            if (sub > 1f) sub = 1f;
+            int subtracted = (int)(sub * 11f);
+            _nightDim = 1f - subtracted / 15f;
+            if (_nightDim < 0.12f) _nightDim = 0.12f;
+
+            // Sky gradient base colors ride the sky factor (Infdev skyColor * sky factor).
+            _nightSkyR = (136f / 255f) * Math.Max(sky, 0.1f);
+            _nightSkyG = (187f / 255f) * Math.Max(sky, 0.1f);
+            _nightSkyB = 1f * Math.Max(sky, 0.1f);
         }
 
         // Renders the Infdev sky: two giant fog-blended planes in CAMERA SPACE - the TOP plane sits
@@ -2307,17 +2362,20 @@ void main() {
         {
             if (_skyPipeline == null) return;
 
-            // Infdev sky colors at full daylight (World.skyColor = 0x88BBFF, fogColor = 0xC0D8FF).
-            float skyR = 136f / 255f, skyG = 187f / 255f, skyB = 1f;
+            // Infdev sky colors, dimmed by the celestial angle (World.skyColor = 0x88BBFF at noon,
+            // multiplied by getSkyColor's cosine factor at night). ComputeNightFactors ran just
+            // before this in UpdateFog.
+            float skyR = _nightSkyR, skyG = _nightSkyG, skyB = _nightSkyB;
             float darkR = skyR * 0.2f + 0.04f;
             float darkG = skyG * 0.2f + 0.04f;
             float darkB = skyB * 0.6f + 0.1f;
 
             // Infdev's sky fog: setupFog(-1) = linear 0 .. farPlane*0.8. The camera sits at the
             // origin of camera space, so the fog distance is just the fragment's position length.
-            _skyFogParams[0] = 192f / 255f;
-            _skyFogParams[1] = 216f / 255f;
-            _skyFogParams[2] = 1f;
+            // The fog color darkens with the sky at night so the horizon blends seamlessly.
+            _skyFogParams[0] = (192f / 255f) * Math.Max(_nightSkyDim, 0.1f);
+            _skyFogParams[1] = (216f / 255f) * Math.Max(_nightSkyDim, 0.1f);
+            _skyFogParams[2] = 1f * Math.Max(_nightSkyDim, 0.1f);
             _skyFogParams[3] = 1f;
             _skyFogParams[4] = 0f;
             _skyFogParams[5] = _farPlane * 0.8f;

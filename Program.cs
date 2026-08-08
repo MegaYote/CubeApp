@@ -734,7 +734,7 @@ namespace CubeApp
             if (pickResult.HasValue) highlightQuad = ComputeHighlightWorldQuad(pickResult.Value);
             return new HudState
             {
-                ShowDebug = showFps, InventoryOpen = inventoryOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
+                ShowDebug = showFps, InventoryOpen = inventoryOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
                 MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                 FacingText = $"{GetCompassDirection(World.PlayerYaw)} ({GameWorld.NormalizeYaw(World.PlayerYaw):0.0} deg)",
                 SelectedBlockText = $"Selected: {BlockRegistry.GetName(World.SelectedBlock)}",
