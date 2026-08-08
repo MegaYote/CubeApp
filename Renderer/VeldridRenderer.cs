@@ -1943,6 +1943,9 @@ void main() {
         public void SetHud(HudState hud)
         {
             _hud = hud;
+            // Compute night factors here (before Render) so the clear color, sky, fog, clouds and
+            // mobs all use the CURRENT frame's time - no one-frame lag at the clear.
+            ComputeNightFactors();
         }
 
         /// <summary>Feeds the active falling-block entities to the renderer (drawn as 3D cubes
@@ -2080,7 +2083,11 @@ void main() {
             // sky color. The sky planes fade to this same fog color at the far plane, so clearing to
             // fog color makes the horizon band (where the flat sky planes are clipped) blend
             // seamlessly instead of showing a bright sky-blue ring that follows the camera.
-            cl.ClearColorTarget(0, new RgbaFloat(192f / 255f, 216f / 255f, 1f, 1f));
+            // At night the fog color rides the celestial dim so the horizon gap darkens with the sky.
+            cl.ClearColorTarget(0, new RgbaFloat(
+                (192f / 255f) * _nightSkyDim,
+                (216f / 255f) * _nightSkyDim,
+                1f * _nightSkyDim, 1f));
             cl.ClearDepthStencil(1f);
 
             // Advance the block-break particle simulation with the real frame delta.
