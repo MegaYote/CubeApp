@@ -2612,31 +2612,34 @@ void main() {
             cl.DrawIndexed(6, 1, 0, 0, 0);
         }
 
-        // Writes one quad glued to the sky's rotation, EXACTLY like Infdev RenderGlobal.renderSky:
-        // a horizontal XZ-plane quad at (0, centerY, 0) spanning +-size in x and z, rotated around
-        // the X axis by the celestial angle. It shares the sky's rotation-only matrix, so the sun
-        // (centerY=+100) and moon (centerY=-100) ride OPPOSITE sides of the celestial arc and stay
-        // aligned with the sky as the camera rotates.
+        // Writes a camera-facing (billboard) quad for the sun/moon, positioned far out along the
+        // celestial arc so it orbits the sky as the angle changes. This matches how MC actually
+        // draws them: a flat sprite always facing the player, riding the sun/moon path.
         private static void WriteCelestialQuad(float[] v, int index, float cosA, float sinA,
             float centerY, float size, float u0, float v0, float u1, float v1)
         {
-            (float x, float y, float z)[] corners =
+            // Body direction in the sky arc. Sun is +Y arc, moon is -Y arc. We place the sprite
+            // far out along (0, up, depth) and billboard it (camera looks down -Z in camera space,
+            // so "up" on screen is +Y and "right" is +X).
+            float sign = centerY > 0 ? 1f : -1f;
+            float up = cosA * sign;   // +1 at noon for sun, +1 at midnight for moon
+            float depth = sinA * sign;
+            float dist = 1000f;
+            float cx = 0f, cy = up * dist, cz = depth * dist;
+
+            (float x, float y)[] corners =
             {
-                (-size, centerY, -size),
-                ( size, centerY, -size),
-                ( size, centerY,  size),
-                (-size, centerY,  size),
+                (-size, -size),
+                ( size, -size),
+                ( size,  size),
+                (-size,  size),
             };
             for (int c = 0; c < 4; c++)
             {
-                float y = corners[c].y;
-                float z = corners[c].z;
-                float ry = y * cosA - z * sinA;
-                float rz = y * sinA + z * cosA;
                 int o = (index + c) * 5;
-                v[o] = corners[c].x;
-                v[o + 1] = ry;
-                v[o + 2] = rz;
+                v[o] = cx + corners[c].x;
+                v[o + 1] = cy + corners[c].y;
+                v[o + 2] = cz;
                 v[o + 3] = (c == 0 || c == 3) ? u0 : u1;
                 v[o + 4] = (c == 0 || c == 1) ? v0 : v1;
             }
