@@ -2588,53 +2588,65 @@ void main() {
             float angle = ComputeNightCelestialAngle() * MathF.PI * 2.0f;
             float cosA = MathF.Cos(angle), sinA = MathF.Sin(angle);
 
-            // Sun: 4 corners of a quad at (0, +100, 0) +/- 30 in x/z, rotated around X.
-            var v = new float[8 * 5];
-            WriteCelestialQuad(v, 0, cosA, sinA, 100f, 30f, 0f, 0f, 1f, 1f);   // sun, normal UVs
+            // In CAMERA space the view looks down -Z. The celestial quads are rotated around X, so
+            // a body's depth is z = 100*sinA (sun) or z = -100*sinA (moon). Anything at z > 0 is
+            // BEHIND the camera and would project mirrored onto the screen center - cull it so the
+            // sun and moon never overlap at dawn/dusk (sun in front, moon behind).
+            float sunZ = 100f * sinA;
+            float moonZ = -100f * sinA;
 
-            _gd.UpdateBuffer(_celestialVertexBuffer, 0, v);
-            cl.SetPipeline(_celestialPipeline);
-            cl.SetGraphicsResourceSet(0, _skyMatrixSet);
-            cl.SetGraphicsResourceSet(1, _sunTextureSet);
-            cl.SetVertexBuffer(0, _celestialVertexBuffer);
-            cl.SetIndexBuffer(_celestialIndexBuffer, IndexFormat.UInt16);
-            cl.DrawIndexed(6, 1, 0, 0, 0);
+            if (sunZ < 0f) // sun is in front of the camera
+            {
+                var v = new float[4 * 5];
+                WriteCelestialQuad(v, 0, cosA, sinA, 100f, 30f, 0f, 0f, 1f, 1f);
+                _gd.UpdateBuffer(_celestialVertexBuffer, 0, v);
+                cl.SetPipeline(_celestialPipeline);
+                cl.SetGraphicsResourceSet(0, _skyMatrixSet);
+                cl.SetGraphicsResourceSet(1, _sunTextureSet);
+                cl.SetVertexBuffer(0, _celestialVertexBuffer);
+                cl.SetIndexBuffer(_celestialIndexBuffer, IndexFormat.UInt16);
+                cl.DrawIndexed(6, 1, 0, 0, 0);
+            }
 
-            // Moon: quad at (0, -100, 0) +/- 20, UVs flipped horizontally (Infdev does this).
-            var vm = new float[4 * 5];
-            WriteCelestialQuad(vm, 0, cosA, sinA, -100f, 20f, 1f, 1f, 0f, 0f);
-            _gd.UpdateBuffer(_celestialVertexBuffer, 0, vm);
-            cl.SetGraphicsResourceSet(1, _moonTextureSet);
-            cl.SetVertexBuffer(0, _celestialVertexBuffer);
-            cl.DrawIndexed(6, 1, 0, 0, 0);
+            if (moonZ < 0f) // moon is in front of the camera
+            {
+                var vm = new float[4 * 5];
+                WriteCelestialQuad(vm, 0, cosA, sinA, -100f, 20f, 1f, 1f, 0f, 0f);
+                _gd.UpdateBuffer(_celestialVertexBuffer, 0, vm);
+                cl.SetPipeline(_celestialPipeline);
+                cl.SetGraphicsResourceSet(0, _skyMatrixSet);
+                cl.SetGraphicsResourceSet(1, _moonTextureSet);
+                cl.SetVertexBuffer(0, _celestialVertexBuffer);
+                cl.SetIndexBuffer(_celestialIndexBuffer, IndexFormat.UInt16);
+                cl.DrawIndexed(6, 1, 0, 0, 0);
+            }
         }
 
-        // Writes one billboarded quad: an XY-plane square (faces the camera in camera space),
-        // centered at (0, centerY, 0) after celestial-angle rotation around X, half-size `size`,
-        // with UVs (u0,v0)-(u1,v1). The XY orientation makes it visible like MC's sun/moon disks
-        // instead of a horizontal plane seen edge-on.
+        // Writes one quad glued to the sky's rotation, EXACTLY like Infdev RenderGlobal.renderSky:
+        // a horizontal XZ-plane quad at (0, centerY, 0) spanning +-size in x and z, rotated around
+        // the X axis by the celestial angle. It shares the sky's rotation-only matrix, so the sun
+        // (centerY=+100) and moon (centerY=-100) ride OPPOSITE sides of the celestial arc and stay
+        // aligned with the sky as the camera rotates.
         private static void WriteCelestialQuad(float[] v, int index, float cosA, float sinA,
             float centerY, float size, float u0, float v0, float u1, float v1)
         {
-            // Four corners of an XY-aligned quad (facing the camera), then rotate the QUAD CENTER
-            // around the X axis by the celestial angle so it follows the sky arc. The quad stays
-            // camera-facing (billboarded) because it's in the XY plane of camera space.
-            (float x, float y)[] corners =
+            (float x, float y, float z)[] corners =
             {
-                (-size, -size),
-                ( size, -size),
-                ( size,  size),
-                (-size,  size),
+                (-size, centerY, -size),
+                ( size, centerY, -size),
+                ( size, centerY,  size),
+                (-size, centerY,  size),
             };
             for (int c = 0; c < 4; c++)
             {
-                // Rotate the center (0, centerY, 0) around X by the celestial angle.
-                float cy = centerY * cosA;
-                float cz = centerY * sinA;
+                float y = corners[c].y;
+                float z = corners[c].z;
+                float ry = y * cosA - z * sinA;
+                float rz = y * sinA + z * cosA;
                 int o = (index + c) * 5;
                 v[o] = corners[c].x;
-                v[o + 1] = cy + corners[c].y;
-                v[o + 2] = cz;
+                v[o + 1] = ry;
+                v[o + 2] = rz;
                 v[o + 3] = (c == 0 || c == 3) ? u0 : u1;
                 v[o + 4] = (c == 0 || c == 1) ? v0 : v1;
             }
