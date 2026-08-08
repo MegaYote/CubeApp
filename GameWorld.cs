@@ -178,9 +178,11 @@ namespace CubeApp
         /// <summary>Advance the simulation by one frame. Pure logic; no rendering here.</summary>
         public void StepSimulation(TickInputState tickInput, float deltaSeconds)
         {
-            // Day/night clock: 1 world tick per simulation step (Infdev: worldTime advances once
-            // per tick, full cycle = 24000 ticks = 20 minutes).
-            WorldTime++;
+            // Day/night clock: MC advances worldTime at a fixed 20 ticks/sec (Infdev: worldTime
+            // advances once per tick, full cycle = 24000 ticks = 20 minutes). Advance by delta so
+            // the sky (sun/moon/stars) moves at MC speed regardless of frame rate - per-frame
+            // ++ made the whole 24000-tick cycle spin in seconds at high FPS.
+            WorldTime += (long)Math.Round(deltaSeconds * 20.0);
             BlockTicks?.Tick(deltaSeconds);
             StepPlayer(LocalPlayer, tickInput, deltaSeconds);
             Entities.Update(deltaSeconds, LocalPlayer.Position, true);
