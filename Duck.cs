@@ -54,8 +54,8 @@ namespace CubeApp
     /// </summary>
     public sealed class Duck : MobEntity
     {
-        public const float DuckWidth = 0.7f;
-        public const float DuckHeight = 1.4f;
+        public const float DuckWidth = 0.9f;
+        public const float DuckHeight = 0.95f;
 
         public Duck(Point3D position, float yaw) : base(position, yaw)
         {
