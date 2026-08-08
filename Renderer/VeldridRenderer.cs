@@ -116,6 +116,7 @@ namespace CubeApp.Renderer
         private bool _galaxiesBuilt;
         private int _galaxySeed = int.MinValue;
         private float[] _galaxyVertexScratch = Array.Empty<float>();
+        private float[] _galaxyBaseScratch = Array.Empty<float>();
         private ushort[] _galaxyIndexScratch = Array.Empty<ushort>();
         private List<GalaxyDef> _galaxies = new();
 
@@ -2813,8 +2814,8 @@ void main() {
         }
 
         // Draws the seeded galaxy field: 4 spiral galaxies (1 main + 3 random) built once per
-        // world seed, rendered as additive billboarded particle quads riding the celestial arc.
-        // Faithful port of CubuildC++ SkyRenderer::renderGalaxy / initializeGalaxy.
+        // world seed. Each particle is a FIXED tangent-plane quad on the celestial sphere (like
+        // stars), rotated by the celestial angle each frame so galaxies wheel with the sky.
         private void DrawGalaxies(CommandList cl)
         {
             if (_galaxyPipeline == null) return;
@@ -2843,57 +2844,27 @@ void main() {
             }
             if (_galaxies.Count == 0 || _galaxyVertexCount == 0) return;
 
-            // Same celestial rotation as stars/sun/moon (around X).
+            // Rotate the prebuilt sphere quads by the celestial angle around X, exactly like the
+            // star field. Read from the pristine base, write into the scratch (no accumulation).
             float angle = ComputeNightCelestialAngle() * MathF.PI * 2.0f;
             float cosA = MathF.Cos(angle), sinA = MathF.Sin(angle);
-
-            // Camera right/up for billboarding (world axes; sky matrix is rotation-only).
-            var right = _cameraRight;
-            var up = _cameraUp;
-
-            int vf = 0;
-            foreach (var galaxy in _galaxies)
+            for (int i = 0; i < _galaxyVertexCount; i++)
             {
-                // Rotate the galaxy's base direction with the sky (same as star field).
-                var bp = galaxy.BasePosition;
-                float ry = bp.Y * cosA - bp.Z * sinA;
-                float rz = bp.Y * sinA + bp.Z * cosA;
-                var rotatedPos = new Vector3(bp.X, ry, rz);
-                var galaxyCenter = rotatedPos * GalaxyDistance;
-
-                // Galaxy's own orientation (rotation about the view direction).
-                float cosR = MathF.Cos(galaxy.Rotation), sinR = MathF.Sin(galaxy.Rotation);
-                var galaxyRight = right * cosR - up * sinR;
-                var galaxyUp = right * sinR + up * cosR;
-                var depthDir = Vector3.Normalize(rotatedPos);
-
-                foreach (var particle in galaxy.Particles)
-                {
-                    // Scale offsets/sizes from C++'s 1000-unit shell to our 400-unit sky.
-                    var particlePos = galaxyCenter
-                        + galaxyRight * (particle.Offset.X * GalaxyScale)
-                        + galaxyUp * (particle.Offset.Y * GalaxyScale)
-                        + depthDir * (particle.Offset.Z * GalaxyScale);
-
-                    float alpha = particle.Alpha * galaxyAlpha * 0.6f * galaxy.SizeMultiplier;
-                    float size = particle.Size * 1.5f * galaxy.SizeMultiplier * GalaxyScale;
-
-                    // Billboarding quad corners (pos3 + color4 = 7 floats per vertex).
-                    var c0 = particlePos - right * size - up * size;
-                    var c1 = particlePos + right * size - up * size;
-                    var c2 = particlePos + right * size + up * size;
-                    var c3 = particlePos - right * size + up * size;
-                    _galaxyVertexScratch[vf++] = c0.X; _galaxyVertexScratch[vf++] = c0.Y; _galaxyVertexScratch[vf++] = c0.Z;
-                    _galaxyVertexScratch[vf++] = 0.8f; _galaxyVertexScratch[vf++] = 0.85f; _galaxyVertexScratch[vf++] = 1.0f; _galaxyVertexScratch[vf++] = alpha;
-                    _galaxyVertexScratch[vf++] = c1.X; _galaxyVertexScratch[vf++] = c1.Y; _galaxyVertexScratch[vf++] = c1.Z;
-                    _galaxyVertexScratch[vf++] = 0.8f; _galaxyVertexScratch[vf++] = 0.85f; _galaxyVertexScratch[vf++] = 1.0f; _galaxyVertexScratch[vf++] = alpha;
-                    _galaxyVertexScratch[vf++] = c2.X; _galaxyVertexScratch[vf++] = c2.Y; _galaxyVertexScratch[vf++] = c2.Z;
-                    _galaxyVertexScratch[vf++] = 0.8f; _galaxyVertexScratch[vf++] = 0.85f; _galaxyVertexScratch[vf++] = 1.0f; _galaxyVertexScratch[vf++] = alpha;
-                    _galaxyVertexScratch[vf++] = c3.X; _galaxyVertexScratch[vf++] = c3.Y; _galaxyVertexScratch[vf++] = c3.Z;
-                    _galaxyVertexScratch[vf++] = 0.8f; _galaxyVertexScratch[vf++] = 0.85f; _galaxyVertexScratch[vf++] = 1.0f; _galaxyVertexScratch[vf++] = alpha;
-                }
+                int o = i * 7;
+                float x = _galaxyBaseScratch[o];
+                float y = _galaxyBaseScratch[o + 1];
+                float z = _galaxyBaseScratch[o + 2];
+                float ry = y * cosA - z * sinA;
+                float rz = y * sinA + z * cosA;
+                _galaxyVertexScratch[o] = x;
+                _galaxyVertexScratch[o + 1] = ry;
+                _galaxyVertexScratch[o + 2] = rz;
+                // Alpha rides the night fade (base alpha baked at build time).
+                _galaxyVertexScratch[o + 3] = _galaxyBaseScratch[o + 3];
+                _galaxyVertexScratch[o + 4] = _galaxyBaseScratch[o + 4];
+                _galaxyVertexScratch[o + 5] = _galaxyBaseScratch[o + 5];
+                _galaxyVertexScratch[o + 6] = _galaxyBaseScratch[o + 6] * galaxyAlpha;
             }
-
             _gd.UpdateBuffer(_galaxyVertexBuffer, 0, _galaxyVertexScratch);
 
             cl.SetPipeline(_galaxyPipeline);
@@ -2905,7 +2876,10 @@ void main() {
 
         // Builds the seeded galaxy field. Mirrors CubuildC++ SkyRenderer::initializeGalaxy:
         // 1 main galaxy (elongated edge-on spiral near the moon's arc) + 3 random galaxies
-        // (face-on/edge-on/tilted variety) spread across the night-sky hemisphere.
+        // (face-on/edge-on/tilted variety) spread across the night-sky hemisphere. Unlike the
+        // C++ billboard quads, each particle here is a fixed quad tangent to the celestial
+        // sphere at its position (the same Infdev orientation used by the star field), so the
+        // whole galaxy stays anchored to the sky and rotates with the celestial angle.
         private void BuildGalaxies()
         {
             var rng = new Random(_cloudSeed);
@@ -3009,18 +2983,77 @@ void main() {
                 _galaxies.Add(galaxy);
             }
 
-            // Allocate the scratch + index buffers for the total particle count.
+            // Allocate the scratch + base + index buffers for the total particle count.
             int totalParticles = 0;
             foreach (var galaxy in _galaxies) totalParticles += galaxy.Particles.Count;
             _galaxyVertexScratch = new float[totalParticles * 4 * 7];
+            _galaxyBaseScratch = new float[totalParticles * 4 * 7];
             _galaxyIndexScratch = new ushort[totalParticles * 6];
+
+            // Build each galaxy's local frame ONCE (in unrotated sky space) so the particle
+            // quads can be placed tangent to the celestial sphere, anchored to the sky.
+            int vf = 0;
             int ii = 0;
             ushort baseV = 0;
-            for (int i = 0; i < totalParticles; i++)
+            foreach (var galaxy in _galaxies)
             {
-                _galaxyIndexScratch[ii++] = baseV; _galaxyIndexScratch[ii++] = (ushort)(baseV + 1); _galaxyIndexScratch[ii++] = (ushort)(baseV + 2);
-                _galaxyIndexScratch[ii++] = baseV; _galaxyIndexScratch[ii++] = (ushort)(baseV + 2); _galaxyIndexScratch[ii++] = (ushort)(baseV + 3);
-                baseV += 4;
+                var dir = Vector3.Normalize(galaxy.BasePosition);
+
+                // Tangent frame at the galaxy center (independent of the camera).
+                var refUp = Math.Abs(dir.Y) < 0.99f ? Vector3.UnitY : Vector3.UnitX;
+                var galaxyRight = Vector3.Normalize(Vector3.Cross(dir, refUp));
+                var galaxyUp = Vector3.Cross(dir, galaxyRight);
+                float cosR = MathF.Cos(galaxy.Rotation), sinR = MathF.Sin(galaxy.Rotation);
+                var gRight = galaxyRight * cosR + galaxyUp * sinR;
+                var gUp = -galaxyRight * sinR + galaxyUp * cosR;
+
+                foreach (var particle in galaxy.Particles)
+                {
+                    // Particle's position in sky space (unrotated). Offsets are the C++ spiral
+                    // shape scaled from the 1000-unit shell down to GalaxyDistance.
+                    var center = dir * GalaxyDistance
+                        + gRight * (particle.Offset.X * GalaxyScale)
+                        + gUp * (particle.Offset.Y * GalaxyScale)
+                        + dir * (particle.Offset.Z * GalaxyScale);
+                    var pd = Vector3.Normalize(center);
+                    float sz = particle.Size * 1.5f * galaxy.SizeMultiplier * GalaxyScale;
+                    float alpha = particle.Alpha * 0.6f * galaxy.SizeMultiplier;
+
+                    // Infdev star orientation: a small square around the particle's direction,
+                    // tangent to the sphere. Same math as BuildStars.
+                    double a1 = Math.Atan2(pd.X, pd.Z);
+                    double s1 = Math.Sin(a1), c1 = Math.Cos(a1);
+                    double a2 = Math.Atan2(Math.Sqrt(pd.X * pd.X + pd.Z * pd.Z), pd.Y);
+                    double s2 = Math.Sin(a2), c2 = Math.Cos(a2);
+                    double a3 = rng.NextDouble() * 2.0 * Math.PI;
+                    double s3 = Math.Sin(a3), c3 = Math.Cos(a3);
+
+                    for (int vert = 0; vert < 4; vert++)
+                    {
+                        double vx = ((vert & 2) - 1) * sz;
+                        double vy = (((vert + 1) & 2) - 1) * sz;
+                        double rx1 = vx * c3 - vy * s3;
+                        double ry1 = vy * c3 + vx * s3;
+                        double rx2 = rx1 * s2;
+                        double ry2 = -rx1 * c2;
+                        double rz2 = ry1;
+                        double fx = ry2 * s1 - rz2 * c1;
+                        double fz = rz2 * s1 + ry2 * c1;
+
+                        int o = vf;
+                        _galaxyBaseScratch[o] = (float)(center.X + fx);
+                        _galaxyBaseScratch[o + 1] = (float)(center.Y + rx2);
+                        _galaxyBaseScratch[o + 2] = (float)(center.Z + fz);
+                        _galaxyBaseScratch[o + 3] = 0.8f;  // r
+                        _galaxyBaseScratch[o + 4] = 0.85f; // g
+                        _galaxyBaseScratch[o + 5] = 1.0f;  // b
+                        _galaxyBaseScratch[o + 6] = alpha; // alpha (scaled per frame)
+                        vf += 7;
+                    }
+                    _galaxyIndexScratch[ii++] = baseV; _galaxyIndexScratch[ii++] = (ushort)(baseV + 1); _galaxyIndexScratch[ii++] = (ushort)(baseV + 2);
+                    _galaxyIndexScratch[ii++] = baseV; _galaxyIndexScratch[ii++] = (ushort)(baseV + 2); _galaxyIndexScratch[ii++] = (ushort)(baseV + 3);
+                    baseV += 4;
+                }
             }
             _galaxyVertexCount = totalParticles * 4;
 
