@@ -83,6 +83,29 @@ namespace CubeApp.Renderer
         private DeviceBuffer _skyMatrixBuffer;
         private ResourceSet _skyMatrixSet;
 
+        // Infdev sun/moon/stars (RenderGlobal.renderSky): textured quads glued to the sky rotation.
+        private Pipeline _celestialPipeline;
+        private DeviceBuffer _celestialVertexBuffer;
+        private DeviceBuffer _celestialIndexBuffer;
+        private Texture _sunTexture;
+        private TextureView _sunView;
+        private Texture _moonTexture;
+        private TextureView _moonView;
+        private Sampler _celestialSampler;
+        private ResourceSet _sunTextureSet;
+        private ResourceSet _moonTextureSet;
+        private ResourceLayout _celestialTextureLayout;
+
+        // Infdev starfield: a precompiled list of small quads on the unit sphere, drawn with
+        // alpha = getStarBrightness when the sky is dark.
+        private Pipeline _starPipeline;
+        private DeviceBuffer _starVertexBuffer;
+        private DeviceBuffer _starIndexBuffer;
+        private int _starVertexCount;
+        private bool _starsBuilt;
+        private float[] _starVertexScratch = Array.Empty<float>();
+        private ushort[] _starIndexScratch = Array.Empty<ushort>();
+
         // ---- Clouds (world-space flat plane, buildable/flyable) -----------------------
         // One flat plane at a FIXED WORLD HEIGHT (like MC's cloud layer at y~128) that follows
         // the camera in X/Z so its edges stay beyond the far plane. The texture TILES (repeat
@@ -1299,6 +1322,7 @@ void main() {
             CreateChunkBorderPipeline();
             CreateModelPipeline();
             CreateSkyPipeline();
+            CreateCelestialPipelines();
             CreateCloudPipeline();
         }
 
@@ -1530,6 +1554,118 @@ void main() {
             _skyIndexBuffer = factory.CreateBuffer(new BufferDescription(
                 12 * sizeof(ushort), BufferUsage.IndexBuffer));
             _gd.UpdateBuffer(_skyIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7 });
+        }
+
+        // Infdev's sun, moon and stars (RenderGlobal.renderSky). Sun/moon are textured quads drawn
+        // with ADDITIVE blending into the sky's rotation (rotate by celestialAngle around X); stars
+        // are a precompiled field of small quads with alpha = getStarBrightness.
+        private void CreateCelestialPipelines()
+        {
+            var factory = _gd.ResourceFactory;
+
+            // Sun/moon: pos(3) + uv(2), texture from set 1, additive blend, depth off (drawn on sky).
+            string celestialVs = @"#version 450
+layout(location=0) in vec3 aPosition;
+layout(location=1) in vec2 aUV;
+layout(location=0) out vec2 vUV;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() { vUV = aUV; gl_Position = projView * vec4(aPosition, 1.0); }";
+            string celestialFs = @"#version 450
+layout(location=0) in vec2 vUV;
+layout(set=1, binding=0) uniform sampler2D uTex;
+layout(location=0) out vec4 outColor;
+void main() { outColor = texture(uTex, vUV); }";
+            var cvSpirv = SpirvCompilation.CompileGlslToSpirv(celestialVs, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var cfSpirv = SpirvCompilation.CompileGlslToSpirv(celestialFs, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var celestialShaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, cvSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, cfSpirv.SpirvBytes, "main"));
+            var celestialLayout = new VertexLayoutDescription(
+                new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                new VertexElementDescription("aUV", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float2));
+            _celestialTextureLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
+                new ResourceLayoutElementDescription("uTex", ResourceKind.TextureReadOnly, ShaderStages.Fragment),
+                new ResourceLayoutElementDescription("uTexSampler", ResourceKind.Sampler, ShaderStages.Fragment)));
+            var celestialPipelineDesc = new GraphicsPipelineDescription()
+            {
+                // Alpha-blend the 16x16 sun/moon sprites over the sky (Infdev used additive
+                // GL_ONE/GL_ONE; the texture has its own alpha so SingleAlphaBlend reads the same).
+                BlendState = BlendStateDescription.SingleAlphaBlend,
+                DepthStencilState = DepthStencilStateDescription.Disabled,
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _celestialTextureLayout },
+                ShaderSet = new ShaderSetDescription(new[] { celestialLayout }, new[] { celestialShaders[0], celestialShaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            };
+            _celestialPipeline = factory.CreateGraphicsPipeline(celestialPipelineDesc);
+            _celestialVertexBuffer = factory.CreateBuffer(new BufferDescription(
+                8 * 5 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            _celestialIndexBuffer = factory.CreateBuffer(new BufferDescription(
+                12 * sizeof(ushort), BufferUsage.IndexBuffer));
+            _gd.UpdateBuffer(_celestialIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7 });
+
+            // Load the 16x16 sun/moon textures (classic Infdev sprites).
+            try
+            {
+                byte[]? sunBytes = LoadImageBytes("sun.png");
+                byte[]? moonBytes = LoadImageBytes("moon.png");
+                if (sunBytes != null)
+                {
+                    var img = StbImageSharp.ImageResult.FromMemory(sunBytes, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                    var tex = _gd.ResourceFactory.CreateTexture(TextureDescription.Texture2D((uint)img.Width, (uint)img.Height, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled));
+                    _gd.UpdateTexture(tex, img.Data, 0, 0, 0, (uint)img.Width, (uint)img.Height, 1, 0, 0);
+                    _sunTexture = tex;
+                    _sunView = _gd.ResourceFactory.CreateTextureView(tex);
+                }
+                if (moonBytes != null)
+                {
+                    var img = StbImageSharp.ImageResult.FromMemory(moonBytes, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                    var tex = _gd.ResourceFactory.CreateTexture(TextureDescription.Texture2D((uint)img.Width, (uint)img.Height, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled));
+                    _gd.UpdateTexture(tex, img.Data, 0, 0, 0, (uint)img.Width, (uint)img.Height, 1, 0, 0);
+                    _moonTexture = tex;
+                    _moonView = _gd.ResourceFactory.CreateTextureView(tex);
+                }
+                _celestialSampler = _gd.ResourceFactory.CreateSampler(new SamplerDescription(
+                    SamplerAddressMode.Clamp, SamplerAddressMode.Clamp, SamplerAddressMode.Clamp,
+                    SamplerFilter.MinPoint_MagPoint_MipPoint, null, 1, 0, 0, 0, SamplerBorderColor.TransparentBlack));
+                if (_sunView != null && _celestialSampler != null)
+                    _sunTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_celestialTextureLayout, _sunView, _celestialSampler));
+                if (_moonView != null && _celestialSampler != null)
+                    _moonTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_celestialTextureLayout, _moonView, _celestialSampler));
+            }
+            catch { }
+
+            // Stars: pos(3) + color(4) quads, white with alpha, drawn with additive blend.
+            string starVs = @"#version 450
+layout(location=0) in vec3 aPosition;
+layout(location=1) in vec4 aColor;
+layout(location=0) out vec4 vColor;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() { vColor = aColor; gl_Position = projView * vec4(aPosition, 1.0); }";
+            string starFs = @"#version 450
+layout(location=0) in vec4 vColor;
+layout(location=0) out vec4 outColor;
+void main() { outColor = vColor; }";
+            var svSpirv = SpirvCompilation.CompileGlslToSpirv(starVs, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var sfSpirv = SpirvCompilation.CompileGlslToSpirv(starFs, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var starShaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, svSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, sfSpirv.SpirvBytes, "main"));
+            var starLayout = new VertexLayoutDescription(
+                new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                new VertexElementDescription("aColor", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
+            var starPipelineDesc = new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleAlphaBlend,
+                DepthStencilState = DepthStencilStateDescription.Disabled,
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout },
+                ShaderSet = new ShaderSetDescription(new[] { starLayout }, new[] { starShaders[0], starShaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            };
+            _starPipeline = factory.CreateGraphicsPipeline(starPipelineDesc);
         }
 
         // A real flat cloud plane at a FIXED WORLD HEIGHT (CloudWorldY) that follows the camera
@@ -2424,6 +2560,10 @@ void main() {
             cl.SetVertexBuffer(0, _skyVertexBuffer);
             cl.SetIndexBuffer(_skyIndexBuffer, IndexFormat.UInt16);
             cl.DrawIndexed(12, 1, 0, 0, 0);
+
+            // Infdev's sun, moon and stars, glued to the sky's rotation (RenderGlobal.renderSky).
+            DrawCelestialBodies(cl);
+            DrawStars(cl);
         }
 
         private static void SetSkyVertex(float[] v, int index, float x, float y, float z, float r, float g, float b)
@@ -2436,6 +2576,194 @@ void main() {
             v[o + 4] = g;
             v[o + 5] = b;
             v[o + 6] = 1f;
+        }
+
+        // Infdev's sun + moon (RenderGlobal.renderSky): textured quads rotated by the celestial
+        // angle around X, additive blend, drawn on the same camera-space sky matrix. Sun is 30
+        // half-size at y=+100; moon is 20 half-size at y=-100 with its UVs flipped horizontally.
+        private void DrawCelestialBodies(CommandList cl)
+        {
+            if (_celestialPipeline == null || _sunTextureSet == null || _moonTextureSet == null) return;
+
+            float angle = ComputeNightCelestialAngle() * MathF.PI * 2.0f;
+            float cosA = MathF.Cos(angle), sinA = MathF.Sin(angle);
+
+            // Sun: 4 corners of a quad at (0, +100, 0) +/- 30 in x/z, rotated around X.
+            var v = new float[8 * 5];
+            WriteCelestialQuad(v, 0, cosA, sinA, 100f, 30f, 0f, 0f, 1f, 1f);   // sun, normal UVs
+
+            _gd.UpdateBuffer(_celestialVertexBuffer, 0, v);
+            cl.SetPipeline(_celestialPipeline);
+            cl.SetGraphicsResourceSet(0, _skyMatrixSet);
+            cl.SetGraphicsResourceSet(1, _sunTextureSet);
+            cl.SetVertexBuffer(0, _celestialVertexBuffer);
+            cl.SetIndexBuffer(_celestialIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed(6, 1, 0, 0, 0);
+
+            // Moon: quad at (0, -100, 0) +/- 20, UVs flipped horizontally (Infdev does this).
+            var vm = new float[4 * 5];
+            WriteCelestialQuad(vm, 0, cosA, sinA, -100f, 20f, 1f, 1f, 0f, 0f);
+            _gd.UpdateBuffer(_celestialVertexBuffer, 0, vm);
+            cl.SetGraphicsResourceSet(1, _moonTextureSet);
+            cl.SetVertexBuffer(0, _celestialVertexBuffer);
+            cl.DrawIndexed(6, 1, 0, 0, 0);
+        }
+
+        // Writes one XY-aligned quad at (0, centerY, 0) half-size `size` with UVs (u0,v0)-(u1,v1),
+        // rotated around the X axis by (cosA, sinA) to follow the celestial arc.
+        private static void WriteCelestialQuad(float[] v, int index, float cosA, float sinA,
+            float centerY, float size, float u0, float v0, float u1, float v1)
+        {
+            // Four corners in the XZ plane at centerY, then rotate around X: y' = y*cos - z*sin,
+            // z' = y*sin + z*cos.
+            (float x, float y, float z)[] corners =
+            {
+                (-size, centerY - 0f, -size),
+                ( size, centerY - 0f, -size),
+                ( size, centerY - 0f,  size),
+                (-size, centerY - 0f,  size),
+            };
+            for (int c = 0; c < 4; c++)
+            {
+                float y = corners[c].y;
+                float z = corners[c].z;
+                float ry = y * cosA - z * sinA;
+                float rz = y * sinA + z * cosA;
+                int o = (index + c) * 5;
+                v[o] = corners[c].x;
+                v[o + 1] = ry;
+                v[o + 2] = rz;
+                v[o + 3] = (c == 0 || c == 3) ? u0 : u1;
+                v[o + 4] = (c == 0 || c == 1) ? v0 : v1;
+            }
+        }
+
+        // Infdev's starfield: a field of small quads on the unit sphere (built once), drawn with
+        // alpha = getStarBrightness. Rotated by the celestial angle so stars rise/set with the sky.
+        private void DrawStars(CommandList cl)
+        {
+            if (_starPipeline == null) return;
+
+            float starBrightness = GetStarBrightness();
+            if (starBrightness <= 0.001f) return;
+
+            if (!_starsBuilt)
+            {
+                BuildStars();
+                _starsBuilt = true;
+            }
+            if (_starVertexCount == 0) return;
+
+            // Rotate the prebuilt unit-sphere quads by the celestial angle around X.
+            float angle = ComputeNightCelestialAngle() * MathF.PI * 2.0f;
+            float cosA = MathF.Cos(angle), sinA = MathF.Sin(angle);
+            for (int i = 0; i < _starVertexCount; i++)
+            {
+                int o = i * 7;
+                float x = _starVertexScratch[o];
+                float y = _starVertexScratch[o + 1];
+                float z = _starVertexScratch[o + 2];
+                float ry = y * cosA - z * sinA;
+                float rz = y * sinA + z * cosA;
+                _starVertexScratch[o] = x;
+                _starVertexScratch[o + 1] = ry;
+                _starVertexScratch[o + 2] = rz;
+                // Alpha rides star brightness (Infdev: glColor4f(brightness,...)).
+                _starVertexScratch[o + 6] = starBrightness;
+            }
+            _gd.UpdateBuffer(_starVertexBuffer, 0, _starVertexScratch);
+
+            cl.SetPipeline(_starPipeline);
+            cl.SetGraphicsResourceSet(0, _skyMatrixSet);
+            cl.SetVertexBuffer(0, _starVertexBuffer);
+            cl.SetIndexBuffer(_starIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed((uint)_starVertexCount, 1, 0, 0, 0);
+        }
+
+        // Builds the starfield: 800 quads on the unit sphere (Infdev's starGLCallList density).
+        private void BuildStars()
+        {
+            var rng = new Random(10842);
+            _starVertexScratch = new float[800 * 4 * 7];
+            _starIndexScratch = new ushort[800 * 6];
+            int vf = 0, ii = 0;
+            ushort baseV = 0;
+            for (int i = 0; i < 800; i++)
+            {
+                // Random direction on unit sphere.
+                double rx = rng.NextDouble() * 2.0 - 1.0;
+                double ry = rng.NextDouble() * 2.0 - 1.0;
+                double rz = rng.NextDouble() * 2.0 - 1.0;
+                double len2 = rx * rx + ry * ry + rz * rz;
+                if (len2 >= 1.0 || len2 < 0.01) { i--; continue; }
+                double inv = 1.0 / Math.Sqrt(len2);
+                rx *= inv; ry *= inv; rz *= inv;
+
+                // Position far away, small random size.
+                double px = rx * 100.0, py = ry * 100.0, pz = rz * 100.0;
+                double sz = 0.25 + rng.NextDouble() * 0.25;
+
+                // Orientation quads (Infdev's star rotation approach).
+                double a1 = Math.Atan2(rx, rz);
+                double s1 = Math.Sin(a1), c1 = Math.Cos(a1);
+                double a2 = Math.Atan2(Math.Sqrt(rx * rx + rz * rz), ry);
+                double s2 = Math.Sin(a2), c2 = Math.Cos(a2);
+                double a3 = rng.NextDouble() * 2.0 * Math.PI;
+                double s3 = Math.Sin(a3), c3 = Math.Cos(a3);
+
+                for (int vert = 0; vert < 4; vert++)
+                {
+                    double vx = ((vert & 2) - 1) * sz;
+                    double vy = (((vert + 1) & 2) - 1) * sz;
+                    double rx1 = vx * c3 - vy * s3;
+                    double ry1 = vy * c3 + vx * s3;
+                    double rx2 = rx1 * s2;
+                    double ry2 = -rx1 * c2;
+                    double rz2 = ry1;
+                    double fx = ry2 * s1 - rz2 * c1;
+                    double fz = rz2 * s1 + ry2 * c1;
+
+                    int o = vf;
+                    _starVertexScratch[o] = (float)(px + fx);
+                    _starVertexScratch[o + 1] = (float)(py + rx2);
+                    _starVertexScratch[o + 2] = (float)(pz + fz);
+                    _starVertexScratch[o + 3] = 1f; // r
+                    _starVertexScratch[o + 4] = 1f; // g
+                    _starVertexScratch[o + 5] = 1f; // b
+                    _starVertexScratch[o + 6] = 1f; // alpha (set per frame)
+                    vf += 7;
+                }
+                _starIndexScratch[ii++] = baseV; _starIndexScratch[ii++] = (ushort)(baseV + 1); _starIndexScratch[ii++] = (ushort)(baseV + 2);
+                _starIndexScratch[ii++] = baseV; _starIndexScratch[ii++] = (ushort)(baseV + 2); _starIndexScratch[ii++] = (ushort)(baseV + 3);
+                baseV += 4;
+            }
+            _starVertexCount = vf / 7;
+
+            _starVertexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                (uint)(_starVertexScratch.Length * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            _starIndexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                (uint)(_starIndexScratch.Length * sizeof(ushort)), BufferUsage.IndexBuffer));
+            _gd.UpdateBuffer(_starIndexBuffer, 0, _starIndexScratch);
+        }
+
+        // Infdev's getStarBrightness: clamp(1 - (cos(cel*2pi)*2 + 0.75), 0, 1)^2 * 0.5.
+        private float GetStarBrightness()
+        {
+            float cel = ComputeNightCelestialAngle();
+            float v = 1f - (MathF.Cos(cel * MathF.PI * 2.0f) * 2.0f + 12f / 16f);
+            if (v < 0f) v = 0f;
+            if (v > 1f) v = 1f;
+            return v * v * 0.5f;
+        }
+
+        // Returns the current celestial angle (0.0 = dawn ... 1.0 wraps) using the last HUD time.
+        private float ComputeNightCelestialAngle()
+        {
+            long t = _hud.WorldTime % 24000;
+            float ang = t / 24000.0f - 0.25f;
+            if (ang < 0f) ang += 1f;
+            if (ang > 1f) ang -= 1f;
+            return ang;
         }
 
         // Issues one indirect world draw for a chunk-command pass (opaque or transparent) using the
@@ -3804,6 +4132,20 @@ void main() {
             _skyFogBuffer?.Dispose();
             _skyMatrixSet?.Dispose();
             _skyMatrixBuffer?.Dispose();
+            _celestialPipeline?.Dispose();
+            _celestialVertexBuffer?.Dispose();
+            _celestialIndexBuffer?.Dispose();
+            _sunTextureSet?.Dispose();
+            _moonTextureSet?.Dispose();
+            _celestialTextureLayout?.Dispose();
+            _sunView?.Dispose();
+            _sunTexture?.Dispose();
+            _moonView?.Dispose();
+            _moonTexture?.Dispose();
+            _celestialSampler?.Dispose();
+            _starPipeline?.Dispose();
+            _starVertexBuffer?.Dispose();
+            _starIndexBuffer?.Dispose();
             _cloudPipeline?.Dispose();
             _cloudVertexBuffer?.Dispose();
             _cloudIndexBuffer?.Dispose();
