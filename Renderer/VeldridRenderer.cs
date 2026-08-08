@@ -2602,7 +2602,7 @@ void main() {
             // Moon: quad at (0, -100, 0) +/- 20, UVs flipped horizontally (Infdev does this).
             // Both always draw; whichever is below the horizon is hidden by the terrain naturally.
             var vm = new float[4 * 5];
-            WriteCelestialQuad(vm, 0, cosA, sinA, -100f, 20f, 1f, 1f, 0f, 0f);
+            WriteCelestialQuad(vm, 0, cosA, sinA, -100f, 20f, 1f, 0f, 0f, 1f);
             _gd.UpdateBuffer(_celestialVertexBuffer, 0, vm);
             cl.SetPipeline(_celestialPipeline);
             cl.SetGraphicsResourceSet(0, _skyMatrixSet);
@@ -2618,16 +2618,13 @@ void main() {
         private static void WriteCelestialQuad(float[] v, int index, float cosA, float sinA,
             float centerY, float size, float u0, float v0, float u1, float v1)
         {
-            // Body direction in the sky arc. Sun is +Y arc, moon is -Y arc. We place the sprite
-            // far out along (0, up, depth) and billboard it (camera looks down -Z in camera space,
-            // so "up" on screen is +Y and "right" is +X).
-            float sign = centerY > 0 ? 1f : -1f;
-            float up = cosA * sign;   // +1 at noon for sun, +1 at midnight for moon
-            float depth = sinA * sign;
-            float dist = 1000f;
-            float cx = 0f, cy = up * dist, cz = depth * dist;
-
-            (float x, float y)[] corners =
+            // MC 1.12 (RenderGlobal.renderSky): the sun/moon are FIXED horizontal XZ quads at
+            // y=+100 (sun) / y=-100 (moon), and the celestial angle is a modelview rotation about
+            // the X axis. Rotating a horizontal quad around X keeps its normal pointing along the
+            // camera->body ray, so the quad always faces the camera at radius ~100 - no billboard,
+            // no z=0 degeneracy at noon, and well inside the near/far planes. Mirror that here by
+            // rotating each fixed corner (x, centerY, z) around X by the same angle.
+            (float x, float z)[] corners =
             {
                 (-size, -size),
                 ( size, -size),
@@ -2637,9 +2634,12 @@ void main() {
             for (int c = 0; c < 4; c++)
             {
                 int o = (index + c) * 5;
-                v[o] = cx + corners[c].x;
-                v[o + 1] = cy + corners[c].y;
-                v[o + 2] = cz;
+                float x = corners[c].x;
+                float z = corners[c].z;
+                // Rotate (x, centerY, z) around X: x'=x, y'=y*cosA - z*sinA, z'=y*sinA + z*cosA
+                v[o] = x;
+                v[o + 1] = centerY * cosA - z * sinA;
+                v[o + 2] = centerY * sinA + z * cosA;
                 v[o + 3] = (c == 0 || c == 3) ? u0 : u1;
                 v[o + 4] = (c == 0 || c == 1) ? v0 : v1;
             }
