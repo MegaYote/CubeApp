@@ -353,7 +353,7 @@ namespace CubeApp.Renderer
         // holes tracked in _freeBlocks. Buffer growth is a GPU CopyBuffer into a 2x buffer,
         // recorded after Begin() and before the world draw; the old buffer is released via
         // DisposeWhenIdle once the GPU is done with it.
-        private const uint VertexStrideBytes = 52;   // 13 floats * 4 bytes per vertex
+        private const uint VertexStrideBytes = 24;   // packed: Float3 + 3x UInt1 = 6 uint32s
         private const uint IndirectCommandStride = 20; // sizeof(IndirectDrawIndexedArguments)
         private DeviceBuffer? _megaVertexBuffer;
         private DeviceBuffer? _megaIndexBuffer;
@@ -401,18 +401,18 @@ namespace CubeApp.Renderer
         private readonly struct PendingUpload
         {
             public CubeApp.ChunkCoordinates Coord { get; }
-            public float[] Vertices { get; }
+            public uint[] Vertices { get; }
             public ushort[] Indices { get; }
-            public float[] CutoutVertices { get; }
+            public uint[] CutoutVertices { get; }
             public ushort[] CutoutIndices { get; }
-            public float[] GlassVertices { get; }
+            public uint[] GlassVertices { get; }
             public ushort[] GlassIndices { get; }
-            public float[] TransparentVertices { get; }
+            public uint[] TransparentVertices { get; }
             public ushort[] TransparentIndices { get; }
 
-            public PendingUpload(CubeApp.ChunkCoordinates coord, float[] vertices, ushort[] indices,
-                float[] cutoutVertices, ushort[] cutoutIndices, float[] glassVertices, ushort[] glassIndices,
-                float[] transparentVertices, ushort[] transparentIndices)
+            public PendingUpload(CubeApp.ChunkCoordinates coord, uint[] vertices, ushort[] indices,
+                uint[] cutoutVertices, ushort[] cutoutIndices, uint[] glassVertices, ushort[] glassIndices,
+                uint[] transparentVertices, ushort[] transparentIndices)
             {
                 Coord = coord;
                 Vertices = vertices;
@@ -1046,17 +1046,50 @@ namespace CubeApp.Renderer
         private void CreatePipeline()
         {
             var factory = _gd.ResourceFactory;
-            string vsCode = @"#version 450
+            // Packed chunk vertex format (24 bytes vs the old 52): the vertex shader decodes
+            // everything back into the same varyings, so the fragment shaders are unchanged.
+            //   aPosition  : world-space Float3 (12 bytes)
+            //   aPack1     : du/dv as 8.8 fixed point (uint16 each)
+            //   aPack2     : tile rect as 4x uint8 ATLAS TEXELS (x,y,w,h)
+            //   aPack3     : shade(8) | alphaByte(8) | alphaMode(2) | pad(14)
+            //                alphaMode 0 = real alpha (opaque/water), 1 = glass frame (-100
+            //                sentinel), 2 = translucent glass tint (-200 sentinel).
+            // Atlas size is baked in (atlas loads before CreatePipeline) so the texel decode is exact.
+            float atlasW = Math.Max(1f, _atlasWidth);
+            float atlasH = Math.Max(1f, _atlasHeight);
+            string vsCode = $@"#version 450
 layout(location=0) in vec3 aPosition;
-layout(location=1) in vec2 aLocalUV;
-layout(location=2) in vec4 aTileRect;
-layout(location=3) in vec4 aColor;
+layout(location=1) in uint aPack1;
+layout(location=2) in uint aPack2;
+layout(location=3) in uint aPack3;
 layout(location=0) out vec2 vLocalUV;
 layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
 layout(location=3) out vec3 vWorldPos;
-layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
-void main() { vLocalUV = aLocalUV; vTileRect = aTileRect; vColor = aColor; vWorldPos = aPosition; gl_Position = projView * vec4(aPosition, 1.0); }";
+layout(set=0, binding=0) uniform ProjectionView {{ mat4 projView; }};
+const float ATLAS_INV_X = 1.0 / {atlasW.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
+const float ATLAS_INV_Y = 1.0 / {atlasH.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
+void main() {{
+    // localUV: 8.8 fixed point (block units; fract() in the fragment shader tiles it).
+    float du = float((aPack1 >> 16) & 0xFFFFu) / 256.0;
+    float dv = float(aPack1 & 0xFFFFu) / 256.0;
+    vLocalUV = vec2(du, dv);
+    // tileRect: 4x uint8 atlas texel coords -> atlas UV space.
+    float tx = float((aPack2 >> 24) & 0xFFu) * ATLAS_INV_X;
+    float ty = float((aPack2 >> 16) & 0xFFu) * ATLAS_INV_Y;
+    float tw = float((aPack2 >> 8) & 0xFFu) * ATLAS_INV_X;
+    float th = float(aPack2 & 0xFFu) * ATLAS_INV_Y;
+    vTileRect = vec4(tx, ty, tw, th);
+    // color: shade(8) replicated to rgb, alpha decoded per alphaMode so the glass sentinels
+    // (-100 regular frame, -200 translucent tint) survive exactly for the tint pass.
+    float shade = float(aPack3 & 0xFFu) / 255.0;
+    uint alphaByte = (aPack3 >> 8) & 0xFFu;
+    uint mode = (aPack3 >> 16) & 0x3u;
+    float alpha = mode == 0u ? float(alphaByte) / 255.0 : (mode == 1u ? -100.0 : -200.0);
+    vColor = vec4(shade, shade, shade, alpha);
+    vWorldPos = aPosition;
+    gl_Position = projView * vec4(aPosition, 1.0);
+}}";
 
             string fsCode = @"#version 450
 layout(location=0) in vec2 vLocalUV;
@@ -1098,9 +1131,9 @@ void main() {
 
             var vertexLayout = new VertexLayoutDescription(
                 new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
-                new VertexElementDescription("aLocalUV", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float2),
-                new VertexElementDescription("aTileRect", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4),
-                new VertexElementDescription("aColor", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
+                new VertexElementDescription("aPack1", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1),
+                new VertexElementDescription("aPack2", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1),
+                new VertexElementDescription("aPack3", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1));
 
             var shaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { vs, fs });
 
@@ -3399,9 +3432,9 @@ void main() {
         // pooling the previous buffers for reuse.
         // Uploads one chunk's vertices/indices into a region of the shared mega vertex/index buffers,
 // reusing freed holes or appending at the tail. The previous range (if any) is recycled.
-        private void WriteChunkData(CubeApp.ChunkCoordinates coord, float[] verts, ushort[] indices,
-            float[] cutoutVerts, ushort[] cutoutIndices, float[] glassVerts, ushort[] glassIndices,
-            float[] transVerts, ushort[] transIndices)
+        private void WriteChunkData(CubeApp.ChunkCoordinates coord, uint[] verts, ushort[] indices,
+            uint[] cutoutVerts, ushort[] cutoutIndices, uint[] glassVerts, ushort[] glassIndices,
+            uint[] transVerts, ushort[] transIndices)
         {
             if (_chunkRanges.TryGetValue(coord, out var prev))
             {
@@ -4542,7 +4575,7 @@ void main() {
             _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr));
         }
 
-        // Builds the 13-float-per-vertex chunk mesh (pos + localUV + tileRect + color) from greedy
+        // Builds the packed 24-byte-per-vertex chunk mesh (Float3 pos + 3x UInt1 packs) from greedy
         // faces. Per-face alpha routes each face to one of four buffer pairs:
         //   alpha >= 1   -> opaque (culled, depth-writing)
         //   alpha < -10  -> glass (alpha-tested, depth-WRITE OFF, front-side; marker set by the
@@ -4554,12 +4587,13 @@ void main() {
         // directly - no List<T>, no ToArray() copies, no double allocation per chunk upload.
         private void BuildMesh(
             System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces,
-            out float[] vertsArr, out ushort[] indicesArr,
-            out float[] cutoutVertsArr, out ushort[] cutoutIndicesArr,
-            out float[] glassVertsArr, out ushort[] glassIndicesArr,
-            out float[] transVertsArr, out ushort[] transIndicesArr)
+            out uint[] vertsArr, out ushort[] indicesArr,
+            out uint[] cutoutVertsArr, out ushort[] cutoutIndicesArr,
+            out uint[] glassVertsArr, out ushort[] glassIndicesArr,
+            out uint[] transVertsArr, out ushort[] transIndicesArr)
         {
-            // vertex layout: position(3) + localUV(2) + tileRect(4) + color(4) = 13 floats per vertex
+            // vertex layout: position(3 floats) + aPack1(1 uint) + aPack2(1 uint) + aPack3(1 uint)
+            // = 6 uint32s per vertex (24 bytes), decoded in the vertex shader.
             int faceCount = faces.Count;
             int opaqueFaces = 0;
             int cutoutFaces = 0;
@@ -4572,16 +4606,14 @@ void main() {
             }
             int transFaces = faceCount - opaqueFaces - cutoutFaces - glassFaces;
 
-            var verts = new float[opaqueFaces * 4 * 13];
+            var verts = new uint[opaqueFaces * 4 * 6];
             var indices = new ushort[opaqueFaces * 6];
-            var cutoutVerts = new float[cutoutFaces * 4 * 13];
+            var cutoutVerts = new uint[cutoutFaces * 4 * 6];
             var cutoutIndices = new ushort[cutoutFaces * 6];
-            var glassVerts = new float[glassFaces * 4 * 13];
+            var glassVerts = new uint[glassFaces * 4 * 6];
             var glassIndices = new ushort[glassFaces * 6];
-            var transVerts = new float[transFaces * 4 * 13];
+            var transVerts = new uint[transFaces * 4 * 6];
             var transIndices = new ushort[transFaces * 6];
-            float atlasW = Math.Max(1f, _atlasWidth);
-            float atlasH = Math.Max(1f, _atlasHeight);
             // Hoisted out of the face loop: stackalloc reserves stack for the method, so a
             // per-face stackalloc would grow the frame with face count (CA2014).
             Span<CubeApp.Point3D> vertsSpan = stackalloc CubeApp.Point3D[4];
@@ -4645,24 +4677,49 @@ void main() {
                     spanV = Math.Max(1, (int)Math.Round(maxV - minV));
                 }
 
+                // Compute the per-face alpha mode. Fragments keep the same 4-way split, but the
+                // glass sentinels (-100 regular frame, -200 translucent tint) become a mode field
+                // so they survive the 8-bit pack exactly.
                 float shade = f.Shade;
-                float rf = shade;
-                float gf = shade;
-                float bf = shade;
                 float alpha = f.Alpha;
+                uint alphaMode;
+                uint alphaByte;
+                if (alpha >= 1f)
+                {
+                    alphaMode = 0;   // opaque
+                    alphaByte = 255;
+                }
+                else if (alpha < -10f)
+                {
+                    alphaMode = alpha < -150f ? 2u : 1u; // translucent tint (-200) vs frame (-100)
+                    alphaByte = 255;
+                }
+                else if (alpha < 0f)
+                {
+                    alphaMode = 0;   // cutout - alpha ignored by the sprite shader
+                    alphaByte = 255;
+                }
+                else
+                {
+                    alphaMode = 0;   // transparent (water) - real blended alpha
+                    alphaByte = (uint)Math.Clamp((int)Math.Round(alpha * 255f), 0, 255);
+                }
 
-                float tileOriginX = f.SrcRect.X / atlasW;
-                float tileOriginY = f.SrcRect.Y / atlasH;
-                float tileSzX = tileW / atlasW;
-                float tileSzY = tileH / atlasH;
+                uint shadeByte = (uint)Math.Clamp((int)Math.Round(shade * 255f), 0, 255);
+                // Tile rect as atlas texels: X/Y <= 240, W/H = 16 (256px atlas, 16px tiles).
+                uint tileX = (uint)Math.Clamp(f.SrcRect.X, 0, 255);
+                uint tileY = (uint)Math.Clamp(f.SrcRect.Y, 0, 255);
+                uint pack2 = (tileX << 24) | (tileY << 16) | ((uint)Math.Clamp(tileW, 0, 255) << 8) | (uint)Math.Clamp(tileH, 0, 255);
+                uint pack3 = shadeByte | (alphaByte << 8) | (alphaMode << 16);
 
+                // Face-edge basis for the non-axis (fluid slope) UV fallback.
                 var v0p = vertsSpan[0];
                 var edgeU = vertsSpan[1] - v0p;
                 var edgeV = vertsSpan[3] - v0p;
                 double denomU = edgeU.X * edgeU.X + edgeU.Y * edgeU.Y + edgeU.Z * edgeU.Z;
                 double denomV = edgeV.X * edgeV.X + edgeV.Y * edgeV.Y + edgeV.Z * edgeV.Z;
 
-                int vertWrite = vertexStart * 13;
+                int vertWrite = vertexStart * 6;
                 for (int i = 0; i < 4; i++)
                 {
                     var vv = vertsSpan[i];
@@ -4684,20 +4741,19 @@ void main() {
                         dv = Math.Clamp(dv, 0.0, 1.0) * spanV;
                     }
 
-                    dstVerts[vertWrite] = (float)vv.X;
-                    dstVerts[vertWrite + 1] = (float)vv.Y;
-                    dstVerts[vertWrite + 2] = (float)vv.Z;
-                    dstVerts[vertWrite + 3] = (float)du;
-                    dstVerts[vertWrite + 4] = (float)dv;
-                    dstVerts[vertWrite + 5] = tileOriginX;
-                    dstVerts[vertWrite + 6] = tileOriginY;
-                    dstVerts[vertWrite + 7] = tileSzX;
-                    dstVerts[vertWrite + 8] = tileSzY;
-                    dstVerts[vertWrite + 9] = rf;
-                    dstVerts[vertWrite + 10] = gf;
-                    dstVerts[vertWrite + 11] = bf;
-                    dstVerts[vertWrite + 12] = alpha;
-                    vertWrite += 13;
+                    // Pack du/dv as 8.8 fixed point (0..255 blocks, 1/256 block precision).
+                    uint duFixed = (uint)Math.Clamp((int)Math.Round(du * 256.0), 0, 0xFFFF);
+                    uint dvFixed = (uint)Math.Clamp((int)Math.Round(dv * 256.0), 0, 0xFFFF);
+                    uint pack1 = (duFixed << 16) | dvFixed;
+
+                    // Position keeps full float precision (world coords).
+                    dstVerts[vertWrite] = BitConverter.SingleToUInt32Bits((float)vv.X);
+                    dstVerts[vertWrite + 1] = BitConverter.SingleToUInt32Bits((float)vv.Y);
+                    dstVerts[vertWrite + 2] = BitConverter.SingleToUInt32Bits((float)vv.Z);
+                    dstVerts[vertWrite + 3] = pack1;
+                    dstVerts[vertWrite + 4] = pack2;
+                    dstVerts[vertWrite + 5] = pack3;
+                    vertWrite += 6;
                 }
 
                 int ib = faceIdx * 6;
