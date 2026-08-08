@@ -26,6 +26,9 @@
     <!-- Hotbar frame (169x16, 10 slots) + selected-slot highlight (18x18), from Cubuild.html. -->
     <EmbeddedResource Include="hotbar.png" />
     <EmbeddedResource Include="hotbar_select.png" />
+    <!-- Infdev-style sun/moon sprites for the celestial sky quads. -->
+    <EmbeddedResource Include="sun.png" />
+    <EmbeddedResource Include="moon.png" />
   </ItemGroup>
   <ItemGroup>
     <!-- Copy GLB models to output -->
