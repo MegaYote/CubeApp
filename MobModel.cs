@@ -389,14 +389,14 @@ namespace CubeApp
                 int indicesAccessorIdx = indicesProp.GetInt32();
                 
                 // Read positions
-                var posAccEl = accessors.GetProperty(posAccessorIdx.ToString());
+                var posAccEl = accessors[posAccessorIdx];
                 int posCount = posAccEl.GetProperty("count").GetInt32();
                 int posCompType = posAccEl.GetProperty("componentType").GetInt32();
                 string posType = posAccEl.GetProperty("type").GetString();
                 if (posType != "VEC3") return;
                 
                 var posViewIdx = posAccEl.GetProperty("bufferView").GetInt32();
-                var posView = bufferViews.GetProperty(posViewIdx.ToString());
+                var posView = bufferViews[posViewIdx];
                 int posByteOffset = posView.TryGetProperty("byteOffset", out var po) ? po.GetInt32() : 0;
                 int posByteLength = posView.GetProperty("byteLength").GetInt32();
                 
@@ -404,13 +404,13 @@ namespace CubeApp
                 List<Vector2> uvs = new List<Vector2>();
                 if (uvAccessorIdx >= 0)
                 {
-                    var uvAccEl = accessors.GetProperty(uvAccessorIdx.ToString());
+                    var uvAccEl = accessors[uvAccessorIdx];
                     int uvCount = uvAccEl.GetProperty("count").GetInt32();
                     string uvType = uvAccEl.GetProperty("type").GetString();
                     if (uvType == "VEC2")
                     {
                         var uvViewIdx = uvAccEl.GetProperty("bufferView").GetInt32();
-                        var uvView = bufferViews.GetProperty(uvViewIdx.ToString());
+                        var uvView = bufferViews[uvViewIdx];
                         int uvByteOffset = uvView.TryGetProperty("byteOffset", out var uo) ? uo.GetInt32() : 0;
                         // int uvByteLength = uvView.GetProperty("byteLength").GetInt32();
                         int uvCompType = uvAccEl.GetProperty("componentType").GetInt32();
@@ -443,11 +443,11 @@ namespace CubeApp
                 for (int i = 0; i < posCount; i++) _uvs.Add(uvs[i]);
                 
                 // Read indices
-                var idxAccEl = accessors.GetProperty(indicesAccessorIdx.ToString());
+                var idxAccEl = accessors[indicesAccessorIdx];
                 int idxCount = idxAccEl.GetProperty("count").GetInt32();
                 int idxCompType = idxAccEl.GetProperty("componentType").GetInt32();
                 var idxViewIdx = idxAccEl.GetProperty("bufferView").GetInt32();
-                var idxView = bufferViews.GetProperty(idxViewIdx.ToString());
+                var idxView = bufferViews[idxViewIdx];
                 int idxByteOffset = idxView.TryGetProperty("byteOffset", out var io) ? io.GetInt32() : 0;
                 
                 int idxStart = (int)(binaryOffset + idxByteOffset);
