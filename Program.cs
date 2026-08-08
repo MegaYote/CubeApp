@@ -564,7 +564,18 @@ namespace CubeApp
             {
                 if (frameInput.ToggleFlyPressed) World.FlyMode = !World.FlyMode;
                 if (frameInput.AdvanceTimePressed) World.AdvanceTime();
-                if (frameInput.ToggleGpuCullPressed) gpuRenderer?.ToggleGpuCulling();
+                if (frameInput.ToggleGpuCullPressed)
+                {
+                    gpuRenderer?.ToggleGpuCulling();
+                    // A cull-mode switch changes which per-pass command buffer is authoritative, so
+                    // every loaded chunk is re-meshed and re-uploaded - this rebuilds the draw
+                    // commands and flushes the GPU cull data fresh, avoiding stale-args glitches.
+                    _forceChunkStream = true;
+                    foreach (var c in World.Chunks.GetLoadedChunks())
+                    {
+                        c.NeedsRemesh = true;
+                    }
+                }
                 if (frameInput.ToggleFullbrightPressed)
                 {
                     ChunkLighting.Fullbright = !ChunkLighting.Fullbright;

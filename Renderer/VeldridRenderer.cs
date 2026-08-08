@@ -3774,11 +3774,17 @@ void main() {
         }
 
         // F7 toggle between CPU-side and GPU-side frustum culling. No-op if the device lacks
-        // compute/structured-buffer/indirect support (D3D11 always has them).
+        // compute/structured-buffer/indirect support (D3D11 always has them). Invalidates all
+        // cached cull data so the next GPU-culled frame refills it from the rebuilt commands.
         public void ToggleGpuCulling()
         {
             if (!_gpuCullSupported) return;
             _gpuCullEnabled = !_gpuCullEnabled;
+            _gpuCullDataDirty = true;
+            _opaqueCullData = Array.Empty<uint>();
+            _cutoutCullData = Array.Empty<uint>();
+            _glassCullData = Array.Empty<uint>();
+            _transparentCullData = Array.Empty<uint>();
         }
 
         // Grows the cull-data and args-output buffers so they hold at least `commands` entries.
