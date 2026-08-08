@@ -19,7 +19,9 @@ namespace CubeApp
         // Natural spawning + despawning (1.12-style). Set to null to disable.
         private MobSpawner? _spawner;
         private double _spawnAccumulator;
-        private const double SpawnInterval = 4.0; // seconds between spawn attempts
+        private const double SpawnIntervalBase = 4.0;    // seconds between spawn attempts at full pop
+        private const double SpawnIntervalMin = 1.2;     // fastest spawn cadence when empty
+        private const int SpawnCapFraction = 30;         // world count where spawning eases off
 
         private const float BlockReach = 6.5f;
 
@@ -37,11 +39,23 @@ namespace CubeApp
                     new MobSpawnEntry("steve", 1, 1, 1),
                 },
                 AddMobAt,
-                CountMobs);
+                () => _mobs.Count,
+                CountMobsOfType);
         }
 
         /// <summary>Total living mobs (for the spawn cap).</summary>
         public int CountMobs(Point3D ignore) => _mobs.Count;
+
+        private int CountMobsOfType(string mobId)
+        {
+            int count = 0;
+            foreach (var mob in _mobs)
+            {
+                if (mob is MobEntity me && string.Equals(me.MobTypeName, mobId, StringComparison.OrdinalIgnoreCase))
+                    count++;
+            }
+            return count;
+        }
 
         public void SpawnDuck(Point3D playerPosition, float playerYaw)
         {
@@ -155,11 +169,15 @@ namespace CubeApp
                 }
             }
 
-            // Natural spawning (1.12-style pack spawning near the player).
+            // Natural spawning (1.12-style pack spawning near the player). The interval adapts:
+            // spawn attempts come faster when the world is empty (populate a fresh area) and slow
+            // down as it approaches the cap so the world doesn't flood.
             if (enableSpawning && _spawner != null)
             {
                 _spawnAccumulator += deltaSeconds;
-                if (_spawnAccumulator >= SpawnInterval)
+                double interval = SpawnIntervalBase * (0.5 + 0.5 * (_mobs.Count / (double)SpawnCapFraction));
+                interval = Math.Clamp(interval, SpawnIntervalMin, SpawnIntervalBase);
+                if (_spawnAccumulator >= interval)
                 {
                     _spawnAccumulator = 0;
                     _spawner.TrySpawn(_chunkManager, playerPosition, _rand);
