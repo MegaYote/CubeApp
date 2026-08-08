@@ -18,14 +18,36 @@ namespace CubeApp
         private Sampler? _sampler;
         private ResourceLayout? _textureLayout;
 
-        private readonly List<Vector3> _positions = new();
-        private readonly List<Vector2> _uvs = new();
-        private readonly List<ushort> _indices = new();
-        private readonly List<float> _shades = new(); // per-vertex directional face shade (0..1)
+        // One rigid body part of the model (Blockbench exports each part as its own mesh). The
+        // part has a pivot (its mesh node's translation) and an optional joint node whose rotation
+        // is driven by the model's animation - animating a part = rotating it around its pivot:
+        //   v' = T + R(t)(v - T)
+        private sealed class ModelPart
+        {
+            public Vector3[] Positions = Array.Empty<Vector3>();
+            public Vector2[] Uvs = Array.Empty<Vector2>();
+            public ushort[] Indices = Array.Empty<ushort>();
+            public float[] Shades = Array.Empty<float>();
+            public Vector3 Pivot;
+            public int JointNode = -1; // animation joint node, or -1 for static parts
+        }
+
+        private readonly List<ModelPart> _parts = new();
+        private readonly List<float> _allShades = new();
+
+        // Keyframed joint rotations: jointNode -> (times, quaternions). Sampled by animTime.
+        private sealed class JointTrack
+        {
+            public float[] Times = Array.Empty<float>();
+            public Quaternion[] Rotations = Array.Empty<Quaternion>();
+            public float Duration;
+        }
+
+        private readonly Dictionary<int, JointTrack> _jointTracks = new();
 
         public bool Loaded { get; private set; } = false;
-        public int VertexCount => _positions.Count;
-        public int IndexCount => _indices.Count;
+        public int VertexCount { get; private set; }
+        public int IndexCount { get; private set; }
 
         public MobModel(GraphicsDevice graphicsDevice) { _gd = graphicsDevice; }
 
@@ -45,7 +67,7 @@ namespace CubeApp
                 ComputeFaceShades();
                 CreateBuffers();
                 if (!string.IsNullOrEmpty(texturePath)) LoadTexture(texturePath);
-                return Loaded = _positions.Count > 0 && _indices.Count > 0;
+                return Loaded = VertexCount > 0 && IndexCount > 0;
             }
             catch { return false; }
         }
@@ -57,29 +79,33 @@ namespace CubeApp
         // seams stay clean.
         private void ComputeFaceShades()
         {
-            _shades.Clear();
-            if (_positions.Count == 0 || _indices.Count == 0) return;
-
-            _shades.AddRange(new float[_positions.Count]);
-            for (int i = 0; i + 2 < _indices.Count; i += 3)
+            foreach (var part in _parts)
             {
-                int i0 = _indices[i], i1 = _indices[i + 1], i2 = _indices[i + 2];
-                if (i0 >= _positions.Count || i1 >= _positions.Count || i2 >= _positions.Count) continue;
+                for (int i = 0; i < part.Positions.Length; i++) part.Shades[i] = 0f;
+                if (part.Indices.Length == 0) continue;
 
-                var a = _positions[i0];
-                var b = _positions[i1];
-                var c = _positions[i2];
-                var ab = b - a;
-                var ac = c - a;
-                var n = Vector3.Cross(ab, ac);
-                if (n.LengthSquared() < 1e-12f) continue;
-                n = Vector3.Normalize(n);
+                for (int i = 0; i + 2 < part.Indices.Length; i += 3)
+                {
+                    int i0 = part.Indices[i], i1 = part.Indices[i + 1], i2 = part.Indices[i + 2];
+                    if (i0 >= part.Positions.Length || i1 >= part.Positions.Length || i2 >= part.Positions.Length) continue;
 
-                float shade = FaceShade(n);
-                if (shade > _shades[i0]) _shades[i0] = shade;
-                if (shade > _shades[i1]) _shades[i1] = shade;
-                if (shade > _shades[i2]) _shades[i2] = shade;
+                    var a = part.Positions[i0];
+                    var b = part.Positions[i1];
+                    var c = part.Positions[i2];
+                    var n = Vector3.Cross(b - a, c - a);
+                    if (n.LengthSquared() < 1e-12f) continue;
+                    n = Vector3.Normalize(n);
+
+                    float shade = FaceShade(n);
+                    if (shade > part.Shades[i0]) part.Shades[i0] = shade;
+                    if (shade > part.Shades[i1]) part.Shades[i1] = shade;
+                    if (shade > part.Shades[i2]) part.Shades[i2] = shade;
+                }
             }
+
+            // Flatten for CreateBuffers (which still uses the flat index/vertex arrays).
+            _allShades.Clear();
+            foreach (var part in _parts) _allShades.AddRange(part.Shades);
         }
 
         private static float FaceShade(Vector3 n)
@@ -97,7 +123,7 @@ namespace CubeApp
                 LoadGLBModel(modelPath);
                 ComputeFaceShades();
                 CreateBuffers();
-                return Loaded = _positions.Count > 0 && _indices.Count > 0;
+                return Loaded = VertexCount > 0 && IndexCount > 0;
             }
             catch { return false; }
         }
@@ -108,7 +134,8 @@ namespace CubeApp
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
-            _positions.Clear(); _uvs.Clear(); _indices.Clear();
+            _parts.Clear();
+            _jointTracks.Clear();
 
             if (root.TryGetProperty("elements", out var elements))
             {
@@ -167,7 +194,14 @@ namespace CubeApp
             }
 
             float scale = 1.0f / 16.0f;
-            int baseIndex = _positions.Count;
+            var part = new ModelPart
+            {
+                Pivot = origin * scale,
+                JointNode = -1, // .bbmodel files carry no animation rig here
+            };
+            var posList = new List<Vector3>();
+            var uvList = new List<Vector2>();
+            var idxList = new List<ushort>();
 
             // Process faces directly from the faces property
             if (element.TryGetProperty("faces", out var facesElement))
@@ -192,8 +226,6 @@ namespace CubeApp
                     float uvRight = uvData[2];
                     float uvBottom = uvData[3];
 
-                    float texW = 64f, texH = 64f;
-
                     // Collect all vertex positions for this face
                     List<Vector3> faceVerts = new List<Vector3>();
                     for (int i = 0; i < vertexIds.GetArrayLength(); i++)
@@ -203,29 +235,33 @@ namespace CubeApp
                     }
 
                     // Calculate proper UVs for each vertex based on its position in the face
-                    // The UV rectangle [uvLeft, uvTop, uvRight, uvBottom] maps to the face
-                    // We need to map each vertex's X/Y/Z to UV coordinates
                     Vector2[] faceUVs = CalculateFaceUVs(faceVerts, uvLeft, uvTop, uvRight, uvBottom);
 
                     // Triangulate the face vertices (fan triangulation for convex polygons)
                     for (int tri = 1; tri < faceVerts.Count - 1; tri++)
                     {
-                        // Add triangle vertices with their UVs
-                        _positions.Add(faceVerts[0]);
-                        _uvs.Add(faceUVs[0]);
-                        
-                        _positions.Add(faceVerts[tri]);
-                        _uvs.Add(faceUVs[tri]);
-                        
-                        _positions.Add(faceVerts[tri + 1]);
-                        _uvs.Add(faceUVs[tri + 1]);
+                        int baseIndex = posList.Count;
+                        posList.Add(faceVerts[0]);
+                        uvList.Add(faceUVs[0]);
+                        posList.Add(faceVerts[tri]);
+                        uvList.Add(faceUVs[tri]);
+                        posList.Add(faceVerts[tri + 1]);
+                        uvList.Add(faceUVs[tri + 1]);
 
-                        _indices.Add((ushort)baseIndex);
-                        _indices.Add((ushort)(baseIndex + 1));
-                        _indices.Add((ushort)(baseIndex + 2));
-                        baseIndex += 3;
+                        idxList.Add((ushort)baseIndex);
+                        idxList.Add((ushort)(baseIndex + 1));
+                        idxList.Add((ushort)(baseIndex + 2));
                     }
                 }
+            }
+
+            if (posList.Count > 0)
+            {
+                part.Positions = posList.ToArray();
+                part.Uvs = uvList.ToArray();
+                part.Indices = idxList.ToArray();
+                part.Shades = new float[part.Positions.Length];
+                _parts.Add(part);
             }
         }
 
@@ -365,53 +401,150 @@ namespace CubeApp
                 uint binaryOffset = 20 + jsonLength + 8;
 
                 // Blockbench exports each body part as its OWN mesh, placed by a NODE translation
-                // (the part's pivot/origin in blocks). Build a meshIndex -> (translation) map so
-                // each part's vertices are offset into world space. Without this every part piles
-                // up at the origin and the model looks mangled (this was the coyote bug).
-                var meshOffsets = new Dictionary<int, Vector3>();
+                // (the part's pivot/origin in blocks). Each skinned part has a child JOINT node
+                // that the walk animation rotates. We collect per-mesh: pivot translation + joint
+                // node index, so animating = rotating the part around its pivot.
+                _parts.Clear();
+                _jointTracks.Clear();
+                int[] meshJoint = Array.Empty<int>();   // meshIndex -> joint node index (or -1)
+                Vector3[] meshPivot = Array.Empty<Vector3>();
+
                 if (root.TryGetProperty("nodes", out var nodes))
                 {
+                    // First pass: for every node that references a mesh, find its pivot and the
+                    // skinned joint (the node's FIRST child - Blockbench puts the joint there).
+                    var nodeList = new List<(Vector3 t, int mesh, int child)>();
                     foreach (var node in nodes.EnumerateArray())
                     {
-                        if (!node.TryGetProperty("mesh", out var meshProp)) continue;
-                        int nodeMeshIdx = meshProp.GetInt32();
                         Vector3 t = Vector3.Zero;
                         if (node.TryGetProperty("translation", out var tArr) && tArr.GetArrayLength() >= 3)
-                        {
                             t = new Vector3(tArr[0].GetSingle(), tArr[1].GetSingle(), tArr[2].GetSingle());
-                        }
-                        // Nodes may also carry a rotation (pivot tilt). Blockbench typically bakes
-                        // it into the vertices, but apply it anyway when present.
-                        if (node.TryGetProperty("rotation", out var rArr) && rArr.GetArrayLength() >= 3)
-                        {
-                            var rot = new Vector3(rArr[0].GetSingle(), rArr[1].GetSingle(), rArr[2].GetSingle());
-                            meshOffsets[nodeMeshIdx] = t + Vector3.Zero; // rotation handled per-vertex below if needed
-                        }
-                        else
-                        {
-                            meshOffsets[nodeMeshIdx] = t;
-                        }
+                        int mesh = -1;
+                        if (node.TryGetProperty("mesh", out var mProp)) mesh = mProp.GetInt32();
+                        int child = -1;
+                        if (node.TryGetProperty("children", out var cArr) && cArr.GetArrayLength() >= 1)
+                            child = cArr[0].GetInt32();
+                        nodeList.Add((t, mesh, child));
+                    }
+
+                    meshPivot = new Vector3[meshes.GetArrayLength()];
+                    meshJoint = new int[meshes.GetArrayLength()];
+                    for (int i = 0; i < meshJoint.Length; i++) meshJoint[i] = -1;
+                    for (int i = 0; i < nodeList.Count; i++)
+                    {
+                        if (nodeList[i].mesh < 0 || nodeList[i].mesh >= meshJoint.Length) continue;
+                        meshPivot[nodeList[i].mesh] = nodeList[i].t;
+                        meshJoint[nodeList[i].mesh] = nodeList[i].child;
                     }
                 }
 
                 int meshIndex = 0;
                 foreach (var mesh in meshes.EnumerateArray())
                 {
-                    Vector3 meshOffset = meshOffsets.TryGetValue(meshIndex, out var mo) ? mo : Vector3.Zero;
+                    Vector3 pivot = meshPivot.Length > meshIndex ? meshPivot[meshIndex] : Vector3.Zero;
+                    int joint = meshJoint.Length > meshIndex ? meshJoint[meshIndex] : -1;
                     if (!mesh.TryGetProperty("primitives", out var primitives)) continue;
                     
                     foreach (var primitive in primitives.EnumerateArray())
                     {
-                        ExtractPrimitive(primitive, bufferViews, accessors, buffers, glbBytes, binaryOffset, meshOffset);
+                        ExtractPrimitive(primitive, bufferViews, accessors, buffers, glbBytes, binaryOffset, pivot, joint);
                     }
                     meshIndex++;
+                }
+
+                // Parse the animation: joint node -> rotation keyframes (times + quaternions).
+                if (root.TryGetProperty("animations", out var animations))
+                {
+                    foreach (var anim in animations.EnumerateArray())
+                    {
+                        if (!anim.TryGetProperty("channels", out var channels)) continue;
+                        if (!anim.TryGetProperty("samplers", out var animSamplers)) continue;
+                        foreach (var channel in channels.EnumerateArray())
+                        {
+                            if (!channel.TryGetProperty("target", out var target)) continue;
+                            if (!target.TryGetProperty("node", out var nodeProp)) continue;
+                            if (!target.TryGetProperty("path", out var pathProp)) continue;
+                            if (pathProp.GetString() != "rotation") continue;
+                            int jointNode = nodeProp.GetInt32();
+                            int samplerIdx = channel.GetProperty("sampler").GetInt32();
+                            if (samplerIdx < 0 || samplerIdx >= animSamplers.GetArrayLength()) continue;
+                            var sampler = animSamplers[samplerIdx];
+                            int inputAcc = sampler.GetProperty("input").GetInt32();
+                            int outputAcc = sampler.GetProperty("output").GetInt32();
+                            var track = new JointTrack();
+                            track.Times = ReadFloatArray(accessors, bufferViews, glbBytes, binaryOffset, inputAcc);
+                            track.Rotations = ReadQuaternionArray(accessors, bufferViews, glbBytes, binaryOffset, outputAcc);
+                            if (track.Times.Length > 0) track.Duration = track.Times[track.Times.Length - 1];
+                            _jointTracks[jointNode] = track;
+                        }
+                    }
                 }
             }
             catch { }
         }
 
+        private static float[] ReadFloatArray(JsonElement accessors, JsonElement bufferViews, byte[] glbBytes, uint binaryOffset, int accessorIdx)
+        {
+            var acc = accessors[accessorIdx];
+            int count = acc.GetProperty("count").GetInt32();
+            var view = bufferViews[acc.GetProperty("bufferView").GetInt32()];
+            int byteOffset = view.TryGetProperty("byteOffset", out var bo) ? bo.GetInt32() : 0;
+            int start = (int)(binaryOffset + byteOffset);
+            var result = new float[count];
+            for (int i = 0; i < count; i++)
+                result[i] = BitConverter.ToSingle(glbBytes, start + i * 4);
+            return result;
+        }
+
+        private static Quaternion[] ReadQuaternionArray(JsonElement accessors, JsonElement bufferViews, byte[] glbBytes, uint binaryOffset, int accessorIdx)
+        {
+            var acc = accessors[accessorIdx];
+            int count = acc.GetProperty("count").GetInt32();
+            var view = bufferViews[acc.GetProperty("bufferView").GetInt32()];
+            int byteOffset = view.TryGetProperty("byteOffset", out var bo) ? bo.GetInt32() : 0;
+            int start = (int)(binaryOffset + byteOffset);
+            var result = new Quaternion[count];
+            for (int i = 0; i < count; i++)
+            {
+                int o = start + i * 16;
+                // glTF quaternion is (x, y, z, w).
+                result[i] = new Quaternion(
+                    BitConverter.ToSingle(glbBytes, o),
+                    BitConverter.ToSingle(glbBytes, o + 4),
+                    BitConverter.ToSingle(glbBytes, o + 8),
+                    BitConverter.ToSingle(glbBytes, o + 12));
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Samples the given joint's rotation at <paramref name="animTime"/> (seconds, wrapped to
+        /// the track duration). Returns identity for a static joint.
+        /// </summary>
+        public Quaternion SampleJointRotation(int jointNode, float animTime)
+        {
+            if (!_jointTracks.TryGetValue(jointNode, out var track) || track.Rotations.Length == 0)
+                return Quaternion.Identity;
+
+            float t = track.Duration > 0.0001f ? animTime % track.Duration : 0f;
+            int n = track.Times.Length;
+            if (n == 1) return track.Rotations[0];
+
+            // Find the surrounding keyframes (binary-ish: the coyote's 24 keys are small enough to scan).
+            int hi = 1;
+            while (hi < n && track.Times[hi] < t) hi++;
+            if (hi >= n) return track.Rotations[n - 1];
+            int lo = hi - 1;
+            if (lo < 0) return track.Rotations[0];
+
+            float span = track.Times[hi] - track.Times[lo];
+            float s = span > 0.0001f ? (t - track.Times[lo]) / span : 0f;
+            return Quaternion.Slerp(track.Rotations[lo], track.Rotations[hi], s);
+        }
+
         private void ExtractPrimitive(JsonElement primitive, JsonElement bufferViews, 
-            JsonElement accessors, JsonElement buffers, byte[] glbBytes, uint binaryOffset, Vector3 meshOffset)
+            JsonElement accessors, JsonElement buffers, byte[] glbBytes, uint binaryOffset,
+            Vector3 pivot, int jointNode)
         {
             try
             {
@@ -426,7 +559,6 @@ namespace CubeApp
                 // Get UV accessor
                 int uvAccessorIdx = -1;
                 if (attrs.TryGetProperty("TEXCOORD_0", out var uvAcc)) uvAccessorIdx = uvAcc.GetInt32();
-                else if (attrs.TryGetProperty("TEXCOORD_0", out uvAcc)) uvAccessorIdx = uvAcc.GetInt32();
                 
                 // Get indices accessor
                 int indicesAccessorIdx = indicesProp.GetInt32();
@@ -434,14 +566,12 @@ namespace CubeApp
                 // Read positions
                 var posAccEl = accessors[posAccessorIdx];
                 int posCount = posAccEl.GetProperty("count").GetInt32();
-                int posCompType = posAccEl.GetProperty("componentType").GetInt32();
                 string posType = posAccEl.GetProperty("type").GetString();
                 if (posType != "VEC3") return;
                 
                 var posViewIdx = posAccEl.GetProperty("bufferView").GetInt32();
                 var posView = bufferViews[posViewIdx];
                 int posByteOffset = posView.TryGetProperty("byteOffset", out var po) ? po.GetInt32() : 0;
-                int posByteLength = posView.GetProperty("byteLength").GetInt32();
                 
                 // Read UVs if available
                 List<Vector2> uvs = new List<Vector2>();
@@ -455,10 +585,6 @@ namespace CubeApp
                         var uvViewIdx = uvAccEl.GetProperty("bufferView").GetInt32();
                         var uvView = bufferViews[uvViewIdx];
                         int uvByteOffset = uvView.TryGetProperty("byteOffset", out var uo) ? uo.GetInt32() : 0;
-                        // int uvByteLength = uvView.GetProperty("byteLength").GetInt32();
-                        int uvCompType = uvAccEl.GetProperty("componentType").GetInt32();
-                        
-                        // Read UV floats
                         int uvStart = (int)(binaryOffset + uvByteOffset);
                         for (int i = 0; i < uvCount; i++)
                         {
@@ -470,7 +596,11 @@ namespace CubeApp
                     }
                 }
                 
-                // Read positions
+                // Read positions into LOCAL space (not offset by pivot - the pivot rotation is
+                // applied at animation/write time so parts swing around their joint origin).
+                var part = new ModelPart { Pivot = pivot, JointNode = jointNode };
+                part.Positions = new Vector3[posCount];
+                part.Shades = new float[posCount];
                 int posStart = (int)(binaryOffset + posByteOffset);
                 for (int i = 0; i < posCount; i++)
                 {
@@ -478,12 +608,12 @@ namespace CubeApp
                     float x = BitConverter.ToSingle(glbBytes, offset);
                     float y = BitConverter.ToSingle(glbBytes, offset + 4);
                     float z = BitConverter.ToSingle(glbBytes, offset + 8);
-                    _positions.Add(new Vector3(x + meshOffset.X, y + meshOffset.Y, z + meshOffset.Z));
+                    part.Positions[i] = new Vector3(x, y, z);
                 }
                 
-                // Read UVs (pad with zeros if missing)
-                while (uvs.Count < posCount) uvs.Add(Vector2.Zero);
-                for (int i = 0; i < posCount; i++) _uvs.Add(uvs[i]);
+                // UVs (pad with zeros if missing)
+                part.Uvs = new Vector2[posCount];
+                for (int i = 0; i < posCount; i++) part.Uvs[i] = i < uvs.Count ? uvs[i] : Vector2.Zero;
                 
                 // Read indices
                 var idxAccEl = accessors[indicesAccessorIdx];
@@ -494,145 +624,21 @@ namespace CubeApp
                 int idxByteOffset = idxView.TryGetProperty("byteOffset", out var io) ? io.GetInt32() : 0;
                 
                 int idxStart = (int)(binaryOffset + idxByteOffset);
-                int baseIndex = _positions.Count - posCount;
-                
+                part.Indices = new ushort[idxCount];
                 if (idxCompType == 5123) // UNSIGNED_SHORT
                 {
                     for (int i = 0; i < idxCount; i++)
-                    {
-                        int offset = idxStart + i * 2;
-                        ushort idx = BitConverter.ToUInt16(glbBytes, offset);
-                        _indices.Add((ushort)(baseIndex + idx));
-                    }
+                        part.Indices[i] = BitConverter.ToUInt16(glbBytes, idxStart + i * 2);
                 }
                 else if (idxCompType == 5125) // UNSIGNED_INT
                 {
                     for (int i = 0; i < idxCount; i++)
-                    {
-                        int offset = idxStart + i * 4;
-                        uint idx = BitConverter.ToUInt32(glbBytes, offset);
-                        _indices.Add((ushort)(baseIndex + idx));
-                    }
+                        part.Indices[i] = (ushort)BitConverter.ToUInt32(glbBytes, idxStart + i * 4);
                 }
+
+                _parts.Add(part);
             }
             catch { }
-        }
-
-        private void ExtractFromPrimitive(object primitive)
-        {
-            try
-            {
-                var getVertexAccessor = primitive.GetType().GetMethod("GetVertexAccessor", new[] { typeof(string) });
-                if (getVertexAccessor == null) return;
-
-                int vertexStart = _positions.Count;
-
-                // Extract positions
-                var posAccessor = getVertexAccessor.Invoke(primitive, new object[] { "POSITION" });
-                var posArray = ExtractVector3Array(posAccessor);
-                
-                // Extract UVs
-                var uvAccessor = getVertexAccessor.Invoke(primitive, new object[] { "TEXCOORD_0" });
-                if (uvAccessor == null) uvAccessor = getVertexAccessor.Invoke(primitive, new object[] { "uv0" });
-                if (uvAccessor == null) uvAccessor = getVertexAccessor.Invoke(primitive, new object[] { "UV" });
-                var uvArray = ExtractVector2Array(uvAccessor);
-
-                // Add positions and UVs together to keep them aligned
-                int count = Math.Max(posArray.Count, uvArray.Count);
-                for (int i = 0; i < count; i++)
-                {
-                    if (i < posArray.Count)
-                        _positions.Add(posArray[i]);
-                    else
-                        _positions.Add(Vector3.Zero);
-                    
-                    if (i < uvArray.Count)
-                        _uvs.Add(uvArray[i]);
-                    else
-                        _uvs.Add(Vector2.Zero);
-                }
-
-                int vertexCount = _positions.Count - vertexStart;
-                if (vertexCount >= 3)
-                {
-                    for (int i = 0; i < vertexCount; i += 3)
-                    {
-                        if (i + 2 < vertexCount)
-                        {
-                            _indices.Add((ushort)(vertexStart + i));
-                            _indices.Add((ushort)(vertexStart + i + 1));
-                            _indices.Add((ushort)(vertexStart + i + 2));
-                        }
-                    }
-                }
-            }
-            catch { }
-        }
-
-        private List<Vector3> ExtractVector3Array(object accessor)
-        {
-            var result = new List<Vector3>();
-            try
-            {
-                if (accessor == null) return result;
-                
-                var asArrayMethod = accessor.GetType().GetMethod("AsVector3Array");
-                if (asArrayMethod == null) return result;
-                
-                var array = asArrayMethod.Invoke(accessor, null) as System.Collections.IEnumerable;
-                if (array == null) return result;
-
-                foreach (var item in array)
-                {
-                    if (item != null)
-                    {
-                        var x = GetComponent(item, "X");
-                        var y = GetComponent(item, "Y");
-                        var z = GetComponent(item, "Z");
-                        if (x.HasValue && y.HasValue && z.HasValue)
-                            result.Add(new Vector3(x.Value, y.Value, z.Value));
-                    }
-                }
-            }
-            catch { }
-            return result;
-        }
-
-        private List<Vector2> ExtractVector2Array(object accessor)
-        {
-            var result = new List<Vector2>();
-            try
-            {
-                if (accessor == null) return result;
-                
-                var asArrayMethod = accessor.GetType().GetMethod("AsVector2Array");
-                if (asArrayMethod == null) return result;
-                
-                var array = asArrayMethod.Invoke(accessor, null) as System.Collections.IEnumerable;
-                if (array == null) return result;
-
-                foreach (var item in array)
-                {
-                    if (item != null)
-                    {
-                        var x = GetComponent(item, "X");
-                        var y = GetComponent(item, "Y");
-                        if (x.HasValue && y.HasValue)
-                            result.Add(new Vector2(x.Value, y.Value));
-                    }
-                }
-            }
-            catch { }
-            return result;
-        }
-
-        private static float? GetComponent(object vec, string name)
-        {
-            var prop = vec.GetType().GetProperty(name);
-            if (prop != null) { var val = prop.GetValue(vec); if (val != null) return Convert.ToSingle(val); }
-            var field = vec.GetType().GetField(name);
-            if (field != null) { var val = field.GetValue(vec); if (val != null) return Convert.ToSingle(val); }
-            return null;
         }
 
         private void LoadTexture(string texturePath)
@@ -655,33 +661,56 @@ namespace CubeApp
 
         private void CreateBuffers()
         {
-            if (_positions.Count == 0) return;
-            while (_uvs.Count < _positions.Count) _uvs.Add(Vector2.Zero);
+            if (_parts.Count == 0) return;
+            VertexCount = 0;
+            IndexCount = 0;
+            foreach (var p in _parts)
+            {
+                VertexCount += p.Positions.Length;
+                IndexCount += p.Indices.Length;
+            }
 
-            var vertexData = new float[_positions.Count * 5];
-            for (int i = 0; i < _positions.Count; i++)
+            // Bind-pose flat arrays (used only by the legacy single-instance Draw path).
+            var flatPos = new List<Vector3>();
+            var flatUv = new List<Vector2>();
+            var flatIdx = new List<ushort>();
+            foreach (var p in _parts)
+            {
+                int baseIndex = flatPos.Count;
+                for (int i = 0; i < p.Positions.Length; i++)
+                {
+                    // Bind pose: vertices are local to the part's pivot, so restore the offset.
+                    flatPos.Add(p.Positions[i] + p.Pivot);
+                    flatUv.Add(p.Uvs[i]);
+                }
+                for (int i = 0; i < p.Indices.Length; i++)
+                    flatIdx.Add((ushort)(baseIndex + p.Indices[i]));
+            }
+
+            var vertexData = new float[flatPos.Count * 5];
+            for (int i = 0; i < flatPos.Count; i++)
             {
                 int offset = i * 5;
-                vertexData[offset + 0] = _positions[i].X;
-                vertexData[offset + 1] = _positions[i].Y;
-                vertexData[offset + 2] = _positions[i].Z;
-                vertexData[offset + 3] = _uvs[i].X;
-                vertexData[offset + 4] = _uvs[i].Y;
+                vertexData[offset + 0] = flatPos[i].X;
+                vertexData[offset + 1] = flatPos[i].Y;
+                vertexData[offset + 2] = flatPos[i].Z;
+                vertexData[offset + 3] = flatUv[i].X;
+                vertexData[offset + 4] = flatUv[i].Y;
             }
 
             _vertexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
                 (uint)(vertexData.Length * sizeof(float)), BufferUsage.VertexBuffer));
             _gd.UpdateBuffer(_vertexBuffer, 0, vertexData);
 
-            if (_indices.Count == 0)
+            if (flatIdx.Count == 0)
             {
-                for (int i = 0; i < _positions.Count; i++) _indices.Add((ushort)i);
+                for (int i = 0; i < flatPos.Count; i++) flatIdx.Add((ushort)i);
             }
 
             _indexBuffer?.Dispose();
             _indexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
-                (uint)(_indices.Count * sizeof(ushort)), BufferUsage.IndexBuffer));
-            _gd.UpdateBuffer(_indexBuffer, 0, _indices.ToArray());
+                (uint)(flatIdx.Count * sizeof(ushort)), BufferUsage.IndexBuffer));
+            _gd.UpdateBuffer(_indexBuffer, 0, flatIdx.ToArray());
         }
 
         private DeviceBuffer? _instanceBuffer;
@@ -690,44 +719,55 @@ namespace CubeApp
 
         /// <summary>
         /// Writes this model's vertices transformed to (x,y,z) with the given yaw into a shared
-        /// scratch buffer (pos + uv + white color, 9 floats per vertex), and copies its indices
-        /// offset by <paramref name="baseVertex"/>. This lets the renderer batch MULTIPLE mobs of
-        /// the same model into ONE vertex/index buffer and draw them in a single call - drawing
-        /// each mob separately with a shared instance buffer corrupts earlier draws (the second
-        /// mob's UpdateBuffer overwrites the first's data before the GPU has consumed it).
+        /// scratch buffer (pos + uv + shaded color, 9 floats per vertex), and copies its indices
+        /// offset by <paramref name="baseVertex"/>. Each part is first animated: its joint's
+        /// rotation (sampled from the walk cycle at <paramref name="animTime"/>) rotates the part
+        /// around its pivot, so the mob swings its legs/tail properly instead of a flat bob.
         /// </summary>
         public void WriteInstance(float[] vertexScratch, ref int vf, ushort[] indexScratch, ref int ii, ref ushort baseVertex,
-            float x, float y, float z, float yaw)
+            float x, float y, float z, float yaw, float animTime = 0f)
         {
-            // yawCorrection rotates the model so its +X (Blockbench front) aligns with the mob's
-            // forward direction (sin Yaw, cos Yaw). Add -90deg to map +X onto forward.
             float renderYaw = yaw + MathF.PI + YawCorrection;
             float cosY = MathF.Cos(renderYaw);
             float sinY = MathF.Sin(renderYaw);
-            for (int i = 0; i < _positions.Count; i++)
-            {
-                var pos = _positions[i];
-                var uv = _uvs[Math.Min(i, _uvs.Count - 1)];
-                float shade = i < _shades.Count ? _shades[i] : 1f;
-                float fx = pos.X * cosY + pos.Z * sinY;
-                float fy = pos.Y;
-                float fz = -pos.X * sinY + pos.Z * cosY;
-                int offset = vf;
-                vertexScratch[offset + 0] = x + fx;
-                vertexScratch[offset + 1] = y + fy;
-                vertexScratch[offset + 2] = z + fz;
-                vertexScratch[offset + 3] = uv.X;
-                vertexScratch[offset + 4] = uv.Y;
-                vertexScratch[offset + 5] = shade; vertexScratch[offset + 6] = shade;
-                vertexScratch[offset + 7] = shade; vertexScratch[offset + 8] = 1f;
-                vf += 9;
-            }
 
-            for (int i = 0; i < _indices.Count; i++)
+            foreach (var part in _parts)
             {
-                indexScratch[ii++] = (ushort)(baseVertex + _indices[i]);
+                Quaternion jointRot = part.JointNode >= 0 ? SampleJointRotation(part.JointNode, animTime) : Quaternion.Identity;
+
+                for (int i = 0; i < part.Positions.Length; i++)
+                {
+                    var local = part.Positions[i];
+
+                    // Skin: rotate the local vertex around the part's pivot by the joint rotation
+                    // (v' = T + R(v - T)). Identity for static parts.
+                    if (jointRot != Quaternion.Identity)
+                    {
+                        var v = Vector3.Transform(local - part.Pivot, jointRot);
+                        local = part.Pivot + v;
+                    }
+
+                    float fx = local.X * cosY + local.Z * sinY;
+                    float fy = local.Y;
+                    float fz = -local.X * sinY + local.Z * cosY;
+                    int offset = vf;
+                    vertexScratch[offset + 0] = x + fx;
+                    vertexScratch[offset + 1] = y + fy;
+                    vertexScratch[offset + 2] = z + fz;
+                    vertexScratch[offset + 3] = part.Uvs[i].X;
+                    vertexScratch[offset + 4] = part.Uvs[i].Y;
+                    float shade = part.Shades[i] <= 0f ? 1f : part.Shades[i];
+                    vertexScratch[offset + 5] = shade; vertexScratch[offset + 6] = shade;
+                    vertexScratch[offset + 7] = shade; vertexScratch[offset + 8] = 1f;
+                    vf += 9;
+                }
+
+                for (int i = 0; i < part.Indices.Length; i++)
+                {
+                    indexScratch[ii++] = (ushort)(baseVertex + part.Indices[i]);
+                }
+                baseVertex += (ushort)part.Positions.Length;
             }
-            baseVertex += (ushort)_positions.Count;
         }
 
         /// <summary>
@@ -742,42 +782,11 @@ namespace CubeApp
 
         public void Draw(CommandList cl, ResourceSet? textureSet, float x, float y, float z, float yaw)
         {
-            if (_vertexBuffer == null || _positions.Count == 0) return;
-            int vertexCount = _positions.Count;
-            int vertexFloats = vertexCount * 9;
-            if (_transformedVertices.Length < vertexFloats) _transformedVertices = new float[vertexFloats];
-            if (_instanceBuffer == null || _instanceBufferSize < (uint)(vertexFloats * sizeof(float)))
-            {
-                _instanceBuffer?.Dispose();
-                _instanceBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
-                    (uint)(vertexFloats * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
-                _instanceBufferSize = (uint)(vertexFloats * sizeof(float));
-            }
-
-            float cosY = (float)Math.Cos(yaw + Math.PI);
-            float sinY = (float)Math.Sin(yaw + Math.PI);
-            for (int i = 0; i < vertexCount; i++)
-            {
-                var pos = _positions[i];
-                var uv = _uvs[Math.Min(i, _uvs.Count - 1)];
-                float fx = pos.X * cosY + pos.Z * sinY;
-                float fy = pos.Y;
-                float fz = -pos.X * sinY + pos.Z * cosY;
-                int offset = i * 9;
-                _transformedVertices[offset + 0] = x + fx;
-                _transformedVertices[offset + 1] = y + fy;
-                _transformedVertices[offset + 2] = z + fz;
-                _transformedVertices[offset + 3] = uv.X;
-                _transformedVertices[offset + 4] = uv.Y;
-                _transformedVertices[offset + 5] = 1f; _transformedVertices[offset + 6] = 1f;
-                _transformedVertices[offset + 7] = 1f; _transformedVertices[offset + 8] = 1f;
-            }
-
-            _gd.UpdateBuffer(_instanceBuffer, 0, _transformedVertices);
-            cl.SetVertexBuffer(0, _instanceBuffer);
+            if (_vertexBuffer == null || VertexCount == 0) return;
+            cl.SetVertexBuffer(0, _vertexBuffer);
             cl.SetIndexBuffer(_indexBuffer, IndexFormat.UInt16);
             if (textureSet != null) cl.SetGraphicsResourceSet(1, textureSet);
-            cl.DrawIndexed((uint)_indices.Count, 1, 0, 0, 0);
+            cl.DrawIndexed((uint)IndexCount, 1, 0, 0, 0);
         }
 
         public TextureView? TextureView => _textureView;
@@ -798,3 +807,4 @@ namespace CubeApp
         }
     }
 }
+
