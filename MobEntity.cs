@@ -55,6 +55,17 @@ namespace CubeApp
         public bool Removed { get; protected set; }
         public bool IsDead => _dead;
 
+        // A* pathfinding. Lazily built per-mob when a path goal is requested; a fresh PathFinder
+        // and NodeProcessor are cheap (they hold no world state).
+        private PathFinder? _pathFinder;
+        private PathEntity? _path;
+        private double _pathGoalX, _pathGoalZ;
+        private int _pathRecalcCooldown;
+        private bool _pathGoalActive;
+
+        /// <summary>Whether a pathfinding route is currently active.</summary>
+        public bool HasPath => _path != null && !_path.IsDone;
+
         // Restores saved state after spawning (world load).
         public void RestoreState(Point3D position, float yaw, int health)
         {
@@ -234,6 +245,101 @@ namespace CubeApp
                 _deathRollDir, _hurtTimer, MobTypeName);
         }
 
+        /// <summary>
+        /// Ask the navigator to path to a world position. The mob steers along the computed
+        /// waypoints (A*, ported from 1.12) until the goal is reached or the path is exhausted.
+        /// Set <paramref name="maxDistance"/> to bound how far the search will look.
+        /// </summary>
+        public void SetPathGoal(double goalX, double goalZ, double maxDistance = 64.0)
+        {
+            _pathGoalX = goalX;
+            _pathGoalZ = goalZ;
+            _pathRecalcCooldown = 0;
+            _path = null;
+            _pathGoalActive = true;
+        }
+
+        /// <summary>Cancel any active path goal and let the wander brain resume.</summary>
+        public void ClearPathGoal()
+        {
+            _pathGoalActive = false;
+            _path = null;
+        }
+
+        private void UpdatePath(float dt, ChunkManager manager)
+        {
+            if (_path == null)
+            {
+                // No route yet: compute one to the stored goal.
+                _pathFinder ??= new PathFinder(new PathNodeProcessor(manager, Width, Height));
+                _path = _pathFinder.FindPath(Position.X, Position.Y, Position.Z, _pathGoalX, Position.Y, _pathGoalZ, 64.0f);
+                if (_path == null)
+                {
+                    _pathRecalcCooldown = 20;
+                    return;
+                }
+            }
+
+            if (_path.IsDone)
+            {
+                _path = null;
+                return;
+            }
+
+            // Re-request the path when the goal moves far from the current path end (or every so
+            // often in case terrain changed).
+            _pathRecalcCooldown--;
+            if (_pathRecalcCooldown <= 0)
+            {
+                double gx = _pathGoalX - Position.X, gz = _pathGoalZ - Position.Z;
+                if (gx * gx + gz * gz < 2.25) // within 1.5 blocks of goal: actually arrived
+                {
+                    _path = null;
+                    return;
+                }
+                var final = _path.GetFinal();
+                double fdx = _pathGoalX - final.X, fdz = _pathGoalZ - final.Z;
+                if (fdx * fdx + fdz * fdz > 9.0)
+                {
+                    _pathFinder ??= new PathFinder(new PathNodeProcessor(manager, Width, Height));
+                    var fresh = _pathFinder.FindPath(Position.X, Position.Y, Position.Z, _pathGoalX, Position.Y, _pathGoalZ, 64.0f);
+                    if (fresh != null) _path = fresh;
+                }
+                _pathRecalcCooldown = 20;
+            }
+
+            var wp = _path.GetNext();
+            if (wp == null)
+            {
+                _path = null;
+                return;
+            }
+
+            // Steer toward the current waypoint; advance when we're close to it.
+            double dx = wp.X + 0.5 - Position.X;
+            double dz = wp.Z + 0.5 - Position.Z;
+            double distSq = dx * dx + dz * dz;
+            if (distSq < 0.7 * 0.7)
+            {
+                _path.Advance();
+                wp = _path.GetNext();
+                if (wp == null)
+                {
+                    _path = null;
+                    return;
+                }
+                dx = wp.X + 0.5 - Position.X;
+                dz = wp.Z + 0.5 - Position.Z;
+            }
+
+            _targetYaw = (float)Math.Atan2(dx, dz);
+            _desiredMoveForward = 0.9f;
+            _desiredSpeedScale = 1.0f;
+            _idleTimer = 0f;
+
+            // Let the shared steering code handle the actual turn + movement.
+        }
+
         // ---- AI brain -------------------------------------------------------
 
         private void UpdateBrain(float dt, ChunkManager manager)
@@ -242,6 +348,31 @@ namespace CubeApp
             if (_dead) { UpdateDead(dt); return; }
 
             bool grounded = _prevOnGround || OnGround;
+
+            // A* path override: when a route is active, steer along waypoints and skip the wander
+            // brain entirely. Panic still takes priority so mobs flee when scared.
+            if (_panicTimer <= 0f && _pathGoalActive)
+            {
+                UpdatePath(dt, manager);
+                if (_path != null && !_path.IsDone)
+                {
+                    // Path steering owns look + movement this frame.
+                    _aiTimer = Math.Max(0f, _aiTimer - dt);
+                    _actionTimer = Math.Max(0f, _actionTimer - dt);
+                    _idleTimer = 0f;
+                    _currentMoveForward = Lerp(_currentMoveForward, _desiredMoveForward, 1f - (float)Math.Exp(-dt * 4.6));
+                    _currentSpeedScale = Lerp(_currentSpeedScale, _desiredSpeedScale, 1f - (float)Math.Exp(-dt * 3.9));
+                    _headYaw = TurnToward(_headYaw, _targetYaw, HeadTurnSpeed * dt);
+                    UpdateBodyYawFromHead(dt, _currentMoveForward > 0.04f);
+                    float pathYawError = WrapAngle(_targetYaw - Yaw);
+                    float pathTurnSlow = Math.Abs(pathYawError) > 1.2f ? 0.22f : (Math.Abs(pathYawError) > 0.75f ? 0.72f : 1.0f);
+                    _ctrlForward = _currentMoveForward * pathTurnSlow;
+                    _ctrlStrafe = _currentMoveForward > 0.04f ? Clamp(pathYawError * 0.14f, -0.18f, 0.18f) : 0f;
+                    return;
+                }
+                _pathGoalActive = false;
+            }
+
             _aiTimer = Math.Max(0f, _aiTimer - dt);
             _actionTimer = Math.Max(0f, _actionTimer - dt);
             _idleTimer = Math.Max(0f, _idleTimer - dt);
