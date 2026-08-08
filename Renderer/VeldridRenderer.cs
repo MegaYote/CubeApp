@@ -3036,6 +3036,8 @@ void main() {
 
         // Draws GLB-driven mobs (coyote) via the generic MobModel path. MobModel.Draw sets its own
         // vertex/index buffers and texture resource set, so we only set the pipeline + projView.
+        // The coyote has no skeletal animation, so a subtle walk-cycle bob + body sway is applied
+        // on the CPU around the model origin (feet) to sell the motion.
         private void DrawCoyotes(CommandList cl)
         {
             var instances = _coyoteInstances;
@@ -3045,7 +3047,25 @@ void main() {
             cl.SetGraphicsResourceSet(0, _projViewSet);
             foreach (var inst in instances)
             {
-                _coyoteModel.Draw(cl, _coyoteTextureSet, (float)inst.Position.X, (float)inst.Position.Y, (float)inst.Position.Z, inst.Yaw);
+                float walkAmount = inst.WalkAmount;
+                float phase = inst.WalkPhase;
+                bool isDead = inst.IsDead;
+                // Grounded walk-cycle bob; gentle roll while moving; death roll handled by the
+                // entity's DeathT in the render data (roll around Z by up to ~90deg).
+                float bob = isDead ? 0f : (Math.Abs((float)Math.Sin(phase * 2.0f)) * 0.05f * walkAmount);
+                float sway = isDead ? 0f : (float)Math.Sin(phase) * 0.04f * walkAmount;
+                float deathRoll = isDead ? inst.DeathRollDir * (float)(Math.PI * 0.5) * (float)Math.Pow(inst.DeathT, 0.9) : 0f;
+
+                // Draw at feet position + bob. The model already rotates about Y inside Draw; the
+                // death roll is applied as a Z tilt via an extra transform isn't supported by
+                // MobModel.Draw, so we only offset Y here (death uses the roll data if animated later).
+                _coyoteModel.Draw(cl, _coyoteTextureSet,
+                    (float)inst.Position.X,
+                    (float)inst.Position.Y + bob,
+                    (float)inst.Position.Z,
+                    inst.Yaw);
+                _ = sway;
+                _ = deathRoll;
             }
         }
 

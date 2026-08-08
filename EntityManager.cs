@@ -174,7 +174,9 @@ namespace CubeApp
             }
         }
 
-        // 1.12's despawnEntity: >128 blocks = gone; >32 blocks for 600 idle ticks = gone.
+        // Despawn (1.12-style but tuned so natural spawns don't instantly vanish): instant despawn
+        // beyond 128 blocks; between 64 and 128 blocks, despawn after 600 idle ticks. The natural
+        // spawn ring is 24-32 blocks, so mobs that wander a little don't cross the idle threshold.
         private bool ShouldDespawn(MobEntity mob, Point3D playerPosition)
         {
             double dx = mob.Position.X - playerPosition.X;
@@ -182,7 +184,7 @@ namespace CubeApp
             double dz = mob.Position.Z - playerPosition.Z;
             double distSq = dx * dx + dy * dy + dz * dz;
             if (distSq > 128.0 * 128.0) return true;
-            if (distSq > 32.0 * 32.0)
+            if (distSq > 64.0 * 64.0)
             {
                 _idleTimeAccum[mob] = _idleTimeAccum.TryGetValue(mob, out var t) ? t + 1 : 1;
                 if (_idleTimeAccum[mob] > 600 && _rand.Next(800) == 0) return true;
