@@ -2588,38 +2588,28 @@ void main() {
             float angle = ComputeNightCelestialAngle() * MathF.PI * 2.0f;
             float cosA = MathF.Cos(angle), sinA = MathF.Sin(angle);
 
-            // In CAMERA space the view looks down -Z. The celestial quads are rotated around X, so
-            // a body's depth is z = 100*sinA (sun) or z = -100*sinA (moon). Anything at z > 0 is
-            // BEHIND the camera and would project mirrored onto the screen center - cull it so the
-            // sun and moon never overlap at dawn/dusk (sun in front, moon behind).
-            float sunZ = 100f * sinA;
-            float moonZ = -100f * sinA;
+            // Sun: quad at (0, +100, 0) +/- 30 in x/z, rotated around X to ride the sky arc.
+            var v = new float[4 * 5];
+            WriteCelestialQuad(v, 0, cosA, sinA, 100f, 30f, 0f, 0f, 1f, 1f);
+            _gd.UpdateBuffer(_celestialVertexBuffer, 0, v);
+            cl.SetPipeline(_celestialPipeline);
+            cl.SetGraphicsResourceSet(0, _skyMatrixSet);
+            cl.SetGraphicsResourceSet(1, _sunTextureSet);
+            cl.SetVertexBuffer(0, _celestialVertexBuffer);
+            cl.SetIndexBuffer(_celestialIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed(6, 1, 0, 0, 0);
 
-            if (sunZ < 0f) // sun is in front of the camera
-            {
-                var v = new float[4 * 5];
-                WriteCelestialQuad(v, 0, cosA, sinA, 100f, 30f, 0f, 0f, 1f, 1f);
-                _gd.UpdateBuffer(_celestialVertexBuffer, 0, v);
-                cl.SetPipeline(_celestialPipeline);
-                cl.SetGraphicsResourceSet(0, _skyMatrixSet);
-                cl.SetGraphicsResourceSet(1, _sunTextureSet);
-                cl.SetVertexBuffer(0, _celestialVertexBuffer);
-                cl.SetIndexBuffer(_celestialIndexBuffer, IndexFormat.UInt16);
-                cl.DrawIndexed(6, 1, 0, 0, 0);
-            }
-
-            if (moonZ < 0f) // moon is in front of the camera
-            {
-                var vm = new float[4 * 5];
-                WriteCelestialQuad(vm, 0, cosA, sinA, -100f, 20f, 1f, 1f, 0f, 0f);
-                _gd.UpdateBuffer(_celestialVertexBuffer, 0, vm);
-                cl.SetPipeline(_celestialPipeline);
-                cl.SetGraphicsResourceSet(0, _skyMatrixSet);
-                cl.SetGraphicsResourceSet(1, _moonTextureSet);
-                cl.SetVertexBuffer(0, _celestialVertexBuffer);
-                cl.SetIndexBuffer(_celestialIndexBuffer, IndexFormat.UInt16);
-                cl.DrawIndexed(6, 1, 0, 0, 0);
-            }
+            // Moon: quad at (0, -100, 0) +/- 20, UVs flipped horizontally (Infdev does this).
+            // Both always draw; whichever is below the horizon is hidden by the terrain naturally.
+            var vm = new float[4 * 5];
+            WriteCelestialQuad(vm, 0, cosA, sinA, -100f, 20f, 1f, 1f, 0f, 0f);
+            _gd.UpdateBuffer(_celestialVertexBuffer, 0, vm);
+            cl.SetPipeline(_celestialPipeline);
+            cl.SetGraphicsResourceSet(0, _skyMatrixSet);
+            cl.SetGraphicsResourceSet(1, _moonTextureSet);
+            cl.SetVertexBuffer(0, _celestialVertexBuffer);
+            cl.SetIndexBuffer(_celestialIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed(6, 1, 0, 0, 0);
         }
 
         // Writes one quad glued to the sky's rotation, EXACTLY like Infdev RenderGlobal.renderSky:
