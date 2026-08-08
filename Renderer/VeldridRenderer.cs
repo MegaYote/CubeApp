@@ -138,7 +138,7 @@ namespace CubeApp.Renderer
         private float[] _duckVertexScratch = Array.Empty<float>();
         private ushort[] _duckIndexScratch = Array.Empty<ushort>();
         private const int DuckFloatsPerVertex = 9; // pos(3) + uv(2) + color(4)
-        private const float DuckModelScale = 1.25f; // visually bigger duck (matches bigger collision)
+        private const float DuckModelScale = 1.05f; // visually petite duck
         private const float PlayerModelScale = 1.25f; // visually bigger player/Steve
 
         // Minecraft-style player model (shares the model pipeline; own texture + buffers).
