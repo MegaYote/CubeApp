@@ -662,7 +662,7 @@ namespace CubeApp
                         "player",
                         new Point3D(p.Position.X, p.Position.Y - GameWorld.EyeHeight, p.Position.Z),
                         p.Yaw * (float)Math.PI / 180f,
-                        0f, p.WalkPhase, p.WalkAmount, 0f, 0f,
+                        0f, p.WalkPhase, p.WalkAmount, 0f, 0f, 0f,
                         (float)p.Velocity.Y, p.Grounded, false, 0f, 0f, 0f));
                 }
                 return;
@@ -678,7 +678,7 @@ namespace CubeApp
                     "player",
                     new Point3D(p.X, p.Y - GameWorld.EyeHeight, p.Z),
                     p.Yaw * (float)Math.PI / 180f,
-                    0f, p.WalkPhase, p.WalkAmount, 0f, 0f,
+                    0f, p.WalkPhase, p.WalkAmount, 0f, 0f, 0f,
                     p.VelY, p.Grounded, false, 0f, 0f, 0f));
             }
         }
@@ -945,7 +945,7 @@ namespace CubeApp
             float yawRad = w.PlayerYaw * (float)Math.PI / 180f;
             return new MobRenderData(
                 "player", feet, yawRad, 0f,
-                w.PlayerWalkPhase, w.PlayerWalkAmount, 0f, 0f,
+                w.PlayerWalkPhase, w.PlayerWalkAmount, 0f, 0f, 0f,
                 (float)w.PlayerVelocity.Y, w.PlayerGrounded,
                 false, 0f, 0f, 0f);
         }

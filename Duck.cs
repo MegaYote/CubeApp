@@ -15,6 +15,7 @@ namespace CubeApp
         public readonly float WalkPhase;    // radians, drives leg/wing swing
         public readonly float WalkAmount;   // 0..1, how briskly it's walking
         public readonly float AnimTime;     // seconds, advances only while moving (GLB walk cycles)
+        public readonly float AnimBlend;    // 0..1 rest<->walk blend
         public readonly float FlapPhase;    // radians, drives in-air wing flap
         public readonly float VelocityY;    // vertical velocity (for in-air tilt)
         public readonly bool OnGround;
@@ -25,7 +26,7 @@ namespace CubeApp
 
         public DuckInstance(
             Point3D position, float yaw, float headYawLocal,
-            float walkPhase, float walkAmount, float animTime, float flapPhase,
+            float walkPhase, float walkAmount, float animTime, float animBlend, float flapPhase,
             float velocityY, bool onGround,
             bool isDead, float deathT, float deathRollDir, float hurtTimer)
         {
@@ -35,6 +36,7 @@ namespace CubeApp
             WalkPhase = walkPhase;
             WalkAmount = walkAmount;
             AnimTime = animTime;
+            AnimBlend = animBlend;
             FlapPhase = flapPhase;
             VelocityY = velocityY;
             OnGround = onGround;

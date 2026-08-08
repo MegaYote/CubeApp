@@ -2020,7 +2020,7 @@ void main() {
 
                 var inst = new CubeApp.DuckInstance(
                     md.Position, md.Yaw, md.HeadYawLocal,
-                    md.WalkPhase, md.WalkAmount, md.AnimTime, md.FlapPhase,
+                    md.WalkPhase, md.WalkAmount, md.AnimTime, md.AnimBlend, md.FlapPhase,
                     md.VelocityY, md.OnGround,
                     md.IsDead, md.DeathT, md.DeathRollDir, md.HurtTimer);
 
@@ -3063,10 +3063,12 @@ void main() {
             ushort baseVertex = 0;
             foreach (var inst in instances)
             {
-                // The mob's animation clock advances only while it actually walks, so the GLB
-                // trot plays when moving and holds the rest pose when idle.
+                // The mob's animation clock advances only while it actually walks, and AnimBlend
+                // eases back to 0 when idle - so the GLB trot plays while moving and the coyote
+                // returns to its neutral stance when it stops (no frozen mid-stride).
                 _coyoteModel.WriteInstance(_coyoteVertexScratch, ref vf, _coyoteIndexScratch, ref ii, ref baseVertex,
-                    (float)inst.Position.X, (float)inst.Position.Y, (float)inst.Position.Z, inst.Yaw, inst.AnimTime);
+                    (float)inst.Position.X, (float)inst.Position.Y, (float)inst.Position.Z, inst.Yaw,
+                    inst.AnimTime, inst.AnimBlend);
             }
 
             EnsureCoyoteBuffers((uint)(totalVertexFloats * sizeof(float)), (uint)(totalIndices * sizeof(ushort)));

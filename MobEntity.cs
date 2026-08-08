@@ -12,6 +12,7 @@ namespace CubeApp
         public readonly float WalkPhase;
         public readonly float WalkAmount;
         public readonly float AnimTime;
+        public readonly float AnimBlend;
         public readonly float VelocityY;
         public readonly bool OnGround;
         public readonly bool IsDead;
@@ -19,11 +20,11 @@ namespace CubeApp
         public readonly string MobType;
 
         public MobInstance(float x, float y, float z, float yaw, float walkPhase, float walkAmount,
-            float animTime, float velocityY, bool onGround, bool isDead, float deathT, float deathRollDir, float hurtTimer, string mobType)
+            float animTime, float animBlend, float velocityY, bool onGround, bool isDead, float deathT, float deathRollDir, float hurtTimer, string mobType)
         {
             X = x; Y = y; Z = z; Yaw = yaw;
             WalkPhase = walkPhase; WalkAmount = walkAmount;
-            AnimTime = animTime;
+            AnimTime = animTime; AnimBlend = animBlend;
             VelocityY = velocityY; OnGround = onGround;
             IsDead = isDead; DeathT = deathT;
             DeathRollDir = deathRollDir; HurtTimer = hurtTimer;
@@ -88,6 +89,7 @@ namespace CubeApp
         float IMobRenderable.WalkPhase => _walkPhase;
         float IMobRenderable.WalkAmount => _walkAmount;
         float IMobRenderable.AnimTime => _animClock;
+        float IMobRenderable.AnimBlend => _animBlend;
         float IMobRenderable.FlapPhase => _flapPhase;
         float IMobRenderable.VelocityY => (float)_velY;
         float IMobRenderable.DeathT => _dead ? Math.Clamp(_deathTimer / Math.Max(0.001f, _deathDuration), 0f, 1f) : 0f;
@@ -102,6 +104,10 @@ namespace CubeApp
         /// moving (scaled by walkAmount), so GLB walk cycles play while walking and hold pose when
         /// idle - unlike _walkPhase which also advances at an idle-bob rate.</summary>
         protected float _animClock;
+        /// <summary>Smoothed 0..1 blend between the rest pose and the walk pose. Eases to 1 while
+        /// moving and back to 0 when idle, so a stopped mob returns to its neutral stance instead
+        /// of freezing mid-stride.</summary>
+        protected float _animBlend;
         protected float _hurtTimer;
         protected bool _dead;
         protected float _deathTimer;
@@ -246,7 +252,7 @@ namespace CubeApp
         {
             return new MobInstance(
                 (float)Position.X, (float)Position.Y, (float)Position.Z,
-                Yaw, _walkPhase, _walkAmount, _animClock,
+                Yaw, _walkPhase, _walkAmount, _animClock, _animBlend,
                 (float)_velY, OnGround, _dead,
                 _dead ? Math.Clamp(_deathTimer / Math.Max(0.001f, _deathDuration), 0f, 1f) : 0f,
                 _deathRollDir, _hurtTimer, MobTypeName);
@@ -652,6 +658,8 @@ namespace CubeApp
             _walkPhase += dt * ((_prevOnGround || OnGround) ? (_walkAmount * 8.5f + 1.9f) : 14.0f);
             // Animation clock: advance in step with real walking; freeze when idle.
             _animClock += dt * _walkAmount * (_prevOnGround || OnGround ? 1f : 0.2f);
+            // Walk blend eases toward the movement amount so stopping returns the mob to rest pose.
+            _animBlend += (_walkAmount - _animBlend) * (1f - (float)Math.Exp(-dt * 5.0f));
         }
 
         protected enum Axis { X, Y, Z }

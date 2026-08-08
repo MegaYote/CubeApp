@@ -723,17 +723,25 @@ namespace CubeApp
         /// offset by <paramref name="baseVertex"/>. Each part is first animated: its joint's
         /// rotation (sampled from the walk cycle at <paramref name="animTime"/>) rotates the part
         /// around its pivot, so the mob swings its legs/tail properly instead of a flat bob.
+        /// <paramref name="animBlend"/> (0..1) blends the sampled pose back toward the neutral
+        /// rest pose, so an idle mob stands normally instead of freezing mid-stride.
         /// </summary>
         public void WriteInstance(float[] vertexScratch, ref int vf, ushort[] indexScratch, ref int ii, ref ushort baseVertex,
-            float x, float y, float z, float yaw, float animTime = 0f)
+            float x, float y, float z, float yaw, float animTime = 0f, float animBlend = 1f)
         {
             float renderYaw = yaw + MathF.PI + YawCorrection;
             float cosY = MathF.Cos(renderYaw);
             float sinY = MathF.Sin(renderYaw);
+            animBlend = Math.Clamp(animBlend, 0f, 1f);
 
             foreach (var part in _parts)
             {
                 Quaternion jointRot = part.JointNode >= 0 ? SampleJointRotation(part.JointNode, animTime) : Quaternion.Identity;
+                // Blend toward rest pose: at blend 0 the joint is identity (neutral stance).
+                if (animBlend < 1f)
+                {
+                    jointRot = Quaternion.Slerp(Quaternion.Identity, jointRot, animBlend);
+                }
 
                 for (int i = 0; i < part.Positions.Length; i++)
                 {

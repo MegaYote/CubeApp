@@ -63,6 +63,11 @@ namespace CubeApp
         float AnimTime { get; }
 
         /// <summary>
+        /// Smoothed 0..1 blend between rest pose and walk pose (0 = standing, 1 = full stride).
+        /// </summary>
+        float AnimBlend { get; }
+
+        /// <summary>
         /// Vertical velocity for in-air tilt animation.
         /// </summary>
         float VelocityY { get; }

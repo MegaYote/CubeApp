@@ -13,6 +13,7 @@ namespace CubeApp
         public readonly float WalkPhase;
         public readonly float WalkAmount;
         public readonly float AnimTime;
+        public readonly float AnimBlend;
         public readonly float FlapPhase;
         public readonly float VelocityY;
         public readonly bool OnGround;
@@ -29,6 +30,7 @@ namespace CubeApp
             float walkPhase,
             float walkAmount,
             float animTime,
+            float animBlend,
             float flapPhase,
             float velocityY,
             bool onGround,
@@ -44,6 +46,7 @@ namespace CubeApp
             WalkPhase = walkPhase;
             WalkAmount = walkAmount;
             AnimTime = animTime;
+            AnimBlend = animBlend;
             FlapPhase = flapPhase;
             VelocityY = velocityY;
             OnGround = onGround;
@@ -66,6 +69,7 @@ namespace CubeApp
                 mob.WalkPhase,
                 mob.WalkAmount,
                 mob.AnimTime,
+                mob.AnimBlend,
                 mob.FlapPhase,
                 mob.VelocityY,
                 mob.OnGround,
