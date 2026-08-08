@@ -1776,14 +1776,15 @@ void main() {
             };
             _gd.UpdateBuffer(_cloudVertexBuffer, 0, verts);
 
-            // Scroll + opacity.
+            // Scroll + opacity. Opacity rides the night sky dim so clouds darken with the world
+            // (Infdev's getCloudColor = getSkyColor cosine factor).
             float now = (float)_cloudClock.Elapsed.TotalSeconds;
             _cloudScrollU = (float)Math.IEEERemainder(_cloudScrollU + 0.002f * (now - _lastCloudTime), 1.0);
             _cloudScrollV = (float)Math.IEEERemainder(_cloudScrollV + 0.0007f * (now - _lastCloudTime), 1.0);
             _lastCloudTime = now;
             _cloudParams[0] = _cloudScrollU;
             _cloudParams[1] = _cloudScrollV;
-            _cloudParams[2] = 0.7f; // cloud opacity: translucent but still clearly visible
+            _cloudParams[2] = 0.7f * Math.Max(_nightSkyDim, 0.02f); // cloud opacity: translucent, dims at night
             _cloudParams[3] = 0f;
             _gd.UpdateBuffer(_cloudParamsBuffer, 0, _cloudParams);
 
@@ -2288,9 +2289,9 @@ void main() {
             // Fog DISABLED by request - fogStart 0 + huge fogEnd keeps the fog factor ~1 = clear at
             // every distance. The uniform plumbing stays so it's trivial to re-enable later.
             ComputeNightFactors();
-            _fogParams[0] = (192f / 255f) * Math.Max(_nightSkyDim, 0.15f);
-            _fogParams[1] = (216f / 255f) * Math.Max(_nightSkyDim, 0.15f);
-            _fogParams[2] = 1f * Math.Max(_nightSkyDim, 0.15f);
+            _fogParams[0] = (192f / 255f) * _nightSkyDim;
+            _fogParams[1] = (216f / 255f) * _nightSkyDim;
+            _fogParams[2] = 1f * _nightSkyDim;
             _fogParams[3] = 1f;
             _fogParams[4] = 0f;
             _fogParams[5] = 1e6f;
@@ -2342,11 +2343,11 @@ void main() {
             _nightDim = tableFull > 1e-5f ? tableNight / tableFull : 0.12f;
             if (_nightDim < 0.05f) _nightDim = 0.05f;
 
-            // Sky gradient base colors ride the sky factor (Infdev skyColor * sky factor) with a
-            // floor so night is a deep blue, not pure black.
-            _nightSkyR = (136f / 255f) * Math.Max(sky, 0.12f);
-            _nightSkyG = (187f / 255f) * Math.Max(sky, 0.14f);
-            _nightSkyB = 1f * Math.Max(sky, 0.32f);
+            // Sky gradient base colors follow Infdev exactly: skyColor * getSkyColor factor, which
+            // reaches 0 at midnight -> the night sky is genuinely black (no floor).
+            _nightSkyR = (136f / 255f) * sky;
+            _nightSkyG = (187f / 255f) * sky;
+            _nightSkyB = 1f * sky;
         }
 
         // Infdev's lightBrightnessTable (World.java static init):
@@ -2380,9 +2381,9 @@ void main() {
             // Infdev's sky fog: setupFog(-1) = linear 0 .. farPlane*0.8. The camera sits at the
             // origin of camera space, so the fog distance is just the fragment's position length.
             // The fog color darkens with the sky at night so the horizon blends seamlessly.
-            _skyFogParams[0] = (192f / 255f) * Math.Max(_nightSkyDim, 0.15f);
-            _skyFogParams[1] = (216f / 255f) * Math.Max(_nightSkyDim, 0.15f);
-            _skyFogParams[2] = 1f * Math.Max(_nightSkyDim, 0.15f);
+            _skyFogParams[0] = (192f / 255f) * _nightSkyDim;
+            _skyFogParams[1] = (216f / 255f) * _nightSkyDim;
+            _skyFogParams[2] = 1f * _nightSkyDim;
             _skyFogParams[3] = 1f;
             _skyFogParams[4] = 0f;
             _skyFogParams[5] = _farPlane * 0.8f;
@@ -2697,9 +2698,9 @@ void main() {
             _duckVertexScratch[vf++] = pz + fz;
                     _duckVertexScratch[vf++] = v.U;
                     _duckVertexScratch[vf++] = v.V;
-                    _duckVertexScratch[vf++] = v.Shade;
-                    _duckVertexScratch[vf++] = v.Shade * gbMul;
-                    _duckVertexScratch[vf++] = v.Shade * gbMul;
+                    _duckVertexScratch[vf++] = v.Shade * _nightDim;
+                    _duckVertexScratch[vf++] = v.Shade * gbMul * _nightDim;
+                    _duckVertexScratch[vf++] = v.Shade * gbMul * _nightDim;
                     _duckVertexScratch[vf++] = 1f;
                 }
 
@@ -3142,7 +3143,7 @@ void main() {
                 // returns to its neutral stance when it stops (no frozen mid-stride).
                 _coyoteModel.WriteInstance(_coyoteVertexScratch, ref vf, _coyoteIndexScratch, ref ii, ref baseVertex,
                     (float)inst.Position.X, (float)inst.Position.Y, (float)inst.Position.Z, inst.Yaw,
-                    inst.AnimTime, inst.AnimBlend);
+                    inst.AnimTime, inst.AnimBlend, _nightDim);
             }
 
             EnsureCoyoteBuffers((uint)(totalVertexFloats * sizeof(float)), (uint)(totalIndices * sizeof(ushort)));
@@ -3237,9 +3238,9 @@ void main() {
                     _playerVertexScratch[vf++] = pz + fz;
                     _playerVertexScratch[vf++] = v.U;
                     _playerVertexScratch[vf++] = v.V;
-                    _playerVertexScratch[vf++] = v.Shade;
-                    _playerVertexScratch[vf++] = v.Shade * gbMul;
-                    _playerVertexScratch[vf++] = v.Shade * gbMul;
+                    _playerVertexScratch[vf++] = v.Shade * _nightDim;
+                    _playerVertexScratch[vf++] = v.Shade * gbMul * _nightDim;
+                    _playerVertexScratch[vf++] = v.Shade * gbMul * _nightDim;
                     _playerVertexScratch[vf++] = 1f;
                 }
 

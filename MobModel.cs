@@ -727,7 +727,7 @@ namespace CubeApp
         /// rest pose, so an idle mob stands normally instead of freezing mid-stride.
         /// </summary>
         public void WriteInstance(float[] vertexScratch, ref int vf, ushort[] indexScratch, ref int ii, ref ushort baseVertex,
-            float x, float y, float z, float yaw, float animTime = 0f, float animBlend = 1f)
+            float x, float y, float z, float yaw, float animTime = 0f, float animBlend = 1f, float nightDim = 1f)
         {
             float renderYaw = yaw + MathF.PI + YawCorrection;
             float cosY = MathF.Cos(renderYaw);
@@ -773,6 +773,7 @@ namespace CubeApp
                     vertexScratch[offset + 3] = part.Uvs[i].X;
                     vertexScratch[offset + 4] = part.Uvs[i].Y;
                     float shade = part.Shades[i] <= 0f ? 1f : part.Shades[i];
+                    shade *= nightDim;
                     vertexScratch[offset + 5] = shade; vertexScratch[offset + 6] = shade;
                     vertexScratch[offset + 7] = shade; vertexScratch[offset + 8] = 1f;
                     vf += 9;
