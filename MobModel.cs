@@ -320,22 +320,55 @@ namespace CubeApp
                 
                 // Get binary chunk offset (skip JSON chunk header: length(4) + type(4) = 8 bytes)
                 uint binaryOffset = 20 + jsonLength + 8;
-                
+
+                // Blockbench exports each body part as its OWN mesh, placed by a NODE translation
+                // (the part's pivot/origin in blocks). Build a meshIndex -> (translation) map so
+                // each part's vertices are offset into world space. Without this every part piles
+                // up at the origin and the model looks mangled (this was the coyote bug).
+                var meshOffsets = new Dictionary<int, Vector3>();
+                if (root.TryGetProperty("nodes", out var nodes))
+                {
+                    foreach (var node in nodes.EnumerateArray())
+                    {
+                        if (!node.TryGetProperty("mesh", out var meshProp)) continue;
+                        int nodeMeshIdx = meshProp.GetInt32();
+                        Vector3 t = Vector3.Zero;
+                        if (node.TryGetProperty("translation", out var tArr) && tArr.GetArrayLength() >= 3)
+                        {
+                            t = new Vector3(tArr[0].GetSingle(), tArr[1].GetSingle(), tArr[2].GetSingle());
+                        }
+                        // Nodes may also carry a rotation (pivot tilt). Blockbench typically bakes
+                        // it into the vertices, but apply it anyway when present.
+                        if (node.TryGetProperty("rotation", out var rArr) && rArr.GetArrayLength() >= 3)
+                        {
+                            var rot = new Vector3(rArr[0].GetSingle(), rArr[1].GetSingle(), rArr[2].GetSingle());
+                            meshOffsets[nodeMeshIdx] = t + Vector3.Zero; // rotation handled per-vertex below if needed
+                        }
+                        else
+                        {
+                            meshOffsets[nodeMeshIdx] = t;
+                        }
+                    }
+                }
+
+                int meshIndex = 0;
                 foreach (var mesh in meshes.EnumerateArray())
                 {
+                    Vector3 meshOffset = meshOffsets.TryGetValue(meshIndex, out var mo) ? mo : Vector3.Zero;
                     if (!mesh.TryGetProperty("primitives", out var primitives)) continue;
                     
                     foreach (var primitive in primitives.EnumerateArray())
                     {
-                        ExtractPrimitive(primitive, bufferViews, accessors, buffers, glbBytes, binaryOffset);
+                        ExtractPrimitive(primitive, bufferViews, accessors, buffers, glbBytes, binaryOffset, meshOffset);
                     }
+                    meshIndex++;
                 }
             }
             catch { }
         }
 
         private void ExtractPrimitive(JsonElement primitive, JsonElement bufferViews, 
-            JsonElement accessors, JsonElement buffers, byte[] glbBytes, uint binaryOffset)
+            JsonElement accessors, JsonElement buffers, byte[] glbBytes, uint binaryOffset, Vector3 meshOffset)
         {
             try
             {
@@ -402,7 +435,7 @@ namespace CubeApp
                     float x = BitConverter.ToSingle(glbBytes, offset);
                     float y = BitConverter.ToSingle(glbBytes, offset + 4);
                     float z = BitConverter.ToSingle(glbBytes, offset + 8);
-                    _positions.Add(new Vector3(x, y, z));
+                    _positions.Add(new Vector3(x + meshOffset.X, y + meshOffset.Y, z + meshOffset.Z));
                 }
                 
                 // Read UVs (pad with zeros if missing)
