@@ -2336,19 +2336,34 @@ void main() {
             if (sky > 1f) sky = 1f;
             _nightSkyDim = sky;
 
-            // World light: Infdev subtracts up to 11 from sky light at night, so brightness runs
-            // from full to a dim floor. Map subtracted 0..11 onto a 1..~0.15 multiplier.
+            // World light: Infdev subtracts skylightSubtracted (0..11) from sky light at render time
+            // and looks up the brightness TABLE (World.lightBrightnessTable). To reproduce that with
+            // baked mesh light, scale the baked brightness (which assumed full sky light 15) by the
+            // ratio of table[15-subtracted] / table[15]. This keeps the authentic gamma feel instead
+            // of a flat linear dim.
             float sub = 1f - (float)(Math.Cos(ang * Math.PI * 2.0) * 2.0 + 0.5);
             if (sub < 0f) sub = 0f;
             if (sub > 1f) sub = 1f;
             int subtracted = (int)(sub * 11f);
-            _nightDim = 1f - subtracted / 15f;
-            if (_nightDim < 0.12f) _nightDim = 0.12f;
+            float tableFull = InfdevBrightness(15);
+            float tableNight = InfdevBrightness(Math.Max(0, 15 - subtracted));
+            _nightDim = tableFull > 1e-5f ? tableNight / tableFull : 0.12f;
+            if (_nightDim < 0.05f) _nightDim = 0.05f;
 
-            // Sky gradient base colors ride the sky factor (Infdev skyColor * sky factor).
-            _nightSkyR = (136f / 255f) * Math.Max(sky, 0.1f);
-            _nightSkyG = (187f / 255f) * Math.Max(sky, 0.1f);
-            _nightSkyB = 1f * Math.Max(sky, 0.1f);
+            // Sky gradient base colors ride the sky factor (Infdev skyColor * sky factor) with a
+            // floor so night is a deep blue, not pure black.
+            _nightSkyR = (136f / 255f) * Math.Max(sky, 0.12f);
+            _nightSkyG = (187f / 255f) * Math.Max(sky, 0.14f);
+            _nightSkyB = 1f * Math.Max(sky, 0.32f);
+        }
+
+        // Infdev's lightBrightnessTable (World.java static init):
+        //   v = 1 - light/15
+        //   table[light] = (1-v)/(3v+1) * 0.95 + 0.05
+        private static float InfdevBrightness(int light)
+        {
+            float v = 1f - light / 15f;
+            return (1f - v) / (v * 3f + 1f) * 0.95f + 0.05f;
         }
 
         // Renders the Infdev sky: two giant fog-blended planes in CAMERA SPACE - the TOP plane sits
@@ -2373,9 +2388,9 @@ void main() {
             // Infdev's sky fog: setupFog(-1) = linear 0 .. farPlane*0.8. The camera sits at the
             // origin of camera space, so the fog distance is just the fragment's position length.
             // The fog color darkens with the sky at night so the horizon blends seamlessly.
-            _skyFogParams[0] = (192f / 255f) * Math.Max(_nightSkyDim, 0.1f);
-            _skyFogParams[1] = (216f / 255f) * Math.Max(_nightSkyDim, 0.1f);
-            _skyFogParams[2] = 1f * Math.Max(_nightSkyDim, 0.1f);
+            _skyFogParams[0] = (192f / 255f) * Math.Max(_nightSkyDim, 0.15f);
+            _skyFogParams[1] = (216f / 255f) * Math.Max(_nightSkyDim, 0.15f);
+            _skyFogParams[2] = 1f * Math.Max(_nightSkyDim, 0.15f);
             _skyFogParams[3] = 1f;
             _skyFogParams[4] = 0f;
             _skyFogParams[5] = _farPlane * 0.8f;
