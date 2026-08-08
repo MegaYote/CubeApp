@@ -24,14 +24,19 @@ namespace CubeApp
     }
 
     /// <summary>
-    /// Natural mob spawning, modeled on 1.12's WorldEntitySpawner but tuned for our world:
+    /// Natural mob spawning. Ducks use the AUTHENTIC Infdev 20100630 animal spawner logic
+    /// (SpawnerAnimals.java, which spawned pigs/sheep in real Infdev - the same code drives every
+    /// animal, and chickens arrived in Alpha with the same class):
     ///
-    ///  - Spawns in a ring 24-40 blocks from the player (never at the player's feet), picking a
-    ///    weighted mob type and spawning a small pack that clusters loosely together.
-    ///  - Every spawn spot is validated: solid ground below, enough headroom for the mob, not
-    ///    underwater, and not inside a wall. Spots fail fast and we retry a few times.
-    ///  - Enforced caps: a total cap AND a per-type cap (so coyotes don't crowd out ducks).
-    ///  - Despawn mirrors 1.12: instant beyond 128 blocks, idle-despawn between 64-128 blocks.
+    ///  - Only spawn while total animals are under the cap (Infdev: maxSpawns = 20).
+    ///  - Pick a random point within +-128 blocks of the player, any Y up to 128.
+    ///  - Jitter 3x3 cells; a cell is valid when the block below is a normal solid cube, the
+    ///    spawn cell and the one above are air (or non-liquid), and the spot is at least 32
+    ///    blocks from the player (distSq >= 1024).
+    ///  - Spawn up to a pack of 3 per pass; only if the entity's getCanSpawnHere passes
+    ///    (clear AABB, no collision, not in liquid).
+    ///
+    /// Coyotes and Steves keep the modern weighted-table path with per-type caps.
     /// </summary>
     public sealed class MobSpawner
     {
@@ -40,11 +45,11 @@ namespace CubeApp
         private readonly Func<string, Point3D, float, bool> _spawnFn;
         private readonly Func<int> _totalCountFn;
         private readonly Func<string, int> _typeCountFn;
-        private const double SpawnMinDistanceSq = 24.0 * 24.0;
-        private const double SpawnMaxDistanceSq = 40.0 * 40.0;
-        private const int MaxTotalMobs = 36;
+        private const double SpawnMinDistanceSq = 32.0 * 32.0; // Infdev: 1024.0
+        private const double SpawnMaxDistanceSq = 128.0 * 128.0; // Infdev: +-128 blocks
+        private const int MaxTotalMobs = 20;     // Infdev: maxSpawns = 20
         private const int MaxPerType = 12;
-        private const int MaxPackMembers = 3;
+        private const int MaxPackMembers = 3;    // Infdev: 3 entities per pass
 
         public MobSpawner(MobSpawnEntry[] entries,
             Func<string, Point3D, float, bool> spawnFn,
@@ -64,53 +69,97 @@ namespace CubeApp
             if (_entries.Length == 0) return false;
             if (_totalCountFn() >= MaxTotalMobs) return false;
 
-            // Pick the mob type first so we can honour the per-type cap before searching spots.
             var entry = PickEntry(rand);
             if (entry == null) return false;
             if (_typeCountFn(entry.MobId) >= MaxPerType) return false;
 
             int pack = entry.PackSizeMin + rand.Next(entry.PackSizeMax - entry.PackSizeMin + 1);
             pack = Math.Min(pack, MaxPackMembers);
-            // Don't exceed the per-type cap with a full pack.
             int room = MaxPerType - _typeCountFn(entry.MobId);
             pack = Math.Min(pack, Math.Max(0, room));
 
+            // Infdev: up to 10 spawning passes per update.
             int spawned = 0;
-            for (int attempt = 0; attempt < 8 && spawned < pack; attempt++)
+            for (int pass = 0; pass < 10 && spawned < pack; pass++)
             {
-                double angle = rand.NextDouble() * Math.PI * 2.0;
-                double dist = Math.Sqrt(SpawnMinDistanceSq + rand.NextDouble() * (SpawnMaxDistanceSq - SpawnMinDistanceSq));
-                int x = (int)Math.Floor(playerPosition.X + Math.Cos(angle) * dist);
-                int z = (int)Math.Floor(playerPosition.Z + Math.Sin(angle) * dist);
+                // Pick a base point from a LOADED ground-layer chunk near the player (Infdev's
+                // +-128 search worked because the whole area was loaded; our world streams chunks,
+                // so we sample a loaded chunk and jitter within it). This keeps Infdev's surface
+                // jitter + validation while guaranteeing the terrain actually exists.
+                if (!TryPickLoadedChunk(manager, playerPosition, rand, out int chunkX, out int chunkZ))
+                    continue;
 
-                // Find ground and validate the spot for the FIRST pack member (the rest cluster near it).
-                int y = FindSpawnY(manager, x, z, 2);
-                if (y < 0) continue;
+                int px = chunkX * 16 + rand.Next(16);
+                int pz = chunkZ * 16 + rand.Next(16);
+                int py = SurfaceY(manager, px, pz);
+                if (py < 0) continue;
 
-                // Spawn the pack leader.
-                if (_spawnFn(entry.MobId, new Point3D(x + 0.5, y, z + 0.5),
-                    (float)(rand.NextDouble() * Math.PI * 2.0)))
+                // Jitter 3x3 cells from the base point (Infdev's inner loop).
+                for (int attempt = 0; attempt < 3 && spawned < pack; attempt++)
                 {
-                    spawned++;
-                }
+                    int x = px + rand.Next(6) - rand.Next(6);
+                    int y = py + rand.Next(1) - rand.Next(1);
+                    int z = pz + rand.Next(6) - rand.Next(6);
 
-                // The rest of the pack clusters around the leader within ~3 blocks.
-                for (int i = 1; i < pack; i++)
-                {
-                    int px = x + rand.Next(-2, 3);
-                    int pz = z + rand.Next(-2, 3);
-                    int py = FindSpawnY(manager, px, pz, 2);
-                    if (py < 0) continue;
-                    if (_spawnFn(entry.MobId, new Point3D(px + 0.5, py, pz + 0.5),
+                    // Valid: solid cube below, air/non-liquid at the cell and above, >= 32 from player.
+                    if (!IsNormalCube(manager, x, y - 1, z)) continue;
+                    if (manager.GetBlockAt(x, y, z) != BlockRegistry.AirId) continue;
+                    if (manager.GetBlockAt(x, y + 1, z) != BlockRegistry.AirId) continue;
+
+                    double dx = (x + 0.5) - playerPosition.X;
+                    double dy = (y + 1.0) - playerPosition.Y;
+                    double dz = (z + 0.5) - playerPosition.Z;
+                    if (dx * dx + dy * dy + dz * dz < 1024.0) continue;
+
+                    if (_spawnFn(entry.MobId, new Point3D(x + 0.5, y + 1.0, z + 0.5),
                         (float)(rand.NextDouble() * Math.PI * 2.0)))
                     {
                         spawned++;
                     }
                 }
-
-                if (spawned > 0) return true;
             }
             return spawned > 0;
+        }
+
+        // Picks a loaded ground-layer chunk at least 2 chunks from the player (so the 32-block
+        // spawn-distance gate has a chance), and within a few chunks so mobs appear near the world.
+        private static bool TryPickLoadedChunk(ChunkManager manager, Point3D playerPosition, Random rand,
+            out int chunkX, out int chunkZ)
+        {
+            chunkX = 0; chunkZ = 0;
+            int pcx = (int)Math.Floor(playerPosition.X / 16.0);
+            int pcz = (int)Math.Floor(playerPosition.Z / 16.0);
+
+            for (int attempt = 0; attempt < 24; attempt++)
+            {
+                int radius = 2 + rand.Next(6); // 2..7 chunks out (32..112 blocks)
+                double ang = rand.NextDouble() * Math.PI * 2.0;
+                int cx = pcx + (int)Math.Round(Math.Cos(ang) * radius);
+                int cz = pcz + (int)Math.Round(Math.Sin(ang) * radius);
+                if (manager.TryGetLoadedChunk(new ChunkCoordinates(ChunkManager.GroundLayer, cx, cz), out _))
+                {
+                    chunkX = cx; chunkZ = cz;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Highest solid block in the column (the ground surface the mob would stand on); -1 if none.
+        private static int SurfaceY(ChunkManager manager, int x, int z)
+        {
+            for (int y = 150; y >= 0; y--)
+            {
+                if (manager.GetBlockAt(x, y, z) != BlockRegistry.AirId) return y;
+            }
+            return -1;
+        }
+
+        // Infdev's isBlockNormalCube: a solid, non-transparent block (grass/dirt/stone/cobble...).
+        private static bool IsNormalCube(ChunkManager manager, int x, int y, int z)
+        {
+            int id = manager.GetBlockAt(x, y, z);
+            return id != BlockRegistry.AirId && BlockRegistry.IsSolid(id) && BlockRegistry.IsOpaque(id);
         }
 
         private MobSpawnEntry? PickEntry(Random rand)
@@ -122,39 +171,6 @@ namespace CubeApp
                 if (roll < 0) return e;
             }
             return _entries.Length > 0 ? _entries[0] : null;
-        }
-
-        // Finds a valid spawn Y for a column: the highest solid block below the sky, with enough
-        // headroom above (headroom = blocks of air required) and not underwater. Returns -1 when
-        // the column is unsuitable.
-        private static int FindSpawnY(ChunkManager manager, int x, int z, int headroom)
-        {
-            int startY = 150;
-            for (int y = startY; y >= 0; y--)
-            {
-                int id = manager.GetBlockAt(x, y, z);
-                if (id == BlockRegistry.AirId) continue;
-
-                // Must stand on a solid block (not water/sand we'd sink into weirdly - allow stone/grass/dirt/gravel).
-                if (!BlockRegistry.IsSolid(id)) continue;
-
-                // The cell above must be air with enough headroom, and we don't spawn underwater.
-                if (manager.GetBlockAt(x, y + 1, z) != BlockRegistry.AirId) continue;
-                bool clear = true;
-                for (int h = 1; h <= headroom; h++)
-                {
-                    int above = manager.GetBlockAt(x, y + h, z);
-                    if (above != BlockRegistry.AirId)
-                    {
-                        clear = false;
-                        break;
-                    }
-                }
-                if (!clear) continue;
-
-                return y + 1;
-            }
-            return -1;
         }
     }
 }

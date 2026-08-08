@@ -19,9 +19,7 @@ namespace CubeApp
         // Natural spawning + despawning (1.12-style). Set to null to disable.
         private MobSpawner? _spawner;
         private double _spawnAccumulator;
-        private const double SpawnIntervalBase = 4.0;    // seconds between spawn attempts at full pop
-        private const double SpawnIntervalMin = 1.2;     // fastest spawn cadence when empty
-        private const int SpawnCapFraction = 30;         // world count where spawning eases off
+        private const double SpawnIntervalBase = 2.0; // check for spawning roughly every 2s
 
         private const float BlockReach = 6.5f;
 
@@ -169,18 +167,19 @@ namespace CubeApp
                 }
             }
 
-            // Natural spawning (1.12-style pack spawning near the player). The interval adapts:
-            // spawn attempts come faster when the world is empty (populate a fresh area) and slow
-            // down as it approaches the cap so the world doesn't flood.
+            // Natural spawning. Like Infdev's SpawnerAnimals.onUpdate, we attempt multiple passes
+            // (Infdev did 10) each tick while under the cap; the interval only gates how often we
+            // check so an empty area fills quickly without hammering every frame.
             if (enableSpawning && _spawner != null)
             {
                 _spawnAccumulator += deltaSeconds;
-                double interval = SpawnIntervalBase * (0.5 + 0.5 * (_mobs.Count / (double)SpawnCapFraction));
-                interval = Math.Clamp(interval, SpawnIntervalMin, SpawnIntervalBase);
-                if (_spawnAccumulator >= interval)
+                if (_spawnAccumulator >= SpawnIntervalBase)
                 {
                     _spawnAccumulator = 0;
-                    _spawner.TrySpawn(_chunkManager, playerPosition, _rand);
+                    for (int pass = 0; pass < 10; pass++)
+                    {
+                        _spawner.TrySpawn(_chunkManager, playerPosition, _rand);
+                    }
                 }
             }
 
