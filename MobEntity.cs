@@ -108,6 +108,9 @@ namespace CubeApp
         /// moving and back to 0 when idle, so a stopped mob returns to its neutral stance instead
         /// of freezing mid-stride.</summary>
         protected float _animBlend;
+        /// <summary>How fast the GLB walk animation plays relative to real time (1.0 = one cycle
+        /// per second of full-speed walking). Tuned per mob so leg motion matches ground speed.</summary>
+        protected float AnimSpeedScale = 1.0f;
         protected float _hurtTimer;
         protected bool _dead;
         protected float _deathTimer;
@@ -656,8 +659,9 @@ namespace CubeApp
             double horizontalSpeed = Math.Sqrt(_velX * _velX + _velZ * _velZ);
             _walkAmount = (float)Math.Min(1, horizontalSpeed / Math.Max(0.001, maxSpeed));
             _walkPhase += dt * ((_prevOnGround || OnGround) ? (_walkAmount * 8.5f + 1.9f) : 14.0f);
-            // Animation clock: advance in step with real walking; freeze when idle.
-            _animClock += dt * _walkAmount * (_prevOnGround || OnGround ? 1f : 0.2f);
+            // Animation clock: advance in step with real walking; freeze when idle. Scaled by
+            // AnimSpeedScale so leg cycles match the mob's actual ground speed.
+            _animClock += dt * _walkAmount * (_prevOnGround || OnGround ? 1f : 0.2f) * AnimSpeedScale;
             // Walk blend eases toward the movement amount so stopping returns the mob to rest pose.
             _animBlend += (_walkAmount - _animBlend) * (1f - (float)Math.Exp(-dt * 5.0f));
         }
@@ -781,6 +785,9 @@ namespace CubeApp
             Height = 1.2f;
             MaxHealth = 10;
             Health = MaxHealth;
+            // Legs should swing about one full stride per ~2.5 blocks covered; at 4 blocks/s and a
+            // 1.33s cycle that's ~2.2x real time.
+            AnimSpeedScale = 2.2f;
         }
 
         public override string MobTypeName => "coyote";
