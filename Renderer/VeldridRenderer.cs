@@ -155,6 +155,14 @@ namespace CubeApp.Renderer
         private float[] _playerVertexScratch = Array.Empty<float>();
         private ushort[] _playerIndexScratch = Array.Empty<ushort>();
 
+        // GLB-driven mobs (coyote): loaded from MobEntities/<Type>Mob/<type>.glb + .png at startup,
+        // drawn through MobModel.Draw (which emits the same 9-float model-vertex layout).
+        private MobModel? _coyoteModel;
+        private ResourceSet? _coyoteTextureSet;
+        private IReadOnlyList<CubeApp.DuckInstance> _coyoteInstances = Array.Empty<CubeApp.DuckInstance>();
+        // Full mob snapshot kept for F3 nametag rendering (world -> screen projection).
+        private IReadOnlyList<CubeApp.MobRenderData> _allMobRenderData = Array.Empty<CubeApp.MobRenderData>();
+
         // Current camera (so chunk frustum culling and the mob meshing can read it) and the six
         // view-frustum planes refreshed each frame from the view-projection matrix.
         private CubeApp.Point3D? _cameraPosition;
@@ -395,6 +403,7 @@ namespace CubeApp.Renderer
 
             LoadDuckResources();
             LoadPlayerResources();
+            LoadCoyoteResources();
             CreatePipeline();
 
             _imguiRenderer = new ImGuiRenderer(
@@ -607,6 +616,29 @@ namespace CubeApp.Renderer
             catch
             {
                 // ignore; player rendering is skipped if the texture fails to load
+            }
+        }
+
+        // Loads the coyote GLB model + texture from MobEntities/CoyoteMob/. Coyote (and any future
+        // Blockbench mob) renders through the generic MobModel.Draw path instead of hand-authored
+        // cube bones like duck/player.
+        private void LoadCoyoteResources()
+        {
+            try
+            {
+                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                string modelPath = Path.Combine(baseDir, "MobEntities", "CoyoteMob", "coyote.glb");
+                string texPath = Path.Combine(baseDir, "MobEntities", "CoyoteMob", "Coyote.png");
+                if (!File.Exists(modelPath)) return;
+
+                var model = new MobModel(_gd);
+                if (!model.Load(modelPath, texPath)) return;
+                _coyoteModel = model;
+                _coyoteTextureSet = model.TextureSet;
+            }
+            catch
+            {
+                // ignore; coyotes simply don't render if the model fails to load
             }
         }
 
@@ -1960,21 +1992,25 @@ void main() {
         {
             // Route the unified MobRenderData snapshots to per-model instance lists. DuckInstance
             // carries exactly the fields both models need, so it doubles as the player instance.
+            _allMobRenderData = mobRenderData ?? Array.Empty<CubeApp.MobRenderData>();
             if (mobRenderData == null || mobRenderData.Count == 0)
             {
                 _duckInstances = Array.Empty<CubeApp.DuckInstance>();
                 _playerInstances = Array.Empty<CubeApp.DuckInstance>();
+                _coyoteInstances = Array.Empty<CubeApp.DuckInstance>();
                 return;
             }
 
             List<CubeApp.DuckInstance>? ducks = null;
             List<CubeApp.DuckInstance>? players = null;
+            List<CubeApp.DuckInstance>? coyotes = null;
             for (int i = 0; i < mobRenderData.Count; i++)
             {
                 var md = mobRenderData[i];
                 bool isDuck = string.Equals(md.MobType, "duck", StringComparison.OrdinalIgnoreCase);
                 bool isPlayer = !isDuck && string.Equals(md.MobType, "player", StringComparison.OrdinalIgnoreCase);
-                if (!isDuck && !isPlayer) continue;
+                bool isCoyote = !isDuck && !isPlayer && string.Equals(md.MobType, "coyote", StringComparison.OrdinalIgnoreCase);
+                if (!isDuck && !isPlayer && !isCoyote) continue;
 
                 var inst = new CubeApp.DuckInstance(
                     md.Position, md.Yaw, md.HeadYawLocal,
@@ -1983,11 +2019,13 @@ void main() {
                     md.IsDead, md.DeathT, md.DeathRollDir, md.HurtTimer);
 
                 if (isDuck) (ducks ??= new List<CubeApp.DuckInstance>()).Add(inst);
-                else (players ??= new List<CubeApp.DuckInstance>()).Add(inst);
+                else if (isPlayer) (players ??= new List<CubeApp.DuckInstance>()).Add(inst);
+                else (coyotes ??= new List<CubeApp.DuckInstance>()).Add(inst);
             }
 
             _duckInstances = (IReadOnlyList<CubeApp.DuckInstance>?)ducks ?? Array.Empty<CubeApp.DuckInstance>();
             _playerInstances = (IReadOnlyList<CubeApp.DuckInstance>?)players ?? Array.Empty<CubeApp.DuckInstance>();
+            _coyoteInstances = (IReadOnlyList<CubeApp.DuckInstance>?)coyotes ?? Array.Empty<CubeApp.DuckInstance>();
         }
 
         public void Render()
@@ -2094,6 +2132,7 @@ void main() {
             DrawFallingBlocks(cl);
             DrawDucks(cl);
             DrawPlayers(cl);
+            DrawCoyotes(cl);
             DrawHighlight(cl);
             DrawChunkBorders(cl);
 
@@ -2995,6 +3034,21 @@ void main() {
             cl.DrawIndexed((uint)totalIndices, 1, 0, 0, 0);
         }
 
+        // Draws GLB-driven mobs (coyote) via the generic MobModel path. MobModel.Draw sets its own
+        // vertex/index buffers and texture resource set, so we only set the pipeline + projView.
+        private void DrawCoyotes(CommandList cl)
+        {
+            var instances = _coyoteInstances;
+            if (instances.Count == 0 || _coyoteModel == null || _modelPipeline == null || _coyoteTextureSet == null) return;
+
+            cl.SetPipeline(_modelPipeline);
+            cl.SetGraphicsResourceSet(0, _projViewSet);
+            foreach (var inst in instances)
+            {
+                _coyoteModel.Draw(cl, _coyoteTextureSet, (float)inst.Position.X, (float)inst.Position.Y, (float)inst.Position.Z, inst.Yaw);
+            }
+        }
+
         // Poses one player's bones (limb swing / head turn) and bakes them, with the body yaw,
         // hurt-flash tint and death roll, into the shared scratch buffers. Same scheme as WriteDuck
         // but with Minecraft-style limb animation and no in-air body tilt.
@@ -3551,7 +3605,39 @@ void main() {
                 {
                     Line(_hud.RenderDistanceText);
                 }
+
+                // Nametags: project each mob's position above its head into screen space and draw
+                // its type label, so invisible/broken mobs are still verifiable in the F3 overlay.
+                if (_viewProjection.HasValue && _cameraPosition.HasValue)
+                {
+                    uint tagColor = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 1f));
+                    for (int i = 0; i < _allMobRenderData.Count; i++)
+                    {
+                        var md = _allMobRenderData[i];
+                        var screen = WorldToScreen(new System.Numerics.Vector3((float)md.Position.X, (float)md.Position.Y + 1.8f, (float)md.Position.Z));
+                        if (screen.HasValue)
+                        {
+                            drawList.AddText(screen.Value - new Vector2(0, 14), tagColor, md.MobType);
+                        }
+                    }
+                }
             }
+        }
+
+        // Projects a world-space point to screen pixel coordinates using the current
+        // view-projection matrix (the renderer owns both the camera and the HUD pass). Returns
+        // null when the point is behind the camera.
+        private System.Numerics.Vector2? WorldToScreen(System.Numerics.Vector3 world)
+        {
+            if (!_viewProjection.HasValue) return null;
+            var vp = _viewProjection.Value;
+            var clip = System.Numerics.Vector4.Transform(new System.Numerics.Vector4(world, 1f), vp);
+            if (clip.W <= 0f) return null;
+            var ndc = new System.Numerics.Vector2(clip.X / clip.W, clip.Y / clip.W);
+            var io = ImGui.GetIO();
+            float x = (ndc.X * 0.5f + 0.5f) * io.DisplaySize.X;
+            float y = (1f - ndc.Y * 0.5f - 0.5f) * io.DisplaySize.Y;
+            return new System.Numerics.Vector2(x, y);
         }
 
         public void Dispose()
@@ -3614,6 +3700,7 @@ void main() {
             _playerSampler?.Dispose();
             _playerView?.Dispose();
             _playerTexture?.Dispose();
+            _coyoteModel?.Dispose();
             _modelPipeline?.Dispose();
             _pipeline?.Dispose();
             _cutoutPipeline?.Dispose();
