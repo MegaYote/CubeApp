@@ -388,6 +388,33 @@ namespace CubeApp.Renderer
         private IndirectDrawIndexedArguments[] _transparentIndirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
         private bool _drawCommandsDirty = true;
 
+        // GPU-assisted frustum culling (F7 toggle): a compute pass reads each chunk's AABB + draw
+        // command, tests the 6 frustum planes in parallel, and zeroes InstanceCount for culled
+        // chunks. It writes args into a StructuredBufferReadWrite scratch, which is copied into
+        // the IndirectBuffer for the draw - no CPU scan, no scratch copy on CPU, no readback.
+        private bool _gpuCullEnabled;
+        private bool _gpuCullSupported;
+        private Pipeline _cullPipeline;
+        private ResourceLayout _cullDataLayout;   // set 0: frustum planes (uniform)
+        private ResourceLayout _cullChunkLayout;  // set 1: chunk AABB/command data + args out
+        private DeviceBuffer _frustumBuffer;
+        private ResourceSet _frustumSet;
+        private DeviceBuffer _cullDataBuffer;     // per-pass chunk cull data (StructuredBufferReadOnly)
+        private ResourceSet _cullDataReadSet;     // binds cull data (set 1 binding 0)
+        private DeviceBuffer _cullArgsBuffer;     // compute output (StructuredBufferReadWrite)
+        private ResourceSet _cullArgsWriteSet;    // binds cull args (set 1 binding 1)
+        private uint _cullDataCapacityCommands;
+
+        // Per-pass cull data is packed 11 uint32s per chunk: AABB min xyz (3 float bits), AABB
+        // max xyz (3), then the IndirectDrawIndexedArguments (5). Refreshed when draw commands
+        // change (RebuildDrawCommands / GPU-cull frame).
+        private uint[] _opaqueCullData = Array.Empty<uint>();
+        private uint[] _cutoutCullData = Array.Empty<uint>();
+        private uint[] _glassCullData = Array.Empty<uint>();
+        private uint[] _transparentCullData = Array.Empty<uint>();
+        private readonly float[] _cullPlaneFloats = new float[24];
+        private bool _gpuCullDataDirty = true;
+
         // Pending GPU-side buffer growth copies (old -> new, recorded after cl.Begin()).
         private readonly List<(DeviceBuffer Old, DeviceBuffer New, uint SizeBytes)> _pendingBufferCopies = new();
 
@@ -479,6 +506,7 @@ namespace CubeApp.Renderer
             LoadPlayerResources();
             LoadCoyoteResources();
             CreatePipeline();
+            CreateCullComputePipeline();
 
             _imguiRenderer = new ImGuiRenderer(
                 _gd,
@@ -1393,6 +1421,116 @@ void main() {
             CreateSkyPipeline();
             CreateCelestialPipelines();
             CreateCloudPipeline();
+        }
+
+        // GPU-assisted frustum culling compute pipeline. The shader reads a per-chunk struct
+        // (AABB min/max + the IndirectDrawIndexedArguments) from a structured buffer, tests all
+        // six frustum planes with the positive-vertex trick (same math as ChunkInFrustum), and
+        // zeroes InstanceCount for culled chunks. The draw then skips them via
+        // DrawIndexedIndirect - no CPU scan, no compaction, no GPU->CPU readback.
+        private void CreateCullComputePipeline()
+        {
+            try
+            {
+                CreateCullComputePipelineCore();
+            }
+            catch (Exception ex)
+            {
+                System.Console.Error.WriteLine($"[GPU-Cull] compute pipeline failed: {ex}");
+                _gpuCullSupported = false;
+            }
+        }
+
+        private void CreateCullComputePipelineCore()
+        {
+            var factory = _gd.ResourceFactory;
+
+            string cullCs = @"#version 450
+layout(local_size_x = 64) in;
+
+layout(set=0, binding=0) uniform FrustumPlanes {
+    vec4 planes[6];
+};
+
+// One entry per chunk command, as a flat uint array (16 uint32s per chunk / 64 bytes).
+//   [0..2]   aabbMin xyz (float bits), [3] pad
+//   [4..6]   aabbMax xyz (float bits), [7] pad
+//   [8..12]  IndirectDrawIndexedArguments (IndexCount, InstanceCount, FirstIndex, VertexOffset, FirstInstance)
+//   [13..15] pad
+layout(set=1, binding=0) readonly buffer ChunkCullData {
+    uint data[];
+} chunkData;
+
+layout(set=1, binding=1) buffer IndirectArgs {
+    uint args[];
+} indirectArgs;
+
+const uint CMD_STRIDE = 5;
+
+void main() {
+    uint gi = gl_GlobalInvocationID.x;
+    uint base = gi * 16u;
+    vec3 minAABB = vec3(uintBitsToFloat(chunkData.data[base + 0]),
+                        uintBitsToFloat(chunkData.data[base + 1]),
+                        uintBitsToFloat(chunkData.data[base + 2]));
+    vec3 maxAABB = vec3(uintBitsToFloat(chunkData.data[base + 4]),
+                        uintBitsToFloat(chunkData.data[base + 5]),
+                        uintBitsToFloat(chunkData.data[base + 6]));
+
+    bool visible = true;
+    for (int p = 0; p < 6 && visible; p++) {
+        vec4 pl = planes[p];
+        float px = pl.x >= 0.0 ? maxAABB.x : minAABB.x;
+        float py = pl.y >= 0.0 ? maxAABB.y : minAABB.y;
+        float pz = pl.z >= 0.0 ? maxAABB.z : minAABB.z;
+        if (pl.x * px + pl.y * py + pl.z * pz + pl.w < 0.0) {
+            visible = false;
+        }
+    }
+
+    uint outBase = gi * CMD_STRIDE;
+    indirectArgs.args[outBase + 0] = chunkData.data[base + 8];                   // IndexCount
+    indirectArgs.args[outBase + 1] = visible ? chunkData.data[base + 9] : 0u;    // InstanceCount
+    indirectArgs.args[outBase + 2] = chunkData.data[base + 10];                  // FirstIndex
+    indirectArgs.args[outBase + 3] = chunkData.data[base + 11];                  // VertexOffset
+    indirectArgs.args[outBase + 4] = chunkData.data[base + 12];                  // FirstInstance
+}";
+
+            var csSpirv = SpirvCompilation.CompileGlslToSpirv(cullCs, "main", ShaderStages.Compute, GlslCompileOptions.Default);
+            var csDesc = new ShaderDescription(ShaderStages.Compute, csSpirv.SpirvBytes, "main");
+            var cs = factory.CreateFromSpirv(csDesc);
+
+            _cullDataLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
+                new ResourceLayoutElementDescription("FrustumPlanes", ResourceKind.UniformBuffer, ShaderStages.Compute)));
+            _cullChunkLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
+                new ResourceLayoutElementDescription("ChunkCullData", ResourceKind.StructuredBufferReadOnly, ShaderStages.Compute),
+                new ResourceLayoutElementDescription("IndirectArgs", ResourceKind.StructuredBufferReadWrite, ShaderStages.Compute)));
+
+            _frustumBuffer = factory.CreateBuffer(new BufferDescription(96, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _frustumSet = factory.CreateResourceSet(new ResourceSetDescription(_cullDataLayout, _frustumBuffer));
+
+            // One cull-data buffer (read-only in compute) and one args-output buffer (read-write).
+            // Both start empty; sized in EnsureCullCapacity as chunk counts grow. Structured
+            // buffers REQUIRE a non-zero StructureByteStride. The shader reads both as flat
+            // uint[] arrays, so each buffer's structure stride is sizeof(uint)=4; the compute
+            // writes 5 uints per command (20 bytes), which matches IndirectCommandStride when
+            // copied into the real indirect buffer for the draw.
+            const uint cullDataStride = sizeof(uint);
+            const uint cullArgsStride = sizeof(uint);
+            _cullDataBuffer = factory.CreateBuffer(new BufferDescription(
+                cullDataStride, BufferUsage.StructuredBufferReadOnly, cullDataStride));
+            _cullArgsBuffer = factory.CreateBuffer(new BufferDescription(
+                cullArgsStride, BufferUsage.StructuredBufferReadWrite, cullArgsStride));
+            _cullDataReadSet = factory.CreateResourceSet(new ResourceSetDescription(_cullChunkLayout, _cullDataBuffer, _cullArgsBuffer));
+            _cullArgsWriteSet = factory.CreateResourceSet(new ResourceSetDescription(_cullChunkLayout, _cullDataBuffer, _cullArgsBuffer));
+            _cullDataCapacityCommands = 0;
+
+            _cullPipeline = factory.CreateComputePipeline(new ComputePipelineDescription(
+                cs,
+                new[] { _cullDataLayout, _cullChunkLayout },
+                64, 1, 1));
+
+            _gpuCullSupported = _gd.Features.ComputeShader && _gd.Features.StructuredBuffer && _gd.Features.DrawIndirect;
         }
 
         // Pipeline for textured entity models (the duck). Vertices are supplied in world space each
@@ -2344,28 +2482,30 @@ void main() {
             // one would paint its frame on top. Water blends last, likewise sorted.
             if (_megaVertexBuffer != null && _megaIndexBuffer != null)
             {
-                DrawWorldPass(cl, _drawCommands, _indirectScratch, _pipeline);
+                DrawWorldPass(cl, _drawCommands, _indirectScratch, _pipeline, ref _opaqueCullData);
                 if (_cutoutDrawCommands.Count > 0)
                 {
-                    DrawWorldPass(cl, _cutoutDrawCommands, _cutoutIndirectScratch, _cutoutPipeline);
+                    DrawWorldPass(cl, _cutoutDrawCommands, _cutoutIndirectScratch, _cutoutPipeline, ref _cutoutCullData);
                 }
                 if (_glassDrawCommands.Count > 0)
                 {
                     SortPassBackToFront(_glassDrawCommands);
-                    DrawWorldPass(cl, _glassDrawCommands, _glassIndirectScratch, _glassPipeline);
+                    DrawWorldPass(cl, _glassDrawCommands, _glassIndirectScratch, _glassPipeline, ref _glassCullData);
                 }
                 if (_transparentDrawCommands.Count > 0)
                 {
                     SortPassBackToFront(_transparentDrawCommands);
-                    DrawWorldPass(cl, _transparentDrawCommands, _transparentIndirectScratch, _transparentPipeline);
+                    DrawWorldPass(cl, _transparentDrawCommands, _transparentIndirectScratch, _transparentPipeline, ref _transparentCullData);
                 }
                 // Translucent tint (colored glass) draws AFTER water so its semi-transparent pixels
                 // paint over the water/terrain behind it without depth-blocking anything.
                 if (_glassDrawCommands.Count > 0)
                 {
                     SortPassBackToFront(_glassDrawCommands);
-                    DrawWorldPass(cl, _glassDrawCommands, _glassIndirectScratch, _translucentPipeline);
+                    DrawWorldPass(cl, _glassDrawCommands, _glassIndirectScratch, _translucentPipeline, ref _glassCullData);
                 }
+                // All passes have now had a chance to refill their cull data this frame.
+                _gpuCullDataDirty = false;
             }
 
             // Clouds blend OVER the world (depth test on, write off) so terrain shows through them
@@ -3118,23 +3258,36 @@ void main() {
         }
 
         // Issues one indirect world draw for a chunk-command pass (opaque or transparent) using the
-        // given pipeline. Commands are frustum-culled this frame; the indirect-args buffer contents
-        // are refreshed each frame since the visible set changes with the camera.
+        // given pipeline. Commands are frustum-culled this frame (on the CPU by default, or on the
+        // GPU when F7 toggled); the indirect-args buffer contents are refreshed each frame since
+        // the visible set changes with the camera.
         private void DrawWorldPass(
             CommandList cl,
             System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
             IndirectDrawIndexedArguments[] scratch,
-            Pipeline pipeline)
+            Pipeline pipeline,
+            ref uint[] cullData)
         {
             if (commands.Count == 0)
             {
                 return;
             }
 
-            uint visibleCount = CullDrawCommands(commands, scratch);
-            if (visibleCount == 0)
+            uint drawCount;
+            if (_gpuCullEnabled && _gpuCullSupported)
             {
-                return;
+                // GPU-assisted culling: compute pass writes the args, we draw ALL commands and
+                // culled chunks simply have InstanceCount=0 (no CPU scan, no compaction).
+                RunGpuCull(cl, commands, ref cullData);
+                drawCount = (uint)commands.Count;
+            }
+            else
+            {
+                drawCount = CullDrawCommands(commands, scratch);
+                if (drawCount == 0)
+                {
+                    return;
+                }
             }
 
             cl.SetPipeline(pipeline);
@@ -3146,18 +3299,21 @@ void main() {
             cl.SetIndexBuffer(_megaIndexBuffer, IndexFormat.UInt16);
             if (_gd.Features.DrawIndirect)
             {
-                EnsureIndirectCapacity(visibleCount);
-                // D3D11 indirect-args buffers are USAGE_DEFAULT (no Dynamic flag), so the contents
-                // are pushed via CommandList.UpdateBuffer (UpdateSubresource).
-                cl.UpdateBuffer(_indirectBuffer, 0, ref scratch[0], visibleCount * IndirectCommandStride);
-                cl.DrawIndexedIndirect(_indirectBuffer, 0, visibleCount, IndirectCommandStride);
+                EnsureIndirectCapacity(drawCount);
+                if (!_gpuCullEnabled)
+                {
+                    // D3D11 indirect-args buffers are USAGE_DEFAULT (no Dynamic flag), so the
+                    // contents are pushed via CommandList.UpdateBuffer (UpdateSubresource).
+                    cl.UpdateBuffer(_indirectBuffer, 0, ref scratch[0], drawCount * IndirectCommandStride);
+                }
+                cl.DrawIndexedIndirect(_indirectBuffer, 0, drawCount, IndirectCommandStride);
             }
             else
             {
                 // Fallback for backends without indirect draws (D3D11 has it).
-                for (int i = 0; i < visibleCount; i++)
+                for (int i = 0; i < drawCount; i++)
                 {
-                    var cmd = scratch[i];
+                    var cmd = _gpuCullEnabled ? commands[i].Cmd : scratch[i];
                     cl.DrawIndexed(cmd.IndexCount, cmd.InstanceCount, cmd.FirstIndex, (int)cmd.VertexOffset, cmd.FirstInstance);
                 }
             }
@@ -3617,9 +3773,136 @@ void main() {
             _indirectCapacityCommands = newCap;
         }
 
+        // F7 toggle between CPU-side and GPU-side frustum culling. No-op if the device lacks
+        // compute/structured-buffer/indirect support (D3D11 always has them).
+        public void ToggleGpuCulling()
+        {
+            if (!_gpuCullSupported) return;
+            _gpuCullEnabled = !_gpuCullEnabled;
+        }
+
+        // Grows the cull-data and args-output buffers so they hold at least `commands` entries.
+        // Resource sets are recreated because they capture the buffer instance.
+        private void EnsureCullCapacity(uint commands)
+        {
+            if (_cullDataBuffer != null && _cullDataCapacityCommands >= commands) return;
+
+            uint newCap = _cullDataCapacityCommands == 0
+                ? Math.Max(256, commands * 2)
+                : Math.Max(_cullDataCapacityCommands * 2, commands);
+            // Shader reads both as flat uint[]; 16 uints per chunk for data, 5 uints (20 bytes)
+            // per command for args (see CreateCullComputePipelineCore).
+            const uint cullDataStride = sizeof(uint);
+            const uint cullArgsStride = sizeof(uint);
+            var newData = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                newCap * 16 * sizeof(uint), BufferUsage.StructuredBufferReadOnly, cullDataStride));
+            var newArgs = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                newCap * IndirectCommandStride, BufferUsage.StructuredBufferReadWrite, cullArgsStride));
+            if (_cullDataBuffer != null) _gd.DisposeWhenIdle(_cullDataBuffer);
+            if (_cullArgsBuffer != null) _gd.DisposeWhenIdle(_cullArgsBuffer);
+            _cullDataBuffer = newData;
+            _cullArgsBuffer = newArgs;
+            _cullDataReadSet?.Dispose();
+            _cullArgsWriteSet?.Dispose();
+            _cullDataReadSet = _gd.ResourceFactory.CreateResourceSet(new ResourceSetDescription(_cullChunkLayout, _cullDataBuffer, _cullArgsBuffer));
+            _cullArgsWriteSet = _gd.ResourceFactory.CreateResourceSet(new ResourceSetDescription(_cullChunkLayout, _cullDataBuffer, _cullArgsBuffer));
+            _cullDataCapacityCommands = newCap;
+        }
+
+        // Packs one pass's draw commands into the GPU cull-data layout. The shader struct is
+        // std430: vec4 aabbMin + vec4 aabbMax + uvec4 cmd + uint firstInstance = 16 uint32s per
+        // chunk. The array is sized exactly to the command count so it can be uploaded whole.
+        private void FillCullData(
+            System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            ref uint[] target)
+        {
+            int count = commands.Count;
+            if (target.Length != count * 16)
+            {
+                target = new uint[count * 16];
+            }
+            for (int i = 0; i < count; i++)
+            {
+                var (coord, cmd) = commands[i];
+                float minX = coord.X * ChunkManager.ChunkSize;
+                float maxX = minX + ChunkManager.ChunkSize;
+                float minZ = coord.Z * ChunkManager.ChunkSize;
+                float maxZ = minZ + ChunkManager.ChunkSize;
+                // Match ChunkInFrustum: layer-based Y bounds (ground -256..383, sky 384..1023).
+                float minY = ChunkManager.OriginYForLayer(coord.Layer);
+                float maxY = minY + ChunkManager.HeightForLayer(coord.Layer);
+
+                int o = i * 16;
+                target[o + 0] = BitConverter.SingleToUInt32Bits(minX);
+                target[o + 1] = BitConverter.SingleToUInt32Bits(minY);
+                target[o + 2] = BitConverter.SingleToUInt32Bits(minZ);
+                target[o + 3] = 0; // vec4.w unused
+                target[o + 4] = BitConverter.SingleToUInt32Bits(maxX);
+                target[o + 5] = BitConverter.SingleToUInt32Bits(maxY);
+                target[o + 6] = BitConverter.SingleToUInt32Bits(maxZ);
+                target[o + 7] = 0; // vec4.w unused
+                target[o + 8] = cmd.IndexCount;
+                target[o + 9] = cmd.InstanceCount;
+                target[o + 10] = cmd.FirstIndex;
+                target[o + 11] = unchecked((uint)cmd.VertexOffset);
+                target[o + 12] = cmd.FirstInstance;
+                target[o + 13] = 0; // pad
+                target[o + 14] = 0; // pad
+                target[o + 15] = 0; // pad
+            }
+        }
+
+        // Runs the GPU-cull compute pass for one draw pass. Uploads the cull data (only when the
+        // commands changed), dispatches, then copies the produced args into the indirect buffer.
+        private void RunGpuCull(
+            CommandList cl,
+            System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            ref uint[] cullData)
+        {
+            if (commands.Count == 0) return;
+            EnsureCullCapacity((uint)commands.Count);
+            EnsureIndirectCapacity((uint)commands.Count);
+
+            // Refill a pass's cull data when the command set changed (flagged on rebuild) or this
+            // pass was never filled yet (empty array after RebuildDrawCommands zeroed it).
+            if (_gpuCullDataDirty || cullData.Length == 0)
+            {
+                FillCullData(commands, ref cullData);
+                _gd.UpdateBuffer(_cullDataBuffer, 0, cullData);
+            }
+
+            // Update the frustum planes (row-vector view-projection -> 6 clip planes).
+            if (_viewProjection.HasValue)
+            {
+                ExtractFrustumPlanes(_viewProjection.Value);
+                for (int i = 0; i < 6; i++)
+                {
+                    _cullPlaneFloats[i * 4 + 0] = _frustumPlanes[i].X;
+                    _cullPlaneFloats[i * 4 + 1] = _frustumPlanes[i].Y;
+                    _cullPlaneFloats[i * 4 + 2] = _frustumPlanes[i].Z;
+                    _cullPlaneFloats[i * 4 + 3] = _frustumPlanes[i].W;
+                }
+                _gd.UpdateBuffer(_frustumBuffer, 0, _cullPlaneFloats);
+            }
+
+            cl.SetPipeline(_cullPipeline);
+            cl.SetComputeResourceSet(0, _frustumSet);
+            cl.SetComputeResourceSet(1, _cullArgsWriteSet);
+            uint groups = (uint)((commands.Count + 63) / 64);
+            cl.Dispatch(groups, 1, 1);
+
+            // Copy the compute-written args into the indirect buffer for the draw.
+            cl.CopyBuffer(_cullArgsBuffer, 0, _indirectBuffer, 0, (uint)commands.Count * IndirectCommandStride);
+        }
+
         private void RebuildDrawCommands()
         {
             _drawCommands.Clear();
+            _gpuCullDataDirty = true;
+            _opaqueCullData = Array.Empty<uint>();
+            _cutoutCullData = Array.Empty<uint>();
+            _glassCullData = Array.Empty<uint>();
+            _transparentCullData = Array.Empty<uint>();
             foreach (var kv in _chunkRanges)
             {
                 var r = kv.Value;
@@ -4409,6 +4692,7 @@ void main() {
                 Line($"Seed: {_hud.WorldSeed}");
                 Line($"Fly: {(_hud.FlyMode ? "ON" : "OFF")}");
                 Line($"Fullbright: {(_hud.Fullbright ? "ON" : "OFF")}  [F6]");
+                Line($"Cull: {(_gpuCullEnabled ? "GPU" : "CPU")}  [F7]");
                 if (!string.IsNullOrEmpty(_hud.NetStatus)) Line($"Net: {_hud.NetStatus}");
                 if (!string.IsNullOrEmpty(_hud.BiomeText)) Line($"Biome: {_hud.BiomeText}");
                 Line($"XYZ: {_hud.PlayerX:0.000} / {_hud.PlayerY:0.000} / {_hud.PlayerZ:0.000}");
@@ -4466,6 +4750,15 @@ void main() {
             _megaVertexBuffer?.Dispose();
             _megaIndexBuffer?.Dispose();
             _indirectBuffer?.Dispose();
+            _cullPipeline?.Dispose();
+            _cullDataLayout?.Dispose();
+            _cullChunkLayout?.Dispose();
+            _frustumBuffer?.Dispose();
+            _frustumSet?.Dispose();
+            _cullDataBuffer?.Dispose();
+            _cullArgsBuffer?.Dispose();
+            _cullDataReadSet?.Dispose();
+            _cullArgsWriteSet?.Dispose();
             _particleVertexBuffer?.Dispose();
             _particleIndexBuffer?.Dispose();
 

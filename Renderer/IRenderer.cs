@@ -18,6 +18,7 @@ namespace CubeApp.Renderer
         void SetFallingBlocks(System.Collections.Generic.IReadOnlyList<CubeApp.FallingBlockData> fallingBlocks);
         void SetChunkManager(CubeApp.ChunkManager manager);
         void SetWorldSeed(int seed);
+        void ToggleGpuCulling();
         void MeshChunkImmediate(CubeApp.ChunkCoordinates coords);
         void ProcessPendingPriorityMeshes();
         void SetUiInputSnapshot(Veldrid.InputSnapshot snapshot);

@@ -17,6 +17,7 @@ namespace CubeApp
         public bool ToggleFlyPressed { get; }
         public bool ToggleFullbrightPressed { get; }
         public bool AdvanceTimePressed { get; }
+        public bool ToggleGpuCullPressed { get; }
         public bool BreakBlockPressed { get; }
         public bool PlaceBlockPressed { get; }
         public int? SelectedSlot { get; }
@@ -33,6 +34,7 @@ namespace CubeApp
             bool toggleFlyPressed,
             bool toggleFullbrightPressed,
             bool advanceTimePressed,
+            bool toggleGpuCullPressed,
             bool breakBlockPressed,
             bool placeBlockPressed,
             int? selectedSlot)
@@ -48,6 +50,7 @@ namespace CubeApp
             ToggleFlyPressed = toggleFlyPressed;
             ToggleFullbrightPressed = toggleFullbrightPressed;
             AdvanceTimePressed = advanceTimePressed;
+            ToggleGpuCullPressed = toggleGpuCullPressed;
             BreakBlockPressed = breakBlockPressed;
             PlaceBlockPressed = placeBlockPressed;
             SelectedSlot = selectedSlot;
@@ -110,6 +113,7 @@ namespace CubeApp
         private bool toggleFlyPressed;
         private bool toggleFullbrightPressed;
         private bool advanceTimePressed;
+        private bool toggleGpuCullPressed;
         private bool breakBlockPressed;
         private bool placeBlockPressed;
         private int? selectedSlot;
@@ -195,6 +199,9 @@ namespace CubeApp
                         break;
                     case Key.T:
                         if (down) advanceTimePressed = true;
+                        break;
+                    case Key.F7:
+                        if (down) toggleGpuCullPressed = true;
                         break;
                     case Key.F2:
                         if (down) toggleFlyPressed = true;
@@ -317,6 +324,7 @@ namespace CubeApp
                 toggleFlyPressed,
                 toggleFullbrightPressed,
                 advanceTimePressed,
+                toggleGpuCullPressed,
                 breakBlockPressed,
                 placeBlockPressed,
                 selectedSlot);
@@ -332,6 +340,7 @@ namespace CubeApp
             toggleFlyPressed = false;
             toggleFullbrightPressed = false;
             advanceTimePressed = false;
+            toggleGpuCullPressed = false;
             breakBlockPressed = false;
             placeBlockPressed = false;
             selectedSlot = null;

@@ -564,6 +564,7 @@ namespace CubeApp
             {
                 if (frameInput.ToggleFlyPressed) World.FlyMode = !World.FlyMode;
                 if (frameInput.AdvanceTimePressed) World.AdvanceTime();
+                if (frameInput.ToggleGpuCullPressed) gpuRenderer?.ToggleGpuCulling();
                 if (frameInput.ToggleFullbrightPressed)
                 {
                     ChunkLighting.Fullbright = !ChunkLighting.Fullbright;
