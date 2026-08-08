@@ -21,6 +21,7 @@ namespace CubeApp
         private readonly List<Vector3> _positions = new();
         private readonly List<Vector2> _uvs = new();
         private readonly List<ushort> _indices = new();
+        private readonly List<float> _shades = new(); // per-vertex directional face shade (0..1)
 
         public bool Loaded { get; private set; } = false;
         public int VertexCount => _positions.Count;
@@ -41,6 +42,7 @@ namespace CubeApp
                     LoadGLBModel(modelPath);
                 }
 
+                ComputeFaceShades();
                 CreateBuffers();
                 if (!string.IsNullOrEmpty(texturePath)) LoadTexture(texturePath);
                 return Loaded = _positions.Count > 0 && _indices.Count > 0;
@@ -48,11 +50,52 @@ namespace CubeApp
             catch { return false; }
         }
 
+        // Classic Minecraft directional face shading (Infdev RenderBlocks.java): bottom 0.5,
+        // top 1.0, N/S 0.8, E/W 0.6. For each triangle, the face normal picks a shade; every
+        // vertex of that triangle gets the same shade so GLB models read like the hand-authored
+        // duck/player cube models. Vertices shared across faces take the max (brightest) shade so
+        // seams stay clean.
+        private void ComputeFaceShades()
+        {
+            _shades.Clear();
+            if (_positions.Count == 0 || _indices.Count == 0) return;
+
+            _shades.AddRange(new float[_positions.Count]);
+            for (int i = 0; i + 2 < _indices.Count; i += 3)
+            {
+                int i0 = _indices[i], i1 = _indices[i + 1], i2 = _indices[i + 2];
+                if (i0 >= _positions.Count || i1 >= _positions.Count || i2 >= _positions.Count) continue;
+
+                var a = _positions[i0];
+                var b = _positions[i1];
+                var c = _positions[i2];
+                var ab = b - a;
+                var ac = c - a;
+                var n = Vector3.Cross(ab, ac);
+                if (n.LengthSquared() < 1e-12f) continue;
+                n = Vector3.Normalize(n);
+
+                float shade = FaceShade(n);
+                if (shade > _shades[i0]) _shades[i0] = shade;
+                if (shade > _shades[i1]) _shades[i1] = shade;
+                if (shade > _shades[i2]) _shades[i2] = shade;
+            }
+        }
+
+        private static float FaceShade(Vector3 n)
+        {
+            if (n.Y > 0.5f) return 1.0f;
+            if (n.Y < -0.5f) return 0.5f;
+            if (Math.Abs(n.X) > 0.5f) return 0.6f;
+            return 0.8f;
+        }
+
         public bool LoadGLB(string modelPath)
         {
             try
             {
                 LoadGLBModel(modelPath);
+                ComputeFaceShades();
                 CreateBuffers();
                 return Loaded = _positions.Count > 0 && _indices.Count > 0;
             }
@@ -665,6 +708,7 @@ namespace CubeApp
             {
                 var pos = _positions[i];
                 var uv = _uvs[Math.Min(i, _uvs.Count - 1)];
+                float shade = i < _shades.Count ? _shades[i] : 1f;
                 float fx = pos.X * cosY + pos.Z * sinY;
                 float fy = pos.Y;
                 float fz = -pos.X * sinY + pos.Z * cosY;
@@ -674,8 +718,8 @@ namespace CubeApp
                 vertexScratch[offset + 2] = z + fz;
                 vertexScratch[offset + 3] = uv.X;
                 vertexScratch[offset + 4] = uv.Y;
-                vertexScratch[offset + 5] = 1f; vertexScratch[offset + 6] = 1f;
-                vertexScratch[offset + 7] = 1f; vertexScratch[offset + 8] = 1f;
+                vertexScratch[offset + 5] = shade; vertexScratch[offset + 6] = shade;
+                vertexScratch[offset + 7] = shade; vertexScratch[offset + 8] = 1f;
                 vf += 9;
             }
 
