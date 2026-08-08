@@ -3858,8 +3858,10 @@ void main() {
             }
         }
 
-        // Runs the GPU-cull compute pass for one draw pass. Uploads the cull data (only when the
-        // commands changed), dispatches, then copies the produced args into the indirect buffer.
+        // Runs the GPU-cull compute pass for one draw pass. All four passes share ONE cull-data
+        // buffer, so each pass must re-upload ITS OWN data via the CommandList (recorded in-order
+        // before its dispatch) - a GraphicsDevice-level upload executes immediately and would be
+        // overwritten by the last pass, making every dispatch read the wrong AABBs.
         private void RunGpuCull(
             CommandList cl,
             System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
@@ -3869,15 +3871,16 @@ void main() {
             EnsureCullCapacity((uint)commands.Count);
             EnsureIndirectCapacity((uint)commands.Count);
 
-            // Refill a pass's cull data when the command set changed (flagged on rebuild) or this
-            // pass was never filled yet (empty array after RebuildDrawCommands zeroed it).
+            // Rebuild this pass's CPU scratch only when its commands changed; the buffer itself
+            // is re-uploaded every frame because all passes share it.
             if (_gpuCullDataDirty || cullData.Length == 0)
             {
                 FillCullData(commands, ref cullData);
-                _gd.UpdateBuffer(_cullDataBuffer, 0, cullData);
             }
+            cl.UpdateBuffer(_cullDataBuffer, 0, cullData);
 
-            // Update the frustum planes (row-vector view-projection -> 6 clip planes).
+            // Update the frustum planes (row-vector view-projection -> 6 clip planes). Same
+            // upload reasoning: record through the CommandList so it's ordered before the dispatch.
             if (_viewProjection.HasValue)
             {
                 ExtractFrustumPlanes(_viewProjection.Value);
@@ -3888,7 +3891,7 @@ void main() {
                     _cullPlaneFloats[i * 4 + 2] = _frustumPlanes[i].Z;
                     _cullPlaneFloats[i * 4 + 3] = _frustumPlanes[i].W;
                 }
-                _gd.UpdateBuffer(_frustumBuffer, 0, _cullPlaneFloats);
+                cl.UpdateBuffer(_frustumBuffer, 0, _cullPlaneFloats);
             }
 
             cl.SetPipeline(_cullPipeline);
