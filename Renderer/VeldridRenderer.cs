@@ -1009,7 +1009,6 @@ layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;   // rgb + pad
     vec2 fogRange;   // start, end
     vec4 cameraPos;  // xyz + pad
-    vec2 night;      // x = world light dim (Infdev skylight subtraction), y = sky dim
 };
 layout(location=0) out vec4 outColor;
 void main() {
@@ -1023,8 +1022,6 @@ void main() {
     float dist = length(vWorldPos - cameraPos.xyz);
     float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
     outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);
-    // Day/night: dim the world by Infdev's skylight-subtraction factor.
-    outColor.rgb *= night.x;
 }";
 
             var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
@@ -1089,7 +1086,6 @@ layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;
     vec2 fogRange;
     vec4 cameraPos;
-    vec2 night;
 };
 layout(location=0) out vec4 outColor;
 void main() {
@@ -1100,7 +1096,6 @@ void main() {
     float dist = length(vWorldPos - cameraPos.xyz);
     float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
     outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);
-    outColor.rgb *= night.x;
 }";
             var cutoutFsSpirv = SpirvCompilation.CompileGlslToSpirv(cutoutFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
             var cutoutFsDesc = new ShaderDescription(ShaderStages.Fragment, cutoutFsSpirv.SpirvBytes, "main");
@@ -1149,7 +1144,6 @@ layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;
     vec2 fogRange;
     vec4 cameraPos;
-    vec2 night;
 };
 layout(location=0) out vec4 outColor;
 void main() {
@@ -1161,7 +1155,6 @@ void main() {
     float dist = length(vWorldPos - cameraPos.xyz);
     float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
     outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);
-    outColor.rgb *= night.x;
 }";
             var tintFsSpirv = SpirvCompilation.CompileGlslToSpirv(tintFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
             var tintShaders = factory.CreateFromSpirv(vsDesc, new ShaderDescription(ShaderStages.Fragment, tintFsSpirv.SpirvBytes, "main"));
@@ -2294,9 +2287,10 @@ void main() {
         {
             // Fog DISABLED by request - fogStart 0 + huge fogEnd keeps the fog factor ~1 = clear at
             // every distance. The uniform plumbing stays so it's trivial to re-enable later.
-            _fogParams[0] = 192f / 255f;
-            _fogParams[1] = 216f / 255f;
-            _fogParams[2] = 1f;
+            ComputeNightFactors();
+            _fogParams[0] = (192f / 255f) * Math.Max(_nightSkyDim, 0.15f);
+            _fogParams[1] = (216f / 255f) * Math.Max(_nightSkyDim, 0.15f);
+            _fogParams[2] = 1f * Math.Max(_nightSkyDim, 0.15f);
             _fogParams[3] = 1f;
             _fogParams[4] = 0f;
             _fogParams[5] = 1e6f;
@@ -2308,12 +2302,10 @@ void main() {
             }
             _fogParams[9] = 1f;
 
-            // Day/night dim factor (Infdev skylight subtraction at render time). Reused slot: the
-            // world fragment shaders multiply their final color by this 0..1 value. The fog color
-            // itself also rides down at night so the horizon darkens with the sky.
-            ComputeNightFactors();
-            _fogParams[10] = _nightDim;      // world light multiplier
-            _fogParams[11] = _nightSkyDim;   // fog color multiplier (fades to dark)
+            // The world's night dimming happens in the LIGHTING ENGINE (ChunkLighting lowers its
+            // sky seed by SkylightSubtracted, then chunks are remeshed) - faithful to Infdev's
+            // skylightSubtracted. Here we only darken the fog color so the horizon matches the sky.
+            _fogParams[10] = _nightSkyDim; // fog color multiplier (fades to dark at night)
             _gd.UpdateBuffer(_fogBuffer, 0, _fogParams);
         }
 

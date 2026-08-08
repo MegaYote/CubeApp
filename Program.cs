@@ -26,6 +26,7 @@ namespace CubeApp
         private GraphicsDevice? graphicsDevice;
         private Point3D? _lastMeshPosition;
         private bool _forceChunkStream = true;
+        private int _lastSkylightSubtracted = -1;
         private readonly InputProcessor input = new();
         private bool mouseLook;
         private volatile bool needsMeshUpdate = true;
@@ -612,6 +613,19 @@ namespace CubeApp
             if (screen != GameScreen.Playing || World == null) return;
             UpdateNetworking(tickInput, deltaSeconds);
             World.StepSimulation(tickInput, deltaSeconds);
+
+            // Infdev day/night: lower the sky light seed when the celestial angle crosses a new
+            // skylightSubtracted level, then re-mesh so the flood fill bakes the dimmer light.
+            int sub = World.CalculateSkylightSubtracted(deltaSeconds);
+            if (sub != _lastSkylightSubtracted)
+            {
+                _lastSkylightSubtracted = sub;
+                ChunkLighting.SkylightSubtracted = sub;
+                foreach (var c in World.Chunks.GetLoadedChunks())
+                {
+                    c.NeedsRemesh = true;
+                }
+            }
         }
 
         private void ApplyLookInput(Vector2 lookDelta)

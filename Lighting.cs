@@ -259,11 +259,13 @@ namespace CubeApp
         }
 
         // 1.12's generateSkylightMap: walk each column down from just above the highest solid.
-        // Every cell at/above the column's height map sees the sky -> full 15. Cells below that
-        // are seeded by the 6-way flood from those sources.
+        // Every cell at/above the column's height map sees the sky -> full sky light (reduced by
+        // SkylightSubtracted at night, Infdev-style). Cells below that are seeded by the 6-way
+        // flood from those sources.
         private void SeedSkyLight(Queue<int> queue, int bandLo, int bandHi, int fillTop)
         {
             int startY = Math.Max(bandLo, Math.Min(fillTop + 1, bandHi));
+            byte skySeed = (byte)Math.Max(0, MaxLight - SkylightSubtracted);
             for (int lx = 0; lx < dimX; lx++)
             {
                 for (int lz = 0; lz < dimZ; lz++)
@@ -274,7 +276,7 @@ namespace CubeApp
                     {
                         if (y > hm)
                         {
-                            sky[colBase + y] = MaxLight;
+                            sky[colBase + y] = skySeed;
                             queue.Enqueue(colBase + y);
                         }
                         else
@@ -419,6 +421,14 @@ namespace CubeApp
         /// flag all loaded chunks for remesh.
         /// </summary>
         public static bool Fullbright { get; set; }
+
+        /// <summary>
+        /// Infdev's skylightSubtracted (0..11): how much sky light is removed at night. We bake
+        /// light into meshes, so this lowers the SKY LIGHT SEED (15 - subtracted) and the flood
+        /// fill propagates dimmer light everywhere - exactly Infdev's effect (the subtracted sky
+        /// light, then the flood spreads it). Changing it must re-mesh all loaded chunks.
+        /// </summary>
+        public static int SkylightSubtracted { get; set; }
 
         public static float Brightness(int lightLevel)
         {
