@@ -96,28 +96,20 @@ namespace CubeApp
 
         public void Update(float deltaSeconds)
         {
-            // Update all mobs
+            // Update all mobs. Every mob derives from MobEntity (Duck, Coyote, SteveMob, generic
+            // registry mobs all share one universal AI/physics implementation).
             for (int i = _mobs.Count - 1; i >= 0; i--)
             {
                 var mob = _mobs[i];
-                
-                // Update based on concrete type
-                if (mob is Duck duck)
-                {
-                    duck.Update(deltaSeconds, _chunkManager);
-                }
-                else if (mob is MobEntity mobEntity)
+
+                if (mob is MobEntity mobEntity)
                 {
                     mobEntity.Update(deltaSeconds, _chunkManager);
-                }
 
-                if (mob is Duck d && d.Removed)
-                {
-                    _mobs.RemoveAt(i);
-                }
-                else if (mob is MobEntity me && me.Removed)
-                {
-                    _mobs.RemoveAt(i);
+                    if (mobEntity.Removed)
+                    {
+                        _mobs.RemoveAt(i);
+                    }
                 }
             }
 
@@ -139,14 +131,11 @@ namespace CubeApp
                 if (mobDistance > blockHit.Value.Distance + 0.02) return false;
             }
 
-            // Call Damage based on concrete type
-            if (mob is Duck duck)
+            // Every mob is a MobEntity now (Duck, Coyote, SteveMob, generic) - one universal damage
+            // path with a real attacker source for knockback/panic direction.
+            if (mob is MobEntity mobEntity)
             {
-                duck.Damage(1, cameraPosition.X, cameraPosition.Z, true);
-            }
-            else if (mob is MobEntity mobEntity)
-            {
-                mobEntity.Damage(1, cameraPosition.X, cameraPosition.Z);
+                mobEntity.Damage(1, cameraPosition.X, cameraPosition.Z, true);
             }
             return true;
         }
@@ -161,22 +150,11 @@ namespace CubeApp
             {
                 if (mob.IsDead) continue;
 
-                // Get dimensions based on concrete type
-                float width, height;
-                if (mob is Duck)
-                {
-                    width = Duck.Width;
-                    height = Duck.Height;
-                }
-                else if (mob is MobEntity mobEntity)
-                {
-                    width = mobEntity.Width;
-                    height = mobEntity.Height;
-                }
-                else
-                {
-                    continue; // Unknown mob type
-                }
+                // Every mob is a MobEntity now - one universal dimension source.
+                if (mob is not MobEntity mobEntity) continue;
+
+                float width = mobEntity.Width;
+                float height = mobEntity.Height;
 
                 float half = width * 0.5f;
                 double minX = mob.Position.X - half;
@@ -248,18 +226,13 @@ namespace CubeApp
             {
                 string type = mob switch
                 {
-                    Duck => "duck",
                     Coyote => "coyote",
                     SteveMob => "steve",
                     GenericMobEntity g => g.MobId,
+                    MobEntity me => me.MobTypeName,
                     _ => "duck",
                 };
-                int health = mob switch
-                {
-                    MobEntity me => me.Health,
-                    Duck d => d.Health,
-                    _ => 10,
-                };
+                int health = mob is MobEntity me2 ? me2.Health : 10;
                 result.Add(new SavedMob { Type = type, X = mob.Position.X, Y = mob.Position.Y, Z = mob.Position.Z, Yaw = mob.Yaw, Health = health });
             }
             return result;
@@ -338,16 +311,6 @@ namespace CubeApp
             _model = new MobModel(graphicsDevice);
             _model.LoadGLB(_definition.ModelPath);
             return _model.Loaded;
-        }
-
-        public override MobInstance ToInstance()
-        {
-            return new MobInstance(
-                (float)Position.X, (float)Position.Y, (float)Position.Z,
-                Yaw, _walkPhase, _walkAmount,
-                (float)_velY, OnGround, _dead,
-                _dead ? Math.Clamp(_deathTimer / Math.Max(0.001f, _deathDuration), 0f, 1f) : 0f,
-                _deathRollDir, _hurtTimer, _definition.Id);
         }
     }
 }

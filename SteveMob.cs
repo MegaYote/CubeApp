@@ -18,16 +18,6 @@ namespace CubeApp
             StepHeight = 0.55f;
         }
 
-        protected override string MobTypeName => "player";
-
-        public override MobInstance ToInstance()
-        {
-            return new MobInstance(
-                (float)Position.X, (float)Position.Y, (float)Position.Z,
-                Yaw, _walkPhase, _walkAmount,
-                (float)_velY, OnGround, _dead,
-                _dead ? Math.Clamp(_deathTimer / Math.Max(0.001f, _deathDuration), 0f, 1f) : 0f,
-                _deathRollDir, _hurtTimer, "player");
-        }
+        public override string MobTypeName => "player";
     }
 }

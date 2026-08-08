@@ -71,10 +71,10 @@ namespace CubeApp
         float IMobRenderable.HeadYawLocal => Clamp(WrapAngle(_headYaw - Yaw), -MaxHeadYaw, MaxHeadYaw);
 
         /// <summary>Model lookup key used by the renderer; defaults to the lowercase class name.</summary>
-        protected virtual string MobTypeName => GetType().Name.ToLowerInvariant();
+        public virtual string MobTypeName => GetType().Name.ToLowerInvariant();
         float IMobRenderable.WalkPhase => _walkPhase;
         float IMobRenderable.WalkAmount => _walkAmount;
-        float IMobRenderable.FlapPhase => 0f; // Base class doesn't have flight
+        float IMobRenderable.FlapPhase => _flapPhase;
         float IMobRenderable.VelocityY => (float)_velY;
         float IMobRenderable.DeathT => _dead ? Math.Clamp(_deathTimer / Math.Max(0.001f, _deathDuration), 0f, 1f) : 0f;
         float IMobRenderable.DeathRollDir => _deathRollDir;
@@ -83,7 +83,7 @@ namespace CubeApp
         protected double _velX, _velY, _velZ;
         protected bool _prevOnGround;
         protected readonly double _homeX, _homeZ;
-        protected float _walkPhase, _walkAmount;
+        protected float _walkPhase, _walkAmount, _flapPhase;
         protected float _hurtTimer;
         protected bool _dead;
         protected float _deathTimer;
@@ -153,7 +153,15 @@ namespace CubeApp
         /// <summary>
         /// Apply damage from an attacker at (srcX, srcZ).
         /// </summary>
-        public virtual bool Damage(int amount, double srcX, double srcZ)
+        public virtual bool Damage(int amount, double srcX, double srcZ) => Damage(amount, srcX, srcZ, true);
+
+        /// <summary>
+        /// Apply damage from an attacker at (srcX, srcZ). Triggers hurt flash, knockback, panic, and
+        /// death when health hits zero. <paramref name="hasSource"/> lets knockback/panic-direction be
+        /// skipped when there's no real attacker (e.g. environmental damage) - the mob then panics
+        /// away from its current facing instead.
+        /// </summary>
+        public virtual bool Damage(int amount, double srcX, double srcZ, bool hasSource)
         {
             if (_dead || amount <= 0) return false;
             if (_invulnerableTimer > 0f) return false;
@@ -162,20 +170,31 @@ namespace CubeApp
             _hurtTimer = Math.Max(_hurtTimer, 0.20f);
             _invulnerableTimer = Math.Max(_invulnerableTimer, HitInvulnDuration);
 
-            double dx = Position.X - srcX;
-            double dz = Position.Z - srcZ;
-            double len = Math.Sqrt(dx * dx + dz * dz);
-            if (len < 1e-6) len = 1;
-            _velX += dx / len * 1.2;
-            _velZ += dz / len * 1.2;
+            if (hasSource)
+            {
+                double dx = Position.X - srcX;
+                double dz = Position.Z - srcZ;
+                double len = Math.Sqrt(dx * dx + dz * dz);
+                if (len < 1e-6) len = 1;
+                _velX += dx / len * 1.2;
+                _velZ += dz / len * 1.2;
+            }
 
             _panicTimer = Math.Max(_panicTimer, PanicDurationMin + (float)Rng() * (PanicDurationMax - PanicDurationMin));
             _panicRetargetTimer = 0f;
             _idleTimer = 0f;
             _afterMoveRestTimer = 0f;
             _actionTimer = 0f;
-            _panicSourceX = srcX;
-            _panicSourceZ = srcZ;
+            if (hasSource)
+            {
+                _panicSourceX = srcX;
+                _panicSourceZ = srcZ;
+            }
+            else
+            {
+                _panicSourceX = Position.X - Math.Sin(Yaw);
+                _panicSourceZ = Position.Z - Math.Cos(Yaw);
+            }
 
             if (Health <= 0)
             {
@@ -192,13 +211,28 @@ namespace CubeApp
                 _afterMoveRestTimer = 0f;
                 _currentMoveForward = 0f;
                 _desiredMoveForward = 0f;
-                _deathRollDir = (Position.X - srcX) >= 0 ? 1f : -1f;
+                _deathRollDir = hasSource ? ((Position.X - srcX) >= 0 ? 1f : -1f) : (Rng() < 0.5 ? -1f : 1f);
                 _ctrlForward = 0f; _ctrlStrafe = 0f; _ctrlJump = false;
             }
             return true;
         }
 
-        public abstract MobInstance ToInstance();
+        /// <summary>Whether this mob animates wing flaps (ducks). Default false.</summary>
+        protected virtual bool HasFlap => false;
+
+        /// <summary>
+        /// Snapshot handed to the renderer each frame. Uses <see cref="MobTypeName"/> as the model
+        /// key, so subclasses only override <see cref="MobTypeName"/> (and optionally <see cref="HasFlap"/>).
+        /// </summary>
+        public virtual MobInstance ToInstance()
+        {
+            return new MobInstance(
+                (float)Position.X, (float)Position.Y, (float)Position.Z,
+                Yaw, _walkPhase, _walkAmount,
+                (float)_velY, OnGround, _dead,
+                _dead ? Math.Clamp(_deathTimer / Math.Max(0.001f, _deathDuration), 0f, 1f) : 0f,
+                _deathRollDir, _hurtTimer, MobTypeName);
+        }
 
         // ---- AI brain -------------------------------------------------------
 
@@ -220,6 +254,9 @@ namespace CubeApp
             _panicTimer = Math.Max(0f, _panicTimer - dt);
             _panicRetargetTimer = Math.Max(0f, _panicRetargetTimer - dt);
             _walkPhase += dt * (grounded ? (4.5f + _walkAmount * 4.0f) : 14.0f);
+            // Wing flap: only mobs that actually flap (ducks) advance it; fast when airborne,
+            // lazy waddle-flap when grounded (matches the old Duck behaviour).
+            if (HasFlap) _flapPhase += dt * (grounded ? (4.5f + _walkAmount * 4.0f) : 18.0f);
 
             double homeDx = _homeX - Position.X;
             double homeDz = _homeZ - Position.Z;
@@ -571,7 +608,7 @@ namespace CubeApp
 
         // ---- Math helpers ---------------------------------------------------
 
-        private static double Rng() => Random.Shared.NextDouble();
+        protected static double Rng() => Random.Shared.NextDouble();
         protected static float Clamp(float v, float lo, float hi) => v < lo ? lo : (v > hi ? hi : v);
         protected static float Lerp(float a, float b, float t) => a + (b - a) * t;
         protected static float WrapAngle(float angle)
@@ -598,14 +635,6 @@ namespace CubeApp
             Health = MaxHealth;
         }
 
-        public override MobInstance ToInstance()
-        {
-            return new MobInstance(
-                (float)Position.X, (float)Position.Y, (float)Position.Z,
-                Yaw, _walkPhase, _walkAmount,
-                (float)_velY, OnGround, _dead,
-                _deathTimer / Math.Max(0.001f, _deathDuration), _deathRollDir, _hurtTimer,
-                "coyote");
-        }
+        public override string MobTypeName => "coyote";
     }
 }
