@@ -180,7 +180,7 @@ namespace CubeApp
         {
             BlockTicks?.Tick(deltaSeconds);
             StepPlayer(LocalPlayer, tickInput, deltaSeconds);
-            Entities.Update(deltaSeconds);
+            Entities.Update(deltaSeconds, LocalPlayer.Position, true);
             int chunkX = WorldToChunkCoord(LocalPlayer.Position.X);
             int chunkZ = WorldToChunkCoord(LocalPlayer.Position.Z);
             // Request/unload scans cost O(radius^2) + O(loadedChunks); only run them when the

@@ -14,6 +14,12 @@ namespace CubeApp
         private readonly List<IMobRenderable> _mobs = new();
         private readonly List<MobRenderData> _mobRenderData = new();
         private readonly Dictionary<string, MobModel> _loadedModels = new();
+        private readonly Random _rand = new();
+
+        // Natural spawning + despawning (1.12-style). Set to null to disable.
+        private MobSpawner? _spawner;
+        private double _spawnAccumulator;
+        private const double SpawnInterval = 4.0; // seconds between spawn attempts
 
         private const float BlockReach = 6.5f;
 
@@ -22,7 +28,20 @@ namespace CubeApp
         public EntityManager(ChunkManager chunkManager)
         {
             _chunkManager = chunkManager ?? throw new ArgumentNullException(nameof(chunkManager));
+            // Natural spawn table: ducks are common, coyotes rarer, players (Steve) rarest.
+            _spawner = new MobSpawner(
+                new[]
+                {
+                    new MobSpawnEntry("duck", 6, 1, 3),
+                    new MobSpawnEntry("coyote", 3, 1, 2),
+                    new MobSpawnEntry("steve", 1, 1, 1),
+                },
+                AddMobAt,
+                CountMobs);
         }
+
+        /// <summary>Total living mobs (for the spawn cap).</summary>
+        public int CountMobs(Point3D ignore) => _mobs.Count;
 
         public void SpawnDuck(Point3D playerPosition, float playerYaw)
         {
@@ -69,8 +88,9 @@ namespace CubeApp
 
         public bool SpawnMobById(string mobId, Point3D playerPosition, float playerYaw)
         {
-            var def = MobRegistry.Get(mobId);
-            if (def == null) return false;
+            // Built-in mobs spawn from hardcoded classes; registry mobs need a MobDefinition.
+            if (mobId != "duck" && mobId != "coyote" && mobId != "coyotemob" && mobId != "steve"
+                && MobRegistry.Get(mobId) == null) return false;
 
             float yawRad = playerYaw * (float)Math.PI / 180f;
             double fx = Math.Sin(yawRad);
@@ -81,20 +101,35 @@ namespace CubeApp
             double spawnZ = playerPosition.Z + fz * 3.0;
 
             float mobYaw = playerYaw + 180f;
-            var position = new Point3D(spawnX, spawnY, spawnZ);
-            
-            // Spawn the appropriate mob type based on ID
+            return AddMobAt(mobId, new Point3D(spawnX, spawnY, spawnZ), mobYaw);
+        }
+
+        /// <summary>Creates a mob exactly at the given position (used by the natural spawner).</summary>
+        public bool AddMobAt(string mobId, Point3D position, float yaw)
+        {
             if (mobId == "duck")
-                _mobs.Add(new Duck(position, mobYaw));
+                _mobs.Add(new Duck(position, yaw));
             else if (mobId == "coyote" || mobId == "coyotemob")
-                _mobs.Add(new Coyote(position, mobYaw));
+                _mobs.Add(new Coyote(position, yaw));
+            else if (mobId == "steve")
+                _mobs.Add(new SteveMob(position, yaw));
             else
-                _mobs.Add(new GenericMobEntity(def, position, mobYaw));
-            
+            {
+                var def = MobRegistry.Get(mobId);
+                if (def == null) return false;
+                _mobs.Add(new GenericMobEntity(def, position, yaw));
+            }
             return true;
         }
 
-        public void Update(float deltaSeconds)
+        public void Update(float deltaSeconds) => Update(deltaSeconds, new Point3D(0, 0, 0), false);
+
+        /// <summary>
+        /// Advance all mobs by one frame. When <paramref name="playerPosition"/> is supplied,
+        /// natural spawning (near the player, 24-32 blocks out) and despawning (far-away mobs)
+        /// also run.
+        /// </summary>
+        public void Update(float deltaSeconds, Point3D playerPosition, bool enableSpawning = true)
         {
             // Update all mobs. Every mob derives from MobEntity (Duck, Coyote, SteveMob, generic
             // registry mobs all share one universal AI/physics implementation).
@@ -109,7 +144,25 @@ namespace CubeApp
                     if (mobEntity.Removed)
                     {
                         _mobs.RemoveAt(i);
+                        continue;
                     }
+
+                    // Despawn: too far away, or idle too long at medium distance (1.12).
+                    if (enableSpawning && ShouldDespawn(mobEntity, playerPosition))
+                    {
+                        _mobs.RemoveAt(i);
+                    }
+                }
+            }
+
+            // Natural spawning (1.12-style pack spawning near the player).
+            if (enableSpawning && _spawner != null)
+            {
+                _spawnAccumulator += deltaSeconds;
+                if (_spawnAccumulator >= SpawnInterval)
+                {
+                    _spawnAccumulator = 0;
+                    _spawner.TrySpawn(_chunkManager, playerPosition, _rand);
                 }
             }
 
@@ -120,6 +173,28 @@ namespace CubeApp
                 _mobRenderData.Add(CubeApp.MobRenderData.FromMob(mob));
             }
         }
+
+        // 1.12's despawnEntity: >128 blocks = gone; >32 blocks for 600 idle ticks = gone.
+        private bool ShouldDespawn(MobEntity mob, Point3D playerPosition)
+        {
+            double dx = mob.Position.X - playerPosition.X;
+            double dy = mob.Position.Y - playerPosition.Y;
+            double dz = mob.Position.Z - playerPosition.Z;
+            double distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq > 128.0 * 128.0) return true;
+            if (distSq > 32.0 * 32.0)
+            {
+                _idleTimeAccum[mob] = _idleTimeAccum.TryGetValue(mob, out var t) ? t + 1 : 1;
+                if (_idleTimeAccum[mob] > 600 && _rand.Next(800) == 0) return true;
+            }
+            else
+            {
+                _idleTimeAccum[mob] = 0;
+            }
+            return false;
+        }
+
+        private readonly Dictionary<IMobRenderable, int> _idleTimeAccum = new();
 
         public bool TryAttackMob(Point3D cameraPosition, Point3D forward, BlockInteractionSystem.PickBlockResult? blockHit)
         {
