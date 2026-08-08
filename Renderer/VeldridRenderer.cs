@@ -160,6 +160,12 @@ namespace CubeApp.Renderer
         private MobModel? _coyoteModel;
         private ResourceSet? _coyoteTextureSet;
         private IReadOnlyList<CubeApp.DuckInstance> _coyoteInstances = Array.Empty<CubeApp.DuckInstance>();
+        private DeviceBuffer? _coyoteVertexBuffer;
+        private DeviceBuffer? _coyoteIndexBuffer;
+        private uint _coyoteVertexCapacity;
+        private uint _coyoteIndexCapacity;
+        private float[] _coyoteVertexScratch = Array.Empty<float>();
+        private ushort[] _coyoteIndexScratch = Array.Empty<ushort>();
         // Full mob snapshot kept for F3 nametag rendering (world -> screen projection).
         private IReadOnlyList<CubeApp.MobRenderData> _allMobRenderData = Array.Empty<CubeApp.MobRenderData>();
 
@@ -3034,38 +3040,65 @@ void main() {
             cl.DrawIndexed((uint)totalIndices, 1, 0, 0, 0);
         }
 
-        // Draws GLB-driven mobs (coyote) via the generic MobModel path. MobModel.Draw sets its own
-        // vertex/index buffers and texture resource set, so we only set the pipeline + projView.
-        // The coyote has no skeletal animation, so a subtle walk-cycle bob + body sway is applied
-        // on the CPU around the model origin (feet) to sell the motion.
+        // Draws GLB-driven mobs (coyote) via the generic MobModel path. All instances are baked into
+        // ONE vertex/index buffer and drawn with a single call - the mobs share a model, and a
+        // per-mob UpdateBuffer on a shared instance buffer would corrupt earlier draws. A subtle
+        // walk-cycle bob + body sway is applied on the CPU around the model origin (feet) to sell
+        // the motion (the GLB has no skeletal animation).
         private void DrawCoyotes(CommandList cl)
         {
             var instances = _coyoteInstances;
             if (instances.Count == 0 || _coyoteModel == null || _modelPipeline == null || _coyoteTextureSet == null) return;
 
-            cl.SetPipeline(_modelPipeline);
-            cl.SetGraphicsResourceSet(0, _projViewSet);
+            int vertsPer = _coyoteModel.VertexCount;
+            int idxPer = _coyoteModel.IndexCount;
+            int totalVertexFloats = instances.Count * vertsPer * DuckFloatsPerVertex;
+            int totalIndices = instances.Count * idxPer;
+            if (totalVertexFloats == 0 || totalIndices == 0) return;
+
+            if (_coyoteVertexScratch.Length < totalVertexFloats) _coyoteVertexScratch = new float[totalVertexFloats];
+            if (_coyoteIndexScratch.Length < totalIndices) _coyoteIndexScratch = new ushort[totalIndices];
+
+            int vf = 0, ii = 0;
+            ushort baseVertex = 0;
             foreach (var inst in instances)
             {
                 float walkAmount = inst.WalkAmount;
                 float phase = inst.WalkPhase;
                 bool isDead = inst.IsDead;
-                // Grounded walk-cycle bob; gentle roll while moving; death roll handled by the
-                // entity's DeathT in the render data (roll around Z by up to ~90deg).
+                // Grounded walk-cycle bob.
                 float bob = isDead ? 0f : (Math.Abs((float)Math.Sin(phase * 2.0f)) * 0.05f * walkAmount);
-                float sway = isDead ? 0f : (float)Math.Sin(phase) * 0.04f * walkAmount;
-                float deathRoll = isDead ? inst.DeathRollDir * (float)(Math.PI * 0.5) * (float)Math.Pow(inst.DeathT, 0.9) : 0f;
+                _coyoteModel.WriteInstance(_coyoteVertexScratch, ref vf, _coyoteIndexScratch, ref ii, ref baseVertex,
+                    (float)inst.Position.X, (float)inst.Position.Y + bob, (float)inst.Position.Z, inst.Yaw);
+            }
 
-                // Draw at feet position + bob. The model already rotates about Y inside Draw; the
-                // death roll is applied as a Z tilt via an extra transform isn't supported by
-                // MobModel.Draw, so we only offset Y here (death uses the roll data if animated later).
-                _coyoteModel.Draw(cl, _coyoteTextureSet,
-                    (float)inst.Position.X,
-                    (float)inst.Position.Y + bob,
-                    (float)inst.Position.Z,
-                    inst.Yaw);
-                _ = sway;
-                _ = deathRoll;
+            EnsureCoyoteBuffers((uint)(totalVertexFloats * sizeof(float)), (uint)(totalIndices * sizeof(ushort)));
+            _gd.UpdateBuffer(_coyoteVertexBuffer, 0, ref _coyoteVertexScratch[0], (uint)(totalVertexFloats * sizeof(float)));
+            _gd.UpdateBuffer(_coyoteIndexBuffer, 0, ref _coyoteIndexScratch[0], (uint)(totalIndices * sizeof(ushort)));
+
+            cl.SetPipeline(_modelPipeline);
+            cl.SetGraphicsResourceSet(0, _projViewSet);
+            cl.SetGraphicsResourceSet(1, _coyoteTextureSet);
+            cl.SetVertexBuffer(0, _coyoteVertexBuffer);
+            cl.SetIndexBuffer(_coyoteIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed((uint)totalIndices, 1, 0, 0, 0);
+        }
+
+        private void EnsureCoyoteBuffers(uint vertexBytes, uint indexBytes)
+        {
+            if (_coyoteVertexBuffer == null || _coyoteVertexCapacity < vertexBytes)
+            {
+                _coyoteVertexBuffer?.Dispose();
+                _coyoteVertexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                    Math.Max(vertexBytes, 512), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+                _coyoteVertexCapacity = Math.Max(vertexBytes, 512);
+            }
+            if (_coyoteIndexBuffer == null || _coyoteIndexCapacity < indexBytes)
+            {
+                _coyoteIndexBuffer?.Dispose();
+                _coyoteIndexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                    Math.Max(indexBytes, 512), BufferUsage.IndexBuffer | BufferUsage.Dynamic));
+                _coyoteIndexCapacity = Math.Max(indexBytes, 512);
             }
         }
 
@@ -3721,6 +3754,8 @@ void main() {
             _playerView?.Dispose();
             _playerTexture?.Dispose();
             _coyoteModel?.Dispose();
+            _coyoteVertexBuffer?.Dispose();
+            _coyoteIndexBuffer?.Dispose();
             _modelPipeline?.Dispose();
             _pipeline?.Dispose();
             _cutoutPipeline?.Dispose();

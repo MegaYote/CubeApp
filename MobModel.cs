@@ -645,6 +645,44 @@ namespace CubeApp
         private uint _instanceBufferSize;
         private float[] _transformedVertices = Array.Empty<float>();
 
+        /// <summary>
+        /// Writes this model's vertices transformed to (x,y,z) with the given yaw into a shared
+        /// scratch buffer (pos + uv + white color, 9 floats per vertex), and copies its indices
+        /// offset by <paramref name="baseVertex"/>. This lets the renderer batch MULTIPLE mobs of
+        /// the same model into ONE vertex/index buffer and draw them in a single call - drawing
+        /// each mob separately with a shared instance buffer corrupts earlier draws (the second
+        /// mob's UpdateBuffer overwrites the first's data before the GPU has consumed it).
+        /// </summary>
+        public void WriteInstance(float[] vertexScratch, ref int vf, ushort[] indexScratch, ref int ii, ref ushort baseVertex,
+            float x, float y, float z, float yaw)
+        {
+            float cosY = (float)Math.Cos(yaw + Math.PI);
+            float sinY = (float)Math.Sin(yaw + Math.PI);
+            for (int i = 0; i < _positions.Count; i++)
+            {
+                var pos = _positions[i];
+                var uv = _uvs[Math.Min(i, _uvs.Count - 1)];
+                float fx = pos.X * cosY + pos.Z * sinY;
+                float fy = pos.Y;
+                float fz = -pos.X * sinY + pos.Z * cosY;
+                int offset = vf;
+                vertexScratch[offset + 0] = x + fx;
+                vertexScratch[offset + 1] = y + fy;
+                vertexScratch[offset + 2] = z + fz;
+                vertexScratch[offset + 3] = uv.X;
+                vertexScratch[offset + 4] = uv.Y;
+                vertexScratch[offset + 5] = 1f; vertexScratch[offset + 6] = 1f;
+                vertexScratch[offset + 7] = 1f; vertexScratch[offset + 8] = 1f;
+                vf += 9;
+            }
+
+            for (int i = 0; i < _indices.Count; i++)
+            {
+                indexScratch[ii++] = (ushort)(baseVertex + _indices[i]);
+            }
+            baseVertex += (ushort)_positions.Count;
+        }
+
         public void Draw(CommandList cl, ResourceSet? textureSet, float x, float y, float z, float yaw)
         {
             if (_vertexBuffer == null || _positions.Count == 0) return;
