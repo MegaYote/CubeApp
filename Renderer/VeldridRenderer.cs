@@ -104,6 +104,7 @@ namespace CubeApp.Renderer
         private int _starVertexCount;
         private bool _starsBuilt;
         private float[] _starVertexScratch = Array.Empty<float>();
+        private float[] _starBaseScratch = Array.Empty<float>();
         private ushort[] _starIndexScratch = Array.Empty<ushort>();
 
         // ---- Clouds (world-space flat plane, buildable/flyable) -----------------------
@@ -2595,8 +2596,8 @@ void main() {
             // with the SAME offset-0 data was the bug: both draws used verts 0-3, so the moon
             // always rendered on top of the sun regardless of the y position given.
             var v = new float[8 * 5];
-            WriteCelestialQuad(v, 0, cosA, sinA, 100f, 30f, 0f, 0f, 1f, 1f);   // sun
-            WriteCelestialQuad(v, 4, cosA, sinA, -100f, 20f, 1f, 0f, 0f, 1f);  // moon
+            WriteCelestialQuad(v, 0, cosA, sinA, 100f, 15f, 0f, 0f, 1f, 1f);   // sun
+            WriteCelestialQuad(v, 4, cosA, sinA, -100f, 10f, 1f, 0f, 0f, 1f);  // moon
             _gd.UpdateBuffer(_celestialVertexBuffer, 0, v);
 
             cl.SetPipeline(_celestialPipeline);
@@ -2662,15 +2663,18 @@ void main() {
             }
             if (_starVertexCount == 0) return;
 
-            // Rotate the prebuilt unit-sphere quads by the celestial angle around X.
+            // Rotate the prebuilt unit-sphere quads by the celestial angle around X. Always read
+            // from the PRISTINE base copy and write into the scratch, otherwise the rotation
+            // accumulates frame over frame (rotating already-rotated positions) and the stars
+            // spin wildly faster than the sun/moon.
             float angle = ComputeNightCelestialAngle() * MathF.PI * 2.0f;
             float cosA = MathF.Cos(angle), sinA = MathF.Sin(angle);
             for (int i = 0; i < _starVertexCount; i++)
             {
                 int o = i * 7;
-                float x = _starVertexScratch[o];
-                float y = _starVertexScratch[o + 1];
-                float z = _starVertexScratch[o + 2];
+                float x = _starBaseScratch[o];
+                float y = _starBaseScratch[o + 1];
+                float z = _starBaseScratch[o + 2];
                 float ry = y * cosA - z * sinA;
                 float rz = y * sinA + z * cosA;
                 _starVertexScratch[o] = x;
@@ -2746,6 +2750,9 @@ void main() {
                 baseV += 4;
             }
             _starVertexCount = vf / 7;
+            // Pristine copy WITHOUT the celestial rotation: DrawStars rotates from this base into
+            // the scratch each frame, so rotation never accumulates.
+            _starBaseScratch = (float[])_starVertexScratch.Clone();
 
             _starVertexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
                 (uint)(_starVertexScratch.Length * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
