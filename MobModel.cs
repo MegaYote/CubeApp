@@ -656,8 +656,11 @@ namespace CubeApp
         public void WriteInstance(float[] vertexScratch, ref int vf, ushort[] indexScratch, ref int ii, ref ushort baseVertex,
             float x, float y, float z, float yaw)
         {
-            float cosY = (float)Math.Cos(yaw + Math.PI);
-            float sinY = (float)Math.Sin(yaw + Math.PI);
+            // yawCorrection rotates the model so its +X (Blockbench front) aligns with the mob's
+            // forward direction (sin Yaw, cos Yaw). Add -90deg to map +X onto forward.
+            float renderYaw = yaw + MathF.PI + YawCorrection;
+            float cosY = MathF.Cos(renderYaw);
+            float sinY = MathF.Sin(renderYaw);
             for (int i = 0; i < _positions.Count; i++)
             {
                 var pos = _positions[i];
@@ -682,6 +685,16 @@ namespace CubeApp
             }
             baseVertex += (ushort)_positions.Count;
         }
+
+        /// <summary>
+        /// Additional yaw (radians) applied on top of the standard yaw+PI rotation, so a model whose
+        /// front is NOT +Z (e.g. a Blockbench model whose nose points +X) can be corrected.
+        ///
+        /// The coyote's nose points +X. With renderYaw = yaw + PI the +X vertex maps to
+        /// (-cos, sin) = the forward axis (sin, cos) rotated 90deg LEFT - hence the "strafing left"
+        /// look. Adding +PI/2 (renderYaw = yaw + 3PI/2) makes +X map to (sin, cos) = forward.
+        /// </summary>
+        public float YawCorrection = MathF.PI / 2f;
 
         public void Draw(CommandList cl, ResourceSet? textureSet, float x, float y, float z, float yaw)
         {

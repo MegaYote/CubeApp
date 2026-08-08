@@ -3066,10 +3066,13 @@ void main() {
                 float walkAmount = inst.WalkAmount;
                 float phase = inst.WalkPhase;
                 bool isDead = inst.IsDead;
-                // Grounded walk-cycle bob.
-                float bob = isDead ? 0f : (Math.Abs((float)Math.Sin(phase * 2.0f)) * 0.05f * walkAmount);
+                // Walk-cycle bob (more pronounced than the first pass so it reads clearly) + a
+                // side-to-side sway so the trot has visible body motion. The GLB's skeletal walk
+                // animation is loaded but not yet skinned-rendered, so this is the on-model stand-in.
+                float bob = isDead ? 0f : (Math.Abs((float)Math.Sin(phase * 2.0f)) * 0.12f * walkAmount);
+                float sway = isDead ? 0f : (float)Math.Sin(phase) * 0.08f * walkAmount;
                 _coyoteModel.WriteInstance(_coyoteVertexScratch, ref vf, _coyoteIndexScratch, ref ii, ref baseVertex,
-                    (float)inst.Position.X, (float)inst.Position.Y + bob, (float)inst.Position.Z, inst.Yaw);
+                    (float)inst.Position.X + sway, (float)inst.Position.Y + bob, (float)inst.Position.Z, inst.Yaw);
             }
 
             EnsureCoyoteBuffers((uint)(totalVertexFloats * sizeof(float)), (uint)(totalIndices * sizeof(ushort)));
