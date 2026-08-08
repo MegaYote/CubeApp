@@ -760,6 +760,9 @@ namespace CubeApp
                         local += part.Pivot;
                     }
 
+                    // Uniform world scale (ModelScale) grows the whole model about its feet origin.
+                    local *= ModelScale;
+
                     float fx = local.X * cosY + local.Z * sinY;
                     float fy = local.Y;
                     float fz = -local.X * sinY + local.Z * cosY;
@@ -792,6 +795,9 @@ namespace CubeApp
         /// look. Adding +PI/2 (renderYaw = yaw + 3PI/2) makes +X map to (sin, cos) = forward.
         /// </summary>
         public float YawCorrection = MathF.PI / 2f;
+
+        /// <summary>Uniform world scale applied to the model at draw time (1.0 = raw GLB size).</summary>
+        public float ModelScale = 1.0f;
 
         public void Draw(CommandList cl, ResourceSet? textureSet, float x, float y, float z, float yaw)
         {

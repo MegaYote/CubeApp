@@ -792,8 +792,8 @@ namespace CubeApp
     {
         public Coyote(Point3D position, float yaw) : base(position, yaw)
         {
-            Width = 0.9f;
-            Height = 1.2f;
+            Width = 1.2f;
+            Height = 1.6f;
             MaxHealth = 10;
             Health = MaxHealth;
             // Legs should swing about one full stride per ~2.5 blocks covered; at 4 blocks/s and a

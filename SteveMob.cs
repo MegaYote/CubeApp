@@ -11,8 +11,8 @@ namespace CubeApp
     {
         public SteveMob(Point3D position, float yaw) : base(position, yaw)
         {
-            Width = 0.6f;
-            Height = 1.8f;
+            Width = 0.75f;
+            Height = 2.25f;
             MaxHealth = 20;
             Health = MaxHealth;
             StepHeight = 0.55f;

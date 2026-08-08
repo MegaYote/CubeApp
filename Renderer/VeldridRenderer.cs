@@ -138,6 +138,8 @@ namespace CubeApp.Renderer
         private float[] _duckVertexScratch = Array.Empty<float>();
         private ushort[] _duckIndexScratch = Array.Empty<ushort>();
         private const int DuckFloatsPerVertex = 9; // pos(3) + uv(2) + color(4)
+        private const float DuckModelScale = 1.25f; // visually bigger duck (matches bigger collision)
+        private const float PlayerModelScale = 1.25f; // visually bigger player/Steve
 
         // Minecraft-style player model (shares the model pipeline; own texture + buffers).
         private Texture _playerTexture;
@@ -640,6 +642,8 @@ namespace CubeApp.Renderer
                 var model = new MobModel(_gd);
                 if (!model.Load(modelPath, texPath)) return;
                 _coyoteModel = model;
+                // Coyotes are drawn ~1.3x their raw Blockbench size (matches the bigger collision box).
+                model.ModelScale = 1.3f;
                 _coyoteTextureSet = model.TextureSet;
             }
             catch
@@ -2611,16 +2615,21 @@ void main() {
                     float my = bone.PivotY + ry + bob + headExtraBob;
                     float mz = bone.PivotZ + rz;
 
-                    // Body roll (Z) then body yaw (Y), matching three.js Euler 'XYZ' order.
-                    float ax = mx * cosR - my * sinR;
-                    float ay = mx * sinR + my * cosR;
-                    float az = mz;
-                    float fx = ax * cosY + az * sinY;
-                    float fz = -ax * sinY + az * cosY;
+            // Body roll (Z) then body yaw (Y), matching three.js Euler 'XYZ' order.
+            float ax = mx * cosR - my * sinR;
+            float ay = mx * sinR + my * cosR;
+            float az = mz;
+            float fx = ax * cosY + az * sinY;
+            float fz = -ax * sinY + az * cosY;
 
-                    _duckVertexScratch[vf++] = px + fx;
-                    _duckVertexScratch[vf++] = py + ay;
-                    _duckVertexScratch[vf++] = pz + fz;
+            // Mobs are bigger now: scale the whole model about its feet origin.
+            fx *= DuckModelScale;
+            ay *= DuckModelScale;
+            fz *= DuckModelScale;
+
+            _duckVertexScratch[vf++] = px + fx;
+            _duckVertexScratch[vf++] = py + ay;
+            _duckVertexScratch[vf++] = pz + fz;
                     _duckVertexScratch[vf++] = v.U;
                     _duckVertexScratch[vf++] = v.V;
                     _duckVertexScratch[vf++] = v.Shade;
@@ -3152,6 +3161,11 @@ void main() {
                     float az = mz;
                     float fx = ax * cosY + az * sinY;
                     float fz = -ax * sinY + az * cosY;
+
+                    // Mobs are bigger now: scale the whole model about its feet origin.
+                    fx *= PlayerModelScale;
+                    ay *= PlayerModelScale;
+                    fz *= PlayerModelScale;
 
                     _playerVertexScratch[vf++] = px + fx;
                     _playerVertexScratch[vf++] = py + ay;
