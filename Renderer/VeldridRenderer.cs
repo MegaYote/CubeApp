@@ -2609,30 +2609,32 @@ void main() {
             cl.DrawIndexed(6, 1, 0, 0, 0);
         }
 
-        // Writes one XY-aligned quad at (0, centerY, 0) half-size `size` with UVs (u0,v0)-(u1,v1),
-        // rotated around the X axis by (cosA, sinA) to follow the celestial arc.
+        // Writes one billboarded quad: an XY-plane square (faces the camera in camera space),
+        // centered at (0, centerY, 0) after celestial-angle rotation around X, half-size `size`,
+        // with UVs (u0,v0)-(u1,v1). The XY orientation makes it visible like MC's sun/moon disks
+        // instead of a horizontal plane seen edge-on.
         private static void WriteCelestialQuad(float[] v, int index, float cosA, float sinA,
             float centerY, float size, float u0, float v0, float u1, float v1)
         {
-            // Four corners in the XZ plane at centerY, then rotate around X: y' = y*cos - z*sin,
-            // z' = y*sin + z*cos.
-            (float x, float y, float z)[] corners =
+            // Four corners of an XY-aligned quad (facing the camera), then rotate the QUAD CENTER
+            // around the X axis by the celestial angle so it follows the sky arc. The quad stays
+            // camera-facing (billboarded) because it's in the XY plane of camera space.
+            (float x, float y)[] corners =
             {
-                (-size, centerY - 0f, -size),
-                ( size, centerY - 0f, -size),
-                ( size, centerY - 0f,  size),
-                (-size, centerY - 0f,  size),
+                (-size, -size),
+                ( size, -size),
+                ( size,  size),
+                (-size,  size),
             };
             for (int c = 0; c < 4; c++)
             {
-                float y = corners[c].y;
-                float z = corners[c].z;
-                float ry = y * cosA - z * sinA;
-                float rz = y * sinA + z * cosA;
+                // Rotate the center (0, centerY, 0) around X by the celestial angle.
+                float cy = centerY * cosA;
+                float cz = centerY * sinA;
                 int o = (index + c) * 5;
                 v[o] = corners[c].x;
-                v[o + 1] = ry;
-                v[o + 2] = rz;
+                v[o + 1] = cy + corners[c].y;
+                v[o + 2] = cz;
                 v[o + 3] = (c == 0 || c == 3) ? u0 : u1;
                 v[o + 4] = (c == 0 || c == 1) ? v0 : v1;
             }
