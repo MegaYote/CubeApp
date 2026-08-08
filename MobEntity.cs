@@ -46,7 +46,7 @@ namespace CubeApp
         protected float GroundAccel = 28f;
         protected float AirAccel = 7f;
         protected float JumpSpeed = 7.36f;
-        protected float DragGround = 0.965f;
+        protected float DragGround = 0.86f;   // strong ground traction: stops quickly, no ice feel
         protected float DragAir = 0.985f;
         protected float DragVertical = 0.992f;
         protected float StepHeight = 0.45f;
@@ -640,6 +640,17 @@ namespace CubeApp
                 float accelBase = grounded ? GroundAccel : AirAccel;
                 float accel = accelBase * Lerp(0.9f, 1.12f, Clamp((_currentSpeedScale - 0.85f) / 0.3f, 0f, 1f));
                 _velX += wishX * accel * dt; _velZ += wishZ * accel * dt;
+            }
+            else if (_prevOnGround || OnGround)
+            {
+                // No push this frame (idle / turning): brake hard so the mob stops in place
+                // instead of coasting. The base drag in UpdatePhysics handles the rest.
+                double brakeSpeedSq = _velX * _velX + _velZ * _velZ;
+                if (brakeSpeedSq > 0.001)
+                {
+                    double brake = Math.Pow(0.62, dt * 60); // ~0.62/frame: quick stop
+                    _velX *= brake; _velZ *= brake;
+                }
             }
 
             if (_ctrlJump && (_prevOnGround || OnGround) && _jumpPressCooldown <= 0f)
