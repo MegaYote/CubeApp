@@ -739,12 +739,17 @@ namespace CubeApp
                 {
                     var local = part.Positions[i];
 
-                    // Skin: rotate the local vertex around the part's pivot by the joint rotation
-                    // (v' = T + R(v - T)). Identity for static parts.
+                    // Skin: the mesh's vertices are ALREADY relative to the part's pivot (local
+                    // y 0 = hip/top of a leg), so rotating the joint means rotating the vertex
+                    // about the pivot origin and then placing it: v' = T + R(v). Identity for
+                    // static parts (v' = T + v, i.e. just place the part).
                     if (jointRot != Quaternion.Identity)
                     {
-                        var v = Vector3.Transform(local - part.Pivot, jointRot);
-                        local = part.Pivot + v;
+                        local = part.Pivot + Vector3.Transform(local, jointRot);
+                    }
+                    else
+                    {
+                        local += part.Pivot;
                     }
 
                     float fx = local.X * cosY + local.Z * sinY;
