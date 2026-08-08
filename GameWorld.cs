@@ -231,6 +231,13 @@ namespace CubeApp
         /// <summary>Day/night clock in world ticks. Full cycle = 24000 ticks (Infdev).</summary>
         public long WorldTime { get; private set; }
 
+        /// <summary>Force-advance the day/night clock by 25% of its 24000-tick cycle (T key).</summary>
+        public void AdvanceTime()
+        {
+            WorldTime += 6000;
+            _worldTimeAccumulator = 0.0;
+        }
+
         /// <summary>Fractional leftover for the 20 tps day/night clock.</summary>
         private double _worldTimeAccumulator;
 
