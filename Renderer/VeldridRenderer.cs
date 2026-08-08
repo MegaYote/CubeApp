@@ -2020,7 +2020,7 @@ void main() {
 
                 var inst = new CubeApp.DuckInstance(
                     md.Position, md.Yaw, md.HeadYawLocal,
-                    md.WalkPhase, md.WalkAmount, md.FlapPhase,
+                    md.WalkPhase, md.WalkAmount, md.AnimTime, md.FlapPhase,
                     md.VelocityY, md.OnGround,
                     md.IsDead, md.DeathT, md.DeathRollDir, md.HurtTimer);
 
@@ -3063,11 +3063,10 @@ void main() {
             ushort baseVertex = 0;
             foreach (var inst in instances)
             {
-                // Drive the GLB walk animation from the mob's walk phase. The coyote cycle is
-                // 1.33s; scale the (radian-ish) phase so a full cycle maps to the track duration.
-                float animTime = inst.WalkPhase * (1.33f / (MathF.PI * 2f));
+                // The mob's animation clock advances only while it actually walks, so the GLB
+                // trot plays when moving and holds the rest pose when idle.
                 _coyoteModel.WriteInstance(_coyoteVertexScratch, ref vf, _coyoteIndexScratch, ref ii, ref baseVertex,
-                    (float)inst.Position.X, (float)inst.Position.Y, (float)inst.Position.Z, inst.Yaw, animTime);
+                    (float)inst.Position.X, (float)inst.Position.Y, (float)inst.Position.Z, inst.Yaw, inst.AnimTime);
             }
 
             EnsureCoyoteBuffers((uint)(totalVertexFloats * sizeof(float)), (uint)(totalIndices * sizeof(ushort)));

@@ -11,6 +11,7 @@ namespace CubeApp
         public readonly float Yaw;
         public readonly float WalkPhase;
         public readonly float WalkAmount;
+        public readonly float AnimTime;
         public readonly float VelocityY;
         public readonly bool OnGround;
         public readonly bool IsDead;
@@ -18,10 +19,11 @@ namespace CubeApp
         public readonly string MobType;
 
         public MobInstance(float x, float y, float z, float yaw, float walkPhase, float walkAmount,
-            float velocityY, bool onGround, bool isDead, float deathT, float deathRollDir, float hurtTimer, string mobType)
+            float animTime, float velocityY, bool onGround, bool isDead, float deathT, float deathRollDir, float hurtTimer, string mobType)
         {
             X = x; Y = y; Z = z; Yaw = yaw;
             WalkPhase = walkPhase; WalkAmount = walkAmount;
+            AnimTime = animTime;
             VelocityY = velocityY; OnGround = onGround;
             IsDead = isDead; DeathT = deathT;
             DeathRollDir = deathRollDir; HurtTimer = hurtTimer;
@@ -85,6 +87,7 @@ namespace CubeApp
         public virtual string MobTypeName => GetType().Name.ToLowerInvariant();
         float IMobRenderable.WalkPhase => _walkPhase;
         float IMobRenderable.WalkAmount => _walkAmount;
+        float IMobRenderable.AnimTime => _animClock;
         float IMobRenderable.FlapPhase => _flapPhase;
         float IMobRenderable.VelocityY => (float)_velY;
         float IMobRenderable.DeathT => _dead ? Math.Clamp(_deathTimer / Math.Max(0.001f, _deathDuration), 0f, 1f) : 0f;
@@ -95,6 +98,10 @@ namespace CubeApp
         protected bool _prevOnGround;
         protected readonly double _homeX, _homeZ;
         protected float _walkPhase, _walkAmount, _flapPhase;
+        /// <summary>Accumulated animation time (seconds). Only advances while the mob is actually
+        /// moving (scaled by walkAmount), so GLB walk cycles play while walking and hold pose when
+        /// idle - unlike _walkPhase which also advances at an idle-bob rate.</summary>
+        protected float _animClock;
         protected float _hurtTimer;
         protected bool _dead;
         protected float _deathTimer;
@@ -239,7 +246,7 @@ namespace CubeApp
         {
             return new MobInstance(
                 (float)Position.X, (float)Position.Y, (float)Position.Z,
-                Yaw, _walkPhase, _walkAmount,
+                Yaw, _walkPhase, _walkAmount, _animClock,
                 (float)_velY, OnGround, _dead,
                 _dead ? Math.Clamp(_deathTimer / Math.Max(0.001f, _deathDuration), 0f, 1f) : 0f,
                 _deathRollDir, _hurtTimer, MobTypeName);
@@ -643,6 +650,8 @@ namespace CubeApp
             double horizontalSpeed = Math.Sqrt(_velX * _velX + _velZ * _velZ);
             _walkAmount = (float)Math.Min(1, horizontalSpeed / Math.Max(0.001, maxSpeed));
             _walkPhase += dt * ((_prevOnGround || OnGround) ? (_walkAmount * 8.5f + 1.9f) : 14.0f);
+            // Animation clock: advance in step with real walking; freeze when idle.
+            _animClock += dt * _walkAmount * (_prevOnGround || OnGround ? 1f : 0.2f);
         }
 
         protected enum Axis { X, Y, Z }

@@ -57,6 +57,12 @@ namespace CubeApp
         float WalkAmount { get; }
 
         /// <summary>
+        /// Accumulated animation time (seconds) that advances only while the mob is moving -
+        /// drives GLB walk cycles so they play while walking and hold pose when idle.
+        /// </summary>
+        float AnimTime { get; }
+
+        /// <summary>
         /// Vertical velocity for in-air tilt animation.
         /// </summary>
         float VelocityY { get; }
