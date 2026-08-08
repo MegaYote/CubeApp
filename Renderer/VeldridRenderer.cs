@@ -2588,28 +2588,29 @@ void main() {
             float angle = ComputeNightCelestialAngle() * MathF.PI * 2.0f;
             float cosA = MathF.Cos(angle), sinA = MathF.Sin(angle);
 
-            // Sun: quad at (0, +100, 0) +/- 30 in x/z, rotated around X to ride the sky arc.
-            var v = new float[4 * 5];
-            WriteCelestialQuad(v, 0, cosA, sinA, 100f, 30f, 0f, 0f, 1f, 1f);
+            // One vertex buffer holds BOTH quads: sun at verts 0-3 (y=+100, size 30), moon at
+            // verts 4-7 (y=-100, size 20, UVs flipped). A single UpdateBuffer writes them
+            // together; each draw then reads only its own vertex range via the index buffer
+            // ({0,1,2,0,2,3} = sun, {4,5,6,4,6,7} = moon). Drawing the moon at index start 6
+            // with the SAME offset-0 data was the bug: both draws used verts 0-3, so the moon
+            // always rendered on top of the sun regardless of the y position given.
+            var v = new float[8 * 5];
+            WriteCelestialQuad(v, 0, cosA, sinA, 100f, 30f, 0f, 0f, 1f, 1f);   // sun
+            WriteCelestialQuad(v, 4, cosA, sinA, -100f, 20f, 1f, 0f, 0f, 1f);  // moon
             _gd.UpdateBuffer(_celestialVertexBuffer, 0, v);
+
             cl.SetPipeline(_celestialPipeline);
             cl.SetGraphicsResourceSet(0, _skyMatrixSet);
-            cl.SetGraphicsResourceSet(1, _sunTextureSet);
             cl.SetVertexBuffer(0, _celestialVertexBuffer);
             cl.SetIndexBuffer(_celestialIndexBuffer, IndexFormat.UInt16);
+
+            // Sun quad (indices 0..5 -> vertices 0-3).
+            cl.SetGraphicsResourceSet(1, _sunTextureSet);
             cl.DrawIndexed(6, 1, 0, 0, 0);
 
-            // Moon: quad at (0, -100, 0) +/- 20, UVs flipped horizontally (Infdev does this).
-            // Both always draw; whichever is below the horizon is hidden by the terrain naturally.
-            var vm = new float[4 * 5];
-            WriteCelestialQuad(vm, 0, cosA, sinA, -100f, 20f, 1f, 0f, 0f, 1f);
-            _gd.UpdateBuffer(_celestialVertexBuffer, 0, vm);
-            cl.SetPipeline(_celestialPipeline);
-            cl.SetGraphicsResourceSet(0, _skyMatrixSet);
+            // Moon quad (indices 6..11 -> vertices 4-7).
             cl.SetGraphicsResourceSet(1, _moonTextureSet);
-            cl.SetVertexBuffer(0, _celestialVertexBuffer);
-            cl.SetIndexBuffer(_celestialIndexBuffer, IndexFormat.UInt16);
-            cl.DrawIndexed(6, 1, 0, 0, 0);
+            cl.DrawIndexed(6, 1, 6, 0, 0);
         }
 
         // Writes a camera-facing (billboard) quad for the sun/moon, positioned far out along the
