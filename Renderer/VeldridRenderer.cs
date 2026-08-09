@@ -3536,12 +3536,12 @@ void main() {
             // renderAdjacentFaces table). faceIndex into the neighbor's faces[] above.
             (int dx, int dy, int dz, int faceIndex)[] neighbors =
             {
-                ( 0, 1, 0, 2), // top -> neighbor bottom
-                ( 0,-1, 0, 3), // bottom -> neighbor top
-                ( 1, 0, 0, 5), // right -> neighbor left
-                (-1, 0, 0, 4), // left -> neighbor right
-                ( 0, 0, 1, 1), // front -> neighbor back
-                ( 0, 0,-1, 0), // back -> neighbor front
+                ( 0, 1, 0, 2), // top -> neighbor bottom (y=0, sits at by+1)
+                ( 0,-1, 0, 3), // bottom -> neighbor top (y=1, sits at by)
+                ( 1, 0, 0, 5), // right -> neighbor left (x=0, sits at bx+1)
+                (-1, 0, 0, 4), // left -> neighbor right (x=1, sits at bx)
+                ( 0, 0, 1, 0), // front -> neighbor BACK (z=0, sits at bz+1)
+                ( 0, 0,-1, 1), // back -> neighbor FRONT (z=1, sits at bz)
             };
 
             int vf = 0;
