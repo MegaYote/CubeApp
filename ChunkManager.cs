@@ -340,10 +340,16 @@ namespace CubeApp
         public bool EnsureChunksAround(int centerChunkX, int centerChunkZ, int radius, int layer = GroundLayer)
         {
             bool addedNewChunk = false;
+            long radiusSq = (long)radius * radius; // circle, not square: skips the ~27% corner chunks
             for (int dz = -radius; dz <= radius; dz++)
             {
                 for (int dx = -radius; dx <= radius; dx++)
                 {
+                    // Euclidean circle around the player's chunk: |d| <= r instead of the old
+                    // Chebyshev square (max(dx,dz) <= r). Saves corner-chunk generation/mesh/memory
+                    // with no visible quality loss - the corners were outside the view circle anyway.
+                    if ((long)dx * dx + (long)dz * dz > radiusSq) continue;
+
                     int chunkX = centerChunkX + dx;
                     int chunkZ = centerChunkZ + dz;
                     var key = new ChunkCoordinates(layer, chunkX, chunkZ);
@@ -367,10 +373,15 @@ namespace CubeApp
         /// </summary>
         public void RequestChunksAround(int centerChunkX, int centerChunkZ, int radius, Point3D cameraPosition, int layer = GroundLayer)
         {
+            long radiusSq = (long)radius * radius; // circle, not square: skips the ~27% corner chunks
             for (int dz = -radius; dz <= radius; dz++)
             {
                 for (int dx = -radius; dx <= radius; dx++)
                 {
+                    // Euclidean circle (matches EnsureChunksAround): only queue chunks within the
+                    // radius so corner chunks outside the view circle are never generated.
+                    if ((long)dx * dx + (long)dz * dz > radiusSq) continue;
+
                     int chunkX = centerChunkX + dx;
                     int chunkZ = centerChunkZ + dz;
                     var key = new ChunkCoordinates(layer, chunkX, chunkZ);
@@ -409,11 +420,12 @@ namespace CubeApp
         public List<ChunkCoordinates> UnloadChunksOutside(int centerChunkX, int centerChunkZ, int radius)
         {
             var removed = new List<ChunkCoordinates>();
+            long radiusSq = (long)radius * radius; // circle, matching the load loops
             foreach (var key in loadedChunks.Keys)
             {
-                int dx = Math.Abs(key.X - centerChunkX);
-                int dz = Math.Abs(key.Z - centerChunkZ);
-                if (dx > radius || dz > radius)
+                long dx = key.X - (long)centerChunkX;
+                long dz = key.Z - (long)centerChunkZ;
+                if (dx * dx + dz * dz > radiusSq)
                 {
                     if (loadedChunks.TryRemove(key, out var _))
                     {
