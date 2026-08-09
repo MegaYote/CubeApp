@@ -36,6 +36,17 @@ namespace CubeApp
     ///  - Spawn up to a pack of 3 per pass; only if the entity's getCanSpawnHere passes
     ///    (clear AABB, no collision, not in liquid).
     ///
+    /// Monsters (zombies) use the AUTHENTIC Infdev SpawnerMonsters.java on top of the same
+    /// SpawnerAnimals base:
+    ///  - Y is NOT uniform 0..128. It uses the triple-nested rand.Next(rand.Next(rand.Next(112)+8)+8),
+    ///    which is heavily biased toward the bottom of the world - so monsters mostly emerge from
+    ///    caves and deep shafts rather than clustering on the surface.
+    ///  - The base spawn cell must be AIR (a normal cube immediately fails the pass, and a non-air
+    ///    non-cube like water also fails) - Infdev's exact checks.
+    ///  - EntityMonster.getCanSpawnHere requires block light <= rand.nextInt(8): monsters only
+    ///    spawn in darkness, so caves (light 0) always work and the surface only works at night.
+    ///  - Monster cap is 100 (vs 20 for animals).
+    ///
     /// Coyotes and Steves keep the modern weighted-table path with per-type caps.
     /// </summary>
     public sealed class MobSpawner
@@ -45,29 +56,33 @@ namespace CubeApp
         private readonly Func<string, Point3D, float, bool> _spawnFn;
         private readonly Func<int> _totalCountFn;
         private readonly Func<string, int> _typeCountFn;
+        private readonly bool _monsterSpawner;
         private const double SpawnMinDistanceSq = 32.0 * 32.0; // Infdev: 1024.0
         private const double SpawnMaxDistanceSq = 128.0 * 128.0; // Infdev: +-128 blocks
         private const int MaxTotalMobs = 20;     // Infdev: maxSpawns = 20
+        private const int MaxTotalMonsters = 100; // Infdev: monsterSpawner = 100
         private const int MaxPerType = 12;
         private const int MaxPackMembers = 3;    // Infdev: 3 entities per pass
 
         public MobSpawner(MobSpawnEntry[] entries,
             Func<string, Point3D, float, bool> spawnFn,
             Func<int> totalCountFn,
-            Func<string, int> typeCountFn)
+            Func<string, int> typeCountFn,
+            bool monsterSpawner = false)
         {
             _entries = entries;
             _spawnFn = spawnFn;
             _totalCountFn = totalCountFn;
             _typeCountFn = typeCountFn;
+            _monsterSpawner = monsterSpawner;
             foreach (var e in _entries) _totalWeight += e.Weight;
         }
 
         /// <summary>Try to spawn a pack somewhere near the player. Returns true when something spawned.</summary>
-        public bool TrySpawn(ChunkManager manager, Point3D playerPosition, Random rand)
+        public bool TrySpawn(ChunkManager manager, Point3D playerPosition, Random rand, Func<int,int,int,int>? getLight = null)
         {
             if (_entries.Length == 0) return false;
-            if (_totalCountFn() >= MaxTotalMobs) return false;
+            if (_totalCountFn() >= (_monsterSpawner ? MaxTotalMonsters : MaxTotalMobs)) return false;
 
             var entry = PickEntry(rand);
             if (entry == null) return false;
@@ -91,8 +106,26 @@ namespace CubeApp
 
                 int px = chunkX * 16 + rand.Next(16);
                 int pz = chunkZ * 16 + rand.Next(16);
-                int py = SurfaceY(manager, px, pz);
-                if (py < 0) continue;
+
+                int py;
+                if (_monsterSpawner)
+                {
+                    // Infdev SpawnerMonsters: triple-nested random biases Y toward the world bottom
+                    // (rand.Next(rand.Next(rand.Next(112)+8)+8)) so monsters rise from caves/depths.
+                    py = rand.Next(rand.Next(rand.Next(112) + 8) + 8);
+
+                    // The base spawn cell must be AIR - a normal cube fails the pass outright and a
+                    // non-air non-cube (water) also fails, exactly like Infdev's performSpawning.
+                    int baseBlock = manager.GetBlockAt(px, py, pz);
+                    if (baseBlock == BlockRegistry.AirId) { /* ok */ }
+                    else if (BlockRegistry.IsSolid(baseBlock) && BlockRegistry.IsOpaque(baseBlock)) continue;
+                    else continue;
+                }
+                else
+                {
+                    py = SurfaceY(manager, px, pz);
+                    if (py < 0) continue;
+                }
 
                 // Jitter 3x3 cells from the base point (Infdev's inner loop).
                 for (int attempt = 0; attempt < 3 && spawned < pack; attempt++)
@@ -105,6 +138,13 @@ namespace CubeApp
                     if (!IsNormalCube(manager, x, y - 1, z)) continue;
                     if (manager.GetBlockAt(x, y, z) != BlockRegistry.AirId) continue;
                     if (manager.GetBlockAt(x, y + 1, z) != BlockRegistry.AirId) continue;
+
+                    // EntityMonster.getCanSpawnHere: block light <= rand.nextInt(8) - darkness only.
+                    if (_monsterSpawner)
+                    {
+                        int light = getLight != null ? getLight(x, y, z) : 15;
+                        if (light > rand.Next(8)) continue;
+                    }
 
                     double dx = (x + 0.5) - playerPosition.X;
                     double dy = (y + 1.0) - playerPosition.Y;

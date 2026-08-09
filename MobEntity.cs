@@ -70,6 +70,47 @@ namespace CubeApp
         /// <summary>Whether a pathfinding route is currently active.</summary>
         public bool HasPath => _path != null && !_path.IsDone;
 
+        /// <summary>
+        /// Supplies the current skylight subtraction (0..11) so environmental behaviors (Infdev
+        /// zombie sunburn) can tell day from night. Wired by the EntityManager from the world clock.
+        /// </summary>
+        public Func<int>? SkylightSource { get; set; }
+
+        // ---- Hostile AI (zombies) ----
+
+        /// <summary>True when this mob hunts humans (zombies). Wired from the mob config.</summary>
+        public bool Hostile { get; protected set; }
+
+        /// <summary>Damage dealt per attack (Infdev zombie attackStrength = 5).</summary>
+        public int AttackDamage { get; protected set; } = 5;
+
+        /// <summary>Horizontal range at which the mob starts chasing its target (blocks).</summary>
+        public float AggroRange { get; protected set; } = 24f;
+
+        /// <summary>Horizontal range at which the mob can land a hit (blocks).</summary>
+        public float AttackRange { get; protected set; } = 1.5f;
+
+        /// <summary>Seconds between attacks.</summary>
+        public float AttackCooldown { get; protected set; } = 1.0f;
+
+        /// <summary>
+        /// Set each frame by the EntityManager to the nearest human's feet position (the local
+        /// player or a Steve NPC). The chase re-paths via A* so zombies route AROUND cliffs and
+        /// walls instead of beelining over a drop.
+        /// </summary>
+        public void SetChaseTarget(Point3D? target)
+        {
+            _chaseTarget = target;
+            if (!target.HasValue)
+            {
+                ClearPathGoal();
+            }
+        }
+
+        /// <summary>Fired when this mob lands a melee hit on its target (wired to the EntityManager
+        /// to damage a Steve NPC or mark the player as hit).</summary>
+        public Action? OnAttack { get; set; }
+
         // Restores saved state after spawning (world load).
         public void RestoreState(Point3D position, float yaw, int health)
         {
@@ -135,6 +176,11 @@ namespace CubeApp
         private bool _pendingJump;
         private float _pendingJumpSpeed;
 
+        // Hostile AI (zombies): a chase target position (set by the EntityManager from the nearest
+        // human) plus attack timing. Hostiles path toward the target and lunge when in range.
+        private Point3D? _chaseTarget;
+        private float _attackCooldown;
+
         private const float HitInvulnDuration = 1f / 3f;
         private const float PanicDurationMin = 2.8f;
         private const float PanicDurationMax = 4.2f;
@@ -145,7 +191,7 @@ namespace CubeApp
         private const float BodyAlignWait = 0.5f;
         private const float BodyAlignFull = 1.0f;
 
-        private enum Behavior { Idle, Look, Stroll, ReturnHome, Panic, Dead }
+        private enum Behavior { Idle, Look, Stroll, ReturnHome, Panic, Chase, Dead }
         private Behavior _behavior = Behavior.Idle;
         private float _bodyAlignDelay;
         private float _lastHeadYaw;
@@ -175,8 +221,15 @@ namespace CubeApp
             _invulnerableTimer = Math.Max(0f, _invulnerableTimer - dt);
             UpdateBrain(dt, manager);
             if (Removed) return;
+            UpdateEnvironment(dt, manager);
             UpdatePhysics(dt, manager);
         }
+
+        /// <summary>
+        /// Environmental damage hook (Infdev zombies burn in daylight). Virtual so subclasses can
+        /// opt in without touching the base simulation.
+        /// </summary>
+        protected virtual void UpdateEnvironment(float dt, ChunkManager manager) { }
 
         /// <summary>
         /// Apply damage from an attacker at (srcX, srcZ).
@@ -366,6 +419,15 @@ namespace CubeApp
 
             bool grounded = _prevOnGround || OnGround;
 
+            // Hostile chase (zombies): when a human target is in aggro range, re-path toward it via
+            // A* (routing AROUND cliffs/walls) and lunge when in melee range. Panic still wins (a
+            // fleeing mob never stops to fight). When the chase only sets a path goal it returns
+            // false so the A* path override below steers along the route.
+            if (_panicTimer <= 0f && Hostile && _chaseTarget.HasValue)
+            {
+                if (UpdateChase(dt, manager)) return;
+            }
+
             // A* path override: when a route is active, steer along waypoints and skip the wander
             // brain entirely. Panic still takes priority so mobs flee when scared.
             if (_panicTimer <= 0f && _pathGoalActive)
@@ -506,6 +568,61 @@ namespace CubeApp
             _velX *= Math.Pow(0.60, dt * 60);
             _velZ *= Math.Pow(0.60, dt * 60);
             if (_deathTimer >= _deathDuration) Removed = true;
+        }
+
+        // Hostile chase: track the target, re-issue the A* path so the zombie routes AROUND cliffs
+        // and walls, and lunge when in melee range. Returns true only when the chase consumed this
+        // frame's AI (target missing/out of range returns false so the wander brain takes over).
+        // When a path is set the method returns false too - the A* path override then steers along
+        // the route, so the zombie never beelines straight into a drop.
+        private bool UpdateChase(float dt, ChunkManager manager)
+        {
+            var target = _chaseTarget.Value;
+            double dx = target.X - Position.X;
+            double dz = target.Z - Position.Z;
+            double distSq = dx * dx + dz * dz;
+            if (distSq > AggroRange * AggroRange)
+            {
+                ClearPathGoal();
+                return false;
+            }
+
+            _attackCooldown = Math.Max(0f, _attackCooldown - dt);
+            _behavior = Behavior.Chase;
+
+            // Within melee range: stop, face the target, and swing.
+            if (distSq <= AttackRange * AttackRange)
+            {
+                ClearPathGoal();
+                _targetYaw = (float)Math.Atan2(dx, dz);
+                _desiredMoveForward = 0f;
+                _desiredSpeedScale = 0.95f;
+                _idleTimer = 0f; _afterMoveRestTimer = 0f;
+
+                _currentMoveForward = Lerp(_currentMoveForward, 0f, 1f - (float)Math.Exp(-dt * 4.6));
+                _currentSpeedScale = Lerp(_currentSpeedScale, 0.95f, 1f - (float)Math.Exp(-dt * 3.9));
+                _headYaw = TurnToward(_headYaw, _targetYaw, HeadTurnSpeed * dt);
+                UpdateBodyYawFromHead(dt, false);
+                if (_attackCooldown <= 0f)
+                {
+                    _attackCooldown = AttackCooldown;
+                    OnAttack?.Invoke();
+                }
+                return true;
+            }
+
+            // Otherwise chase through the A* pathfinder so the zombie walks AROUND cliffs/walls.
+            // Only re-issue the goal when the target has moved a meaningful amount or the route is
+            // gone, so we don't recompute the A* path every single frame.
+            bool goalMoved = (Math.Abs(target.X - _pathGoalX) > 1.0 || Math.Abs(target.Z - _pathGoalZ) > 1.0);
+            if (_path == null || goalMoved || !_pathGoalActive)
+            {
+                SetPathGoal(target.X, target.Z, 64.0);
+            }
+            _desiredMoveForward = 1f;
+            _desiredSpeedScale = 1.06f;
+            _idleTimer = 0f; _afterMoveRestTimer = 0f;
+            return false;
         }
 
         private void ChooseWanderGoal(bool forceHome)

@@ -21,10 +21,18 @@ namespace CubeApp
         public float Speed { get; }
         public float Scale { get; }
         public float YawCorrection { get; }
+        public bool BurnsInDaylight { get; }
+        public bool Hostile { get; }
+        public int AttackDamage { get; }
+        public float AggroRange { get; }
+        public float AttackRange { get; }
+        public float AttackCooldown { get; }
 
         public MobDefinition(string id, string displayName, string modelPath, string texturePath,
             float width = 0.68f, float height = 1.35f, int maxHealth = 10, float speed = 4f,
-            float scale = 1.0f, float yawCorrection = MathF.PI / 2f)
+            float scale = 1.0f, float yawCorrection = MathF.PI / 2f, bool burnsInDaylight = false,
+            bool hostile = false, int attackDamage = 5, float aggroRange = 24f,
+            float attackRange = 1.5f, float attackCooldown = 1.0f)
         {
             Id = id;
             DisplayName = displayName;
@@ -36,6 +44,12 @@ namespace CubeApp
             Speed = speed;
             Scale = scale;
             YawCorrection = yawCorrection;
+            BurnsInDaylight = burnsInDaylight;
+            Hostile = hostile;
+            AttackDamage = attackDamage;
+            AggroRange = aggroRange;
+            AttackRange = attackRange;
+            AttackCooldown = attackCooldown;
         }
     }
 
@@ -136,6 +150,12 @@ namespace CubeApp
             float speed = 4f;
             float scale = 1.0f;
             float yawCorrection = MathF.PI / 2f;
+            bool burnsInDaylight = false;
+            bool hostile = false;
+            int attackDamage = 5;
+            float aggroRange = 24f;
+            float attackRange = 1.5f;
+            float attackCooldown = 1.0f;
 
             // Override from JSON if present
             if (File.Exists(configPath))
@@ -162,6 +182,18 @@ namespace CubeApp
                         scale = scaleProp.GetSingle();
                     if (root.TryGetProperty("yawCorrection", out var yawProp))
                         yawCorrection = yawProp.GetSingle();
+                    if (root.TryGetProperty("burnsInDaylight", out var burnProp))
+                        burnsInDaylight = burnProp.GetBoolean();
+                    if (root.TryGetProperty("hostile", out var hostileProp))
+                        hostile = hostileProp.GetBoolean();
+                    if (root.TryGetProperty("attackDamage", out var dmgProp))
+                        attackDamage = dmgProp.GetInt32();
+                    if (root.TryGetProperty("aggroRange", out var aggroProp))
+                        aggroRange = aggroProp.GetSingle();
+                    if (root.TryGetProperty("attackRange", out var rangeProp))
+                        attackRange = rangeProp.GetSingle();
+                    if (root.TryGetProperty("attackCooldown", out var cdProp))
+                        attackCooldown = cdProp.GetSingle();
                 }
                 catch (Exception ex)
                 {
@@ -169,7 +201,8 @@ namespace CubeApp
                 }
             }
 
-            return new MobDefinition(id, displayName, modelPath, texturePath, width, height, maxHealth, speed, scale, yawCorrection);
+            return new MobDefinition(id, displayName, modelPath, texturePath, width, height, maxHealth, speed,
+                scale, yawCorrection, burnsInDaylight, hostile, attackDamage, aggroRange, attackRange, attackCooldown);
         }
     }
 }

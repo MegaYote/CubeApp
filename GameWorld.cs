@@ -97,6 +97,9 @@ namespace CubeApp
             SkyChunkProvider = new World.SkyChunkProvider(seed);
             Chunks = new ChunkManager(new World.DeepChunkProvider(seed), ChunkProvider, SkyChunkProvider);
             Entities = new EntityManager(Chunks);
+            // Infdev monster spawning gates on darkness; give the spawner the time-of-day so
+            // zombies flood caves during the day and the surface at night.
+            Entities.SetSkylightSource(() => CalculateSkylightSubtracted(0f));
             // Mesh workers scale with the machine: at least 2, up to ~cores/4. Chunk gen already
             // takes ProcessorCount-2 threads, so meshing gets a share of what's left without
             // starving the render thread on low-end machines.

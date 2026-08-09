@@ -336,6 +336,25 @@ namespace CubeApp
             return loadedChunks.TryGetValue(coords, out chunk);
         }
 
+        /// <summary>
+        /// Cheap light estimate for mob spawning (Infdev EntityMonster.getCanSpawnHere gate).
+        /// Walks up from (x,y,z): if an opaque block is found before the scan limit the cell is in
+        /// shade (cave / under a roof) and reads 0; otherwise it is open sky and reads
+        /// 15 - skylightSubtracted (day = bright, night = dim). Block-light sources (torches) are
+        /// not consulted - matching the spawner's "darkness only" intent.
+        /// </summary>
+        public int GetSkyLightEstimate(int x, int y, int z, int skylightSubtracted)
+        {
+            for (int wy = y + 1; wy <= y + 24; wy++)
+            {
+                int id = GetBlockAt(x, wy, z);
+                if (id == BlockRegistry.AirId) continue;
+                if (BlockRegistry.IsOpaque(id)) return 0;
+            }
+            int sky = 15 - skylightSubtracted;
+            return sky < 0 ? 0 : sky;
+        }
+
         private static int FloorDiv(int value, int divisor)
         {
             int result = value / divisor;

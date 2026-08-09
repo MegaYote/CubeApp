@@ -18,8 +18,12 @@ namespace CubeApp
 
         // Natural spawning + despawning (1.12-style). Set to null to disable.
         private MobSpawner? _spawner;
+        private MobSpawner? _monsterSpawner;
         private double _spawnAccumulator;
+        private double _monsterSpawnAccumulator;
         private const double SpawnIntervalBase = 2.0; // check for spawning roughly every 2s
+        // World->skylightSubtracted (0 day .. 11 night) for the monster darkness gate.
+        private Func<int>? _skylightSubtractedFn;
 
         private const float BlockReach = 6.5f;
 
@@ -34,16 +38,36 @@ namespace CubeApp
                 {
                     new MobSpawnEntry("duck", 6, 1, 3),
                     new MobSpawnEntry("coyote", 3, 1, 2),
-                    new MobSpawnEntry("zombie", 4, 1, 4),
                     new MobSpawnEntry("steve", 1, 1, 1),
                 },
                 AddMobAt,
                 () => _mobs.Count,
                 CountMobsOfType);
+            // Infdev monsters (zombies): separate spawner with the authentic SpawnerMonsters
+            // darkness/cave logic and a 100-mob cap.
+            _monsterSpawner = new MobSpawner(
+                new[] { new MobSpawnEntry("zombie", 1, 1, 4) },
+                AddMobAt,
+                () => _mobs.Count,
+                CountMobsOfType,
+                monsterSpawner: true);
         }
 
         /// <summary>Total living mobs (for the spawn cap).</summary>
         public int CountMobs(Point3D ignore) => _mobs.Count;
+
+        /// <summary>
+        /// Supplies the current skylight subtraction (0..11) for the Infdev monster darkness gate.
+        /// Wired to GameWorld.CalculateSkylightSubtracted so zombies know when the surface is dark.
+        /// </summary>
+        /// <summary>
+        /// Supplies the current skylight subtraction (0..11) for the Infdev monster darkness gate.
+        /// Wired to GameWorld.CalculateSkylightSubtracted so zombies know when the surface is dark.
+        /// </summary>
+        public void SetSkylightSource(Func<int> skylightSubtractedFn)
+        {
+            _skylightSubtractedFn = skylightSubtractedFn;
+        }
 
         private int CountMobsOfType(string mobId)
         {
@@ -120,19 +144,28 @@ namespace CubeApp
         /// <summary>Creates a mob exactly at the given position (used by the natural spawner).</summary>
         public bool AddMobAt(string mobId, Point3D position, float yaw)
         {
+            MobEntity? mob = null;
             if (mobId == "duck")
-                _mobs.Add(new Duck(position, yaw));
+                mob = new Duck(position, yaw);
             else if (mobId == "coyote" || mobId == "coyotemob")
-                _mobs.Add(new Coyote(position, yaw));
+                mob = new Coyote(position, yaw);
             else if (mobId == "steve")
-                _mobs.Add(new SteveMob(position, yaw));
+                mob = new SteveMob(position, yaw);
             else
             {
                 var def = MobRegistry.Get(mobId);
                 if (def == null) return false;
-                _mobs.Add(new GenericMobEntity(def, position, yaw));
+                mob = new GenericMobEntity(def, position, yaw);
             }
-            return true;
+
+            // Give every mob the world's day/night source for environmental behaviors (sunburn).
+            if (mob != null)
+            {
+                mob.SkylightSource = _skylightSubtractedFn;
+                _mobs.Add(mob);
+                return true;
+            }
+            return false;
         }
 
         public void Update(float deltaSeconds) => Update(deltaSeconds, new Point3D(0, 0, 0), false);
@@ -152,6 +185,40 @@ namespace CubeApp
 
                 if (mob is MobEntity mobEntity)
                 {
+                    // Hostiles hunt the nearest human: the local player plus any Steve NPCs. The
+                    // zombie re-paths toward the target each frame (A* routes around cliffs/walls)
+                    // and its OnAttack damages a Steve when it closes in. The player has no health
+                    // system yet, so attacks on the player just land as a harmless hit.
+                    if (mobEntity.Hostile)
+                    {
+                        IMobRenderable? steveTarget = null;
+                        Point3D target = playerPosition;
+                        double bestSq = DistSq(mobEntity.Position, playerPosition);
+                        for (int h = 0; h < _mobs.Count; h++)
+                        {
+                            if (h == i) continue;
+                            var other = _mobs[h];
+                            if (other.IsDead) continue;
+                            if (other is SteveMob)
+                            {
+                                double d = DistSq(mobEntity.Position, other.Position);
+                                if (d < bestSq) { bestSq = d; steveTarget = other; target = other.Position; }
+                            }
+                        }
+
+                        var capturedSteve = steveTarget;
+                        var capturedMob = mobEntity;
+                        mobEntity.OnAttack = capturedSteve is MobEntity steve
+                            ? () => steve.Damage(capturedMob.AttackDamage, capturedMob.Position.X, capturedMob.Position.Z, true)
+                            : null;
+                        mobEntity.SetChaseTarget(target);
+                    }
+                    else
+                    {
+                        mobEntity.SetChaseTarget(null);
+                        mobEntity.OnAttack = null;
+                    }
+
                     mobEntity.Update(deltaSeconds, _chunkManager);
 
                     if (mobEntity.Removed)
@@ -184,6 +251,24 @@ namespace CubeApp
                 }
             }
 
+            // Infdev monster spawning: same cadence, but zombies only appear in darkness and are
+            // strongly biased toward caves (SpawnerMonsters). The light gate uses the current
+            // sky-light subtraction so they pour out of caves all day and over the surface at night.
+            if (enableSpawning && _monsterSpawner != null && _skylightSubtractedFn != null)
+            {
+                _monsterSpawnAccumulator += deltaSeconds;
+                if (_monsterSpawnAccumulator >= SpawnIntervalBase)
+                {
+                    _monsterSpawnAccumulator = 0;
+                    int skylight = _skylightSubtractedFn();
+                    for (int pass = 0; pass < 10; pass++)
+                    {
+                        _monsterSpawner.TrySpawn(_chunkManager, playerPosition, _rand,
+                            (x, y, z) => _chunkManager.GetSkyLightEstimate(x, y, z, skylight));
+                    }
+                }
+            }
+
             // Build render data
             _mobRenderData.Clear();
             foreach (var mob in _mobs)
@@ -195,6 +280,12 @@ namespace CubeApp
         // Despawn (1.12-style but tuned so natural spawns don't instantly vanish): instant despawn
         // beyond 128 blocks; between 64 and 128 blocks, despawn after 600 idle ticks. The natural
         // spawn ring is 24-32 blocks, so mobs that wander a little don't cross the idle threshold.
+        private static double DistSq(Point3D a, Point3D b)
+        {
+            double dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
+            return dx * dx + dy * dy + dz * dz;
+        }
+
         private bool ShouldDespawn(MobEntity mob, Point3D playerPosition)
         {
             double dx = mob.Position.X - playerPosition.X;
@@ -393,6 +484,11 @@ namespace CubeApp
             Height = definition.Height;
             MaxHealth = definition.MaxHealth;
             Health = MaxHealth;
+            Hostile = definition.Hostile;
+            AttackDamage = definition.AttackDamage;
+            AggroRange = definition.AggroRange;
+            AttackRange = definition.AttackRange;
+            AttackCooldown = definition.AttackCooldown;
         }
 
         public string MobId => _definition.Id;
@@ -400,6 +496,37 @@ namespace CubeApp
         // The renderer routes render data to the per-type MobModel entry by this name, so it MUST
         // be the registry id (e.g. "zombie"), not the class name "genericmobentity".
         public override string MobTypeName => _definition.Id;
+
+        // Infdev EntityZombie.onLivingUpdate: in daytime, if the sky is visible above and the
+        // brightness is high enough, the zombie periodically catches fire (fire=300).
+        private float _burnAccumulator;
+
+        protected override void UpdateEnvironment(float dt, ChunkManager manager)
+        {
+            if (!_definition.BurnsInDaylight) return;
+            if (_dead) return;
+            if (SkylightSource == null) return;
+
+            int skylight = SkylightSource();
+            if (skylight >= 4) return; // not daytime (Infdev isDaytime: skylightSubtracted < 4)
+
+            // canBlockSeeTheSky: nothing opaque above within the probe range.
+            for (int wy = (int)Math.Floor(Position.Y) + 1; wy <= (int)Math.Floor(Position.Y) + 8; wy++)
+            {
+                int id = manager.GetBlockAt((int)Math.Floor(Position.X), wy, (int)Math.Floor(Position.Z));
+                if (id != BlockRegistry.AirId && BlockRegistry.IsOpaque(id)) return;
+            }
+
+            _burnAccumulator += dt;
+            // Infdev: rand.nextFloat() * 30 < (brightness - 0.4) * 2  -> roughly 1/20s at noon.
+            float brightness = Math.Max(0f, (15f - skylight) / 15f);
+            float chancePerSecond = ((brightness - 0.4f) * 2f) / 30f;
+            if (_burnAccumulator > 1f / Math.Max(0.001f, chancePerSecond))
+            {
+                _burnAccumulator = 0f;
+                Damage(1, Position.X, Position.Z, false);
+            }
+        }
 
         public bool LoadModel(GraphicsDevice graphicsDevice)
         {
