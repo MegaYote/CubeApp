@@ -4,42 +4,44 @@ using System.Collections.Generic;
 using System.IO;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
+using Silk.NET.OpenAL;
 
 namespace CubeApp
 {
     /// <summary>
-    /// Minecraft 1.12-style sound manager (SoundManager.java), ported to NAudio.
+    /// A faithful port of Minecraft 1.12's SoundManager (SoundManager.java) onto OpenAL - the SAME
+    /// backend MC uses (paulscode LibraryLWJGLOpenAL). OpenAL gives every sound its own hardware
+    /// source that plays once and transitions to Stopped on its own: no custom mixer, no shared
+    /// mutable voice, no stuck-buffer loop.
     ///
-    /// Key 1.12 ideas preserved:
-    ///  - playSound() creates an ISOLATED source per play (tracked by a unique channel id), then
-    ///    updateAllSounds() actively REMOVES sources once they stop - no shared mutable voice that
-    ///    can get stuck looping.
+    /// 1.12 structure preserved:
+    ///  - playSound() creates an isolated source per play (unique channel), applies volume/pitch
+    ///    and position, plays it.
+    ///  - updateAllSounds() every tick polls each source; when OpenAL reports Stopped, the source
+    ///    is deleted and its slot freed.
     ///  - Volume = clamp(sound.volume * categoryVolume, 0, 1); pitch = clamp(0.5, 2.0).
-    ///  - Positioned sounds attenuate linearly over 16 blocks (range scales with volume > 1).
+    ///  - Positioned sounds use OpenAL's native linear rolloff (16-block reference distance).
     ///  - Sound categories (master/blocks/ambient) with independent volumes.
     ///
-    /// Zero-lag by construction: all audio is decoded to PCM once at startup; playback+mixing runs
-    /// on NAudio's background thread; the game thread only enqueues tiny play requests.
+    /// Decoding still happens once at startup (NAudio -> PCM), then the PCM is uploaded into an
+    /// OpenAL buffer. The game thread only enqueues tiny play requests.
     /// </summary>
     public sealed class SoundEngine : IDisposable
     {
         private const int DefaultSampleRate = 44100;
         private const int MaxSources = 32;          // 1.12-style source cap
-        private const float AttenuationRange = 16f; // MC: linear attenuation over 16 blocks
+        private const float AttenuationRange = 16f; // MC: linear attenuation reference distance
 
         public enum SoundCategory { Master, Blocks, Ambient }
 
-        private sealed class Source
+        private sealed class Channel
         {
-            public float[] Samples = Array.Empty<float>();
-            public int Channels = 1;
-            public int Position;          // current frame
-            public float BaseVolume;      // requested volume * sound volume
-            public float Pitch = 1f;
-            public bool Active;
-            public float X, Y, Z;         // world position for attenuation
-            public bool Positioned;       // true => apply distance attenuation
-            public bool PendingStop;      // set when the play should be cut
+            public uint Source;      // OpenAL source handle
+            public uint Buffer;      // OpenAL buffer handle
+            public bool InUse;
+            public bool Positioned;
+            public float BaseVolume;
+            public float X, Y, Z;
         }
 
         private readonly struct PlayRequest
@@ -49,116 +51,76 @@ namespace CubeApp
             public readonly float Pitch;
             public readonly float X, Y, Z;
             public readonly bool Positioned;
-            public PlayRequest(string name, float volume, float pitch, float x, float y, float z, bool positioned)
+            public readonly SoundCategory Category;
+            public PlayRequest(string name, float volume, float pitch, float x, float y, float z, bool positioned, SoundCategory category)
             {
-                Name = name; Volume = volume; Pitch = pitch; X = x; Y = y; Z = z; Positioned = positioned;
+                Name = name; Volume = volume; Pitch = pitch; X = x; Y = y; Z = z; Positioned = positioned; Category = category;
             }
         }
 
-        // Mixes all active sources. Runs on NAudio's playback thread; never touches game state.
-        private sealed class SoundMixer : ISampleProvider
-        {
-            private readonly SoundEngine _owner;
-
-            public WaveFormat WaveFormat { get; }
-
-            public SoundMixer(SoundEngine owner, int sampleRate)
-            {
-                _owner = owner;
-                WaveFormat = WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, 2);
-            }
-
-            public int Read(float[] buffer, int offset, int count)
-            {
-                _owner.DrainQueue();
-                Array.Clear(buffer, offset, count);
-
-                int frames = count / 2;
-                var sources = _owner._sources;
-                for (int i = 0; i < sources.Length; i++)
-                {
-                    var s = sources[i];
-                    if (!s.Active || s.PendingStop) continue;
-
-                    // Distance attenuation (linear over 16 blocks), MC-style.
-                    float gain = s.BaseVolume;
-                    if (s.Positioned)
-                    {
-                        float dx = s.X - _owner._listenerX;
-                        float dy = s.Y - _owner._listenerY;
-                        float dz = s.Z - _owner._listenerZ;
-                        float dist = MathF.Sqrt(dx * dx + dy * dy + dz * dz);
-                        float range = AttenuationRange * Math.Max(1f, s.BaseVolume);
-                        if (dist >= range) { s.PendingStop = true; continue; }
-                        gain = s.BaseVolume * (1f - dist / range);
-                    }
-                    gain = Math.Clamp(gain, 0f, 1f);
-
-                    int totalFrames = s.Samples.Length / s.Channels;
-                    int framesLeft = totalFrames - s.Position;
-                    int mixFrames = Math.Min(frames, framesLeft);
-                    float vol = gain;
-
-                    for (int f = 0; f < mixFrames; f++)
-                    {
-                        int si = (s.Position + f) * s.Channels;
-                        int o = offset + f * 2;
-                        if (s.Channels == 2)
-                        {
-                            buffer[o] += s.Samples[si] * vol;
-                            buffer[o + 1] += s.Samples[si + 1] * vol;
-                        }
-                        else
-                        {
-                            float v = s.Samples[si] * vol;
-                            buffer[o] += v;
-                            buffer[o + 1] += v;
-                        }
-                    }
-
-                    s.Position += mixFrames;
-                    if (s.Position >= totalFrames)
-                    {
-                        s.PendingStop = true;
-                    }
-                }
-                return count;
-            }
-        }
-
+        private readonly AL _al;
+        private readonly ALContext _alc;
+        private unsafe Device* _device;
+        private unsafe Context* _context;
         private readonly ConcurrentQueue<PlayRequest> _queue = new();
-        private readonly Source[] _sources;
-        private readonly WaveOutEvent _output;
-        private readonly int _sampleRate;
+        private readonly Channel[] _channels;
+        private readonly Dictionary<string, (uint Buffer, int Channels, int SampleRate)> _clips = new();
         private bool _disposed;
-
-        private readonly Dictionary<string, (float[] Samples, int Channels)> _clips = new();
 
         private float _masterVolume = 1f;
         private float _blocksVolume = 1f;
         private float _ambientVolume = 1f;
-        private float _listenerX, _listenerY, _listenerZ;
 
         public SoundEngine(int sampleRate = DefaultSampleRate)
         {
-            _sampleRate = sampleRate;
-            _sources = new Source[MaxSources];
-            for (int i = 0; i < MaxSources; i++)
+            _al = AL.GetApi();
+            _alc = ALContext.GetApi();
+            unsafe
             {
-                _sources[i] = new Source();
+                _device = _alc.OpenDevice(null);
+                if (_device == null)
+                {
+                    _device = _alc.OpenDevice("OpenAL Soft");
+                }
+                if (_device == null)
+                {
+                    throw new InvalidOperationException("OpenAL: no audio device available");
+                }
+                _context = _alc.CreateContext(_device, null);
+                _alc.MakeContextCurrent(_context);
+
+                // Listener at the origin, facing -Z (MC convention).
+                _al.SetListenerProperty(ListenerVector3.Position, 0f, 0f, 0f);
             }
 
-            _output = new WaveOutEvent();
-            _output.Init(new SoundMixer(this, sampleRate));
-            _output.Play();
+            _channels = new Channel[MaxSources];
+            unsafe
+            {
+                for (int i = 0; i < MaxSources; i++)
+                {
+                    _channels[i] = new Channel();
+                    uint src = 0;
+                    _al.GenSources(1, &src);
+                    _channels[i].Source = src;
+                    uint buf = 0;
+                    _al.GenBuffers(1, &buf);
+                    _channels[i].Buffer = buf;
+                    // Never loop: each source plays its clip exactly once, then goes Stopped.
+                    _al.SetSourceProperty(src, SourceBoolean.Looping, false);
+                    // Native linear rolloff over the MC attenuation range.
+                    _al.SetSourceProperty(src, SourceFloat.ReferenceDistance, AttenuationRange);
+                    _al.SetSourceProperty(src, SourceFloat.RolloffFactor, 1f);
+                    _al.SetSourceProperty(src, SourceFloat.MaxDistance, 64f);
+                }
+            }
         }
 
         // ------------------------------------------------------------------
         // Loading (startup only)
         // ------------------------------------------------------------------
 
-        /// <summary>Decodes a sound file (mp3/wav/ogg via NAudio) to PCM and registers it by name.
-        /// Called once at startup; never during gameplay.</summary>
+        /// <summary>Decodes a sound file (mp3/wav via NAudio) to PCM, uploads it into an OpenAL
+        /// buffer, and registers it by name. Called once at startup.</summary>
         public bool Register(string name, byte[] audioBytes)
         {
             if (_disposed || string.IsNullOrEmpty(name) || audioBytes == null || audioBytes.Length == 0)
@@ -192,9 +154,9 @@ namespace CubeApp
             int sourceRate = reader.WaveFormat.SampleRate;
 
             ISampleProvider src = reader;
-            if (sourceRate != _sampleRate)
+            if (sourceRate != DefaultSampleRate)
             {
-                src = new WdlResamplingSampleProvider(reader, _sampleRate);
+                src = new WdlResamplingSampleProvider(reader, DefaultSampleRate);
             }
 
             var list = new List<float>(4096);
@@ -219,7 +181,27 @@ namespace CubeApp
                 for (int i = 0; i < list.Count; i++) list[i] *= scale;
             }
 
-            _clips[name] = (list.ToArray(), channels);
+            // Convert to 16-bit PCM for OpenAL and upload into a fresh buffer.
+            uint buffer = 0;
+            unsafe
+            {
+                _al.GenBuffers(1, &buffer);
+                var pcm = new short[list.Count];
+                for (int i = 0; i < list.Count; i++)
+                {
+                    float v = list[i] * 32767f;
+                    if (v > 32767f) v = 32767f;
+                    else if (v < -32768f) v = -32768f;
+                    pcm[i] = (short)v;
+                }
+                BufferFormat fmt = channels == 2 ? BufferFormat.Stereo16 : BufferFormat.Mono16;
+                fixed (short* p = pcm)
+                {
+                    _al.BufferData(buffer, fmt, p, pcm.Length * 2, DefaultSampleRate);
+                }
+            }
+
+            _clips[name] = (buffer, channels, DefaultSampleRate);
             return true;
         }
 
@@ -261,85 +243,97 @@ namespace CubeApp
         public float BlocksVolume { get => _blocksVolume; set => _blocksVolume = Math.Clamp(value, 0f, 1f); }
         public float AmbientVolume { get => _ambientVolume; set => _ambientVolume = Math.Clamp(value, 0f, 1f); }
 
-        /// <summary>Updates the listener (camera) position, used for positional attenuation.</summary>
+        /// <summary>Updates the listener (camera) position/orientation (MC's setListener).</summary>
         public void UpdateListener(float x, float y, float z)
         {
-            _listenerX = x;
-            _listenerY = y;
-            _listenerZ = z;
+            if (_disposed) return;
+            _al.SetListenerProperty(ListenerVector3.Position, x, y, z);
         }
 
-        /// <summary>Non-positioned play (e.g. menu clicks). Volume = clamp(v * categoryVol, 0, 1).</summary>
+        /// <summary>Non-positioned play (e.g. menu clicks).</summary>
         public void Play(string name, float volume = 1f, SoundCategory category = SoundCategory.Blocks, float pitch = 1f)
         {
             if (_disposed || !_clips.ContainsKey(name)) return;
-            float catVol = category switch
-            {
-                SoundCategory.Blocks => _blocksVolume,
-                SoundCategory.Ambient => _ambientVolume,
-                _ => 1f,
-            };
-            _queue.Enqueue(new PlayRequest(name, Math.Clamp(volume * catVol * _masterVolume, 0f, 1f),
-                Math.Clamp(pitch, 0.5f, 2f), 0f, 0f, 0f, false));
+            _queue.Enqueue(new PlayRequest(name, volume, pitch, 0f, 0f, 0f, false, category));
         }
 
-        /// <summary>Positioned play with distance attenuation (MC's PositionedSoundRecord).</summary>
+        /// <summary>Positioned play with native OpenAL attenuation (MC's PositionedSoundRecord).</summary>
         public void PlayAt(string name, float x, float y, float z, float volume = 1f, SoundCategory category = SoundCategory.Blocks, float pitch = 1f)
         {
             if (_disposed || !_clips.ContainsKey(name)) return;
-            float catVol = category switch
-            {
-                SoundCategory.Blocks => _blocksVolume,
-                SoundCategory.Ambient => _ambientVolume,
-                _ => 1f,
-            };
-            _queue.Enqueue(new PlayRequest(name, Math.Clamp(volume * catVol * _masterVolume, 0f, 1f),
-                Math.Clamp(pitch, 0.5f, 2f), x, y, z, true));
+            _queue.Enqueue(new PlayRequest(name, volume, pitch, x, y, z, true, category));
         }
 
-        /// <summary>Removes finished sources and cuts ones that reached their end (1.12's
-        /// updateAllSounds cleanup). Call every frame/tick from the game thread.</summary>
+        /// <summary>1.12's updateAllSounds: drain pending plays, poll every source, delete the
+        /// finished ones and free their slots. Call every tick from the game thread.</summary>
         public void Update()
         {
-            // Cheap: stop any source flagged as finished, freeing its slot.
-            for (int i = 0; i < _sources.Length; i++)
+            if (_disposed) return;
+            DrainQueue();
+            for (int i = 0; i < _channels.Length; i++)
             {
-                if (_sources[i].Active && _sources[i].PendingStop)
+                var ch = _channels[i];
+                if (!ch.InUse) continue;
+
+                unsafe
                 {
-                    _sources[i].Active = false;
-                    _sources[i].PendingStop = false;
+                    int state = (int)SourceState.Playing;
+                    _al.GetSourceProperty(ch.Source, GetSourceInteger.SourceState, &state);
+                    if (state != (int)SourceState.Playing && state != (int)SourceState.Paused)
+                    {
+                        // 1.12: removeSource + free the slot.
+                        _al.SourceStop(ch.Source);
+                        ch.InUse = false;
+                    }
                 }
             }
         }
 
-        // Runs on the audio thread inside Read. Assigns the next free source round-robin.
+        // Drains queued play requests into OpenAL sources. Runs on the game thread inside Update()
+        // so all OpenAL calls happen on one thread.
         private void DrainQueue()
         {
             while (_queue.TryDequeue(out var req))
             {
                 if (!_clips.TryGetValue(req.Name, out var clip)) continue;
 
-                Source s = FindFreeSource();
-                if (s == null) continue; // source cap hit - 1.12 drops new plays when full
-                s.Samples = clip.Samples;
-                s.Channels = clip.Channels;
-                s.Position = 0;
-                s.BaseVolume = req.Volume;
-                s.Pitch = req.Pitch;
-                s.X = req.X; s.Y = req.Y; s.Z = req.Z;
-                s.Positioned = req.Positioned;
-                s.PendingStop = false;
-                s.Active = true;
+                Channel ch = FindFreeChannel();
+                if (ch == null) continue; // source cap hit - 1.12 drops new plays when full
+
+                float catVol = req.Category switch
+                {
+                    SoundCategory.Blocks => _blocksVolume,
+                    SoundCategory.Ambient => _ambientVolume,
+                    _ => 1f,
+                };
+                float vol = Math.Clamp(req.Volume * catVol * _masterVolume, 0f, 1f);
+                if (vol <= 0f) continue;
+
+                unsafe
+                {
+                    _al.SourceStop(ch.Source);
+                    _al.SetSourceProperty(ch.Source, SourceInteger.Buffer, (int)clip.Buffer);
+                    _al.SetSourceProperty(ch.Source, SourceFloat.Gain, vol);
+                    _al.SetSourceProperty(ch.Source, SourceFloat.Pitch, Math.Clamp(req.Pitch, 0.5f, 2f));
+                    _al.SetSourceProperty(ch.Source, SourceBoolean.SourceRelative, req.Positioned ? false : true);
+                    _al.SetSourceProperty(ch.Source, SourceVector3.Position, req.X, req.Y, req.Z);
+                    _al.SourcePlay(ch.Source);
+                }
+
+                ch.InUse = true;
+                ch.Positioned = req.Positioned;
+                ch.BaseVolume = vol;
+                ch.X = req.X; ch.Y = req.Y; ch.Z = req.Z;
             }
         }
 
-        private Source FindFreeSource()
+        private Channel FindFreeChannel()
         {
-            for (int i = 0; i < _sources.Length; i++)
+            for (int i = 0; i < _channels.Length; i++)
             {
-                if (!_sources[i].Active)
+                if (!_channels[i].InUse)
                 {
-                    return _sources[i];
+                    return _channels[i];
                 }
             }
             return null;
@@ -347,20 +341,32 @@ namespace CubeApp
 
         public bool Enabled
         {
-            get => _output.PlaybackState != PlaybackState.Stopped;
-            set
-            {
-                if (value && _output.PlaybackState == PlaybackState.Stopped) _output.Play();
-                else if (!value && _output.PlaybackState != PlaybackState.Stopped) _output.Stop();
-            }
+            get => !_disposed;
+            set { /* OpenAL has no master on/off here; volume 0 is the MC way to mute */ }
         }
 
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
-            try { _output.Stop(); } catch { }
-            try { _output.Dispose(); } catch { }
+            unsafe
+            {
+                for (int i = 0; i < _channels.Length; i++)
+                {
+                    uint src = _channels[i].Source;
+                    uint buf = _channels[i].Buffer;
+                    _al.SourceStop(src);
+                    _al.DeleteSources(1, &src);
+                    _al.DeleteBuffers(1, &buf);
+                }
+                foreach (var kv in _clips)
+                {
+                    uint b = kv.Value.Buffer;
+                    _al.DeleteBuffers(1, &b);
+                }
+                _alc.DestroyContext(_context);
+                _alc.CloseDevice(_device);
+            }
         }
     }
 }
