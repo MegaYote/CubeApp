@@ -3610,7 +3610,10 @@ void main() {
                     uint pack3 = shadeByte | (255u << 8); // opaque
 
                     var src = faces[nFace];
-                    // The wall sits exactly on the shared boundary at the full cell size.
+                    // The wall sits exactly on the shared boundary at the full cell size. We're
+                    // viewing the BACK of the neighbor's face from inside the mined cell, so the
+                    // texture reads upside-down/mirrored vs an outer face - flip V (the C++
+                    // renderAdjacentFaces does the same: vBase = uv.w, negative vSize).
                     for (int c = 0; c < 4; c++)
                     {
                         float u = src[c * 3 + 0]; // 0..1
@@ -3620,7 +3623,7 @@ void main() {
                         float y = by + v;
                         float z = bz + w;
                         float du = (c == 1 || c == 2) ? 0.999f : 0f;
-                        float dv = (c == 2 || c == 3) ? 0.999f : 0f;
+                        float dv = (c == 0 || c == 1) ? 0.999f : 0f; // flipped V
                         uint duFixed = (uint)Math.Clamp((int)Math.Round(du * 256.0), 0, 0xFFFF);
                         uint dvFixed = (uint)Math.Clamp((int)Math.Round(dv * 256.0), 0, 0xFFFF);
                         uint pack1 = (duFixed << 16) | dvFixed;
