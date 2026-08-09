@@ -285,6 +285,27 @@ namespace CubeApp
             // Special-solid pass: slabs and stairs render as partial boxes (not full cubes).
             EmitSpecialFaces(chunk, chunkLookup, lighting, mesh);
 
+            // Cache the per-block combined light for entity sampling (mobs read the light of the
+            // block they stand on). Reuses the flood fill already computed for faces - no extra
+            // lighting pass. Written under the same lock as MeshFaces.
+            lock (chunk.MeshLock)
+            {
+                var grid = chunk.LightGrid;
+                if (grid == null || grid.Length != chunk.RawBlocks.Length) grid = new byte[chunk.RawBlocks.Length];
+                for (int x = 0; x < width; x++)
+                {
+                    for (int z = 0; z < depth; z++)
+                    {
+                        for (int y = 0; y < height; y++)
+                        {
+                            int idx = (x * depth + z) * height + y;
+                            grid[idx] = (byte)lighting.GetLight(chunk.OriginX + x, y, chunk.OriginZ + z);
+                        }
+                    }
+                }
+                chunk.LightGrid = grid;
+            }
+
             return mesh;
         }
 

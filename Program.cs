@@ -170,9 +170,15 @@ namespace CubeApp
             switch (_loadPhase)
             {
                 case 0:
-                    // Prepare spawn: find a safe spot (generates the first ring of chunks). When
-                    // loading a save the position was already restored - just use it.
-                    if (!_loadSkipSpawn) World.PlaceCameraAtSafeSpawn();
+                    // Prepare spawn: pick the world's default spawn (random safe grass/sand spot near
+                    // the origin) then place the camera there. When loading a save the position was
+                    // already restored - just use it (SpawnPoint stays null, respawn falls back to
+                    // the restored position's search).
+                    if (!_loadSkipSpawn)
+                    {
+                        World.SelectWorldSpawn();
+                        World.PlaceCameraAtSafeSpawn();
+                    }
                     _lastMeshPosition = World.PlayerPosition;
                     _loadPhase = 1;
                     break;
@@ -308,6 +314,7 @@ namespace CubeApp
             World.PlaceCameraAtSafeSpawn();
             World.LocalPlayer.Health = 10;
             World.LocalPlayer.DeathCause = DeathCause.Unknown;
+            World.LocalPlayer.DeathTimer = 0f;
             World.LocalPlayer.TimeSinceDamage = 0f;
             World.LocalPlayer.RegenAccumulator = 0f;
             ResumeToPlaying();
@@ -843,7 +850,10 @@ namespace CubeApp
 
         private void StepSimulation(TickInputState tickInput, float deltaSeconds)
         {
-            if (screen != GameScreen.Playing || World == null) return;
+            // The world only pauses for the ESC pause menu (singleplayer). The death screen keeps
+            // the simulation running - the environment, mobs and time all continue while dead.
+            if (screen == GameScreen.Paused || screen != GameScreen.Playing && screen != GameScreen.Dead) return;
+            if (World == null) return;
             UpdateNetworking(tickInput, deltaSeconds);
             World.StepSimulation(tickInput, deltaSeconds);
 
@@ -1428,11 +1438,13 @@ namespace CubeApp
             var w = World;
             var feet = new Point3D(w.PlayerPosition.X, w.PlayerPosition.Y - GameWorld.EyeHeight, w.PlayerPosition.Z);
             float yawRad = w.PlayerYaw * (float)Math.PI / 180f;
+            bool dead = w.LocalPlayer.Health <= 0;
             return new MobRenderData(
                 "player", feet, yawRad, 0f,
-                w.PlayerWalkPhase, w.PlayerWalkAmount, 0f, 0f, 0f,
+                w.PlayerWalkPhase, dead ? 0f : w.PlayerWalkAmount, 0f, 0f, 0f,
                 (float)w.PlayerVelocity.Y, w.PlayerGrounded,
-                false, 0f, 0f, 0f);
+                dead, dead ? Math.Clamp(w.LocalPlayer.DeathTimer / 0.5f, 0f, 1f) : 0f,
+                w.LocalPlayer.DeathRollDir, 0f);
         }
 
         /// <summary>

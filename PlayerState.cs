@@ -25,6 +25,10 @@ namespace CubeApp
         /// <summary>How the player last died. Set when health reaches 0; the death screen picks its
         /// message from this. Falls back to generic when no specific cause is known.</summary>
         public DeathCause DeathCause;
+        /// <summary>Time since death began (seconds); drives the death roll animation. 0 = alive.</summary>
+        public float DeathTimer;
+        /// <summary>Direction the corpse rolls on death (+1/-1), matching mob death rolls.</summary>
+        public float DeathRollDir = 1f;
         /// <summary>Seconds since the player last took damage. Healing waits for the delay, then
         /// restores one heart slice per regen interval.</summary>
         public float TimeSinceDamage;

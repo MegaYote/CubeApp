@@ -477,6 +477,10 @@ namespace CubeApp.Renderer
         private readonly float[] _cullPlaneFloats = new float[24];
         private bool _gpuCullDataDirty = true;
 
+        // Per-instance brightness multiplier (0..1) set before each mob write; combines the global
+        // night dim with the mob's position-specific block light (GetMobLight).
+        private float _entityLight = 1f;
+
         // Pending GPU-side buffer growth copies (old -> new, recorded after cl.Begin()).
         private readonly List<(DeviceBuffer Old, DeviceBuffer New, uint SizeBytes)> _pendingBufferCopies = new();
 
@@ -3776,6 +3780,35 @@ void main() {
             }
         }
 
+        // Returns the brightness multiplier (0..1) at a world position using the SAME baked light
+        // rules as block faces: ChunkLighting.Brightness(light) where light comes from the chunk's
+        // cached per-block LightGrid (filled by the mesher's existing flood fill). This is a plain
+        // array lookup - no lighting rebuild at render time. Falls back to the global _nightDim
+        // when the chunk isn't loaded / hasn't meshed yet.
+        private float GetMobLight(double x, double y, double z)
+        {
+            if (_chunkManager == null) return _nightDim;
+
+            int layer = ChunkManager.LayerForWorldY((int)Math.Floor(y));
+            int cx = (int)Math.Floor(x / (double)ChunkManager.ChunkSize);
+            int cz = (int)Math.Floor(z / (double)ChunkManager.ChunkSize);
+            if (!_chunkManager.TryGetLoadedChunk(new ChunkCoordinates(layer, cx, cz), out var chunk) || chunk.LightGrid == null)
+            {
+                return _nightDim;
+            }
+
+            int localX = (int)Math.Floor(x) - chunk.OriginX;
+            int localY = (int)Math.Floor(y) - chunk.OriginY;
+            int localZ = (int)Math.Floor(z) - chunk.OriginZ;
+            if (localX < 0 || localX >= chunk.Width || localY < 0 || localY >= chunk.Height || localZ < 0 || localZ >= chunk.Depth)
+            {
+                return _nightDim;
+            }
+
+            int idx = (localX * chunk.Depth + localZ) * chunk.Height + localY;
+            return ChunkLighting.Brightness(chunk.LightGrid[idx]);
+        }
+
         private void DrawShrinkCube(CommandList cl)
         {
             if (_pipeline == null || _shrinkCubeVertexBuffer == null || _shrinkCubeIndexBuffer == null) return;
@@ -4140,6 +4173,7 @@ void main() {
             ushort baseVertex = 0;
             foreach (var inst in instances)
             {
+                _entityLight = GetMobLight(inst.Position.X, inst.Position.Y, inst.Position.Z);
                 WriteDuck(inst, ref vf, ref ii, ref baseVertex);
             }
 
@@ -4227,9 +4261,9 @@ void main() {
             _duckVertexScratch[vf++] = pz + fz;
                     _duckVertexScratch[vf++] = v.U;
                     _duckVertexScratch[vf++] = v.V;
-                    _duckVertexScratch[vf++] = v.Shade * _nightDim;
-                    _duckVertexScratch[vf++] = v.Shade * gbMul * _nightDim;
-                    _duckVertexScratch[vf++] = v.Shade * gbMul * _nightDim;
+                    _duckVertexScratch[vf++] = v.Shade * _nightDim * _entityLight;
+                    _duckVertexScratch[vf++] = v.Shade * gbMul * _nightDim * _entityLight;
+                    _duckVertexScratch[vf++] = v.Shade * gbMul * _nightDim * _entityLight;
                     _duckVertexScratch[vf++] = 1f;
                 }
 
@@ -4912,6 +4946,7 @@ void main() {
             ushort baseVertex = 0;
             foreach (var inst in instances)
             {
+                _entityLight = GetMobLight(inst.Position.X, inst.Position.Y, inst.Position.Z);
                 WritePlayer(inst, ref vf, ref ii, ref baseVertex);
             }
 
@@ -4955,10 +4990,13 @@ void main() {
                 {
                     // The mob's animation clock advances only while it actually walks, and AnimBlend
                     // eases back to 0 when idle - so the GLB trot plays while moving and the mob
-                    // returns to its neutral stance when it stops (no frozen mid-stride).
+                    // returns to its neutral stance when it stops (no frozen mid-stride). The mob is
+                    // lit by its position (same block-light rules as terrain), multiplied by the
+                    // global night dim.
+                    float mobLight = _nightDim * GetMobLight(inst.Position.X, inst.Position.Y, inst.Position.Z);
                     entry.Model.WriteInstance(entry.VertexScratch, ref vf, entry.IndexScratch, ref ii, ref baseVertex,
                         (float)inst.Position.X, (float)inst.Position.Y, (float)inst.Position.Z, inst.Yaw,
-                        inst.AnimTime, inst.AnimBlend, _nightDim, inst.HeadYawLocal);
+                        inst.AnimTime, inst.AnimBlend, mobLight, inst.HeadYawLocal);
                 }
 
                 EnsureMobBuffers(entry, (uint)(totalVertexFloats * sizeof(float)), (uint)(totalIndices * sizeof(ushort)));
@@ -5054,9 +5092,9 @@ void main() {
                     _playerVertexScratch[vf++] = pz + fz;
                     _playerVertexScratch[vf++] = v.U;
                     _playerVertexScratch[vf++] = v.V;
-                    _playerVertexScratch[vf++] = v.Shade * _nightDim;
-                    _playerVertexScratch[vf++] = v.Shade * gbMul * _nightDim;
-                    _playerVertexScratch[vf++] = v.Shade * gbMul * _nightDim;
+                    _playerVertexScratch[vf++] = v.Shade * _nightDim * _entityLight;
+                    _playerVertexScratch[vf++] = v.Shade * gbMul * _nightDim * _entityLight;
+                    _playerVertexScratch[vf++] = v.Shade * gbMul * _nightDim * _entityLight;
                     _playerVertexScratch[vf++] = 1f;
                 }
 
@@ -5181,12 +5219,31 @@ void main() {
                 return;
             }
 
-            // The title/create screens get the dirt background; the pause menu just dims the
-            // frozen world behind it with a translucent gray wash.
+            // The title/create screens get the dirt background; the pause and death menus just dim
+            // the frozen world behind them with a translucent wash (no tiled image).
             if (m.Screen == GameScreen.Paused)
             {
                 uint tint = ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.45f));
                 ImGui.GetBackgroundDrawList().AddRectFilled(Vector2.Zero, size, tint);
+            }
+            else if (m.Screen == GameScreen.Dead)
+            {
+                // Death screen: a red gradient over the player's existing camera view. Built from
+                // stacked translucent rects (more opaque toward the bottom) so the frozen world
+                // shows through dimly rather than being hidden behind a tiled image.
+                var bg = ImGui.GetBackgroundDrawList();
+                int bands = 24;
+                for (int i = 0; i < bands; i++)
+                {
+                    float t0 = (float)i / bands;
+                    float t1 = (float)(i + 1) / bands;
+                    float alpha = 0.15f + 0.45f * t0; // darker toward the bottom
+                    uint c = ImGui.ColorConvertFloat4ToU32(new Vector4(0.35f, 0f, 0f, alpha));
+                    bg.AddRectFilled(
+                        new Vector2(0, size.Y * t0),
+                        new Vector2(size.X, size.Y * t1),
+                        c);
+                }
             }
             else
             {
@@ -5356,11 +5413,7 @@ void main() {
             }
             else if (m.Screen == GameScreen.Dead)
             {
-                // Death screen: dark red wash over the frozen world + a respawn button. The message
-                // depends on HOW the player died; only the debug-self cause has a message so far.
-                uint deathTint = ImGui.ColorConvertFloat4ToU32(new Vector4(0.15f, 0f, 0f, 0.55f));
-                ImGui.GetBackgroundDrawList().AddRectFilled(Vector2.Zero, size, deathTint);
-
+                // Death screen text: the red gradient over the frozen camera was drawn above.
                 string deathMessage = _hud.DeathCause switch
                 {
                     DeathCause.DebugSelf => "Your heart gave out...",
@@ -6184,7 +6237,12 @@ void main() {
             // precision healthy at the wider range (error ~ far^2 / near / 2^24).
             float chunkEnclosure = (float)(chunkRadius * ChunkManager.ChunkSize * Math.Sqrt(2.0));
             _farPlane = Math.Max(700f, chunkEnclosure);
-            _nearPlane = 0.3f;
+            // Near plane 0.3 -> 0.1: the player's collision radius is 0.30, so at maximum approach
+            // the eye sits exactly 0.30 from a block face. A 0.3 near plane puts that face AT the
+            // clip plane and it vanishes (you see through the block you're touching). 0.1 keeps the
+            // closest face inside the clip volume while depth precision at 700 blocks stays healthy
+            // (error ~ far^2 / near / 2^24 ~ 0.29 at max range - no distant z-fighting).
+            _nearPlane = 0.1f;
             // 1.12 fog: full fog at the render distance (chunkRadius * 16 blocks), linear from 0.
             _fogEnd = chunkRadius * ChunkManager.ChunkSize;
         }

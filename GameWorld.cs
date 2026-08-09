@@ -44,6 +44,13 @@ namespace CubeApp
         // ---- local player state ----
         public PlayerState LocalPlayer = new();
 
+        /// <summary>
+        /// The world's default spawn point (player EYE position, matching LocalPlayer.Position).
+        /// Chosen once when a world starts (random safe spot near the origin on grass/sand); the
+        /// camera returns here on respawn.
+        /// </summary>
+        public Point3D? SpawnPoint;
+
         // Convenience forwards for the presentation layer (Program.cs) so the local player's
         // common fields read/write exactly like the old standalone fields.
         public Point3D PlayerPosition { get => LocalPlayer.Position; set => LocalPlayer.Position = value; }
@@ -160,10 +167,73 @@ namespace CubeApp
 
         public void PlaceCameraAtSafeSpawn()
         {
-            var spawn = FindSafeSpawnPosition();
-            if (spawn.HasValue) LocalPlayer.Position = spawn.Value;
+            if (SpawnPoint.HasValue)
+            {
+                LocalPlayer.Position = SpawnPoint.Value;
+            }
+            else
+            {
+                var spawn = FindSafeSpawnPosition();
+                LocalPlayer.Position = spawn ?? new Point3D(0.5, 1.0 + EyeHeight, 0.5);
+            }
             LocalPlayer.Velocity = new Point3D(0, 0, 0);
             LocalPlayer.Grounded = true;
+        }
+
+        /// <summary>
+        /// Picks the world's default spawn point: a RANDOM spot within a ring near the world origin
+        /// whose surface block is grass, grass_spreading, or sand, above sea level, with clear air
+        /// for the player to stand in. Called once before the player enters the world; every respawn
+        /// returns here. SpawnPoint stores the EYE position (matching LocalPlayer.Position).
+        /// </summary>
+        public bool SelectWorldSpawn()
+        {
+            int grassId = BlockRegistry.GetId("grass");
+            int grassSpreadId = BlockRegistry.GetId("grass_spreading");
+            int sandId = BlockRegistry.GetId("sand");
+            var rand = new Random();
+
+            // Try random spots in expanding rings out to ~48 blocks from the origin. A random walk
+            // scatters consecutive attempts instead of clustering in one direction.
+            for (int attempt = 0; attempt < 256; attempt++)
+            {
+                int range = 4 + rand.Next(45); // 4..48 blocks from origin
+                double ang = rand.NextDouble() * Math.PI * 2.0;
+                int wx = (int)Math.Round(Math.Cos(ang) * range);
+                int wz = (int)Math.Round(Math.Sin(ang) * range);
+
+                // Make sure the chunk exists so the surface scan sees real terrain.
+                Chunks.GetOrCreateChunk(WorldToChunkCoord(wx), WorldToChunkCoord(wz));
+                int surfaceY = FindSurfaceWorldY(wx, wz);
+                if (surfaceY < 0) continue; // below sea / no ground
+
+                int surfaceBlock = Chunks.GetBlockAt(wx, surfaceY, wz);
+                if (surfaceBlock != grassId && surfaceBlock != grassSpreadId && surfaceBlock != sandId) continue;
+
+                // Must be open air above (feet just above the surface block, head above that), no ceiling.
+                if (Chunks.GetBlockAt(wx, surfaceY + 1, wz) != BlockRegistry.AirId) continue;
+                if (Chunks.GetBlockAt(wx, surfaceY + 2, wz) != BlockRegistry.AirId) continue;
+
+                // Player AABB must be collision-free standing here. Eye = just above the block top +
+                // eye height (matching FindSafeSpawnPosition's convention).
+                double px = wx + 0.5, pz = wz + 0.5;
+                var eye = new Point3D(px, surfaceY + 0.01 + EyeHeight, pz);
+                if (IsPlayerColliding(eye)) continue;
+
+                SpawnPoint = eye;
+                return true;
+            }
+
+            // Fallback: no grass/sand found near origin - use the old height-hunting search.
+            var fallback = FindSafeSpawnPosition();
+            if (fallback.HasValue)
+            {
+                SpawnPoint = fallback.Value;
+                return true;
+            }
+
+            SpawnPoint = new Point3D(0.5, 1.0 + EyeHeight, 0.5);
+            return true;
         }
 
         public void SetSelectedSlot(int slot)
@@ -196,6 +266,10 @@ namespace CubeApp
             if (LocalPlayer.Health <= 0)
             {
                 LocalPlayer.DeathCause = cause;
+                // Start the death roll (direction random, like mobs that die without an attacker).
+                if (LocalPlayer.DeathTimer <= 0f)
+                    LocalPlayer.DeathRollDir = _regenRandom.Next(2) == 0 ? -1f : 1f;
+                LocalPlayer.DeathTimer += 1f / 60f;
             }
         }
 
@@ -242,6 +316,9 @@ namespace CubeApp
             WorldTime += advance;
             _worldTimeAccumulator -= advance;
             StepRegen(deltaSeconds);
+            // Advance the death roll while dead (capped so it doesn't spin forever).
+            if (LocalPlayer.Health <= 0)
+                LocalPlayer.DeathTimer = Math.Min(1f, LocalPlayer.DeathTimer + deltaSeconds);
             BlockTicks?.Tick(deltaSeconds);
             StepPlayer(LocalPlayer, tickInput, deltaSeconds);
             Entities.Update(deltaSeconds, LocalPlayer.Position, true);
@@ -360,6 +437,15 @@ namespace CubeApp
 
         public void StepPlayer(PlayerState p, TickInputState tickInput, float deltaSeconds)
         {
+            // A dead player is a corpse: no walking, flying, jumping, or input-driven motion.
+            if (p.Health <= 0)
+            {
+                p.Velocity = new Point3D(0, 0, 0);
+                p.WalkAmount = 0f;
+                p.Grounded = false;
+                return;
+            }
+
             if (p.FlyMode)
             {
                 var flyForward = GetCameraForward(p);
