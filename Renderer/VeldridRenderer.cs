@@ -66,6 +66,7 @@ namespace CubeApp.Renderer
         private DeviceBuffer _shrinkCubeVertexBuffer;
         private DeviceBuffer _shrinkCubeIndexBuffer;
         private Pipeline _shrinkCubePipeline;
+        private Pipeline _shrinkWallPipeline;
         private readonly float[] _shrinkCubeVertexScratch = new float[48 * 6]; // shrink cube (24) + neighbor walls (24) verts * 6 floats
 
         // Pipeline for chunk border wireframe rendering (F3 debug)
@@ -1775,6 +1776,21 @@ void main() {
                 // Culling OFF, matching the C++ breaking cube (it never enables GL_CULL_FACE).
                 // The shrink cube's winding is camera-independent - back-face culling would kill
                 // the faces whose winding reads clockwise from the viewer (e.g. north/south).
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
+                ShaderSet = new ShaderSetDescription(new[] { worldVertexLayout }, new[] { shrinkShaders[0], shrinkShaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
+
+            // Neighbor-wall pipeline: same shaders, NO clip-space depth bias. The cube (biased
+            // toward the camera) always wins its own faces at the cell boundary; the walls are
+            // drawn AFTER the cube with no bias, so they only pass the depth test where the cube
+            // has shrunk away and the world faces were discarded - no coplanar z-fighting.
+            _shrinkWallPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleDisabled,
+                DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
                 ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
@@ -3644,16 +3660,30 @@ void main() {
             if (quadCount == 0) return;
             _gd.UpdateBuffer(_shrinkCubeVertexBuffer, 0, _shrinkCubeVertexScratch);
 
-            // Dedicated shrink-cube pipeline: depth-tests against terrain (won't paint over blocks
-            // behind it) but WITHOUT the hidden-cell discard, so the cube and the neighbor walls
-            // render inside the mined cell while the real block's faces are discarded.
+            // 1) Draw the shrink cube first (verts 0-23 = quads 0-5) with the BIASED pipeline so it
+            // always wins its own faces against coplanar world faces at the cell boundary.
             cl.SetPipeline(_shrinkCubePipeline ?? _pipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
             if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
             cl.SetGraphicsResourceSet(2, _fogSet);
             cl.SetVertexBuffer(0, _shrinkCubeVertexBuffer);
             cl.SetIndexBuffer(_shrinkCubeIndexBuffer, IndexFormat.UInt16);
-            cl.DrawIndexed((uint)(quadCount * 6), 1, 0, 0, 0);
+            cl.DrawIndexed(36, 1, 0, 0, 0);
+
+            // 2) Draw the neighbor walls (verts 24+ = quads 6+) with the UNBIASED pipeline, AFTER
+            // the cube, depth-WRITE off. They only pass where the cube has shrunk away and the
+            // world faces were discarded - never coplanar with the cube, so no z-fighting.
+            int wallQuads = quadCount - 6;
+            if (wallQuads > 0 && _shrinkWallPipeline != null)
+            {
+                cl.SetPipeline(_shrinkWallPipeline);
+                cl.SetGraphicsResourceSet(0, _projViewSet);
+                if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
+                cl.SetGraphicsResourceSet(2, _fogSet);
+                cl.SetVertexBuffer(0, _shrinkCubeVertexBuffer);
+                cl.SetIndexBuffer(_shrinkCubeIndexBuffer, IndexFormat.UInt16);
+                cl.DrawIndexed((uint)(wallQuads * 6), 1, 24, 0, 0);
+            }
         }
 
         private void DrawChunkBorders(CommandList cl)
@@ -5139,6 +5169,8 @@ void main() {
             _highlightPipeline?.Dispose();
             _shrinkCubeVertexBuffer?.Dispose();
             _shrinkCubeIndexBuffer?.Dispose();
+            _shrinkCubePipeline?.Dispose();
+            _shrinkWallPipeline?.Dispose();
             _duckVertexBuffer?.Dispose();
             _duckIndexBuffer?.Dispose();
             _duckTextureSet?.Dispose();
