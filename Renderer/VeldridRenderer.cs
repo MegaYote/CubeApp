@@ -3631,6 +3631,20 @@ void main() {
                 new Point3D(0,0,-1), new Point3D(0,0,1), new Point3D(0,-1,0),
                 new Point3D(0,1,0), new Point3D(1,0,0), new Point3D(-1,0,0),
             };
+
+            // Anchor the shrink to the looked-at face (C++ startBreaking hitNormal): the cube
+            // collapses toward the block behind the crosshair instead of the cell center. The hit
+            // face plane stays put at the cell wall; the cube's depth along the hit axis shrinks
+            // onto it. Perpendicular axes shrink toward the center as before.
+            var hitN = _hud.MiningBlockNormal;
+            int hitAxis = 0; // 0=X, 1=Y, 2=Z
+            float hitSign = 1f;
+            if (Math.Abs(hitN.Y) > Math.Abs(hitN.X) && Math.Abs(hitN.Y) > Math.Abs(hitN.Z)) { hitAxis = 1; hitSign = (float)hitN.Y; }
+            else if (Math.Abs(hitN.Z) > Math.Abs(hitN.X)) { hitAxis = 2; hitSign = (float)hitN.Z; }
+            else hitSign = (float)hitN.X;
+            // Corner of the cell the hit face sits on (0 = min, 1 = max).
+            // 1 = no anchor (degenerate normal -> old center collapse).
+            bool anchored = Math.Abs(hitSign) > 0.5f;
             // C++ BreakingBlockRenderer::renderAdjacentFaces table: neighbor offset, which face of
             // the NEIGHBOR looks into the mined cell, and the directional brightness of that face.
             // faceIndex indexes faces[]/faceNormals[] above.
@@ -3674,12 +3688,23 @@ void main() {
                 }
                 for (int c = 0; c < 4; c++)
                 {
-                    float u = src[c * 3 + 0] * 2f - 1f; // -1..1
-                    float v = src[c * 3 + 1] * 2f - 1f;
-                    float w = src[c * 3 + 2] * 2f - 1f;
-                    float x = center.X + u * scale * 0.5f;
-                    float y = center.Y + v * scale * 0.5f;
-                    float z = center.Z + w * scale * 0.5f;
+                    float u = src[c * 3 + 0]; // 0..1
+                    float v = src[c * 3 + 1];
+                    float w = src[c * 3 + 2];
+                    // Normal uniform shrink toward the cube's own center...
+                    float x = center.X + (u * 2f - 1f) * scale * 0.5f;
+                    float y = center.Y + (v * 2f - 1f) * scale * 0.5f;
+                    float z = center.Z + (w * 2f - 1f) * scale * 0.5f;
+                    // ...then slide the whole cube along the hit axis so the face being looked at
+                    // stays pinned to the cell wall. At scale 1 the offset is 0 (cube fills the
+                    // cell); as it shrinks, the center moves toward that wall by (1-scale)/2.
+                    if (anchored)
+                    {
+                        float slide = (1f - scale) * 0.5f * hitSign;
+                        if (hitAxis == 0) x += slide;
+                        else if (hitAxis == 1) y += slide;
+                        else z += slide;
+                    }
                     var corner = new Point3D(src[c * 3 + 0], src[c * 3 + 1], src[c * 3 + 2]);
                     float du = (float)Math.Clamp(Dot(corner, uAxis) - minU, 0.0, 1.0);
                     float dv = (float)Math.Clamp(Dot(corner, vAxis) - minV, 0.0, 1.0);

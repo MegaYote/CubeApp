@@ -71,6 +71,13 @@ namespace CubeApp.Renderer
         public Vector3 MiningBlockPos;
         public int MiningBlockId;
 
+        /// <summary>
+        /// Face normal of the block currently being mined (from TryPickBlock). The shrinking cube
+        /// anchors to this face: instead of collapsing toward the cell center it collapses toward
+        /// the block behind the looked-at face. Zero when no face is targeted.
+        /// </summary>
+        public Point3D MiningBlockNormal;
+
         public static HudState Empty => new HudState
         {
             ShowDebug = false,
@@ -99,6 +106,7 @@ namespace CubeApp.Renderer
             MiningProgress = 0f,
             MiningBlockPos = Vector3.Zero,
             MiningBlockId = 0,
+            MiningBlockNormal = new Point3D(0, 0, 0),
         };
     }
 }

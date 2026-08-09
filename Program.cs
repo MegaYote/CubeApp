@@ -57,6 +57,10 @@ namespace CubeApp
         private float _miningProgress;
         private int _miningBlockId;
         private float _miningBlockHardness;
+        // Camera ray direction captured once when mining starts (the line from the camera THROUGH
+        // the mined block to the block behind it). The shrink cube slides along this direction so
+        // it clamps toward the block behind the crosshair, not the hit face's normal.
+        private Point3D _miningSlideDir;
         private GameScreen screen = GameScreen.Title;
         private readonly MenuState menu = new();
         private bool inventoryOpen;
@@ -683,6 +687,7 @@ namespace CubeApp
                         // New target: reset progress.
                         _miningTarget = target;
                         _miningProgress = 0f;
+                        _miningSlideDir = World.GetCameraForward();
                         if (World.Chunks.TryGetLoadedBlock(target.x, target.y, target.z, out int id))
                         {
                             _miningBlockId = id;
@@ -915,6 +920,7 @@ namespace CubeApp
             float miningProgress = 0f;
             Vector3 miningBlockPos = Vector3.Zero;
             int miningBlockId = 0;
+            var miningBlockNormal = new Point3D(0, 0, 0);
             if (_miningTarget.HasValue && pickResult.HasValue)
             {
                 var t = pickResult.Value.Remove;
@@ -923,6 +929,7 @@ namespace CubeApp
                     miningProgress = _miningProgress;
                     miningBlockPos = new Vector3(t.x, t.y, t.z);
                     miningBlockId = _miningBlockId;
+                    miningBlockNormal = _miningSlideDir;
                 }
             }
             return new HudState
@@ -946,6 +953,7 @@ namespace CubeApp
                 MiningProgress = miningProgress,
                 MiningBlockPos = miningBlockPos,
                 MiningBlockId = miningBlockId,
+                MiningBlockNormal = miningBlockNormal,
             };
         }
 
