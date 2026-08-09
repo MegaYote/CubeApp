@@ -64,11 +64,16 @@ namespace CubeApp
         /// <summary>The simulation world (null on the title screen).</summary>
         public GameWorld World { get; private set; }
 
+        /// <summary>Zero-lag background-thread audio (grass break, cave ambience).</summary>
+        public SoundEngine Sound { get; private set; }
+
         public Program()
         {
             BlockRegistry.LoadDefault();
             MobRegistry.DiscoverMobs(AppDomain.CurrentDomain.BaseDirectory);
             RefreshSavedWorlds();
+            Sound = new SoundEngine();
+            Sound.RegisterAllEmbedded();
         }
 
         // ------------------------------------------------------------------
@@ -639,6 +644,43 @@ namespace CubeApp
                     c.NeedsRemesh = true;
                 }
             }
+
+            UpdateCaveAmbience(deltaSeconds);
+        }
+
+        // Plays a random cave sound at a slow interval while the player is underground. Only the
+        // seven cavesoundN.mp3 files exist, so the timer picks among those; new ambience can be
+        // dropped in by filename later.
+        private float _caveAmbienceTimer;
+        private static readonly string[] CaveSoundNames =
+        {
+            "cavesound1", "cavesound2", "cavesound3", "cavesound4",
+            "cavesound5", "cavesound6", "cavesound7",
+        };
+        private void UpdateCaveAmbience(float deltaSeconds)
+        {
+            if (Sound == null || World == null) return;
+            bool underground = World.PlayerPosition.Y < 0; // below sea level / in the deep layer
+            if (!underground)
+            {
+                _caveAmbienceTimer = 0f;
+                return;
+            }
+
+            // 12-25 seconds between cave sounds (random each cycle).
+            if (_caveAmbienceTimer <= 0f)
+            {
+                string name = CaveSoundNames[Random.Shared.Next(CaveSoundNames.Length)];
+                if (Sound.HasSound(name))
+                {
+                    Sound.Play(name, 0.35f);
+                }
+                _caveAmbienceTimer = 12f + (float)Random.Shared.NextDouble() * 13f;
+            }
+            else
+            {
+                _caveAmbienceTimer -= deltaSeconds;
+            }
         }
 
         private void ApplyLookInput(Vector2 lookDelta)
@@ -657,6 +699,16 @@ namespace CubeApp
             if (!World.TryBreakBlock(World.LocalPlayer, World.PlayerPosition, World.GetCameraForward(), out int removedBlockId, out var removedPos)) return;
             gpuRenderer?.SpawnBlockBreakParticles(removedPos.x, removedPos.y, removedPos.z, removedBlockId, 12);
             needsMeshUpdate = true;
+
+            // Only the sounds that exist are wired: grass.mp3 plays when a GRASS block breaks.
+            // The engine auto-registers any future sound by filename, so drop-in new ones there.
+            if (Sound != null)
+            {
+                if (removedBlockId == BlockRegistry.GetId("grass") && Sound.HasSound("grass"))
+                {
+                    Sound.Play("grass", 0.6f);
+                }
+            }
         }
 
         private void PlaceSelectedBlock()
