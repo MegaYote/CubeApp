@@ -1627,6 +1627,11 @@ void main() { outColor = uTint; }";
             var vertexLayout = new VertexLayoutDescription(
                 new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3));
 
+            _highlightTintLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
+                new ResourceLayoutElementDescription("Tint", ResourceKind.UniformBuffer, ShaderStages.Fragment)));
+            _highlightTintBuffer = factory.CreateBuffer(new BufferDescription(16, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _highlightTintSet = factory.CreateResourceSet(new ResourceSetDescription(_highlightTintLayout, _highlightTintBuffer));
+
             var pipelineDesc = new GraphicsPipelineDescription()
             {
                 BlendState = BlendStateDescription.SingleAlphaBlend,
@@ -1637,11 +1642,6 @@ void main() { outColor = uTint; }";
                 ShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { shaders[0], shaders[1] }),
                 Outputs = _sc.Framebuffer.OutputDescription
             };
-
-            _highlightTintLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
-                new ResourceLayoutElementDescription("Tint", ResourceKind.UniformBuffer, ShaderStages.Fragment)));
-            _highlightTintBuffer = factory.CreateBuffer(new BufferDescription(16, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
-            _highlightTintSet = factory.CreateResourceSet(new ResourceSetDescription(_highlightTintLayout, _highlightTintBuffer));
 
             _highlightPipeline = factory.CreateGraphicsPipeline(pipelineDesc);
 
