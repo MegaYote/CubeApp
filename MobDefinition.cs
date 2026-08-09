@@ -19,9 +19,12 @@ namespace CubeApp
         public float Height { get; }
         public int MaxHealth { get; }
         public float Speed { get; }
+        public float Scale { get; }
+        public float YawCorrection { get; }
 
         public MobDefinition(string id, string displayName, string modelPath, string texturePath,
-            float width = 0.68f, float height = 1.35f, int maxHealth = 10, float speed = 4f)
+            float width = 0.68f, float height = 1.35f, int maxHealth = 10, float speed = 4f,
+            float scale = 1.0f, float yawCorrection = MathF.PI / 2f)
         {
             Id = id;
             DisplayName = displayName;
@@ -31,6 +34,8 @@ namespace CubeApp
             Height = height;
             MaxHealth = maxHealth;
             Speed = speed;
+            Scale = scale;
+            YawCorrection = yawCorrection;
         }
     }
 
@@ -62,17 +67,18 @@ namespace CubeApp
             {
                 string dirName = Path.GetFileName(subDir);
                 
-                // Find a .bbmodel or .glb file. Prefer the folder-named file, but fall back to
-                // any model in the folder (e.g. CoyoteMob/ containing coyote.glb) so assets aren't
-                // silently skipped just because of a case/name mismatch.
-                string modelPath = Path.Combine(subDir, $"{dirName.ToLowerInvariant()}.bbmodel");
+                // Find a .glb or .bbmodel file. GLB is preferred - it carries the joint/animation
+                // rig the renderer drives (a .bbmodel load is static). The folder-named file wins,
+                // then fall back to any model in the folder (e.g. CoyoteMob/ containing coyote.glb)
+                // so assets aren't silently skipped just because of a case/name mismatch.
+                string modelPath = Path.Combine(subDir, $"{dirName.ToLowerInvariant()}.glb");
                 if (!File.Exists(modelPath))
-                    modelPath = Path.Combine(subDir, $"{dirName.ToLowerInvariant()}.glb");
+                    modelPath = Path.Combine(subDir, $"{dirName.ToLowerInvariant()}.bbmodel");
                 if (!File.Exists(modelPath))
                 {
-                    string[] candidates = Directory.GetFiles(subDir, "*.bbmodel", SearchOption.TopDirectoryOnly);
+                    string[] candidates = Directory.GetFiles(subDir, "*.glb", SearchOption.TopDirectoryOnly);
                     if (candidates.Length == 0)
-                        candidates = Directory.GetFiles(subDir, "*.glb", SearchOption.TopDirectoryOnly);
+                        candidates = Directory.GetFiles(subDir, "*.bbmodel", SearchOption.TopDirectoryOnly);
                     if (candidates.Length > 0)
                         modelPath = candidates[0];
                 }
@@ -90,8 +96,15 @@ namespace CubeApp
                 if (!File.Exists(texturePath))
                     continue; // No texture found
 
-                // Try to load JSON config
+                // Try to load JSON config (folder-named first, then any config in the folder -
+                // e.g. CoyoteMob/coyote.json, matching the model/texture fallback rules).
                 string configPath = Path.Combine(subDir, $"{dirName}.json");
+                if (!File.Exists(configPath))
+                {
+                    string[] configs = Directory.GetFiles(subDir, "*.json", SearchOption.TopDirectoryOnly);
+                    if (configs.Length > 0)
+                        configPath = configs[0];
+                }
                 var def = LoadFromConfig(configPath, dirName, modelPath, texturePath);
                 
                 _mobs[def.Id] = def;
@@ -121,6 +134,8 @@ namespace CubeApp
             float height = 1.35f;
             int maxHealth = 10;
             float speed = 4f;
+            float scale = 1.0f;
+            float yawCorrection = MathF.PI / 2f;
 
             // Override from JSON if present
             if (File.Exists(configPath))
@@ -143,6 +158,10 @@ namespace CubeApp
                         maxHealth = healthProp.GetInt32();
                     if (root.TryGetProperty("speed", out var speedProp))
                         speed = speedProp.GetSingle();
+                    if (root.TryGetProperty("scale", out var scaleProp))
+                        scale = scaleProp.GetSingle();
+                    if (root.TryGetProperty("yawCorrection", out var yawProp))
+                        yawCorrection = yawProp.GetSingle();
                 }
                 catch (Exception ex)
                 {
@@ -150,7 +169,7 @@ namespace CubeApp
                 }
             }
 
-            return new MobDefinition(id, displayName, modelPath, texturePath, width, height, maxHealth, speed);
+            return new MobDefinition(id, displayName, modelPath, texturePath, width, height, maxHealth, speed, scale, yawCorrection);
         }
     }
 }

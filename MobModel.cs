@@ -30,6 +30,8 @@ namespace CubeApp
             public float[] Shades = Array.Empty<float>();
             public Vector3 Pivot;
             public int JointNode = -1; // animation joint node, or -1 for static parts
+            public string Name = "";   // mesh node name (e.g. "leftarm") for procedural limbs
+            public Quaternion StaticRotation = Quaternion.Identity; // node's baked pose rotation
         }
 
         private readonly List<ModelPart> _parts = new();
@@ -408,33 +410,46 @@ namespace CubeApp
                 _jointTracks.Clear();
                 int[] meshJoint = Array.Empty<int>();   // meshIndex -> joint node index (or -1)
                 Vector3[] meshPivot = Array.Empty<Vector3>();
+                Quaternion[] meshStaticRotation = Array.Empty<Quaternion>();
+                string[] meshName = Array.Empty<string>();
 
                 if (root.TryGetProperty("nodes", out var nodes))
                 {
-                    // First pass: for every node that references a mesh, find its pivot and the
+                    // First pass: for every node that references a mesh, find its pivot, its baked
+                    // pose rotation, its node name (used for the procedural walk fallback) and the
                     // skinned joint (the node's FIRST child - Blockbench puts the joint there).
-                    var nodeList = new List<(Vector3 t, int mesh, int child)>();
+                    var nodeList = new List<(Vector3 t, Quaternion r, string name, int mesh, int child)>();
                     foreach (var node in nodes.EnumerateArray())
                     {
                         Vector3 t = Vector3.Zero;
                         if (node.TryGetProperty("translation", out var tArr) && tArr.GetArrayLength() >= 3)
                             t = new Vector3(tArr[0].GetSingle(), tArr[1].GetSingle(), tArr[2].GetSingle());
+                        Quaternion r = Quaternion.Identity;
+                        if (node.TryGetProperty("rotation", out var rArr) && rArr.GetArrayLength() >= 4)
+                            r = new Quaternion(rArr[0].GetSingle(), rArr[1].GetSingle(), rArr[2].GetSingle(), rArr[3].GetSingle());
+                        string name = "";
+                        if (node.TryGetProperty("name", out var nameProp))
+                            name = nameProp.GetString() ?? "";
                         int mesh = -1;
                         if (node.TryGetProperty("mesh", out var mProp)) mesh = mProp.GetInt32();
                         int child = -1;
                         if (node.TryGetProperty("children", out var cArr) && cArr.GetArrayLength() >= 1)
                             child = cArr[0].GetInt32();
-                        nodeList.Add((t, mesh, child));
+                        nodeList.Add((t, r, name, mesh, child));
                     }
 
                     meshPivot = new Vector3[meshes.GetArrayLength()];
                     meshJoint = new int[meshes.GetArrayLength()];
-                    for (int i = 0; i < meshJoint.Length; i++) meshJoint[i] = -1;
+                    meshStaticRotation = new Quaternion[meshes.GetArrayLength()];
+                    meshName = new string[meshes.GetArrayLength()];
+                    for (int i = 0; i < meshJoint.Length; i++) { meshJoint[i] = -1; meshStaticRotation[i] = Quaternion.Identity; meshName[i] = ""; }
                     for (int i = 0; i < nodeList.Count; i++)
                     {
                         if (nodeList[i].mesh < 0 || nodeList[i].mesh >= meshJoint.Length) continue;
                         meshPivot[nodeList[i].mesh] = nodeList[i].t;
                         meshJoint[nodeList[i].mesh] = nodeList[i].child;
+                        meshStaticRotation[nodeList[i].mesh] = nodeList[i].r;
+                        meshName[nodeList[i].mesh] = nodeList[i].name;
                     }
                 }
 
@@ -443,11 +458,13 @@ namespace CubeApp
                 {
                     Vector3 pivot = meshPivot.Length > meshIndex ? meshPivot[meshIndex] : Vector3.Zero;
                     int joint = meshJoint.Length > meshIndex ? meshJoint[meshIndex] : -1;
+                    Quaternion staticRot = meshStaticRotation.Length > meshIndex ? meshStaticRotation[meshIndex] : Quaternion.Identity;
+                    string partName = meshName.Length > meshIndex ? meshName[meshIndex] : "";
                     if (!mesh.TryGetProperty("primitives", out var primitives)) continue;
                     
                     foreach (var primitive in primitives.EnumerateArray())
                     {
-                        ExtractPrimitive(primitive, bufferViews, accessors, buffers, glbBytes, binaryOffset, pivot, joint);
+                        ExtractPrimitive(primitive, bufferViews, accessors, buffers, glbBytes, binaryOffset, pivot, joint, staticRot, partName);
                     }
                     meshIndex++;
                 }
@@ -544,7 +561,7 @@ namespace CubeApp
 
         private void ExtractPrimitive(JsonElement primitive, JsonElement bufferViews, 
             JsonElement accessors, JsonElement buffers, byte[] glbBytes, uint binaryOffset,
-            Vector3 pivot, int jointNode)
+            Vector3 pivot, int jointNode, Quaternion staticRotation, string partName)
         {
             try
             {
@@ -598,7 +615,7 @@ namespace CubeApp
                 
                 // Read positions into LOCAL space (not offset by pivot - the pivot rotation is
                 // applied at animation/write time so parts swing around their joint origin).
-                var part = new ModelPart { Pivot = pivot, JointNode = jointNode };
+                var part = new ModelPart { Pivot = pivot, JointNode = jointNode, StaticRotation = staticRotation, Name = partName };
                 part.Positions = new Vector3[posCount];
                 part.Shades = new float[posCount];
                 int posStart = (int)(binaryOffset + posByteOffset);
@@ -727,21 +744,37 @@ namespace CubeApp
         /// rest pose, so an idle mob stands normally instead of freezing mid-stride.
         /// </summary>
         public void WriteInstance(float[] vertexScratch, ref int vf, ushort[] indexScratch, ref int ii, ref ushort baseVertex,
-            float x, float y, float z, float yaw, float animTime = 0f, float animBlend = 1f, float nightDim = 1f)
+            float x, float y, float z, float yaw, float animTime = 0f, float animBlend = 1f, float nightDim = 1f,
+            float headYawLocal = 0f)
         {
             float renderYaw = yaw + MathF.PI + YawCorrection;
             float cosY = MathF.Cos(renderYaw);
             float sinY = MathF.Sin(renderYaw);
             animBlend = Math.Clamp(animBlend, 0f, 1f);
 
+            // The head part yaws independently of the body (clamped by the mob's MaxHeadYaw), so
+            // the mob can look around / track while walking like the hand-authored duck/player.
+            float cosH = MathF.Cos(headYawLocal), sinH = MathF.Sin(headYawLocal);
+
             foreach (var part in _parts)
             {
+                // Rigged mobs (coyote) sample the GLB animation track on their joint node.
+                // Rig-less mobs (zombie) get a procedural walk cycle: arms/legs swing around the
+                // part's pivot from the walk phase, so ANY static Blockbench export can still move.
                 Quaternion jointRot = part.JointNode >= 0 ? SampleJointRotation(part.JointNode, animTime) : Quaternion.Identity;
+                Quaternion staticRot = part.StaticRotation;
+                if (part.JointNode < 0 && IsProceduralLimb(part.Name) && animBlend > 0f)
+                {
+                    jointRot = ProceduralLimbRotation(part.Name, animTime) * jointRot;
+                }
+
                 // Blend toward rest pose: at blend 0 the joint is identity (neutral stance).
                 if (animBlend < 1f)
                 {
                     jointRot = Quaternion.Slerp(Quaternion.Identity, jointRot, animBlend);
                 }
+
+                bool isHead = part.Name.Contains("head", StringComparison.OrdinalIgnoreCase);
 
                 for (int i = 0; i < part.Positions.Length; i++)
                 {
@@ -749,8 +782,14 @@ namespace CubeApp
 
                     // Skin: the mesh's vertices are ALREADY relative to the part's pivot (local
                     // y 0 = hip/top of a leg), so rotating the joint means rotating the vertex
-                    // about the pivot origin and then placing it: v' = T + R(v). Identity for
-                    // static parts (v' = T + v, i.e. just place the part).
+                    // about the pivot origin and then placing it: v' = T + R(v). First apply the
+                    // node's baked pose rotation (e.g. a zombie's arms-out stance), then the joint
+                    // / procedural swing. Identity for static parts (v' = T + v, just place it).
+                    if (staticRot != Quaternion.Identity)
+                    {
+                        local = Vector3.Transform(local, staticRot);
+                    }
+
                     if (jointRot != Quaternion.Identity)
                     {
                         local = part.Pivot + Vector3.Transform(local, jointRot);
@@ -758,6 +797,15 @@ namespace CubeApp
                     else
                     {
                         local += part.Pivot;
+                    }
+
+                    // Head yaw about the part's pivot (neck) - yaw around +Y like the duck.
+                    if (isHead && headYawLocal != 0f)
+                    {
+                        float hx = local.X - part.Pivot.X;
+                        float hz = local.Z - part.Pivot.Z;
+                        local.X = part.Pivot.X + hx * cosH + hz * sinH;
+                        local.Z = part.Pivot.Z - hx * sinH + hz * cosH;
                     }
 
                     // Uniform world scale (ModelScale) grows the whole model about its feet origin.
@@ -786,6 +834,35 @@ namespace CubeApp
                 baseVertex += (ushort)part.Positions.Length;
             }
         }
+
+        // ---- Procedural walk-cycle fallback (for static GLB mobs with no animation rig) ----
+
+        /// <summary>True when a part's name marks it as a swingable limb ("arm"/"leg").</summary>
+        private static bool IsProceduralLimb(string name)
+        {
+            return name.Contains("arm", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("leg", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Swings a limb around the X axis (forward/back) from the walk phase. Right limbs lead,
+        /// left limbs trail, arms swing opposite to legs on the same side so the gait reads like a
+        /// real walk. Amplitude is applied to the part's local X rotation.
+        /// </summary>
+        private Quaternion ProceduralLimbRotation(string name, float animTime)
+        {
+            bool isArm = name.Contains("arm", StringComparison.OrdinalIgnoreCase);
+            bool isRight = name.Contains("right", StringComparison.OrdinalIgnoreCase);
+            float phase = animTime * ProceduralSwingRate;
+            float swing = MathF.Sin(phase + (isArm ? 0f : MathF.PI));
+            swing *= isRight ? ProceduralSwingAmount : -ProceduralSwingAmount;
+            return Quaternion.CreateFromAxisAngle(Vector3.UnitX, swing);
+        }
+
+        /// <summary>Radians/second of walk-phase → limb swing (tuned so a 1.33s coyote trot reads).</summary>
+        public float ProceduralSwingRate = MathF.PI * 2f / 1.33f;
+        /// <summary>Max swing amplitude in radians for rig-less limbs (≈ +-23°).</summary>
+        public float ProceduralSwingAmount = 0.4f;
 
         /// <summary>
         /// Additional yaw (radians) applied on top of the standard yaw+PI rotation, so a model whose

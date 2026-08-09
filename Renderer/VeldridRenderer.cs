@@ -218,7 +218,6 @@ namespace CubeApp.Renderer
         // three Lists every frame (FPS roadmap #6). The draw loops read these via the fields above.
         private readonly List<CubeApp.DuckInstance> _duckList = new();
         private readonly List<CubeApp.DuckInstance> _playerList = new();
-        private readonly List<CubeApp.DuckInstance> _coyoteList = new();
         private float[] _duckVertexScratch = Array.Empty<float>();
         private ushort[] _duckIndexScratch = Array.Empty<ushort>();
         private const int DuckFloatsPerVertex = 9; // pos(3) + uv(2) + color(4)
@@ -244,17 +243,23 @@ namespace CubeApp.Renderer
         private float[] _playerVertexScratch = Array.Empty<float>();
         private ushort[] _playerIndexScratch = Array.Empty<ushort>();
 
-        // GLB-driven mobs (coyote): loaded from MobEntities/<Type>Mob/<type>.glb + .png at startup,
-        // drawn through MobModel.Draw (which emits the same 9-float model-vertex layout).
-        private MobModel? _coyoteModel;
-        private ResourceSet? _coyoteTextureSet;
-        private IReadOnlyList<CubeApp.DuckInstance> _coyoteInstances = Array.Empty<CubeApp.DuckInstance>();
-        private DeviceBuffer? _coyoteVertexBuffer;
-        private DeviceBuffer? _coyoteIndexBuffer;
-        private uint _coyoteVertexCapacity;
-        private uint _coyoteIndexCapacity;
-        private float[] _coyoteVertexScratch = Array.Empty<float>();
-        private ushort[] _coyoteIndexScratch = Array.Empty<ushort>();
+        // GLB-driven mobs (coyote + any future Blockbench mob): loaded from the MobRegistry at
+        // startup (MobEntities/<Type>Mob/<type>.glb + .png) and drawn through MobModel.Draw's
+        // generic path. One entry per mob type so ANY discovered mob renders automatically.
+        private sealed class MobModelEntry
+        {
+            public MobModel? Model;
+            public ResourceSet? TextureSet;
+            public List<CubeApp.DuckInstance> Instances = new();
+            public DeviceBuffer? VertexBuffer;
+            public DeviceBuffer? IndexBuffer;
+            public uint VertexCapacity;
+            public uint IndexCapacity;
+            public float[] VertexScratch = Array.Empty<float>();
+            public ushort[] IndexScratch = Array.Empty<ushort>();
+        }
+
+        private readonly Dictionary<string, MobModelEntry> _modelMobs = new();
         // Full mob snapshot kept for F3 nametag rendering (world -> screen projection).
         private IReadOnlyList<CubeApp.MobRenderData> _allMobRenderData = Array.Empty<CubeApp.MobRenderData>();
 
@@ -544,7 +549,7 @@ namespace CubeApp.Renderer
 
             LoadDuckResources();
             LoadPlayerResources();
-            LoadCoyoteResources();
+            LoadMobResources();
             CreatePipeline();
             CreateCullComputePipeline();
 
@@ -761,28 +766,34 @@ namespace CubeApp.Renderer
             }
         }
 
-        // Loads the coyote GLB model + texture from MobEntities/CoyoteMob/. Coyote (and any future
-        // Blockbench mob) renders through the generic MobModel.Draw path instead of hand-authored
-        // cube bones like duck/player.
-        private void LoadCoyoteResources()
+        // Loads a model + texture for EVERY discovered mob (MobRegistry scans MobEntities/).
+        // Each mob type gets its own MobModelEntry so the renderer is fully data-driven: drop a
+        // <Type>Mob folder with a .glb + .png (+ optional .json config) and it just renders.
+        private void LoadMobResources()
         {
-            try
+            foreach (var def in MobRegistry.All)
             {
-                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                string modelPath = Path.Combine(baseDir, "MobEntities", "CoyoteMob", "coyote.glb");
-                string texPath = Path.Combine(baseDir, "MobEntities", "CoyoteMob", "Coyote.png");
-                if (!File.Exists(modelPath)) return;
+                try
+                {
+                    string key = def.Id.ToLowerInvariant();
+                    if (_modelMobs.ContainsKey(key)) continue;
+                    if (!File.Exists(def.ModelPath)) continue;
 
-                var model = new MobModel(_gd);
-                if (!model.Load(modelPath, texPath)) return;
-                _coyoteModel = model;
-                // Coyotes are drawn ~1.3x their raw Blockbench size (matches the bigger collision box).
-                model.ModelScale = 1.3f;
-                _coyoteTextureSet = model.TextureSet;
-            }
-            catch
-            {
-                // ignore; coyotes simply don't render if the model fails to load
+                    var model = new MobModel(_gd);
+                    if (!model.Load(def.ModelPath, def.TexturePath)) continue;
+
+                    model.ModelScale = def.Scale > 0f ? def.Scale : 1.0f;
+                    model.YawCorrection = def.YawCorrection;
+                    _modelMobs[key] = new MobModelEntry
+                    {
+                        Model = model,
+                        TextureSet = model.TextureSet,
+                    };
+                }
+                catch
+                {
+                    // ignore; this mob simply won't render if its model fails to load
+                }
             }
         }
 
@@ -2586,15 +2597,16 @@ void main() {
         {
             // Route the unified MobRenderData snapshots to per-model instance lists. DuckInstance
             // carries exactly the fields both models need, so it doubles as the player instance.
+            // Duck + player are hand-authored cube models; every OTHER mob type (coyote, zombie,
+            // anything discovered in MobEntities/) renders through the generic MobModel entry.
             _allMobRenderData = mobRenderData ?? Array.Empty<CubeApp.MobRenderData>();
             _duckList.Clear();
             _playerList.Clear();
-            _coyoteList.Clear();
+            foreach (var entry in _modelMobs.Values) entry.Instances.Clear();
             if (mobRenderData == null || mobRenderData.Count == 0)
             {
                 _duckInstances = Array.Empty<CubeApp.DuckInstance>();
                 _playerInstances = Array.Empty<CubeApp.DuckInstance>();
-                _coyoteInstances = Array.Empty<CubeApp.DuckInstance>();
                 return;
             }
 
@@ -2604,8 +2616,6 @@ void main() {
                 var md = mobRenderData[i];
                 bool isDuck = string.Equals(md.MobType, "duck", StringComparison.OrdinalIgnoreCase);
                 bool isPlayer = !isDuck && string.Equals(md.MobType, "player", StringComparison.OrdinalIgnoreCase);
-                bool isCoyote = !isDuck && !isPlayer && string.Equals(md.MobType, "coyote", StringComparison.OrdinalIgnoreCase);
-                if (!isDuck && !isPlayer && !isCoyote) continue;
 
                 var inst = new CubeApp.DuckInstance(
                     md.Position, md.Yaw, md.HeadYawLocal,
@@ -2613,14 +2623,17 @@ void main() {
                     md.VelocityY, md.OnGround,
                     md.IsDead, md.DeathT, md.DeathRollDir, md.HurtTimer);
 
-                if (isDuck) _duckList.Add(inst);
-                else if (isPlayer) _playerList.Add(inst);
-                else _coyoteList.Add(inst);
+                if (isDuck) { _duckList.Add(inst); continue; }
+                if (isPlayer) { _playerList.Add(inst); continue; }
+
+                // Generic data-driven path: any other registered mob type.
+                string key = md.MobType.ToLowerInvariant();
+                if (_modelMobs.TryGetValue(key, out var entry) && entry.Model != null)
+                    entry.Instances.Add(inst);
             }
 
             _duckInstances = _duckList;
             _playerInstances = _playerList;
-            _coyoteInstances = _coyoteList;
         }
 
         public void Render()
@@ -2747,7 +2760,7 @@ void main() {
             DrawFallingBlocks(cl);
             DrawDucks(cl);
             DrawPlayers(cl);
-            DrawCoyotes(cl);
+            DrawModelMobs(cl);
             DrawHighlight(cl);
             DrawShrinkCube(cl);
             DrawChunkBorders(cl);
@@ -4841,64 +4854,68 @@ void main() {
             cl.DrawIndexed((uint)totalIndices, 1, 0, 0, 0);
         }
 
-        // Draws GLB-driven mobs (coyote) via the generic MobModel path. All instances are baked into
-        // ONE vertex/index buffer and drawn with a single call - the mobs share a model, and a
-        // per-mob UpdateBuffer on a shared instance buffer would corrupt earlier draws. A subtle
-        // walk-cycle bob + body sway is applied on the CPU around the model origin (feet) to sell
-        // the motion (the GLB has no skeletal animation).
-        private void DrawCoyotes(CommandList cl)
+        // Draws every generic MobModel-driven mob type (coyote, zombie, ...) discovered in
+        // MobEntities/. Each type is baked into its OWN vertex/index buffer and drawn with a single
+        // call - the mobs of one type share a model, and a per-mob UpdateBuffer on a shared instance
+        // buffer would corrupt earlier draws. A subtle walk-cycle bob + body sway is applied on the
+        // CPU around the model origin (feet) to sell the motion.
+        private void DrawModelMobs(CommandList cl)
         {
-            var instances = _coyoteInstances;
-            if (instances.Count == 0 || _coyoteModel == null || _modelPipeline == null || _coyoteTextureSet == null) return;
-
-            int vertsPer = _coyoteModel.VertexCount;
-            int idxPer = _coyoteModel.IndexCount;
-            int totalVertexFloats = instances.Count * vertsPer * DuckFloatsPerVertex;
-            int totalIndices = instances.Count * idxPer;
-            if (totalVertexFloats == 0 || totalIndices == 0) return;
-
-            if (_coyoteVertexScratch.Length < totalVertexFloats) _coyoteVertexScratch = new float[totalVertexFloats];
-            if (_coyoteIndexScratch.Length < totalIndices) _coyoteIndexScratch = new ushort[totalIndices];
-
-            int vf = 0, ii = 0;
-            ushort baseVertex = 0;
-            foreach (var inst in instances)
+            foreach (var kvp in _modelMobs)
             {
-                // The mob's animation clock advances only while it actually walks, and AnimBlend
-                // eases back to 0 when idle - so the GLB trot plays while moving and the coyote
-                // returns to its neutral stance when it stops (no frozen mid-stride).
-                _coyoteModel.WriteInstance(_coyoteVertexScratch, ref vf, _coyoteIndexScratch, ref ii, ref baseVertex,
-                    (float)inst.Position.X, (float)inst.Position.Y, (float)inst.Position.Z, inst.Yaw,
-                    inst.AnimTime, inst.AnimBlend, _nightDim);
+                var entry = kvp.Value;
+                var instances = entry.Instances;
+                if (instances.Count == 0 || entry.Model == null || _modelPipeline == null || entry.TextureSet == null) continue;
+
+                int vertsPer = entry.Model.VertexCount;
+                int idxPer = entry.Model.IndexCount;
+                int totalVertexFloats = instances.Count * vertsPer * DuckFloatsPerVertex;
+                int totalIndices = instances.Count * idxPer;
+                if (totalVertexFloats == 0 || totalIndices == 0) continue;
+
+                if (entry.VertexScratch.Length < totalVertexFloats) entry.VertexScratch = new float[totalVertexFloats];
+                if (entry.IndexScratch.Length < totalIndices) entry.IndexScratch = new ushort[totalIndices];
+
+                int vf = 0, ii = 0;
+                ushort baseVertex = 0;
+                foreach (var inst in instances)
+                {
+                    // The mob's animation clock advances only while it actually walks, and AnimBlend
+                    // eases back to 0 when idle - so the GLB trot plays while moving and the mob
+                    // returns to its neutral stance when it stops (no frozen mid-stride).
+                    entry.Model.WriteInstance(entry.VertexScratch, ref vf, entry.IndexScratch, ref ii, ref baseVertex,
+                        (float)inst.Position.X, (float)inst.Position.Y, (float)inst.Position.Z, inst.Yaw,
+                        inst.AnimTime, inst.AnimBlend, _nightDim, inst.HeadYawLocal);
+                }
+
+                EnsureMobBuffers(entry, (uint)(totalVertexFloats * sizeof(float)), (uint)(totalIndices * sizeof(ushort)));
+                _gd.UpdateBuffer(entry.VertexBuffer, 0, ref entry.VertexScratch[0], (uint)(totalVertexFloats * sizeof(float)));
+                _gd.UpdateBuffer(entry.IndexBuffer, 0, ref entry.IndexScratch[0], (uint)(totalIndices * sizeof(ushort)));
+
+                cl.SetPipeline(_modelPipeline);
+                cl.SetGraphicsResourceSet(0, _projViewSet);
+                cl.SetGraphicsResourceSet(1, entry.TextureSet);
+                cl.SetVertexBuffer(0, entry.VertexBuffer);
+                cl.SetIndexBuffer(entry.IndexBuffer, IndexFormat.UInt16);
+                cl.DrawIndexed((uint)totalIndices, 1, 0, 0, 0);
             }
-
-            EnsureCoyoteBuffers((uint)(totalVertexFloats * sizeof(float)), (uint)(totalIndices * sizeof(ushort)));
-            _gd.UpdateBuffer(_coyoteVertexBuffer, 0, ref _coyoteVertexScratch[0], (uint)(totalVertexFloats * sizeof(float)));
-            _gd.UpdateBuffer(_coyoteIndexBuffer, 0, ref _coyoteIndexScratch[0], (uint)(totalIndices * sizeof(ushort)));
-
-            cl.SetPipeline(_modelPipeline);
-            cl.SetGraphicsResourceSet(0, _projViewSet);
-            cl.SetGraphicsResourceSet(1, _coyoteTextureSet);
-            cl.SetVertexBuffer(0, _coyoteVertexBuffer);
-            cl.SetIndexBuffer(_coyoteIndexBuffer, IndexFormat.UInt16);
-            cl.DrawIndexed((uint)totalIndices, 1, 0, 0, 0);
         }
 
-        private void EnsureCoyoteBuffers(uint vertexBytes, uint indexBytes)
+        private void EnsureMobBuffers(MobModelEntry entry, uint vertexBytes, uint indexBytes)
         {
-            if (_coyoteVertexBuffer == null || _coyoteVertexCapacity < vertexBytes)
+            if (entry.VertexBuffer == null || entry.VertexCapacity < vertexBytes)
             {
-                _coyoteVertexBuffer?.Dispose();
-                _coyoteVertexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                entry.VertexBuffer?.Dispose();
+                entry.VertexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
                     Math.Max(vertexBytes, 512), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
-                _coyoteVertexCapacity = Math.Max(vertexBytes, 512);
+                entry.VertexCapacity = Math.Max(vertexBytes, 512);
             }
-            if (_coyoteIndexBuffer == null || _coyoteIndexCapacity < indexBytes)
+            if (entry.IndexBuffer == null || entry.IndexCapacity < indexBytes)
             {
-                _coyoteIndexBuffer?.Dispose();
-                _coyoteIndexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                entry.IndexBuffer?.Dispose();
+                entry.IndexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
                     Math.Max(indexBytes, 512), BufferUsage.IndexBuffer | BufferUsage.Dynamic));
-                _coyoteIndexCapacity = Math.Max(indexBytes, 512);
+                entry.IndexCapacity = Math.Max(indexBytes, 512);
             }
         }
 
@@ -5630,9 +5647,12 @@ void main() {
             _playerSampler?.Dispose();
             _playerView?.Dispose();
             _playerTexture?.Dispose();
-            _coyoteModel?.Dispose();
-            _coyoteVertexBuffer?.Dispose();
-            _coyoteIndexBuffer?.Dispose();
+            foreach (var kvp in _modelMobs)
+            {
+                kvp.Value.Model?.Dispose();
+                kvp.Value.VertexBuffer?.Dispose();
+                kvp.Value.IndexBuffer?.Dispose();
+            }
             _modelPipeline?.Dispose();
             _pipeline?.Dispose();
             _cutoutPipeline?.Dispose();

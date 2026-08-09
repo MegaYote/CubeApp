@@ -799,6 +799,7 @@ namespace CubeApp
                 if (frameInput.SpawnMobPressed) World.Entities.SpawnDuck(World.PlayerPosition, World.PlayerYaw);
                 if (frameInput.SpawnCoyotePressed) World.Entities.SpawnCoyote(World.PlayerPosition, World.PlayerYaw);
                 if (frameInput.SpawnStevePressed) World.Entities.SpawnSteve(World.PlayerPosition, World.PlayerYaw);
+                if (frameInput.SpawnZombiePressed) World.Entities.SpawnMobById("zombie", World.PlayerPosition, World.PlayerYaw);
             }
             if (frameInput.ToggleThirdPersonPressed) thirdPersonView = !thirdPersonView;
             if (frameInput.SelectedSlot.HasValue && World != null) World.SetSelectedSlot(frameInput.SelectedSlot.Value);

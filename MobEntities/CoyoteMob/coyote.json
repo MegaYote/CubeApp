@@ -1,8 +1,1 @@
-{
-  "id": "coyote",
-  "displayName": "Coyote",
-  "width": 0.9,
-  "height": 1.2,
-  "maxHealth": 10,
-  "speed": 4.0
-}
+﻿{"id":"coyote","displayName":"Coyote","width":0.9,"height":1.2,"maxHealth":10,"speed":4.0,"scale":1.3,"yawCorrection":1.5707963267948966}

@@ -34,6 +34,7 @@ namespace CubeApp
                 {
                     new MobSpawnEntry("duck", 6, 1, 3),
                     new MobSpawnEntry("coyote", 3, 1, 2),
+                    new MobSpawnEntry("zombie", 4, 1, 4),
                     new MobSpawnEntry("steve", 1, 1, 1),
                 },
                 AddMobAt,
@@ -396,14 +397,22 @@ namespace CubeApp
 
         public string MobId => _definition.Id;
 
+        // The renderer routes render data to the per-type MobModel entry by this name, so it MUST
+        // be the registry id (e.g. "zombie"), not the class name "genericmobentity".
+        public override string MobTypeName => _definition.Id;
+
         public bool LoadModel(GraphicsDevice graphicsDevice)
         {
             // The model needs a live GraphicsDevice to create GPU buffers, so it is built here
             // (lazily) rather than in the constructor - constructing with null used to NRE inside
             // CreateBuffers, get swallowed by the catch, and leave every GLB mob model-less.
             if (graphicsDevice == null) return false;
-            _model = new MobModel(graphicsDevice);
-            _model.LoadGLB(_definition.ModelPath);
+            _model = new MobModel(graphicsDevice)
+            {
+                ModelScale = _definition.Scale > 0f ? _definition.Scale : 1.0f,
+                YawCorrection = _definition.YawCorrection,
+            };
+            _model.Load(_definition.ModelPath, _definition.TexturePath);
             return _model.Loaded;
         }
     }

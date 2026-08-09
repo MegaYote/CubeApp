@@ -42,6 +42,7 @@ namespace CubeApp
         public float Width { get; protected set; } = 0.68f;
         public float Height { get; protected set; } = 1.35f;
         protected float Gravity = 22f;
+        protected float MaxFallSpeed = 36f; // ground-mob terminal velocity (matches the player)
         protected float MaxSpeed = 4f;
         protected float GroundAccel = 28f;
         protected float AirAccel = 7f;
@@ -608,7 +609,20 @@ namespace CubeApp
         {
             ApplyMoveControls(dt);
             _velY -= Gravity * dt;
-            if (_velY < 0) { _velY *= Math.Pow(0.82, dt * 60); if (_velY < -2.15) _velY = -2.15; }
+            if (_velY < 0)
+            {
+                if (HasFlap)
+                {
+                    // Ducks glide on their wings: strong air resistance caps the fall at a gentle
+                    // ~2 blocks/s float-down. Ground mobs fall normally (no feather-drop).
+                    _velY *= Math.Pow(0.82, dt * 60);
+                    if (_velY < -2.15) _velY = -2.15;
+                }
+                else if (_velY < -MaxFallSpeed)
+                {
+                    _velY = -MaxFallSpeed; // matches the player's terminal velocity (24g / 36)
+                }
+            }
 
             MoveAxis(manager, Axis.X, _velX * dt);
             MoveAxis(manager, Axis.Z, _velZ * dt);
