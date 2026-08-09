@@ -45,6 +45,7 @@ namespace CubeApp
         private int _loadGroundTotal;           // total ground chunks in the target radius
         private readonly HashSet<ChunkCoordinates> _loadTargetSet = new(); // exact chunk set to prepare
         private readonly HashSet<ChunkCoordinates> _loadMeshedSet = new(); // meshed+uploaded chunks
+        private int _loadLastMeshedCount;       // for the meshing-stall detector
         private int _loadMeshedCount;
         private int _loadPhase;                 // 0 preparing, 1 generating, 2 meshing, 3 finishing
         private float _loadPhaseStart;
@@ -135,6 +136,7 @@ namespace CubeApp
             _loadSkipSpawn = false;
             _loadTargetSet.Clear();
             _loadMeshedSet.Clear();
+            _loadLastMeshedCount = 0;
             _loadMeshedCount = 0;
             _loadGroundRequested = 0;
             // Prepare a full render-distance radius (the default "Far") so the spawn view is done.
@@ -229,11 +231,24 @@ namespace CubeApp
                         menu.LoadingPhaseProgress = Math.Clamp(_loadMeshedCount / (float)_loadGroundTotal, 0f, 1f);
                         // 0.15 (generating) + 0.85 (meshing) -> reaches exactly 1.0 when done.
                         menu.LoadingTotalProgress = 0.15f + 0.85f * menu.LoadingPhaseProgress;
+                        // Move on when all target chunks are meshed OR meshing has stalled (no new
+                        // chunk meshed for a couple seconds) - the latter handles edge chunks that
+                        // never produce a mesh (e.g. fully air columns) and won't flip their flags.
                         if (_loadMeshedCount >= _loadGroundTotal)
                         {
                             _loadPhaseStart = 0f; // fresh timer for the finishing grace period
                             _loadPhase = 3;
                         }
+                        else if (_loadMeshedCount == _loadLastMeshedCount && _loadPhaseStart >= 2.0f)
+                        {
+                            _loadPhaseStart = 0f;
+                            _loadPhase = 3;
+                        }
+                        else if (_loadMeshedCount != _loadLastMeshedCount)
+                        {
+                            _loadPhaseStart = 0f; // progress made: reset the stall timer
+                        }
+                        _loadLastMeshedCount = _loadMeshedCount;
                     }
                     break;
 

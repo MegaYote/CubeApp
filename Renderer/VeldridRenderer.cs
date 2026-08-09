@@ -223,7 +223,10 @@ namespace CubeApp.Renderer
         private ushort[] _duckIndexScratch = Array.Empty<ushort>();
         private const int DuckFloatsPerVertex = 9; // pos(3) + uv(2) + color(4)
         private const float DuckModelScale = 1.05f; // visually petite duck
-        private const float PlayerModelScale = 1.25f; // visually bigger player/Steve
+        // Classic Steve proportions: the model is 32px = 2.0 blocks tall unscaled (feet to head
+        // top). 0.9x brings it to the classic 1.8 blocks, so the head sits at eye height (1.62)
+        // instead of towering above the camera.
+        private const float PlayerModelScale = 0.9f; // visually correct player/Steve
 
         // Minecraft-style player model (shares the model pipeline; own texture + buffers).
         private Texture _playerTexture;
