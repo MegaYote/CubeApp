@@ -19,5 +19,8 @@ namespace CubeApp
         /// <summary>Latest input received from the network (host-side). The local player's own
         /// input is applied directly via StepSimulation.</summary>
         public TickInputState PendingInput;
+
+        /// <summary>Player health, 0..10. Each point is one slice of the HUD heart (death at 0).</summary>
+        public int Health = 10;
     }
 }

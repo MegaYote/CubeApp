@@ -32,6 +32,9 @@ namespace CubeApp.Renderer
         /// once the player drops inventory picks into slots.</summary>
         public IReadOnlyList<int> Hotbar;
 
+        /// <summary>Player health 0..10, drives the healthbar heart slice (10 = full heart).</summary>
+        public int PlayerHealth;
+
         /// <summary>
         /// Four world-space corners of the targeted block face, or null if nothing is currently
         /// targeted. The renderer draws these as a depth-tested 3D quad so the highlight is
@@ -97,6 +100,7 @@ namespace CubeApp.Renderer
             WorldSeed = 0,
             BiomeText = string.Empty,
             Hotbar = Array.Empty<int>(),
+            PlayerHealth = 10,
             HighlightWorldQuad = null,
             PlayerChunkX = 0,
             PlayerChunkZ = 0,

@@ -800,6 +800,8 @@ namespace CubeApp
                 if (frameInput.SpawnCoyotePressed) World.Entities.SpawnCoyote(World.PlayerPosition, World.PlayerYaw);
                 if (frameInput.SpawnStevePressed) World.Entities.SpawnSteve(World.PlayerPosition, World.PlayerYaw);
                 if (frameInput.SpawnZombiePressed) World.Entities.SpawnMobById("zombie", World.PlayerPosition, World.PlayerYaw);
+                // O = take 1 point of damage (healthbar slice test).
+                if (frameInput.DamageSelfPressed) World.LocalPlayer.Health = Math.Max(0, World.LocalPlayer.Health - 1);
             }
             if (frameInput.ToggleThirdPersonPressed) thirdPersonView = !thirdPersonView;
             if (frameInput.SelectedSlot.HasValue && World != null) World.SetSelectedSlot(frameInput.SelectedSlot.Value);
@@ -1194,6 +1196,7 @@ namespace CubeApp
                 SelectedSlot = World.SelectedSlot, WorldSeed = World.Seed,
                 BiomeText = World.ChunkProvider?.BiomeNameAt((int)Math.Floor(World.PlayerPosition.X), (int)Math.Floor(World.PlayerPosition.Z)) ?? string.Empty,
                 Hotbar = World.Hotbar, HighlightWorldQuad = highlightQuad,
+                PlayerHealth = World.LocalPlayer.Health,
                 PlayerX = World.PlayerPosition.X,
                 PlayerY = World.PlayerPosition.Y,
                 PlayerZ = World.PlayerPosition.Z,

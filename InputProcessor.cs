@@ -14,6 +14,7 @@ namespace CubeApp
         public bool SpawnCoyotePressed { get; }
         public bool SpawnStevePressed { get; }
         public bool SpawnZombiePressed { get; }
+        public bool DamageSelfPressed { get; }
         public bool ToggleThirdPersonPressed { get; }
         public bool ToggleFlyPressed { get; }
         public bool ToggleFullbrightPressed { get; }
@@ -32,6 +33,7 @@ namespace CubeApp
             bool spawnCoyotePressed,
             bool spawnStevePressed,
             bool spawnZombiePressed,
+            bool damageSelfPressed,
             bool toggleThirdPersonPressed,
             bool toggleFlyPressed,
             bool toggleFullbrightPressed,
@@ -49,6 +51,7 @@ namespace CubeApp
             SpawnCoyotePressed = spawnCoyotePressed;
             SpawnStevePressed = spawnStevePressed;
             SpawnZombiePressed = spawnZombiePressed;
+            DamageSelfPressed = damageSelfPressed;
             ToggleThirdPersonPressed = toggleThirdPersonPressed;
             ToggleFlyPressed = toggleFlyPressed;
             ToggleFullbrightPressed = toggleFullbrightPressed;
@@ -119,6 +122,7 @@ namespace CubeApp
         private bool spawnCoyotePressed;
         private bool spawnStevePressed;
         private bool spawnZombiePressed;
+        private bool damageSelfPressed;
         private bool toggleThirdPersonPressed;
         private bool toggleFlyPressed;
         private bool toggleFullbrightPressed;
@@ -143,6 +147,7 @@ namespace CubeApp
             spawnCoyotePressed = false;
             spawnStevePressed = false;
             spawnZombiePressed = false;
+            damageSelfPressed = false;
             toggleThirdPersonPressed = false;
             toggleFlyPressed = false;
             toggleFullbrightPressed = false;
@@ -206,6 +211,9 @@ namespace CubeApp
                         break;
                     case Key.J:
                         if (down) spawnZombiePressed = true;
+                        break;
+                    case Key.O:
+                        if (down) damageSelfPressed = true;
                         break;
                     case Key.F5:
                         if (down) toggleThirdPersonPressed = true;
@@ -336,6 +344,7 @@ namespace CubeApp
                 spawnCoyotePressed,
                 spawnStevePressed,
                 spawnZombiePressed,
+                damageSelfPressed,
                 toggleThirdPersonPressed,
                 toggleFlyPressed,
                 toggleFullbrightPressed,
@@ -353,6 +362,7 @@ namespace CubeApp
             spawnCoyotePressed = false;
             spawnStevePressed = false;
             spawnZombiePressed = false;
+            damageSelfPressed = false;
             toggleThirdPersonPressed = false;
             toggleFlyPressed = false;
             toggleFullbrightPressed = false;

@@ -315,6 +315,13 @@ namespace CubeApp.Renderer
         private Texture? _hotbarSelectTexture;
         private TextureView? _hotbarSelectView;
         private IntPtr _hotbarSelectImGuiId;
+        // Healthbar sprite sheet (healthbar.png): 13px hearts on a 15px grid. The top-left sprite
+        // (index 0) is the FULL heart - the one shown until the slice-countdown sprites are wired.
+        private Texture? _healthbarTexture;
+        private TextureView? _healthbarView;
+        private IntPtr _healthbarImGuiId;
+        private const int HealthbarSpriteSize = 13;
+        private const int HealthbarGridPitch = 15;
         private byte[] _worldNameBuffer = new byte[64];
         private byte[] _seedBuffer = new byte[64];
         private byte[] _hostPortBuffer = new byte[16];
@@ -570,6 +577,7 @@ namespace CubeApp.Renderer
 
             LoadLogo();
             LoadHotbarTextures();
+            LoadHealthbarTexture();
         }
 
         // Loads the embedded title-screen logo and exposes it to ImGui.
@@ -630,6 +638,29 @@ namespace CubeApp.Renderer
             catch
             {
                 // ignore; the hotbar falls back to drawn rects if the textures can't load
+            }
+        }
+
+        // Loads the healthbar sprite sheet and exposes it to ImGui so the HUD can draw a heart.
+        private void LoadHealthbarTexture()
+        {
+            try
+            {
+                byte[]? bytes = LoadImageBytes("healthbar.png");
+                if (bytes == null) return;
+                var img = StbImageSharp.ImageResult.FromMemory(bytes, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                var desc = TextureDescription.Texture2D((uint)img.Width, (uint)img.Height, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
+                _healthbarTexture = _gd.ResourceFactory.CreateTexture(desc);
+                _gd.UpdateTexture(_healthbarTexture, img.Data, 0, 0, 0, (uint)img.Width, (uint)img.Height, 1, 0, 0);
+                _healthbarView = _gd.ResourceFactory.CreateTextureView(_healthbarTexture);
+                if (_imguiRenderer != null)
+                {
+                    _healthbarImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _healthbarView);
+                }
+            }
+            catch
+            {
+                // ignore; the HUD simply won't draw a heart if the texture can't load
             }
         }
 
@@ -5472,6 +5503,46 @@ void main() {
                 }
             }
 
+            // Healthbar: one heart centered directly above the hotbar. Health 10..1 maps to the ten
+            // filled hearts in reading order (top row left->right skipping the blank cell, then
+            // middle row left->right); health 0 (death) is the dark r1c5 heart. Each point of
+            // damage removes one slice - the sprite gets progressively darker/emptier.
+            if (_healthbarImGuiId != IntPtr.Zero)
+            {
+                const float heartScale = 3f;
+                float heartSize = HealthbarSpriteSize * heartScale;
+                // Snap to whole pixels so the linear sampler doesn't bleed between texels.
+                float heartX = (float)Math.Floor((displaySize.X - heartSize) / 2f);
+                float heartY = (float)Math.Floor(hotbarY - heartSize - 10f);
+
+                // Sprite order (reading order, skipping the blank r0c5 cell):
+                //   health 10..6 -> row 0, cols 0..4
+                //   health 5..0  -> row 1, cols 0..5
+                int hp = Math.Clamp(_hud.PlayerHealth, 0, 10);
+                int spriteRow, spriteCol;
+                if (hp >= 6)
+                {
+                    spriteRow = 0;
+                    spriteCol = 10 - hp; // hp10->c0, hp9->c1, ... hp6->c4
+                }
+                else
+                {
+                    spriteRow = 1;
+                    spriteCol = 5 - hp;  // hp5->c0, hp4->c1, ... hp0->c5 (death)
+                }
+
+                float u0 = (spriteCol * HealthbarGridPitch + 1f) / 90f;
+                float v0 = (spriteRow * HealthbarGridPitch + 1f) / 45f;
+                var uv0 = new Vector2(u0, v0);
+                var uv1 = new Vector2(u0 + HealthbarSpriteSize / 90f, v0 + HealthbarSpriteSize / 45f);
+                drawList.AddImage(
+                    _healthbarImGuiId,
+                    new Vector2(heartX, heartY),
+                    new Vector2(heartX + heartSize, heartY + heartSize),
+                    uv0,
+                    uv1);
+            }
+
             // E-menu inventory: a grid of every block. Clicking one queues it to Program, which
             // drops it into the selected hotbar slot and closes the menu.
             if (_hud.InventoryOpen)
@@ -5670,6 +5741,9 @@ void main() {
             _hotbarTexture?.Dispose();
             _hotbarSelectView?.Dispose();
             _hotbarSelectTexture?.Dispose();
+            if (_healthbarTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_healthbarTexture);
+            _healthbarView?.Dispose();
+            _healthbarTexture?.Dispose();
             _iconAtlasView?.Dispose();
             _iconAtlasTexture?.Dispose();
             _sc?.Dispose();
