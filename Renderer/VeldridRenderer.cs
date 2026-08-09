@@ -433,6 +433,11 @@ namespace CubeApp.Renderer
         private readonly System.Collections.Concurrent.ConcurrentQueue<PendingUpload> _pendingPriorityUploads = new(); // player edits jump the line
         private readonly System.Collections.Concurrent.ConcurrentQueue<CubeApp.ChunkCoordinates> _pendingRemovals = new();
         private ChunkManager? _chunkManager; // set via SetChunkManager, used by MeshChunkImmediate
+        // Cached mining-block light (0..15), captured once per mining target like the C++
+        // startBreaking: the max of the 6 neighbors' combined light. Used to shade the shrink
+        // cube + walls with the same brightness as regular world blocks.
+        private int _miningLightLevel = 15;
+        private Vector3 _miningLightAt = new(float.NaN, float.NaN, float.NaN);
         // Upload budget per frame to avoid large spikes
         private int _maxUploadsPerFrame = 4;
 
@@ -3543,6 +3548,53 @@ void main() {
         // cube - the mined block's tiles, scaled 1.0 -> 0.1 as progress -> 1 - with a tiny
         // clip-space depth bias (the C++ glPolygonOffset(-1,-1) equivalent, ~1 ULP) so nothing
         // coplanar can ever z-fight. No walls, no fake faces.
+        // C++ Game.cpp startBreaking light capture: sample the 6 neighbors' combined light and
+        // keep the brightest, so the shrink cube matches the block's surroundings (the block
+        // itself is solid -> light 0 inside). ChunkLighting is rebuilt per mining target only
+        // (a 3x3-chunk region like the mesher's), then cached until the target changes.
+        private void CaptureMiningLight(Vector3 blockPos)
+        {
+            _miningLightAt = blockPos;
+            _miningLightLevel = 15;
+            if (_chunkManager == null) return;
+
+            try
+            {
+                int bx = (int)blockPos.X, by = (int)blockPos.Y, bz = (int)blockPos.Z;
+                int layer = ChunkManager.LayerForWorldY(by);
+                int cx = (int)Math.Floor(bx / (double)ChunkManager.ChunkSize);
+                int cz = (int)Math.Floor(bz / (double)ChunkManager.ChunkSize);
+
+                var region = new Dictionary<ChunkCoordinates, Chunk>();
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    for (int dz = -1; dz <= 1; dz++)
+                    {
+                        var key = new ChunkCoordinates(layer, cx + dx, cz + dz);
+                        if (_chunkManager.TryGetLoadedChunk(key, out var c)) region[key] = c;
+                    }
+                }
+                if (region.Count == 0) return;
+
+                var lighting = new ChunkLighting(region, ChunkManager.ChunkSize, ChunkManager.HeightForLayer(layer));
+                int best = 0;
+                (int dx, int dy, int dz)[] dirs =
+                {
+                    (-1,0,0), (1,0,0), (0,-1,0), (0,1,0), (0,0,-1), (0,0,1)
+                };
+                foreach (var d in dirs)
+                {
+                    int l = lighting.GetLight(bx + d.dx, by - lighting.OriginY + d.dy, bz + d.dz);
+                    if (l > best) best = l;
+                }
+                _miningLightLevel = best;
+            }
+            catch
+            {
+                _miningLightLevel = 15; // fail safe: full bright
+            }
+        }
+
         private void DrawShrinkCube(CommandList cl)
         {
             if (_pipeline == null || _shrinkCubeVertexBuffer == null || _shrinkCubeIndexBuffer == null) return;
@@ -3552,9 +3604,17 @@ void main() {
             float scale = 1f - p * 0.9f; // C++: 1.0 -> 0.1
             if (scale < 0.001f) return;
 
+            // Capture the mining block's light once per target (C++ startBreaking does the same)
+            // and shade the overlay like the world mesh: brightness = faceShade * Brightness(light).
+            if (_miningLightAt != _hud.MiningBlockPos)
+            {
+                CaptureMiningLight(_hud.MiningBlockPos);
+            }
+            float lightMult = ChunkLighting.Brightness(_miningLightLevel);
+
             var center = _hud.MiningBlockPos + new Vector3(0.5f);
             var def = BlockRegistry.GetById(_hud.MiningBlockId);
-            // Infdev per-face shade (top 1.0 / bottom 0.5 / N+S 0.8 / E+W 0.6).
+            // Infdev per-face shade (top 1.0 / bottom 0.5 / N+S 0.8 / E+W 0.6), same as the mesher.
             float[] faceShade = { 0.8f, 0.8f, 0.5f, 1.0f, 0.6f, 0.6f };
             // Unit-cube face corners (back/front/bottom/top/right/left), same as FallingCubeFaces.
             float[][] faces =
@@ -3571,6 +3631,18 @@ void main() {
                 new Point3D(0,0,-1), new Point3D(0,0,1), new Point3D(0,-1,0),
                 new Point3D(0,1,0), new Point3D(1,0,0), new Point3D(-1,0,0),
             };
+            // C++ BreakingBlockRenderer::renderAdjacentFaces table: neighbor offset, which face of
+            // the NEIGHBOR looks into the mined cell, and the directional brightness of that face.
+            // faceIndex indexes faces[]/faceNormals[] above.
+            (int dx, int dy, int dz, int faceIndex, float brightness)[] neighbors =
+            {
+                ( 0, 1, 0, 2, 0.5f),  // top -> neighbor BOTTOM (faces down into the cell)
+                ( 0,-1, 0, 3, 1.0f),  // bottom -> neighbor TOP
+                ( 1, 0, 0, 5, 0.85f), // right -> neighbor LEFT
+                (-1, 0, 0, 4, 0.85f), // left -> neighbor RIGHT
+                ( 0, 0, 1, 0, 0.92f), // front -> neighbor BACK
+                ( 0, 0,-1, 1, 0.92f), // back -> neighbor FRONT
+            };
 
             int vf = 0;
 
@@ -3583,10 +3655,23 @@ void main() {
                 uint tileW = (uint)Math.Clamp(Math.Max(1, tr.Width), 0, 255);
                 uint tileH = (uint)Math.Clamp(Math.Max(1, tr.Height), 0, 255);
                 uint pack2 = (tileX << 24) | (tileY << 16) | (tileW << 8) | tileH;
-                uint shadeByte = (uint)Math.Clamp((int)Math.Round(faceShade[face] * 255f), 0, 255);
+                uint shadeByte = (uint)Math.Clamp((int)Math.Round(faceShade[face] * lightMult * 255f), 0, 255);
                 uint pack3 = shadeByte | (255u << 8); // opaque
 
                 var src = faces[face];
+                // UVs from the SAME axis projection the world mesher uses (TryGetCubuildFaceAxes
+                // + dot-product), so every face's texture orientation matches terrain exactly.
+                // The old fixed du/dv-by-corner-index convention put dv=0.999 at the top of +X/-X
+                // side faces, rendering their tiles upside down.
+                TryGetCubuildFaceAxes(faceNormals[face], out var uAxis, out var vAxis);
+                double minU = double.PositiveInfinity, minV = double.PositiveInfinity;
+                for (int ci = 0; ci < 4; ci++)
+                {
+                    var c = new Point3D(src[ci * 3 + 0], src[ci * 3 + 1], src[ci * 3 + 2]);
+                    double u = Dot(c, uAxis), v = Dot(c, vAxis);
+                    if (u < minU) minU = u;
+                    if (v < minV) minV = v;
+                }
                 for (int c = 0; c < 4; c++)
                 {
                     float u = src[c * 3 + 0] * 2f - 1f; // -1..1
@@ -3595,8 +3680,12 @@ void main() {
                     float x = center.X + u * scale * 0.5f;
                     float y = center.Y + v * scale * 0.5f;
                     float z = center.Z + w * scale * 0.5f;
-                    float du = (c == 1 || c == 2) ? 0.999f : 0f;
-                    float dv = (c == 2 || c == 3) ? 0.999f : 0f;
+                    var corner = new Point3D(src[c * 3 + 0], src[c * 3 + 1], src[c * 3 + 2]);
+                    float du = (float)Math.Clamp(Dot(corner, uAxis) - minU, 0.0, 1.0);
+                    float dv = (float)Math.Clamp(Dot(corner, vAxis) - minV, 0.0, 1.0);
+                    // Never hit exactly 1.0: fract(1.0)==0.0 collapses the quad onto one texel.
+                    if (du >= 0.999f) du = 0.999f;
+                    if (dv >= 0.999f) dv = 0.999f;
                     uint duFixed = (uint)Math.Clamp((int)Math.Round(du * 256.0), 0, 0xFFFF);
                     uint dvFixed = (uint)Math.Clamp((int)Math.Round(dv * 256.0), 0, 0xFFFF);
                     uint pack1 = (duFixed << 16) | dvFixed;
@@ -3609,10 +3698,121 @@ void main() {
                 }
             }
 
+            // 2) The adjacent faces (24 verts max = quads 6+): for each solid neighbor, draw the
+            // face that looks into the mined cell at the FULL cell wall, textured with the
+            // NEIGHBOR's tile (the C++ renderAdjacentFaces). The C++ gates walls until the cube
+            // shrinks 10% (shrinkAmount > 0.05), which made them feel late and left faces
+            // unmasked. The cube draws AFTER with a stronger bias, so it wins any coplanar
+            // overlap - walls can appear almost immediately without z-fighting.
+            float shrinkAmount = (1f - scale) / 2f;
+            bool wallsVisible = shrinkAmount > 0.001f;
+            if (wallsVisible && _chunkManager != null)
+            {
+                int bx = (int)_hud.MiningBlockPos.X;
+                int by = (int)_hud.MiningBlockPos.Y;
+                int bz = (int)_hud.MiningBlockPos.Z;
+                for (int i = 0; i < neighbors.Length; i++)
+                {
+                    int nx = bx + neighbors[i].dx;
+                    int ny = by + neighbors[i].dy;
+                    int nz = bz + neighbors[i].dz;
+                    if (!_chunkManager.TryGetLoadedBlock(nx, ny, nz, out int nid) || nid <= 0) continue;
+                    if (nid == BlockRegistry.GetId("water")) continue; // no wall for fluids
+
+                    var ndef = BlockRegistry.GetById(nid);
+                    int nFace = neighbors[i].faceIndex;
+                    var tr = ndef.FaceTexture(faceNormals[nFace]);
+                    uint tileX = (uint)Math.Clamp(tr.X, 0, 255);
+                    uint tileY = (uint)Math.Clamp(tr.Y, 0, 255);
+                    uint tileW = (uint)Math.Clamp(Math.Max(1, tr.Width), 0, 255);
+                    uint tileH = (uint)Math.Clamp(Math.Max(1, tr.Height), 0, 255);
+                    uint pack2 = (tileX << 24) | (tileY << 16) | (tileW << 8) | tileH;
+                    uint shadeByte = (uint)Math.Clamp((int)Math.Round(neighbors[i].brightness * lightMult * 255f), 0, 255);
+                    uint pack3 = shadeByte | (255u << 8); // opaque
+
+                    var src = faces[nFace];
+                    // Same axis-projection UV baking as the cube + world mesher: the wall is the
+                    // neighbor's face, so its texture must orient exactly like that face would in
+                    // terrain. (The old flipped-V hack was the C++'s vBase=uv.w convention but it
+                    // doesn't match the C# mesher's axis-based UVs.)
+                    TryGetCubuildFaceAxes(faceNormals[nFace], out var wAxis, out var wVAxis);
+                    double wMinU = double.PositiveInfinity, wMinV = double.PositiveInfinity;
+                    for (int ci = 0; ci < 4; ci++)
+                    {
+                        var c = new Point3D(src[ci * 3 + 0], src[ci * 3 + 1], src[ci * 3 + 2]);
+                        double u = Dot(c, wAxis), v = Dot(c, wVAxis);
+                        if (u < wMinU) wMinU = u;
+                        if (v < wMinV) wMinV = v;
+                    }
+                    // The discard epsilon (0.002) removes a hairline of the NEIGHBOR's
+                    // perpendicular faces at the cell corners. Expand the wall's two IN-PLANE axes
+                    // past the discarded region so the mask fully covers those slivers - no
+                    // hairline cracks around the hole. 0.003 = discard 0.002 + a 0.001 overlap.
+                    const float wallEps = 0.003f;
+                    for (int c = 0; c < 4; c++)
+                    {
+                        float u = src[c * 3 + 0]; // 0..1
+                        float v = src[c * 3 + 1];
+                        float w = src[c * 3 + 2];
+                        if (neighbors[i].dx != 0)
+                        {
+                            // x fixed on the boundary plane; expand y and z.
+                            v = -wallEps + v * (1f + 2f * wallEps);
+                            w = -wallEps + w * (1f + 2f * wallEps);
+                        }
+                        else if (neighbors[i].dy != 0)
+                        {
+                            // y fixed; expand x and z.
+                            u = -wallEps + u * (1f + 2f * wallEps);
+                            w = -wallEps + w * (1f + 2f * wallEps);
+                        }
+                        else
+                        {
+                            // z fixed; expand x and y.
+                            u = -wallEps + u * (1f + 2f * wallEps);
+                            v = -wallEps + v * (1f + 2f * wallEps);
+                        }
+                        float x = bx + neighbors[i].dx + u;
+                        float y = by + neighbors[i].dy + v;
+                        float z = bz + neighbors[i].dz + w;
+                        var corner = new Point3D(src[c * 3 + 0], src[c * 3 + 1], src[c * 3 + 2]);
+                        float du = (float)Math.Clamp(Dot(corner, wAxis) - wMinU, 0.0, 1.0);
+                        float dv = (float)Math.Clamp(Dot(corner, wVAxis) - wMinV, 0.0, 1.0);
+                        if (du >= 0.999f) du = 0.999f;
+                        if (dv >= 0.999f) dv = 0.999f;
+                        uint duFixed = (uint)Math.Clamp((int)Math.Round(du * 256.0), 0, 0xFFFF);
+                        uint dvFixed = (uint)Math.Clamp((int)Math.Round(dv * 256.0), 0, 0xFFFF);
+                        uint pack1 = (duFixed << 16) | dvFixed;
+                        _shrinkCubeVertexScratch[vf++] = x;
+                        _shrinkCubeVertexScratch[vf++] = y;
+                        _shrinkCubeVertexScratch[vf++] = z;
+                        _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack1);
+                        _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack2);
+                        _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack3);
+                    }
+                }
+            }
+
             _gd.UpdateBuffer(_shrinkCubeVertexBuffer, 0, _shrinkCubeVertexScratch);
 
-            // Draw the cube only - the world shader already removed every face of the mining cell,
-            // and nothing else is drawn inside it.
+            // Draw order matches the C++ (adjacent faces FIRST, then the shrinking block): the
+            // walls (weaker bias) show through only where the cube has shrunk away; the cube
+            // (stronger bias, drawn after) wins everywhere it still covers.
+            // indexStart=36: the index buffer is 12 quads (0-5 cube, 6-11 walls); wall quads
+            // start at element 36. Starting at 24 (quad 4) drew two cube faces and dropped the
+            // last two wall quads - the front/back (north/south) masks.
+            int wallQuads = vf / (4 * 6) - 6;
+            if (wallQuads > 0 && _shrinkWallPipeline != null)
+            {
+                cl.SetPipeline(_shrinkWallPipeline);
+                cl.SetGraphicsResourceSet(0, _projViewSet);
+                if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
+                cl.SetGraphicsResourceSet(2, _fogSet);
+                cl.SetVertexBuffer(0, _shrinkCubeVertexBuffer);
+                cl.SetIndexBuffer(_shrinkCubeIndexBuffer, IndexFormat.UInt16);
+                cl.DrawIndexed((uint)(wallQuads * 6), 1, 36, 0, 0);
+            }
+
             cl.SetPipeline(_shrinkCubePipeline ?? _pipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
             if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
