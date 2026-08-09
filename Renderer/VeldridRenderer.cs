@@ -1738,7 +1738,7 @@ void main() {{
     vec4 clip = projView * vec4(aPosition, 1.0);
     // Polygon-offset equivalent (C++ glPolygonOffset(-1,-1)): pull depth toward the camera so
     // the shrink cube wins the depth test against any coplanar face at the cell walls.
-    clip.z -= 0.0005 * clip.w;
+    clip.z -= 0.002 * clip.w;
     gl_Position = clip;
 }}";
             string shrinkFsCode = @"#version 450
@@ -3622,9 +3622,9 @@ void main() {
                         float u = src[c * 3 + 0]; // 0..1
                         float v = src[c * 3 + 1];
                         float w = src[c * 3 + 2];
-                        float x = bx + neighbors[i].dx + u + px * 0.01f;
-                        float y = by + neighbors[i].dy + v + py * 0.01f;
-                        float z = bz + neighbors[i].dz + w + pz * 0.01f;
+                        float x = bx + neighbors[i].dx + u + px * 0.05f;
+                        float y = by + neighbors[i].dy + v + py * 0.05f;
+                        float z = bz + neighbors[i].dz + w + pz * 0.05f;
                         float du = (c == 1 || c == 2) ? 0.999f : 0f;
                         float dv = (c == 0 || c == 1) ? 0.999f : 0f; // flipped V
                         uint duFixed = (uint)Math.Clamp((int)Math.Round(du * 256.0), 0, 0xFFFF);
