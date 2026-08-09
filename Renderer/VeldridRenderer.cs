@@ -1144,16 +1144,16 @@ layout(set=2, binding=0) uniform FogParams {
 };
 layout(location=0) out vec4 outColor;
 void main() {
-    // While a block is being mined, its cell is hidden so the shrinking-block overlay shows.
-    // EXACT cell bounds (no epsilon): the neighbor walls are redrawn as fake quads with a
-    // clip-space depth bias, so coplanar faces at the boundary are covered either way. An
-    // epsilon would also eat the neighbor's PERPENDICULAR faces at the corners (fragments just
-    // outside the cell on adjacent blocks) leaving a visible sliver - exact bounds avoid that.
-    if (hiddenCell.w > 0.5 &&
-        vWorldPos.x >= hiddenCell.x && vWorldPos.x <= hiddenCell.x + 1.0 &&
-        vWorldPos.y >= hiddenCell.y && vWorldPos.y <= hiddenCell.y + 1.0 &&
-        vWorldPos.z >= hiddenCell.z && vWorldPos.z <= hiddenCell.z + 1.0) {
-        discard;
+    // Discard the mining cell with a tiny epsilon past the boundary. Exact bounds let neighbor
+    // boundary faces (float-precision fragments landing a hair outside the cell) survive and
+    // z-fight the cube. 0.01 was still marginally visible - trying 0.002 (~0.13 px on a 16px
+    // tile, should be invisible while still swallowing the surviving boundary sliver).
+    if (hiddenCell.w > 0.5) {
+        if (vWorldPos.x >= hiddenCell.x - 0.002 && vWorldPos.x <= hiddenCell.x + 1.002 &&
+            vWorldPos.y >= hiddenCell.y - 0.002 && vWorldPos.y <= hiddenCell.y + 1.002 &&
+            vWorldPos.z >= hiddenCell.z - 0.002 && vWorldPos.z <= hiddenCell.z + 1.002) {
+            discard;
+        }
     }
     // fract() tiles the same atlas tile regardless of how many blocks the face spans.
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
@@ -1233,11 +1233,15 @@ layout(set=2, binding=0) uniform FogParams {
 };
 layout(location=0) out vec4 outColor;
 void main() {
-    if (hiddenCell.w > 0.5 &&
-        vWorldPos.x >= hiddenCell.x && vWorldPos.x <= hiddenCell.x + 1.0 &&
-        vWorldPos.y >= hiddenCell.y && vWorldPos.y <= hiddenCell.y + 1.0 &&
-        vWorldPos.z >= hiddenCell.z && vWorldPos.z <= hiddenCell.z + 1.0) {
-        discard;
+    // Discard the mining cell with a tiny epsilon past the boundary (matches the opaque shader):
+    // exact bounds let neighbor boundary faces survive and z-fight the shrink cube; 0.002 is
+    // invisible (~0.13 px on a 16px tile) but swallows the surviving boundary sliver.
+    if (hiddenCell.w > 0.5) {
+        if (vWorldPos.x >= hiddenCell.x - 0.002 && vWorldPos.x <= hiddenCell.x + 1.002 &&
+            vWorldPos.y >= hiddenCell.y - 0.002 && vWorldPos.y <= hiddenCell.y + 1.002 &&
+            vWorldPos.z >= hiddenCell.z - 0.002 && vWorldPos.z <= hiddenCell.z + 1.002) {
+            discard;
+        }
     }
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
     vec4 tex = texture(uAtlas, atlasUV);
@@ -1298,13 +1302,17 @@ layout(set=2, binding=0) uniform FogParams {
 };
 layout(location=0) out vec4 outColor;
 void main() {
-    if (vColor.a > -150.0) discard; // only translucent (colored) glass - sentinel ~ -200
-    if (hiddenCell.w > 0.5 &&
-        vWorldPos.x >= hiddenCell.x && vWorldPos.x <= hiddenCell.x + 1.0 &&
-        vWorldPos.y >= hiddenCell.y && vWorldPos.y <= hiddenCell.y + 1.0 &&
-        vWorldPos.z >= hiddenCell.z && vWorldPos.z <= hiddenCell.z + 1.0) {
-        discard;
+    // Discard the mining cell with a tiny epsilon past the boundary (matches the opaque shader):
+    // exact bounds let neighbor boundary faces survive and z-fight the shrink cube; 0.002 is
+    // invisible (~0.13 px on a 16px tile) but swallows the surviving boundary sliver.
+    if (hiddenCell.w > 0.5) {
+        if (vWorldPos.x >= hiddenCell.x - 0.002 && vWorldPos.x <= hiddenCell.x + 1.002 &&
+            vWorldPos.y >= hiddenCell.y - 0.002 && vWorldPos.y <= hiddenCell.y + 1.002 &&
+            vWorldPos.z >= hiddenCell.z - 0.002 && vWorldPos.z <= hiddenCell.z + 1.002) {
+            discard;
+        }
     }
+    if (vColor.a > -150.0) discard; // only translucent (colored) glass - sentinel ~ -200
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
     vec4 tex = texture(uAtlas, atlasUV);
     if (tex.a >= 0.5) discard;      // opaque frame pixels already drawn by the glass pass
@@ -1745,8 +1753,8 @@ void main() {{
     clip.z -= {biasExpr} * clip.w;
     gl_Position = clip;
 }}";
-            string shrinkVsCode = MakeShrinkVs("0.002");
-            string wallVsCode = MakeShrinkVs("0.0005");
+            string shrinkVsCode = MakeShrinkVs("0.00002");
+            string wallVsCode = MakeShrinkVs("0.00001");
             string shrinkFsCode = @"#version 450
 layout(location=0) in vec2 vLocalUV;
 layout(location=1) in vec4 vTileRect;
@@ -1793,12 +1801,15 @@ void main() {
             });
 
             // Neighbor-wall pipeline: same fragment shader but a WEAKER vertex depth bias than the
-            // cube. Walls are drawn after the cube; where they overlap the cube wins (stronger
-            // bias), and where the cube has shrunk away the walls show through. No coplanar fight.
+            // cube. Faithful to C++ BreakingBlockRenderer::render, which renders adjacent faces
+            // FIRST then the shrinking block LAST (both glPolygonOffset(-1,-1)): the walls (drawn
+            // first, weaker bias) show through only where the cube has shrunk away, and the cube
+            // (drawn after, stronger bias) wins everywhere it still covers. Walls write depth,
+            // like the C++ (no glDepthMask(false) during the breaking render).
             _shrinkWallPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
             {
                 BlendState = BlendStateDescription.SingleDisabled,
-                DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
+                DepthStencilState = new DepthStencilStateDescription(true, true, ComparisonKind.LessEqual),
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
                 ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
@@ -3499,6 +3510,11 @@ void main() {
 
         private void DrawHighlight(CommandList cl)
         {
+            // C++ Game.cpp hides the normal block highlighter while breaking - the shrink-cube
+            // overlay (and its own highlight) replaces it. Otherwise the white quad would float in
+            // the shrinking hole.
+            if (_hud.MiningProgress > 0f && _hud.MiningBlockId > 0) return;
+
             var quad = _hud.HighlightWorldQuad;
             if (quad == null || quad.Length != 4 || _highlightPipeline == null)
             {
@@ -3521,10 +3537,12 @@ void main() {
             cl.DrawIndexed(6, 1, 0, 0, 0);
         }
 
-        // Cubuild C++ shrinking-block mining overlay: a cube textured with the mined block's
-        // tiles, centered in the block cell and scaled from 1.0 down to 0.1 as progress -> 1.
-        // Vertices are packed into the world pipeline's 24-byte format (Float3 + 3x UInt1) so it
-        // depth-tests, textures and fogs exactly like terrain.
+        // Cubuild C++ shrinking-block mining overlay: while a block is mined, the WORLD shader
+        // discards every face in the mining cell (hideBreakingBlock -> basic.frag, inclusive
+        // bounds), so the block is completely invisible. This pass then draws ONLY the shrinking
+        // cube - the mined block's tiles, scaled 1.0 -> 0.1 as progress -> 1 - with a tiny
+        // clip-space depth bias (the C++ glPolygonOffset(-1,-1) equivalent, ~1 ULP) so nothing
+        // coplanar can ever z-fight. No walls, no fake faces.
         private void DrawShrinkCube(CommandList cl)
         {
             if (_pipeline == null || _shrinkCubeVertexBuffer == null || _shrinkCubeIndexBuffer == null) return;
@@ -3536,8 +3554,6 @@ void main() {
 
             var center = _hud.MiningBlockPos + new Vector3(0.5f);
             var def = BlockRegistry.GetById(_hud.MiningBlockId);
-            float atlasW = Math.Max(1f, _atlasWidth);
-            float atlasH = Math.Max(1f, _atlasHeight);
             // Infdev per-face shade (top 1.0 / bottom 0.5 / N+S 0.8 / E+W 0.6).
             float[] faceShade = { 0.8f, 0.8f, 0.5f, 1.0f, 0.6f, 0.6f };
             // Unit-cube face corners (back/front/bottom/top/right/left), same as FallingCubeFaces.
@@ -3555,20 +3571,10 @@ void main() {
                 new Point3D(0,0,-1), new Point3D(0,0,1), new Point3D(0,-1,0),
                 new Point3D(0,1,0), new Point3D(1,0,0), new Point3D(-1,0,0),
             };
-            // Neighbor offsets + which face of the NEIGHBOR looks into the mined cell (the C++
-            // renderAdjacentFaces table). faceIndex into the neighbor's faces[] above.
-            (int dx, int dy, int dz, int faceIndex)[] neighbors =
-            {
-                ( 0, 1, 0, 2), // top -> neighbor bottom (y=0, sits at by+1)
-                ( 0,-1, 0, 3), // bottom -> neighbor top (y=1, sits at by)
-                ( 1, 0, 0, 5), // right -> neighbor left (x=0, sits at bx+1)
-                (-1, 0, 0, 4), // left -> neighbor right (x=1, sits at bx)
-                ( 0, 0, 1, 0), // front -> neighbor BACK (z=0, sits at bz+1)
-                ( 0, 0,-1, 1), // back -> neighbor FRONT (z=1, sits at bz)
-            };
 
             int vf = 0;
-            // 1) The shrinking cube itself (24 verts).
+
+            // The shrinking cube itself (24 verts = quads 0-5).
             for (int face = 0; face < 6; face++)
             {
                 var tr = def.FaceTexture(faceNormals[face]);
@@ -3603,69 +3609,10 @@ void main() {
                 }
             }
 
-            // 2) The neighbor walls (24 verts): for each solid neighbor, draw the face that looks
-            // into the mined cell, textured with the NEIGHBOR's tile. This is what the C++
-            // renderAdjacentFaces does - the hole shows the adjacent block's inner face instead
-            // of xray. Drawn at the FULL cell wall (not scaled), so it fills the gap as the cube
-            // shrinks away.
-            if (_chunkManager != null)
-            {
-                int bx = (int)_hud.MiningBlockPos.X;
-                int by = (int)_hud.MiningBlockPos.Y;
-                int bz = (int)_hud.MiningBlockPos.Z;
-                for (int i = 0; i < neighbors.Length; i++)
-                {
-                    int nx = bx + neighbors[i].dx;
-                    int ny = by + neighbors[i].dy;
-                    int nz = bz + neighbors[i].dz;
-                    if (!_chunkManager.TryGetLoadedBlock(nx, ny, nz, out int nid) || nid <= 0) continue;
-                    if (nid == BlockRegistry.GetId("water")) continue; // no wall for fluids
-
-                    var ndef = BlockRegistry.GetById(nid);
-                    int nFace = neighbors[i].faceIndex;
-                    var tr = ndef.FaceTexture(faceNormals[nFace]);
-                    uint tileX = (uint)Math.Clamp(tr.X, 0, 255);
-                    uint tileY = (uint)Math.Clamp(tr.Y, 0, 255);
-                    uint tileW = (uint)Math.Clamp(Math.Max(1, tr.Width), 0, 255);
-                    uint tileH = (uint)Math.Clamp(Math.Max(1, tr.Height), 0, 255);
-                    uint pack2 = (tileX << 24) | (tileY << 16) | (tileW << 8) | tileH;
-                    uint shadeByte = (uint)Math.Clamp((int)Math.Round(faceShade[nFace] * 255f), 0, 255);
-                    uint pack3 = shadeByte | (255u << 8); // opaque
-
-                    var src = faces[nFace];
-                    // The wall sits on the SHARED BOUNDARY between the mined cell and the neighbor.
-                    // The cube has a stronger depth bias and draws first (writes depth), so it wins
-                    // where they overlap; the walls (weaker bias, drawn after) only pass where the
-                    // cube has shrunk away. No world-space nudge needed.
-                    for (int c = 0; c < 4; c++)
-                    {
-                        float u = src[c * 3 + 0]; // 0..1
-                        float v = src[c * 3 + 1];
-                        float w = src[c * 3 + 2];
-                        float x = bx + neighbors[i].dx + u;
-                        float y = by + neighbors[i].dy + v;
-                        float z = bz + neighbors[i].dz + w;
-                        float du = (c == 1 || c == 2) ? 0.999f : 0f;
-                        float dv = (c == 0 || c == 1) ? 0.999f : 0f; // flipped V
-                        uint duFixed = (uint)Math.Clamp((int)Math.Round(du * 256.0), 0, 0xFFFF);
-                        uint dvFixed = (uint)Math.Clamp((int)Math.Round(dv * 256.0), 0, 0xFFFF);
-                        uint pack1 = (duFixed << 16) | dvFixed;
-                        _shrinkCubeVertexScratch[vf++] = x;
-                        _shrinkCubeVertexScratch[vf++] = y;
-                        _shrinkCubeVertexScratch[vf++] = z;
-                        _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack1);
-                        _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack2);
-                        _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack3);
-                    }
-                }
-            }
-
-            int quadCount = vf / (4 * 6);
-            if (quadCount == 0) return;
             _gd.UpdateBuffer(_shrinkCubeVertexBuffer, 0, _shrinkCubeVertexScratch);
 
-            // 1) Draw the shrink cube first (verts 0-23 = quads 0-5) with the BIASED pipeline so it
-            // always wins its own faces against coplanar world faces at the cell boundary.
+            // Draw the cube only - the world shader already removed every face of the mining cell,
+            // and nothing else is drawn inside it.
             cl.SetPipeline(_shrinkCubePipeline ?? _pipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
             if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
@@ -3673,21 +3620,6 @@ void main() {
             cl.SetVertexBuffer(0, _shrinkCubeVertexBuffer);
             cl.SetIndexBuffer(_shrinkCubeIndexBuffer, IndexFormat.UInt16);
             cl.DrawIndexed(36, 1, 0, 0, 0);
-
-            // 2) Draw the neighbor walls (verts 24+ = quads 6+) with the UNBIASED pipeline, AFTER
-            // the cube, depth-WRITE off. They only pass where the cube has shrunk away and the
-            // world faces were discarded - never coplanar with the cube, so no z-fighting.
-            int wallQuads = quadCount - 6;
-            if (wallQuads > 0 && _shrinkWallPipeline != null)
-            {
-                cl.SetPipeline(_shrinkWallPipeline);
-                cl.SetGraphicsResourceSet(0, _projViewSet);
-                if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
-                cl.SetGraphicsResourceSet(2, _fogSet);
-                cl.SetVertexBuffer(0, _shrinkCubeVertexBuffer);
-                cl.SetIndexBuffer(_shrinkCubeIndexBuffer, IndexFormat.UInt16);
-                cl.DrawIndexed((uint)(wallQuads * 6), 1, 24, 0, 0);
-            }
         }
 
         private void DrawChunkBorders(CommandList cl)
