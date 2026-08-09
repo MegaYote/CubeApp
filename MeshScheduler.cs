@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace CubeApp
 {
@@ -13,6 +14,10 @@ namespace CubeApp
         /// mesh versions never advance, so callers that wait on remesh must release immediately.</summary>
         public bool HasRealMeshQueue { get; }
 
+        // Dirty-list of chunks needing a mesh rebuild (instead of scanning every loaded chunk).
+        // Populated via MarkDirty (called wherever NeedsRemesh is set); Update() drains only these.
+        private readonly HashSet<ChunkCoordinates> _dirty = new();
+
         public MeshScheduler(ChunkManager manager, IMeshQueue meshQueue)
         {
             _manager = manager ?? throw new ArgumentNullException(nameof(manager));
@@ -20,26 +25,55 @@ namespace CubeApp
             HasRealMeshQueue = meshQueue is not NoOpMeshQueue;
         }
 
+        /// <summary>Registers a chunk for a mesh rebuild. Call wherever NeedsRemesh is set so the
+        /// scheduler can drain a dirty-list instead of scanning every loaded chunk.</summary>
+        public void MarkDirty(ChunkCoordinates coords)
+        {
+            _dirty.Add(coords);
+        }
+
+        public void MarkDirtyChunk(Chunk chunk)
+        {
+            int chunkX = chunk.OriginX / ChunkManager.ChunkSize;
+            int chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
+            int layer = ChunkManager.LayerForWorldY(chunk.OriginY);
+            _dirty.Add(new ChunkCoordinates(layer, chunkX, chunkZ));
+        }
+
         public int Update()
         {
             int queued = 0;
 
-            foreach (var chunk in _manager.GetLoadedChunks())
+            if (_dirty.Count == 0)
             {
-                if (!chunk.NeedsRemesh)
+                NeedsMeshUpdate = false;
+                return 0;
+            }
+
+            // Copy so we can safely remove entries while iterating.
+            foreach (var coords in new List<ChunkCoordinates>(_dirty))
+            {
+                if (!_manager.TryGetLoadedChunk(coords, out var chunk))
+                {
+                    _dirty.Remove(coords); // chunk gone - nothing to mesh
                     continue;
+                }
+
+                if (!chunk.NeedsRemesh)
+                {
+                    _dirty.Remove(coords); // already meshed since the flag was set
+                    continue;
+                }
 
                 if (chunk.IsMeshingQueued)
-                    continue;
+                {
+                    continue; // keep in _dirty: it may be re-flagged while meshing, and NeedsRemesh
+                              // stays true until the worker finishes, so the next Update retries it
+                }
 
                 chunk.IsMeshingQueued = true;
-
-                int chunkX = chunk.OriginX / ChunkManager.ChunkSize;
-                int chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
-                int layer = ChunkManager.LayerForWorldY(chunk.OriginY);
-
-                _meshQueue.Enqueue(new ChunkCoordinates(layer, chunkX, chunkZ));
-
+                _meshQueue.Enqueue(coords);
+                _dirty.Remove(coords);
                 queued++;
             }
 

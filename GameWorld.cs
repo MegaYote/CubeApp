@@ -103,6 +103,9 @@ namespace CubeApp
             int meshWorkers = Math.Clamp(Environment.ProcessorCount / 4, 2, 8);
             _meshQueue = new MeshWorker(Chunks, getRenderer, meshWorkers);
             Mesher = new MeshScheduler(Chunks, _meshQueue);
+            // Dirty-list wiring: any chunk whose NeedsRemesh flips true registers itself with the
+            // scheduler instead of the scheduler scanning every loaded chunk each update.
+            Chunks.ChunkDirty = Mesher.MarkDirtyChunk;
             BlockTicks = new BlockTickScheduler(Chunks, Mesher);
             _chunkGenWorker = new ChunkGenWorker(Chunks, () => ChunkGenerated?.Invoke(), Math.Max(1, chunkGenWorkers));
 
@@ -120,6 +123,7 @@ namespace CubeApp
         {
             _meshQueue = new NoOpMeshQueue();
             Mesher = new MeshScheduler(Chunks, _meshQueue);
+            Chunks.ChunkDirty = Mesher.MarkDirtyChunk;
             BlockTicks = new BlockTickScheduler(Chunks, Mesher);
         }
 

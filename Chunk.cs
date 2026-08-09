@@ -36,7 +36,29 @@ namespace CubeApp
         }
         // Cached mesh for this chunk (regenerated when NeedsRemesh is true)
         public List<MeshFace> MeshFaces { get; set; } = new List<MeshFace>();
-        public bool NeedsRemesh { get; set; } = true;
+        private bool _needsRemesh = true;
+        /// <summary>True when this chunk's mesh must be regenerated. The setter fires
+        /// <see cref="OnDirty"/> (used by MeshScheduler's dirty-list) whenever it transitions
+        /// to true, so the scheduler never scans every loaded chunk to find work.</summary>
+        public bool NeedsRemesh
+        {
+            get => _needsRemesh;
+            set
+            {
+                if (value && !_needsRemesh)
+                {
+                    _needsRemesh = true;
+                    OnDirty?.Invoke(this);
+                }
+                else
+                {
+                    _needsRemesh = value;
+                }
+            }
+        }
+        /// <summary>Called once when NeedsRemesh flips false -> true. Wired to the MeshScheduler's
+        /// dirty-list by GameWorld after constructing the scheduler.</summary>
+        public Action<Chunk>? OnDirty;
         // Prevent duplicate enqueueing while meshing is pending
         public bool IsMeshingQueued { get; set; } = false;
         // Incremented each time MeshFaces is updated by the mesher

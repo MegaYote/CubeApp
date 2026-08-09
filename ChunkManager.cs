@@ -48,11 +48,27 @@ namespace CubeApp
         private readonly ConcurrentDictionary<ChunkCoordinates, byte> pendingGeneration = new();
         private readonly IChunkProvider[] chunkProviders = new IChunkProvider[3];
 
+        /// <summary>Fired when any chunk flips NeedsRemesh false -> true. Wired to the
+        /// MeshScheduler's dirty-list by GameWorld so the scheduler never scans every loaded
+        /// chunk to find mesh work.</summary>
+        public Action<Chunk>? ChunkDirty;
+
         public ChunkManager(IChunkProvider? deepProvider = null, IChunkProvider? groundProvider = null, IChunkProvider? skyProvider = null)
         {
             chunkProviders[DeepLayer] = deepProvider ?? new DeepChunkProvider();
             chunkProviders[GroundLayer] = groundProvider ?? new InfdevChunkProvider();
             chunkProviders[SkyLayer] = skyProvider ?? new SkyChunkProvider();
+        }
+
+        private void WireDirty(Chunk chunk)
+        {
+            chunk.OnDirty = ChunkDirty;
+            // Newly generated/loaded chunks are already marked dirty; make sure the scheduler
+            // knows without waiting for a false->true transition.
+            if (chunk.NeedsRemesh && !chunk.IsMeshingQueued)
+            {
+                ChunkDirty?.Invoke(chunk);
+            }
         }
 
         public static int LayerForWorldY(int worldY)
@@ -85,6 +101,7 @@ namespace CubeApp
                 var chunk = chunkProviders[layer].GenerateChunk(chunkX, chunkZ, ChunkSize, HeightForLayer(layer));
                 chunk.NeedsRemesh = true;
                 created = true;
+                WireDirty(chunk);
                 return chunk;
             });
 
