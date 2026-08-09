@@ -1144,13 +1144,14 @@ layout(set=2, binding=0) uniform FogParams {
 layout(location=0) out vec4 outColor;
 void main() {
     // While a block is being mined, its cell is hidden so the shrinking-block overlay shows.
-    // Tiny epsilon so both coplanar faces at each wall are discarded (the neighbor walls are
-    // redrawn as fake quads anyway). Any LARGER epsilon would also eat into the neighbor's
-    // PERPENDICULAR faces near the corners, leaving a visible sliver of invisibility.
+    // EXACT cell bounds (no epsilon): the neighbor walls are redrawn as fake quads with a
+    // clip-space depth bias, so coplanar faces at the boundary are covered either way. An
+    // epsilon would also eat the neighbor's PERPENDICULAR faces at the corners (fragments just
+    // outside the cell on adjacent blocks) leaving a visible sliver - exact bounds avoid that.
     if (hiddenCell.w > 0.5 &&
-        vWorldPos.x >= hiddenCell.x - 0.001 && vWorldPos.x <= hiddenCell.x + 1.001 &&
-        vWorldPos.y >= hiddenCell.y - 0.001 && vWorldPos.y <= hiddenCell.y + 1.001 &&
-        vWorldPos.z >= hiddenCell.z - 0.001 && vWorldPos.z <= hiddenCell.z + 1.001) {
+        vWorldPos.x >= hiddenCell.x && vWorldPos.x <= hiddenCell.x + 1.0 &&
+        vWorldPos.y >= hiddenCell.y && vWorldPos.y <= hiddenCell.y + 1.0 &&
+        vWorldPos.z >= hiddenCell.z && vWorldPos.z <= hiddenCell.z + 1.0) {
         discard;
     }
     // fract() tiles the same atlas tile regardless of how many blocks the face spans.
@@ -1232,9 +1233,9 @@ layout(set=2, binding=0) uniform FogParams {
 layout(location=0) out vec4 outColor;
 void main() {
     if (hiddenCell.w > 0.5 &&
-        vWorldPos.x >= hiddenCell.x - 0.001 && vWorldPos.x <= hiddenCell.x + 1.001 &&
-        vWorldPos.y >= hiddenCell.y - 0.001 && vWorldPos.y <= hiddenCell.y + 1.001 &&
-        vWorldPos.z >= hiddenCell.z - 0.001 && vWorldPos.z <= hiddenCell.z + 1.001) {
+        vWorldPos.x >= hiddenCell.x && vWorldPos.x <= hiddenCell.x + 1.0 &&
+        vWorldPos.y >= hiddenCell.y && vWorldPos.y <= hiddenCell.y + 1.0 &&
+        vWorldPos.z >= hiddenCell.z && vWorldPos.z <= hiddenCell.z + 1.0) {
         discard;
     }
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
@@ -1298,9 +1299,9 @@ layout(location=0) out vec4 outColor;
 void main() {
     if (vColor.a > -150.0) discard; // only translucent (colored) glass - sentinel ~ -200
     if (hiddenCell.w > 0.5 &&
-        vWorldPos.x >= hiddenCell.x - 0.001 && vWorldPos.x <= hiddenCell.x + 1.001 &&
-        vWorldPos.y >= hiddenCell.y - 0.001 && vWorldPos.y <= hiddenCell.y + 1.001 &&
-        vWorldPos.z >= hiddenCell.z - 0.001 && vWorldPos.z <= hiddenCell.z + 1.001) {
+        vWorldPos.x >= hiddenCell.x && vWorldPos.x <= hiddenCell.x + 1.0 &&
+        vWorldPos.y >= hiddenCell.y && vWorldPos.y <= hiddenCell.y + 1.0 &&
+        vWorldPos.z >= hiddenCell.z && vWorldPos.z <= hiddenCell.z + 1.0) {
         discard;
     }
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
