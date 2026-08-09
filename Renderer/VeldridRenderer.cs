@@ -2559,7 +2559,7 @@ void main() {
             float atlasW = Math.Max(1f, _atlasWidth);
             float atlasH = Math.Max(1f, _atlasHeight);
 
-            int vertFloats = n * 4 * 13;
+            int vertFloats = n * 4 * 6;   // packed: Float3 pos + 3x UInt1 = 6 uint32s per vertex
             if (_particleVertexScratch.Length < vertFloats) _particleVertexScratch = new float[vertFloats];
             int indexCount = n * 6;
             if (_particleIndexScratch.Length < indexCount) _particleIndexScratch = new ushort[indexCount];
@@ -2584,29 +2584,31 @@ void main() {
                     { oX + rx + ux, oY + ry + uy, oZ + rz + uz },
                     { oX - rx + ux, oY - ry + uy, oZ - rz + uz }
                 };
-                float u0 = p.TileX / atlasW;
-                float v0 = p.TileY / atlasH;
-                float uw = p.TileW / atlasW;
-                float vh = p.TileH / atlasH;
+                // Tile rect as atlas texels (matches the packed chunk format's aPack2).
+                uint tileX = (uint)Math.Clamp((int)p.TileX, 0, 255);
+                uint tileY = (uint)Math.Clamp((int)p.TileY, 0, 255);
+                uint tileW = (uint)Math.Clamp((int)p.TileW, 0, 255);
+                uint tileH = (uint)Math.Clamp((int)p.TileH, 0, 255);
+                uint pack2 = (tileX << 24) | (tileY << 16) | (tileW << 8) | tileH;
+                uint shadeByte = (uint)Math.Clamp((int)Math.Round(p.Brightness * 255f), 0, 255);
+                uint pack3 = shadeByte | (255u << 8); // alpha byte 255, alphaMode 0 (opaque)
                 int baseV = i * 4;
-                // UVs must never hit exactly 1.0 - the world shader samples via fract(vLocalUV),
-                // and fract(1.0) == 0.0 would collapse the whole quad onto one texel.
-                const float uvMax = 0.999f;
                 for (int c = 0; c < 4; c++)
                 {
+                    // UVs must never hit exactly 1.0 - the world shader samples via fract(vLocalUV),
+                    // and fract(1.0) == 0.0 would collapse the whole quad onto one texel.
+                    float du = (c == 1 || c == 2) ? 0.999f : 0f;
+                    float dv = (c == 2 || c == 3) ? 0.999f : 0f;
+                    uint duFixed = (uint)Math.Clamp((int)Math.Round(du * 256.0), 0, 0xFFFF);
+                    uint dvFixed = (uint)Math.Clamp((int)Math.Round(dv * 256.0), 0, 0xFFFF);
+                    uint pack1 = (duFixed << 16) | dvFixed;
+
                     _particleVertexScratch[vf++] = corners[c, 0];
                     _particleVertexScratch[vf++] = corners[c, 1];
                     _particleVertexScratch[vf++] = corners[c, 2];
-                    _particleVertexScratch[vf++] = (c == 1 || c == 2) ? uvMax : 0f;
-                    _particleVertexScratch[vf++] = (c == 2 || c == 3) ? uvMax : 0f;
-                    _particleVertexScratch[vf++] = u0;
-                    _particleVertexScratch[vf++] = v0;
-                    _particleVertexScratch[vf++] = uw;
-                    _particleVertexScratch[vf++] = vh;
-                    _particleVertexScratch[vf++] = p.Brightness;
-                    _particleVertexScratch[vf++] = p.Brightness;
-                    _particleVertexScratch[vf++] = p.Brightness;
-                    _particleVertexScratch[vf++] = 1f;
+                    _particleVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack1);
+                    _particleVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack2);
+                    _particleVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack3);
                 }
                 _particleIndexScratch[ii++] = (ushort)(baseV + 0);
                 _particleIndexScratch[ii++] = (ushort)(baseV + 1);
@@ -4701,8 +4703,7 @@ void main() {
                 Line($"Seed: {_hud.WorldSeed}");
                 Line($"Fly: {(_hud.FlyMode ? "ON" : "OFF")}");
                 Line($"Fullbright: {(_hud.Fullbright ? "ON" : "OFF")}  [F6]");
-                Line($"Cull: {(_gpuCullEnabled ? "GPU" : "CPU")}  [F7]");
-                if (!string.IsNullOrEmpty(_hud.NetStatus)) Line($"Net: {_hud.NetStatus}");
+                Line($"Cull: {(_gpuCullEnabled ? "GPU" : "CPU")}  [F7]");                if (!string.IsNullOrEmpty(_hud.NetStatus)) Line($"Net: {_hud.NetStatus}");
                 if (!string.IsNullOrEmpty(_hud.BiomeText)) Line($"Biome: {_hud.BiomeText}");
                 Line($"XYZ: {_hud.PlayerX:0.000} / {_hud.PlayerY:0.000} / {_hud.PlayerZ:0.000}");
                 Line($"Block: {(int)Math.Floor(_hud.PlayerX)} / {(int)Math.Floor(_hud.PlayerY)} / {(int)Math.Floor(_hud.PlayerZ)}");
