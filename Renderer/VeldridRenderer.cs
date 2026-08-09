@@ -66,7 +66,7 @@ namespace CubeApp.Renderer
         private DeviceBuffer _shrinkCubeVertexBuffer;
         private DeviceBuffer _shrinkCubeIndexBuffer;
         private Pipeline _shrinkCubePipeline;
-        private readonly float[] _shrinkCubeVertexScratch = new float[24 * 6]; // 24 verts * 6 floats
+        private readonly float[] _shrinkCubeVertexScratch = new float[48 * 6]; // shrink cube (24) + neighbor walls (24) verts * 6 floats
 
         // Pipeline for chunk border wireframe rendering (F3 debug)
         private Pipeline _chunkBorderPipeline;
@@ -1683,17 +1683,17 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
             _shrinkCubeVertexBuffer = factory.CreateBuffer(new BufferDescription(
                 (uint)(_shrinkCubeVertexScratch.Length * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
             _shrinkCubeIndexBuffer = factory.CreateBuffer(new BufferDescription(
-                36 * sizeof(ushort), BufferUsage.IndexBuffer));
-            var cubeIndices = new ushort[36];
-            for (int face = 0; face < 6; face++)
+                72 * sizeof(ushort), BufferUsage.IndexBuffer)); // 12 quads (cube + 6 walls)
+            var cubeIndices = new ushort[72];
+            for (int quad = 0; quad < 12; quad++)
             {
-                int fv = face * 4;
-                cubeIndices[face * 6 + 0] = (ushort)(fv + 0);
-                cubeIndices[face * 6 + 1] = (ushort)(fv + 1);
-                cubeIndices[face * 6 + 2] = (ushort)(fv + 2);
-                cubeIndices[face * 6 + 3] = (ushort)(fv + 0);
-                cubeIndices[face * 6 + 4] = (ushort)(fv + 2);
-                cubeIndices[face * 6 + 5] = (ushort)(fv + 3);
+                int fv = quad * 4;
+                cubeIndices[quad * 6 + 0] = (ushort)(fv + 0);
+                cubeIndices[quad * 6 + 1] = (ushort)(fv + 1);
+                cubeIndices[quad * 6 + 2] = (ushort)(fv + 2);
+                cubeIndices[quad * 6 + 3] = (ushort)(fv + 0);
+                cubeIndices[quad * 6 + 4] = (ushort)(fv + 2);
+                cubeIndices[quad * 6 + 5] = (ushort)(fv + 3);
             }
             _gd.UpdateBuffer(_shrinkCubeIndexBuffer, 0, cubeIndices);
 
@@ -3532,8 +3532,20 @@ void main() {
                 new Point3D(0,0,-1), new Point3D(0,0,1), new Point3D(0,-1,0),
                 new Point3D(0,1,0), new Point3D(1,0,0), new Point3D(-1,0,0),
             };
+            // Neighbor offsets + which face of the NEIGHBOR looks into the mined cell (the C++
+            // renderAdjacentFaces table). faceIndex into the neighbor's faces[] above.
+            (int dx, int dy, int dz, int faceIndex)[] neighbors =
+            {
+                ( 0, 1, 0, 2), // top -> neighbor bottom
+                ( 0,-1, 0, 3), // bottom -> neighbor top
+                ( 1, 0, 0, 5), // right -> neighbor left
+                (-1, 0, 0, 4), // left -> neighbor right
+                ( 0, 0, 1, 1), // front -> neighbor back
+                ( 0, 0,-1, 0), // back -> neighbor front
+            };
 
             int vf = 0;
+            // 1) The shrinking cube itself (24 verts).
             for (int face = 0; face < 6; face++)
             {
                 var tr = def.FaceTexture(faceNormals[face]);
@@ -3568,18 +3580,74 @@ void main() {
                 }
             }
 
+            // 2) The neighbor walls (24 verts): for each solid neighbor, draw the face that looks
+            // into the mined cell, textured with the NEIGHBOR's tile. This is what the C++
+            // renderAdjacentFaces does - the hole shows the adjacent block's inner face instead
+            // of xray. Drawn at the FULL cell wall (not scaled), so it fills the gap as the cube
+            // shrinks away.
+            if (_chunkManager != null)
+            {
+                int bx = (int)_hud.MiningBlockPos.X;
+                int by = (int)_hud.MiningBlockPos.Y;
+                int bz = (int)_hud.MiningBlockPos.Z;
+                for (int i = 0; i < neighbors.Length; i++)
+                {
+                    int nx = bx + neighbors[i].dx;
+                    int ny = by + neighbors[i].dy;
+                    int nz = bz + neighbors[i].dz;
+                    if (!_chunkManager.TryGetLoadedBlock(nx, ny, nz, out int nid) || nid <= 0) continue;
+                    if (nid == BlockRegistry.GetId("water")) continue; // no wall for fluids
+
+                    var ndef = BlockRegistry.GetById(nid);
+                    int nFace = neighbors[i].faceIndex;
+                    var tr = ndef.FaceTexture(faceNormals[nFace]);
+                    uint tileX = (uint)Math.Clamp(tr.X, 0, 255);
+                    uint tileY = (uint)Math.Clamp(tr.Y, 0, 255);
+                    uint tileW = (uint)Math.Clamp(Math.Max(1, tr.Width), 0, 255);
+                    uint tileH = (uint)Math.Clamp(Math.Max(1, tr.Height), 0, 255);
+                    uint pack2 = (tileX << 24) | (tileY << 16) | (tileW << 8) | tileH;
+                    uint shadeByte = (uint)Math.Clamp((int)Math.Round(faceShade[nFace] * 255f), 0, 255);
+                    uint pack3 = shadeByte | (255u << 8); // opaque
+
+                    var src = faces[nFace];
+                    // The wall sits exactly on the shared boundary at the full cell size.
+                    for (int c = 0; c < 4; c++)
+                    {
+                        float u = src[c * 3 + 0]; // 0..1
+                        float v = src[c * 3 + 1];
+                        float w = src[c * 3 + 2];
+                        float x = bx + u;
+                        float y = by + v;
+                        float z = bz + w;
+                        float du = (c == 1 || c == 2) ? 0.999f : 0f;
+                        float dv = (c == 2 || c == 3) ? 0.999f : 0f;
+                        uint duFixed = (uint)Math.Clamp((int)Math.Round(du * 256.0), 0, 0xFFFF);
+                        uint dvFixed = (uint)Math.Clamp((int)Math.Round(dv * 256.0), 0, 0xFFFF);
+                        uint pack1 = (duFixed << 16) | dvFixed;
+                        _shrinkCubeVertexScratch[vf++] = x;
+                        _shrinkCubeVertexScratch[vf++] = y;
+                        _shrinkCubeVertexScratch[vf++] = z;
+                        _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack1);
+                        _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack2);
+                        _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack3);
+                    }
+                }
+            }
+
+            int quadCount = vf / (4 * 6);
+            if (quadCount == 0) return;
             _gd.UpdateBuffer(_shrinkCubeVertexBuffer, 0, _shrinkCubeVertexScratch);
 
             // Dedicated shrink-cube pipeline: depth-tests against terrain (won't paint over blocks
-            // behind it) but WITHOUT the hidden-cell discard, so the cube itself renders inside
-            // the mined cell while the real block's faces are discarded by the world shaders.
+            // behind it) but WITHOUT the hidden-cell discard, so the cube and the neighbor walls
+            // render inside the mined cell while the real block's faces are discarded.
             cl.SetPipeline(_shrinkCubePipeline ?? _pipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
             if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
             cl.SetGraphicsResourceSet(2, _fogSet);
             cl.SetVertexBuffer(0, _shrinkCubeVertexBuffer);
             cl.SetIndexBuffer(_shrinkCubeIndexBuffer, IndexFormat.UInt16);
-            cl.DrawIndexed(36, 1, 0, 0, 0);
+            cl.DrawIndexed((uint)(quadCount * 6), 1, 0, 0, 0);
         }
 
         private void DrawChunkBorders(CommandList cl)
