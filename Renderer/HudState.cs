@@ -62,6 +62,10 @@ namespace CubeApp.Renderer
         /// Empty = no error.</summary>
         public string MultiplayerError;
 
+        /// <summary>0..1 mining progress on the highlighted block (0 = not mining). The renderer
+        /// darkens the block-highlight quad as the player mines it, like Cubuild's crack overlay.</summary>
+        public float MiningProgress;
+
         public static HudState Empty => new HudState
         {
             ShowDebug = false,
@@ -87,6 +91,7 @@ namespace CubeApp.Renderer
             RenderDistance = 0,
             NetStatus = string.Empty,
             MultiplayerError = string.Empty,
+            MiningProgress = 0f,
         };
     }
 }

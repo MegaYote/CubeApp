@@ -48,6 +48,15 @@ namespace CubeApp
         private int ChunkRenderRadius => RenderDistances[renderDistanceIndex];
         private string RenderDistanceName => RenderDistanceNames[renderDistanceIndex];
         private int _ignoreInteractFrames; // skips break/place right after a menu click
+        // ---- Survival mining (Cubuild C++ port) -------------------------------------
+        // Hold left click to mine: progress accumulates toward breakTime = BASE_BREAK_TIME *
+        // hardness, particles pop every 20%, and the block breaks at progress >= 1.
+        private const float BaseBreakTime = 1.5f;    // seconds for hardness 1.0 (C++ BASE_BREAK_TIME)
+        private const float BreakParticleInterval = 0.2f; // spawn shards every 20% progress
+        private (int x, int y, int z)? _miningTarget;
+        private float _miningProgress;
+        private int _miningBlockId;
+        private float _miningBlockHardness;
         private GameScreen screen = GameScreen.Title;
         private readonly MenuState menu = new();
         private bool inventoryOpen;
@@ -611,7 +620,8 @@ namespace CubeApp
             {
                 if (!World.Entities.TryAttackMob(World.PlayerPosition, World.GetCameraForward(), null))
                 {
-                    DeleteHighlightedBlock();
+                    // No mob hit: mining is driven by BreakHeld in StepSimulation, but the click
+                    // primes the target so progress starts immediately this frame.
                 }
             }
             if (screen == GameScreen.Playing && World != null && _ignoreInteractFrames == 0 && frameInput.PlaceBlockPressed) PlaceSelectedBlock();
@@ -646,6 +656,103 @@ namespace CubeApp
             }
 
             UpdateCaveAmbience(deltaSeconds);
+
+            // Survival mining: progress accumulates while the left mouse is held.
+            UpdateMining(tickInput, deltaSeconds);
+        }
+
+        // Cubuild C++ port: hold-to-mine. Progress = delta / (BASE_BREAK_TIME * hardness).
+        // Switching target (or releasing) resets progress. Spawns shards every 20% and breaks the
+        // block at 100%.
+        private void UpdateMining(TickInputState tickInput, float deltaSeconds)
+        {
+            if (World == null) return;
+
+            if (tickInput.BreakHeld && _ignoreInteractFrames == 0)
+            {
+                var pick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
+                if (pick.HasValue)
+                {
+                    var target = pick.Value.Remove;
+                    bool sameTarget = _miningTarget.HasValue
+                        && _miningTarget.Value.x == target.x
+                        && _miningTarget.Value.y == target.y
+                        && _miningTarget.Value.z == target.z;
+                    if (!sameTarget)
+                    {
+                        // New target: reset progress.
+                        _miningTarget = target;
+                        _miningProgress = 0f;
+                        if (World.Chunks.TryGetLoadedBlock(target.x, target.y, target.z, out int id))
+                        {
+                            _miningBlockId = id;
+                            _miningBlockHardness = BlockRegistry.HardnessOf(id);
+                        }
+                        else
+                        {
+                            _miningBlockId = 0;
+                            _miningBlockHardness = 1f;
+                        }
+                    }
+
+                    if (float.IsPositiveInfinity(_miningBlockHardness))
+                    {
+                        return; // bedrock-like: unmineable
+                    }
+
+                    float breakTime = BaseBreakTime * _miningBlockHardness;
+                    float oldProgress = _miningProgress;
+                    _miningProgress += (float)(deltaSeconds / breakTime);
+
+                    // Periodic shards while mining (every 20%).
+                    int oldStage = (int)(oldProgress / BreakParticleInterval);
+                    int newStage = (int)(_miningProgress / BreakParticleInterval);
+                    if (newStage > oldStage && _miningProgress < 1f)
+                    {
+                        gpuRenderer?.SpawnBlockBreakParticles(target.x, target.y, target.z, _miningBlockId, 4);
+                    }
+
+                    if (_miningProgress >= 1f)
+                    {
+                        // Fully mined: break it (reuse the existing break path so particles,
+                        // remesh and sound all fire).
+                        DeleteBlockAt(target.x, target.y, target.z);
+                        _miningTarget = null;
+                        _miningProgress = 0f;
+                    }
+                }
+                else
+                {
+                    _miningTarget = null;
+                    _miningProgress = 0f;
+                }
+            }
+            else
+            {
+                // Not holding (or interact locked): reset mining state.
+                _miningTarget = null;
+                _miningProgress = 0f;
+            }
+        }
+
+        // Breaks the block at a world position (shared by mining completion). Returns true if a
+        // block was removed.
+        private bool DeleteBlockAt(int x, int y, int z)
+        {
+            if (World == null) return false;
+            if (!World.TryBreakBlockAt(x, y, z, out int removedBlockId)) return false;
+            gpuRenderer?.SpawnBlockBreakParticles(x, y, z, removedBlockId, 12);
+            needsMeshUpdate = true;
+
+            // Only the sounds that exist are wired: grass.mp3 plays when a GRASS block breaks.
+            if (Sound != null)
+            {
+                if (removedBlockId == BlockRegistry.GetId("grass") && Sound.HasSound("grass"))
+                {
+                    Sound.PlayAt("grass", x + 0.5f, y + 0.5f, z + 0.5f, 0.6f);
+                }
+            }
+            return true;
         }
 
         // Plays a random cave sound at a slow interval while the player is underground. Only the
@@ -663,6 +770,11 @@ namespace CubeApp
             // 1.12-style: keep the listener at the camera, then play positioned sounds.
             Sound.UpdateListener((float)World.PlayerPosition.X, (float)World.PlayerPosition.Y, (float)World.PlayerPosition.Z);
             Sound.Update();
+
+            // NOTE: cave ambience is DISABLED temporarily to isolate the grass-break sound path.
+            // It was playing at the player position every 12-25s underground, which read as
+            // "sounds repeat and follow me." Re-enable when block sounds are confirmed clean.
+            return;
 
             bool underground = World.PlayerPosition.Y < 0; // below sea level / in the deep layer
             if (!underground)
@@ -698,24 +810,6 @@ namespace CubeApp
         // ------------------------------------------------------------------
         // block interaction (render-layer effects: particles + immediate meshes)
         // ------------------------------------------------------------------
-
-        private void DeleteHighlightedBlock()
-        {
-            if (World == null) return;
-            if (!World.TryBreakBlock(World.LocalPlayer, World.PlayerPosition, World.GetCameraForward(), out int removedBlockId, out var removedPos)) return;
-            gpuRenderer?.SpawnBlockBreakParticles(removedPos.x, removedPos.y, removedPos.z, removedBlockId, 12);
-            needsMeshUpdate = true;
-
-            // Only the sounds that exist are wired: grass.mp3 plays when a GRASS block breaks.
-            // The engine auto-registers any future sound by filename, so drop-in new ones there.
-            if (Sound != null)
-            {
-                if (removedBlockId == BlockRegistry.GetId("grass") && Sound.HasSound("grass"))
-                {
-                    Sound.PlayAt("grass", removedPos.x + 0.5f, removedPos.y + 0.5f, removedPos.z + 0.5f, 0.6f);
-                }
-            }
-        }
 
         private void PlaceSelectedBlock()
         {
@@ -817,6 +911,16 @@ namespace CubeApp
             var pickResult = World.TryPickBlock(World.PlayerPosition, forward);
             Vector3[]? highlightQuad = null;
             if (pickResult.HasValue) highlightQuad = ComputeHighlightWorldQuad(pickResult.Value);
+            // Mining overlay only shows on the block actually being mined.
+            float miningProgress = 0f;
+            if (_miningTarget.HasValue && pickResult.HasValue)
+            {
+                var t = pickResult.Value.Remove;
+                if (_miningTarget.Value.x == t.x && _miningTarget.Value.y == t.y && _miningTarget.Value.z == t.z)
+                {
+                    miningProgress = _miningProgress;
+                }
+            }
             return new HudState
             {
                 ShowDebug = showFps, InventoryOpen = inventoryOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
@@ -835,6 +939,7 @@ namespace CubeApp
                 RenderDistance = ChunkRenderRadius,
                 NetStatus = netStatus,
                 MultiplayerError = mpError,
+                MiningProgress = miningProgress,
             };
         }
 

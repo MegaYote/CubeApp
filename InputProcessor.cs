@@ -66,6 +66,8 @@ namespace CubeApp
         public bool JumpPressed { get; }
         public bool MoveUp { get; }
         public bool MoveDown { get; }
+        public bool BreakHeld { get; }
+        public bool PlaceHeld { get; }
         public Vector2 LookDelta { get; }
 
         public TickInputState(
@@ -76,6 +78,8 @@ namespace CubeApp
             bool jumpPressed,
             bool moveUp,
             bool moveDown,
+            bool breakHeld,
+            bool placeHeld,
             Vector2 lookDelta)
         {
             MoveForward = moveForward;
@@ -85,6 +89,8 @@ namespace CubeApp
             JumpPressed = jumpPressed;
             MoveUp = moveUp;
             MoveDown = moveDown;
+            BreakHeld = breakHeld;
+            PlaceHeld = placeHeld;
             LookDelta = lookDelta;
         }
     }
@@ -116,6 +122,8 @@ namespace CubeApp
         private bool toggleGpuCullPressed;
         private bool breakBlockPressed;
         private bool placeBlockPressed;
+        private bool breakHeld;
+        private bool placeHeld;
         private int? selectedSlot;
         private Vector2 lookDeltaAccum;
         private Vector2 lastMousePosition;
@@ -248,11 +256,13 @@ namespace CubeApp
 
                 if (mouseEvent.MouseButton == MouseButton.Left)
                 {
-                    breakBlockPressed = true;
+                    breakHeld = mouseEvent.Down;
+                    if (mouseEvent.Down) breakBlockPressed = true;
                 }
                 else if (mouseEvent.MouseButton == MouseButton.Right)
                 {
-                    placeBlockPressed = true;
+                    placeHeld = mouseEvent.Down;
+                    if (mouseEvent.Down) placeBlockPressed = true;
                 }
             }
 
@@ -365,6 +375,8 @@ namespace CubeApp
                 jumpPressed,
                 moveUp,
                 moveDown,
+                breakHeld,
+                placeHeld,
                 Vector2.Zero);
 
             jumpPressed = false;

@@ -245,7 +245,11 @@ namespace CubeApp.Net
             if (input.JumpPressed) flags |= 0x10;
             if (input.MoveUp) flags |= 0x20;
             if (input.MoveDown) flags |= 0x40;
+            if (input.BreakHeld) flags |= 0x80;
             w.WriteByte(flags);
+            byte flags2 = 0;
+            if (input.PlaceHeld) flags2 |= 0x01;
+            w.WriteByte(flags2);
             w.WriteFloat(input.LookDelta.X);
             w.WriteFloat(input.LookDelta.Y);
             w.WriteFloat(yaw);
@@ -282,10 +286,13 @@ namespace CubeApp.Net
             if (!r.TryReadByte(out var flags)) return false;
             input = new TickInputState(
                 (flags & 0x01) != 0, (flags & 0x02) != 0, (flags & 0x04) != 0, (flags & 0x08) != 0,
-                (flags & 0x10) != 0, (flags & 0x20) != 0, (flags & 0x40) != 0, default);
+                (flags & 0x10) != 0, (flags & 0x20) != 0, (flags & 0x40) != 0,
+                (flags & 0x80) != 0, false, default);
+            if (!r.TryReadByte(out var flags2)) return false;
             if (!r.TryReadFloat(out var lx) || !r.TryReadFloat(out var ly)) return false;
             input = new TickInputState(input.MoveForward, input.MoveBackward, input.MoveLeft, input.MoveRight,
-                input.JumpPressed, input.MoveUp, input.MoveDown, new System.Numerics.Vector2(lx, ly));
+                input.JumpPressed, input.MoveUp, input.MoveDown, input.BreakHeld,
+                (flags2 & 0x01) != 0, new System.Numerics.Vector2(lx, ly));
             if (!r.TryReadFloat(out yaw) || !r.TryReadFloat(out pitch)) return false;
             return true;
         }

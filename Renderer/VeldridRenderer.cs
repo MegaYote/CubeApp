@@ -57,6 +57,9 @@ namespace CubeApp.Renderer
         private DeviceBuffer _highlightVertexBuffer;
         private DeviceBuffer _highlightIndexBuffer;
         private readonly float[] _highlightVertexScratch = new float[12];
+        private ResourceLayout _highlightTintLayout;
+        private DeviceBuffer _highlightTintBuffer;
+        private ResourceSet _highlightTintSet;
 
         // Pipeline for chunk border wireframe rendering (F3 debug)
         private Pipeline _chunkBorderPipeline;
@@ -1611,8 +1614,9 @@ layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() { gl_Position = projView * vec4(aPosition, 1.0); }";
 
             string fsCode = @"#version 450
+layout(set=0, binding=1) uniform Tint { vec4 uTint; };
 layout(location=0) out vec4 outColor;
-void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
+void main() { outColor = uTint; }";
 
             var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
             var fsSpirv = SpirvCompilation.CompileGlslToSpirv(fsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
@@ -1629,10 +1633,15 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
                 DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
-                ResourceLayouts = new[] { _projViewLayout },
+                ResourceLayouts = new[] { _projViewLayout, _highlightTintLayout },
                 ShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { shaders[0], shaders[1] }),
                 Outputs = _sc.Framebuffer.OutputDescription
             };
+
+            _highlightTintLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
+                new ResourceLayoutElementDescription("Tint", ResourceKind.UniformBuffer, ShaderStages.Fragment)));
+            _highlightTintBuffer = factory.CreateBuffer(new BufferDescription(16, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _highlightTintSet = factory.CreateResourceSet(new ResourceSetDescription(_highlightTintLayout, _highlightTintBuffer));
 
             _highlightPipeline = factory.CreateGraphicsPipeline(pipelineDesc);
 
@@ -3338,8 +3347,18 @@ void main() {
 
             _gd.UpdateBuffer(_highlightVertexBuffer, 0, _highlightVertexScratch);
 
+            // Mining tint: normally a translucent white outline. As mining progress goes 0->1 the
+            // tint darkens toward crack-black (Cubuild's breaking overlay), and the highlight
+            // becomes more opaque so the crack reads over the block's texture.
+            float p = Math.Clamp(_hud.MiningProgress, 0f, 1f);
+            float light = 1f - p * 0.85f;          // white -> dark
+            float alpha = 0.35f + p * 0.45f;       // 0.35 -> 0.8
+            var tint = new[] { light, light * 0.92f, light * 0.85f, alpha };
+            _gd.UpdateBuffer(_highlightTintBuffer, 0, tint);
+
             cl.SetPipeline(_highlightPipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
+            cl.SetGraphicsResourceSet(1, _highlightTintSet);
             cl.SetVertexBuffer(0, _highlightVertexBuffer);
             cl.SetIndexBuffer(_highlightIndexBuffer, IndexFormat.UInt16);
             cl.DrawIndexed(6, 1, 0, 0, 0);

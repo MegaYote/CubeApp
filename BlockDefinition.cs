@@ -52,6 +52,11 @@ namespace CubeApp
         /// removed or updated out from under it, it drops until it finds support.</summary>
         public bool Gravity { get; set; }
 
+        /// <summary>Survival mining hardness (Cubuild C++ port): break time = BASE_BREAK_TIME *
+        /// hardness. 1.0 = default; soft blocks (dirt/grass ~0.5-0.6) mine fast, stone ~4 takes a
+        /// while, bedrocks are unbreakable.</summary>
+        public float Hardness { get; set; } = 1f;
+
         /// <summary>Picks the atlas tile for a given face normal, honouring top/bottom/side overrides.</summary>
         public TextureRect FaceTexture(Point3D normal)
         {

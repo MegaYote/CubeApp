@@ -35,6 +35,7 @@ namespace CubeApp
         private static bool[] _gravity = Array.Empty<bool>();
         private static int[] _lightEmission = Array.Empty<int>();
         private static float[] _alpha = Array.Empty<float>();
+        private static float[] _hardness = Array.Empty<float>();
         private static uint[] _mapColor = Array.Empty<uint>();
         private static int[] _hotbar = Array.Empty<int>();
         public static bool Loaded { get; private set; }
@@ -66,6 +67,43 @@ namespace CubeApp
             public int LightEmission { get; set; } = 0;
             public bool Gravity { get; set; } = false;
             public string? MapColor { get; set; } = "#000000";
+            public double Hardness { get; set; } = 0; // 0 => code default
+        }
+
+        /// <summary>Default survival-mining hardness (Cubuild C++ port). Blocks that share an id
+        /// family (slabs/stairs/_top) inherit the base block's value. Bedrock is unbreakable.</summary>
+        private static float DefaultHardness(string id)
+        {
+            string baseId = id
+                .Replace("_slab_top", "").Replace("_slab", "").Replace("_stairs", "")
+                .Replace("_top", "");
+            return baseId switch
+            {
+                "air" => 0f,
+                "bedrock" => float.PositiveInfinity,
+                "water" => 0f,
+                "grass" or "grass_spreading" or "full_grass" => 0.6f,
+                "dirt" or "gravel" or "redclay" or "sand" => 0.5f,
+                "leaves" or "sapling" or "red_flower" or "yellow_flower" or "blue_flower"
+                    or "red_mushroom" or "white_mushroom" or "poison_mushroom" or "spikes" or "sap" => 0.2f,
+                "planks" or "treated_planks" or "log" or "bookshelf" or "workbench" or "rottingwood"
+                    or "rottingwood_2" or "rottingwood_3" or "rottingwood_4" or "rottingwood_5"
+                    or "rubberblock" or "cage" or "corn_block" => 2f,
+                "stone" or "cobblestone" or "mossycobblestone" or "smoothstone" or "shimmerrock"
+                    or "quartz" or "tiledstone" or "darkstone" => 4f,
+                "bricks" or "bluebrick" or "greenbrick" or "yellowbrick" or "pinkbrick" or "cyanbrick"
+                    or "blackbrick" or "whitebrick" => 4f,
+                "coalore" => 3f,
+                "ironore" => 3f,
+                "goldore" => 3f,
+                "diamondore" or "bluestoneore" or "copperore" => 3f,
+                "iron" or "gold" or "diamond" or "copper" => 5f,
+                "obsidian" => 8f,
+                "glass" => 0.3f,
+                "bomb" => 0f,
+                "sponge" => 0.6f,
+                _ => 1f,
+            };
         }
 
         /// <summary>Loads the catalogue from a JSON string. Throws on the first malformed block
@@ -109,6 +147,7 @@ namespace CubeApp
                     LightEmission = dto.LightEmission,
                     Gravity = dto.Gravity,
                     MapColor = ParseMapColor(dto.MapColor ?? "#000000"),
+                    Hardness = dto.Hardness > 0 ? (float)dto.Hardness : DefaultHardness(dto.Id),
                 };
 
                 // air has no faces; everything else must define at least an "all" tile.
@@ -130,6 +169,7 @@ namespace CubeApp
             _opaque = new bool[Count];
             _transparent = new bool[Count];
             _alpha = new float[Count];
+            _hardness = new float[Count];
             _mapColor = new uint[Count];
             _cross = new bool[Count];
             _cutout = new bool[Count];
@@ -147,6 +187,7 @@ namespace CubeApp
                 _opaque[i] = defs[i].Opaque;
                 _transparent[i] = defs[i].Transparent;
                 _alpha[i] = defs[i].Alpha;
+                _hardness[i] = defs[i].Hardness;
                 _mapColor[i] = defs[i].MapColor;
                 _inventory[i] = defs[i].Inventory;
                 _lightEmission[i] = defs[i].LightEmission;
@@ -226,6 +267,7 @@ namespace CubeApp
         public static bool IsGravity(int id) => id > 0 && id < Count && _gravity[id];
         public static int LightEmissionOf(int id) => id > 0 && id < Count ? _lightEmission[id] : 0;
         public static float Alpha(int id) => _alpha[id];
+        public static float HardnessOf(int id) => id >= 0 && id < Count ? _hardness[id] : 1f;
         public static uint MapColorOf(int id) => _mapColor[id];
         public static TextureRect FaceTexture(int id, Point3D normal) => _defs[id].FaceTexture(normal);
 

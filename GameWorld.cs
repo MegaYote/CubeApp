@@ -551,14 +551,26 @@ namespace CubeApp
             var pickResult = TryPickBlock(origin, direction);
             if (!pickResult.HasValue) return false;
             var remove = pickResult.Value.Remove;
-            if (!Chunks.TryGetLoadedBlock(remove.x, remove.y, remove.z, out removedBlockId)) return false;
-            if (!Chunks.TrySetBlock(remove.x, remove.y, remove.z, BlockRegistry.AirId)) return false;
-            removedPos = remove;
-            BlockTicks?.OnBlockChanged(remove.x, remove.y, remove.z);
-            int rLayer = ChunkManager.LayerForWorldY(remove.y);
-            var editedChunk = new ChunkCoordinates(rLayer, WorldToChunkCoord(remove.x), WorldToChunkCoord(remove.z));
+            if (TryBreakBlockAt(remove.x, remove.y, remove.z, out removedBlockId))
+            {
+                removedPos = remove;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>Breaks the block at an exact world position (used by the mining system).
+        /// Returns true if a block was removed, with its previous id for particle spawning.</summary>
+        public bool TryBreakBlockAt(int x, int y, int z, out int removedBlockId)
+        {
+            removedBlockId = 0;
+            if (!Chunks.TryGetLoadedBlock(x, y, z, out removedBlockId)) return false;
+            if (!Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId)) return false;
+            BlockTicks?.OnBlockChanged(x, y, z);
+            int rLayer = ChunkManager.LayerForWorldY(y);
+            var editedChunk = new ChunkCoordinates(rLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
             Mesher.RequestImmediateRemesh(editedChunk);
-            BlockEdited?.Invoke(remove.x, remove.y, remove.z, 0, 0);
+            BlockEdited?.Invoke(x, y, z, 0, 0);
             return true;
         }
 
