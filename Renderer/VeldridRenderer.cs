@@ -1144,14 +1144,15 @@ layout(set=2, binding=0) uniform FogParams {
 layout(location=0) out vec4 outColor;
 void main() {
     // While a block is being mined, its cell is hidden so the shrinking-block overlay shows.
-    // Closed interval [cell, cell+1]: a block's +X/+Y/+Z faces sit EXACTLY at cell+1.0, so a
-    // half-open check left them visible (only the -X/-Y/-Z faces vanished). Discarding the
-    // boundary also hides the touching neighbor faces, which the C++ renderer drew explicitly
-    // to avoid z-fighting - hiding them is the clean equivalent.
+    // Use an EPSILON-expanded box: a cell boundary has TWO faces (the mined block's face and the
+    // neighbour's face back into it) that are separate quads at the same plane. Floating-point
+    // interpolation at the exact boundary can discard one and keep the other, which then z-fights
+    // with the shrink cube. Expanding the test a hair past the walls guarantees BOTH faces at
+    // every wall are discarded - nothing coplanar survives to fight the cube.
     if (hiddenCell.w > 0.5 &&
-        vWorldPos.x >= hiddenCell.x && vWorldPos.x <= hiddenCell.x + 1.0 &&
-        vWorldPos.y >= hiddenCell.y && vWorldPos.y <= hiddenCell.y + 1.0 &&
-        vWorldPos.z >= hiddenCell.z && vWorldPos.z <= hiddenCell.z + 1.0) {
+        vWorldPos.x >= hiddenCell.x - 0.01 && vWorldPos.x <= hiddenCell.x + 1.01 &&
+        vWorldPos.y >= hiddenCell.y - 0.01 && vWorldPos.y <= hiddenCell.y + 1.01 &&
+        vWorldPos.z >= hiddenCell.z - 0.01 && vWorldPos.z <= hiddenCell.z + 1.01) {
         discard;
     }
     // fract() tiles the same atlas tile regardless of how many blocks the face spans.
@@ -1233,9 +1234,9 @@ layout(set=2, binding=0) uniform FogParams {
 layout(location=0) out vec4 outColor;
 void main() {
     if (hiddenCell.w > 0.5 &&
-        vWorldPos.x >= hiddenCell.x && vWorldPos.x <= hiddenCell.x + 1.0 &&
-        vWorldPos.y >= hiddenCell.y && vWorldPos.y <= hiddenCell.y + 1.0 &&
-        vWorldPos.z >= hiddenCell.z && vWorldPos.z <= hiddenCell.z + 1.0) {
+        vWorldPos.x >= hiddenCell.x - 0.01 && vWorldPos.x <= hiddenCell.x + 1.01 &&
+        vWorldPos.y >= hiddenCell.y - 0.01 && vWorldPos.y <= hiddenCell.y + 1.01 &&
+        vWorldPos.z >= hiddenCell.z - 0.01 && vWorldPos.z <= hiddenCell.z + 1.01) {
         discard;
     }
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
@@ -1299,9 +1300,9 @@ layout(location=0) out vec4 outColor;
 void main() {
     if (vColor.a > -150.0) discard; // only translucent (colored) glass - sentinel ~ -200
     if (hiddenCell.w > 0.5 &&
-        vWorldPos.x >= hiddenCell.x && vWorldPos.x <= hiddenCell.x + 1.0 &&
-        vWorldPos.y >= hiddenCell.y && vWorldPos.y <= hiddenCell.y + 1.0 &&
-        vWorldPos.z >= hiddenCell.z && vWorldPos.z <= hiddenCell.z + 1.0) {
+        vWorldPos.x >= hiddenCell.x - 0.01 && vWorldPos.x <= hiddenCell.x + 1.01 &&
+        vWorldPos.y >= hiddenCell.y - 0.01 && vWorldPos.y <= hiddenCell.y + 1.01 &&
+        vWorldPos.z >= hiddenCell.z - 0.01 && vWorldPos.z <= hiddenCell.z + 1.01) {
         discard;
     }
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
