@@ -301,6 +301,18 @@ namespace CubeApp
             EnableMouseLook();
         }
 
+        /// <summary>Teleports the player back to the world spawn, refills health, and resumes.</summary>
+        private void RespawnPlayer()
+        {
+            if (World == null) return;
+            World.PlaceCameraAtSafeSpawn();
+            World.LocalPlayer.Health = 10;
+            World.LocalPlayer.DeathCause = DeathCause.Unknown;
+            World.LocalPlayer.TimeSinceDamage = 0f;
+            World.LocalPlayer.RegenAccumulator = 0f;
+            ResumeToPlaying();
+        }
+
         private void ReturnToTitle()
         {
             StopNetworking();
@@ -345,6 +357,10 @@ namespace CubeApp
             else if (menu.ResumeClicked)
             {
                 ResumeToPlaying();
+            }
+            else if (menu.RespawnClicked)
+            {
+                RespawnPlayer();
             }
             else if (menu.QuitToTitleClicked)
             {
@@ -801,7 +817,7 @@ namespace CubeApp
                 if (frameInput.SpawnStevePressed) World.Entities.SpawnSteve(World.PlayerPosition, World.PlayerYaw);
                 if (frameInput.SpawnZombiePressed) World.Entities.SpawnMobById("zombie", World.PlayerPosition, World.PlayerYaw);
                 // O = take 1 point of damage (healthbar slice test).
-                if (frameInput.DamageSelfPressed) World.LocalPlayer.Health = Math.Max(0, World.LocalPlayer.Health - 1);
+                if (frameInput.DamageSelfPressed) World.DamagePlayer(1, DeathCause.DebugSelf);
             }
             if (frameInput.ToggleThirdPersonPressed) thirdPersonView = !thirdPersonView;
             if (frameInput.SelectedSlot.HasValue && World != null) World.SetSelectedSlot(frameInput.SelectedSlot.Value);
@@ -830,6 +846,15 @@ namespace CubeApp
             if (screen != GameScreen.Playing || World == null) return;
             UpdateNetworking(tickInput, deltaSeconds);
             World.StepSimulation(tickInput, deltaSeconds);
+
+            // Death: when health is fully depleted, stop the sim and show the respawn screen.
+            if (World.LocalPlayer.Health <= 0)
+            {
+                screen = GameScreen.Dead;
+                menu.Screen = GameScreen.Dead;
+                DisableMouseLook();
+                return;
+            }
 
             // Infdev day/night: lower the sky light seed when the celestial angle crosses a new
             // skylightSubtracted level, then re-mesh so the flood fill bakes the dimmer light.
@@ -1197,6 +1222,7 @@ namespace CubeApp
                 BiomeText = World.ChunkProvider?.BiomeNameAt((int)Math.Floor(World.PlayerPosition.X), (int)Math.Floor(World.PlayerPosition.Z)) ?? string.Empty,
                 Hotbar = World.Hotbar, HighlightWorldQuad = highlightQuad,
                 PlayerHealth = World.LocalPlayer.Health,
+                DeathCause = World.LocalPlayer.DeathCause,
                 PlayerX = World.PlayerPosition.X,
                 PlayerY = World.PlayerPosition.Y,
                 PlayerZ = World.PlayerPosition.Z,

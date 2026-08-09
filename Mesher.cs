@@ -48,6 +48,19 @@ namespace CubeApp
             return result;
         }
 
+        // Returns the 3rd-quartile height among the chunk's columns: the highest local Y that at
+        // least 75% of columns reach. Using this for occlusion instead of the absolute max means a
+        // single tall spike (tree, tower, lone peak) can't hide the whole chunk behind it, while
+        // real ridges/mountains still occlude. Columns with no blocks (top=-1) count as -1.
+        private static int RepresentativeColumnHeight(int[] columnTop)
+        {
+            var sorted = (int[])columnTop.Clone();
+            Array.Sort(sorted);
+            int idx = (int)Math.Floor(sorted.Length * 0.75);
+            if (idx >= sorted.Length) idx = sorted.Length - 1;
+            return sorted[idx];
+        }
+
         public static IReadOnlyList<MeshFace> GenerateMesh(IEnumerable<Chunk> chunks)
         {
             var mesh = new List<MeshFace>();
@@ -111,26 +124,45 @@ namespace CubeApp
             bool[] blockAtY = new bool[height];
             bool anyBlock = false;
             int topSolidLocalY = -1;
+            // Per-column solid height (world Y of the highest block in each 1x1 column). Used to
+            // compute a REPRESENTATIVE chunk height for occlusion culling. The plain max is too
+            // aggressive: one lone peak or tree on a chunk's far edge makes the whole 16x16 chunk
+            // occlude a huge area behind it. A majority height (where most columns are solid) keeps
+            // the cull effective for real mountains while valleys/trees stop hiding things.
+            int[] columnTop = new int[width * depth];
+            int stride = depth * height;
+            for (int x = 0; x < width; x++)
+            {
+                int colBase = x * stride;
+                for (int z = 0; z < depth; z++)
+                {
+                    int top = -1;
+                    for (int y = height - 1; y >= 0; y--)
+                    {
+                        if (raw[colBase + z * height + y] != BlockRegistry.AirId) { top = y; break; }
+                    }
+                    columnTop[x * depth + z] = top;
+                    if (top > topSolidLocalY) topSolidLocalY = top;
+                }
+            }
             for (int y = 0; y < height; y++)
             {
                 bool has = false;
-                int stride = depth * height;
-                for (int x = 0; x < width && !has; x++)
+                for (int c = 0; c < columnTop.Length; c++)
                 {
-                    int colBase = x * stride;
-                    for (int z = 0; z < depth && !has; z++)
-                    {
-                        if (raw[colBase + z * height + y] != BlockRegistry.AirId) { has = true; break; }
-                    }
+                    if (columnTop[c] >= y) { has = true; break; }
                 }
                 blockAtY[y] = has;
                 anyBlock |= has;
-                if (has) topSolidLocalY = y;
             }
 
-            // Heightmap occlusion data: the highest solid world Y in this chunk. The mesh worker
-            // owns this chunk exclusively, so writing here is race-free (same lock as MeshFaces).
-            chunk.TopSolidY = topSolidLocalY >= 0 ? chunk.OriginY + topSolidLocalY : chunk.OriginY - 1;
+            // Heightmap occlusion data: a conservative representative height. Use the 3rd-quartile
+            // column height (>=75% of columns reach it) instead of the absolute max, so a lone tall
+            // spike doesn't cull the view. The mesh worker owns this chunk exclusively, so writing
+            // here is race-free (same lock as MeshFaces).
+            int repLocalY = RepresentativeColumnHeight(columnTop);
+            chunk.TopSolidY = repLocalY >= 0 ? chunk.OriginY + repLocalY : chunk.OriginY - 1;
+            chunk.MaxSolidY = topSolidLocalY >= 0 ? chunk.OriginY + topSolidLocalY : chunk.OriginY - 1;
 
             for (int d = 0; d < 3; d++)
             {

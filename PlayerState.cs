@@ -22,5 +22,27 @@ namespace CubeApp
 
         /// <summary>Player health, 0..10. Each point is one slice of the HUD heart (death at 0).</summary>
         public int Health = 10;
+        /// <summary>How the player last died. Set when health reaches 0; the death screen picks its
+        /// message from this. Falls back to generic when no specific cause is known.</summary>
+        public DeathCause DeathCause;
+        /// <summary>Seconds since the player last took damage. Healing waits for the delay, then
+        /// restores one heart slice per regen interval.</summary>
+        public float TimeSinceDamage;
+        /// <summary>Accumulator toward the next heart-slice heal.</summary>
+        public float RegenAccumulator;
+        /// <summary>Seconds until the next heart slice restores (8.5 + random 1..2 fluctuation).</summary>
+        public float NextRegenInterval = 8.5f;
+    }
+
+    /// <summary>
+    /// The manner of a player's death. The respawn screen reads this to pick a fitting message;
+    /// new death methods just set a new cause when they kill the player.
+    /// </summary>
+    public enum DeathCause
+    {
+        /// <summary>Not dead / no cause recorded.</summary>
+        Unknown,
+        /// <summary>Killed by the debug "O" key (manual damage test).</summary>
+        DebugSelf,
     }
 }

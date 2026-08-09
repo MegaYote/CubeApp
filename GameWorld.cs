@@ -182,6 +182,53 @@ namespace CubeApp
             p.Pitch = Math.Clamp(p.Pitch - lookDelta.Y, -89f, 89f);
         }
 
+        /// <summary>
+        /// Applies damage to the local player (mob hits, test key, falls...). Clamps at 0, resets
+        /// the regen timer so healing has to wait the full delay again, and records the death cause
+        /// when the hit drops health to 0.
+        /// </summary>
+        public void DamagePlayer(int amount, DeathCause cause = DeathCause.Unknown)
+        {
+            if (amount <= 0) return;
+            LocalPlayer.Health = Math.Max(0, LocalPlayer.Health - amount);
+            LocalPlayer.TimeSinceDamage = 0f;
+            LocalPlayer.RegenAccumulator = 0f;
+            if (LocalPlayer.Health <= 0)
+            {
+                LocalPlayer.DeathCause = cause;
+            }
+        }
+
+        // Natural regeneration: after RegenDelay seconds without damage the player heals one heart
+        // slice every RegenIntervalBase seconds, plus a random 1..2s fluctuation per slice.
+        private const float RegenDelay = 15f;
+        private const float RegenIntervalBase = 8.5f;
+        private readonly Random _regenRandom = new();
+
+        private void StepRegen(float dt)
+        {
+            var p = LocalPlayer;
+            if (p.Health <= 0) return; // dead players don't heal
+            if (p.Health >= 10)
+            {
+                p.TimeSinceDamage = 0f;
+                p.RegenAccumulator = 0f;
+                return;
+            }
+
+            p.TimeSinceDamage += dt;
+            if (p.TimeSinceDamage < RegenDelay) return;
+
+            p.RegenAccumulator += dt;
+            if (p.RegenAccumulator >= p.NextRegenInterval)
+            {
+                p.RegenAccumulator = 0f;
+                p.Health = Math.Min(10, p.Health + 1);
+                // Random fluctuation of 1..2 seconds per slice.
+                p.NextRegenInterval = RegenIntervalBase + 1f + (float)_regenRandom.NextDouble();
+            }
+        }
+
         /// <summary>Advance the simulation by one frame. Pure logic; no rendering here.</summary>
         public void StepSimulation(TickInputState tickInput, float deltaSeconds)
         {
@@ -194,6 +241,7 @@ namespace CubeApp
             long advance = (long)_worldTimeAccumulator;
             WorldTime += advance;
             _worldTimeAccumulator -= advance;
+            StepRegen(deltaSeconds);
             BlockTicks?.Tick(deltaSeconds);
             StepPlayer(LocalPlayer, tickInput, deltaSeconds);
             Entities.Update(deltaSeconds, LocalPlayer.Position, true);

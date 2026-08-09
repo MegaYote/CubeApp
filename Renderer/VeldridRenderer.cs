@@ -320,8 +320,23 @@ namespace CubeApp.Renderer
         private Texture? _healthbarTexture;
         private TextureView? _healthbarView;
         private IntPtr _healthbarImGuiId;
+        // Flash mask: a copy of the sheet where only the near-black outline pixels are white (the
+        // rest transparent). Drawn over the heart briefly whenever health changes, so the outline
+        // flashes white like the classic MC damage flash.
+        private Texture? _healthbarFlashTexture;
+        private TextureView? _healthbarFlashView;
+        private IntPtr _healthbarFlashImGuiId;
+        private float _healthFlashTimer;
+        private int _lastHudHealth = 10;
+        private const float HealthFlashDuration = 0.25f;
         private const int HealthbarSpriteSize = 13;
         private const int HealthbarGridPitch = 15;
+        // Heartbeat rhythm: "bump, pause, bump bump, pause, bump, pause, bump bump" repeating.
+        // Each entry is (startTimeInCycle, amplitudePx); the second thump of each double is softer.
+        private static readonly double[] HealthbeatTimes = { 0.00, 0.90, 1.05, 1.80, 2.40, 2.55 };
+        private static readonly double[] HealthbeatAmps = { 1.5, 1.5, 1.0, 1.5, 1.5, 1.0 };
+        private const double HealthbeatCycle = 2.8;    // seconds for the full pattern
+        private const double HealthbeatBumpDur = 0.18; // seconds per thump
         private byte[] _worldNameBuffer = new byte[64];
         private byte[] _seedBuffer = new byte[64];
         private byte[] _hostPortBuffer = new byte[16];
@@ -653,9 +668,27 @@ namespace CubeApp.Renderer
                 _healthbarTexture = _gd.ResourceFactory.CreateTexture(desc);
                 _gd.UpdateTexture(_healthbarTexture, img.Data, 0, 0, 0, (uint)img.Width, (uint)img.Height, 1, 0, 0);
                 _healthbarView = _gd.ResourceFactory.CreateTextureView(_healthbarTexture);
+
+                // Build the flash mask: copy the sheet pixels, but keep only near-black outline
+                // pixels (brightness < 16) as opaque white; everything else is fully transparent.
+                // Drawn over the heart for a beat on any health change so the outline flashes white.
+                var flashData = new byte[img.Data.Length];
+                for (int i = 0; i + 3 < img.Data.Length; i += 4)
+                {
+                    int r = img.Data[i], g = img.Data[i + 1], b = img.Data[i + 2], a = img.Data[i + 3];
+                    bool isDark = a > 0 && r < 16 && g < 16 && b < 16;
+                    flashData[i] = flashData[i + 1] = flashData[i + 2] = (byte)(isDark ? 255 : 0);
+                    flashData[i + 3] = (byte)(isDark ? a : 0);
+                }
+                var flashDesc = TextureDescription.Texture2D((uint)img.Width, (uint)img.Height, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
+                _healthbarFlashTexture = _gd.ResourceFactory.CreateTexture(flashDesc);
+                _gd.UpdateTexture(_healthbarFlashTexture, flashData, 0, 0, 0, (uint)img.Width, (uint)img.Height, 1, 0, 0);
+                _healthbarFlashView = _gd.ResourceFactory.CreateTextureView(_healthbarFlashTexture);
+
                 if (_imguiRenderer != null)
                 {
                     _healthbarImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _healthbarView);
+                    _healthbarFlashImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _healthbarFlashView);
                 }
             }
             catch
@@ -2558,6 +2591,12 @@ void main() {
         public void SetHud(HudState hud)
         {
             _hud = hud;
+            // Any health change (gain OR damage) triggers the outline flash.
+            if (hud.PlayerHealth != _lastHudHealth)
+            {
+                _lastHudHealth = hud.PlayerHealth;
+                _healthFlashTimer = HealthFlashDuration;
+            }
             // Compute night factors here (before Render) so the clear color, sky, fog, clouds and
             // mobs all use the CURRENT frame's time - no one-frame lag at the clear.
             ComputeNightFactors();
@@ -2674,6 +2713,9 @@ void main() {
             {
                 FreeChunkRange(rem);
             }
+
+            // Decay the health-outline flash (1/60s per frame; ImGui is updated at 60Hz).
+            if (_healthFlashTimer > 0f) _healthFlashTimer -= 1f / 60f;
 
             // Process priority uploads (player edits) first - no limit for instant feedback
             while (_pendingPriorityUploads.TryDequeue(out var pu))
@@ -5312,6 +5354,32 @@ void main() {
                 }
                 ImGui.End();
             }
+            else if (m.Screen == GameScreen.Dead)
+            {
+                // Death screen: dark red wash over the frozen world + a respawn button. The message
+                // depends on HOW the player died; only the debug-self cause has a message so far.
+                uint deathTint = ImGui.ColorConvertFloat4ToU32(new Vector4(0.15f, 0f, 0f, 0.55f));
+                ImGui.GetBackgroundDrawList().AddRectFilled(Vector2.Zero, size, deathTint);
+
+                string deathMessage = _hud.DeathCause switch
+                {
+                    DeathCause.DebugSelf => "Your heart gave out...",
+                    _ => "You died...",
+                };
+
+                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 140f, size.Y / 2f - 90f), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(280, 180), ImGuiCond.Always);
+                ImGui.Begin("##dead", windowFlags);
+                ImGui.SetWindowFontScale(2.0f);
+                ImGui.TextColored(new Vector4(0.9f, 0.25f, 0.25f, 1f), "You Died");
+                ImGui.SetWindowFontScale(1f);
+                ImGui.Spacing();
+                ImGui.TextColored(new Vector4(0.8f, 0.8f, 0.8f, 1f), deathMessage);
+                ImGui.Spacing();
+                ImGui.Spacing();
+                if (ImGui.Button("Respawn", new Vector2(200, 34))) m.RespawnClicked = true;
+                ImGui.End();
+            }
         }
 
         // Copies a string into a null-terminated byte buffer for ImGui.InputText.
@@ -5515,10 +5583,28 @@ void main() {
                 float heartX = (float)Math.Floor((displaySize.X - heartSize) / 2f);
                 float heartY = (float)Math.Floor(hotbarY - heartSize - 10f);
 
+                // Heartbeat: when health is halfway depleted or worse (<=5) the heart bobs in the
+                // classic "lub-dub" rhythm: bump, pause, bump bump, pause, bump, pause, bump bump.
+                int hp = Math.Clamp(_hud.PlayerHealth, 0, 10);
+                if (hp <= 5)
+                {
+                    double t = ImGui.GetTime();
+                    double tInCycle = t % HealthbeatCycle;
+                    double bob = 0;
+                    for (int i = 0; i < HealthbeatTimes.Length; i++)
+                    {
+                        double u = tInCycle - HealthbeatTimes[i];
+                        if (u >= 0 && u < HealthbeatBumpDur)
+                        {
+                            bob += HealthbeatAmps[i] * Math.Sin(Math.PI * u / HealthbeatBumpDur);
+                        }
+                    }
+                    heartY += (float)bob;
+                }
+
                 // Sprite order (reading order, skipping the blank r0c5 cell):
                 //   health 10..6 -> row 0, cols 0..4
                 //   health 5..0  -> row 1, cols 0..5
-                int hp = Math.Clamp(_hud.PlayerHealth, 0, 10);
                 int spriteRow, spriteCol;
                 if (hp >= 6)
                 {
@@ -5535,12 +5621,25 @@ void main() {
                 float v0 = (spriteRow * HealthbarGridPitch + 1f) / 45f;
                 var uv0 = new Vector2(u0, v0);
                 var uv1 = new Vector2(u0 + HealthbarSpriteSize / 90f, v0 + HealthbarSpriteSize / 45f);
+                var heartPos0 = new Vector2(heartX, heartY);
+                var heartPos1 = new Vector2(heartX + heartSize, heartY + heartSize);
                 drawList.AddImage(
                     _healthbarImGuiId,
-                    new Vector2(heartX, heartY),
-                    new Vector2(heartX + heartSize, heartY + heartSize),
+                    heartPos0,
+                    heartPos1,
                     uv0,
                     uv1);
+
+                // On any health change the near-black outline flashes white for a brief beat.
+                if (_healthFlashTimer > 0f && _healthbarFlashImGuiId != IntPtr.Zero)
+                {
+                    drawList.AddImage(
+                        _healthbarFlashImGuiId,
+                        heartPos0,
+                        heartPos1,
+                        uv0,
+                        uv1);
+                }
             }
 
             // E-menu inventory: a grid of every block. Clicking one queues it to Program, which
@@ -5742,8 +5841,11 @@ void main() {
             _hotbarSelectView?.Dispose();
             _hotbarSelectTexture?.Dispose();
             if (_healthbarTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_healthbarTexture);
+            if (_healthbarFlashTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_healthbarFlashTexture);
             _healthbarView?.Dispose();
             _healthbarTexture?.Dispose();
+            _healthbarFlashView?.Dispose();
+            _healthbarFlashTexture?.Dispose();
             _iconAtlasView?.Dispose();
             _iconAtlasTexture?.Dispose();
             _sc?.Dispose();

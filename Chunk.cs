@@ -39,28 +39,37 @@ namespace CubeApp
         private bool _needsRemesh = true;
         /// <summary>True when this chunk's mesh must be regenerated. The setter fires
         /// <see cref="OnDirty"/> (used by MeshScheduler's dirty-list) whenever it transitions
-        /// to true, so the scheduler never scans every loaded chunk to find work.</summary>
+        /// to true, so the scheduler never scans every loaded chunk to find work.
+        /// Set from BOTH chunk-gen worker threads and the main thread, so it's lock-guarded.</summary>
+        private readonly object _remeshLock = new();
+
         public bool NeedsRemesh
         {
             get => _needsRemesh;
             set
             {
-                if (value && !_needsRemesh)
+                bool fire = false;
+                lock (_remeshLock)
                 {
-                    _needsRemesh = true;
-                    OnDirty?.Invoke(this);
+                    if (value && !_needsRemesh)
+                    {
+                        _needsRemesh = true;
+                        fire = true;
+                    }
+                    else
+                    {
+                        _needsRemesh = value;
+                    }
                 }
-                else
-                {
-                    _needsRemesh = value;
-                }
+                if (fire) OnDirty?.Invoke(this);
             }
         }
         /// <summary>Called once when NeedsRemesh flips false -> true. Wired to the MeshScheduler's
         /// dirty-list by GameWorld after constructing the scheduler.</summary>
         public Action<Chunk>? OnDirty;
-        // Prevent duplicate enqueueing while meshing is pending
-        public bool IsMeshingQueued { get; set; } = false;
+        // Prevent duplicate enqueueing while meshing is pending. Written by the mesh workers
+        // (background) and the mesh scheduler (main thread), so volatile for cross-thread visibility.
+        public volatile bool IsMeshingQueued = false;
         // Incremented each time MeshFaces is updated by the mesher
         public int MeshVersion = 0;
 
@@ -68,6 +77,10 @@ namespace CubeApp
         /// Computed by the mesher from the live block scan. Used by heightmap occlusion culling
         /// to skip chunks hidden behind nearer terrain.</summary>
         public int TopSolidY = int.MinValue;
+
+        /// <summary>Absolute highest solid world Y (the true per-chunk max), kept alongside the
+        /// representative <see cref="TopSolidY"/> so callers can pick the aggressiveness.</summary>
+        public int MaxSolidY = int.MinValue;
 
         public object MeshLock => _meshLock;
 

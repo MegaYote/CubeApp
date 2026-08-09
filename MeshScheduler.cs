@@ -16,7 +16,10 @@ namespace CubeApp
 
         // Dirty-list of chunks needing a mesh rebuild (instead of scanning every loaded chunk).
         // Populated via MarkDirty (called wherever NeedsRemesh is set); Update() drains only these.
+        // The list is mutated from BOTH the chunk-gen worker threads (WireDirty on a fresh chunk)
+        // and the main/render thread, so every access is guarded by a lock.
         private readonly HashSet<ChunkCoordinates> _dirty = new();
+        private readonly object _dirtyLock = new();
         // Reusable scratch so Update() doesn't allocate a List per call.
         private readonly List<ChunkCoordinates> _dirtyScratch = new();
 
@@ -31,7 +34,10 @@ namespace CubeApp
         /// scheduler can drain a dirty-list instead of scanning every loaded chunk.</summary>
         public void MarkDirty(ChunkCoordinates coords)
         {
-            _dirty.Add(coords);
+            lock (_dirtyLock)
+            {
+                _dirty.Add(coords);
+            }
         }
 
         public void MarkDirtyChunk(Chunk chunk)
@@ -39,7 +45,11 @@ namespace CubeApp
             int chunkX = chunk.OriginX / ChunkManager.ChunkSize;
             int chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
             int layer = ChunkManager.LayerForWorldY(chunk.OriginY);
-            _dirty.Add(new ChunkCoordinates(layer, chunkX, chunkZ));
+            var coords = new ChunkCoordinates(layer, chunkX, chunkZ);
+            lock (_dirtyLock)
+            {
+                _dirty.Add(coords);
+            }
         }
 
         public int Update()
@@ -55,30 +65,37 @@ namespace CubeApp
             // Copy so we can safely remove entries while iterating. Reuse the scratch list to
             // avoid a per-update allocation (FPS roadmap #6).
             _dirtyScratch.Clear();
-            _dirtyScratch.AddRange(_dirty);
+            lock (_dirtyLock)
+            {
+                _dirtyScratch.AddRange(_dirty);
+                _dirty.Clear();
+            }
+
             foreach (var coords in _dirtyScratch)
             {
                 if (!_manager.TryGetLoadedChunk(coords, out var chunk))
                 {
-                    _dirty.Remove(coords); // chunk gone - nothing to mesh
-                    continue;
+                    continue; // chunk gone - nothing to mesh
                 }
 
                 if (!chunk.NeedsRemesh)
                 {
-                    _dirty.Remove(coords); // already meshed since the flag was set
-                    continue;
+                    continue; // already meshed since the flag was set
                 }
 
                 if (chunk.IsMeshingQueued)
                 {
-                    continue; // keep in _dirty: it may be re-flagged while meshing, and NeedsRemesh
-                              // stays true until the worker finishes, so the next Update retries it
+                    // Keep it for a retry next frame: NeedsRemesh stays true until the worker
+                    // finishes, and it may be re-flagged while meshing.
+                    lock (_dirtyLock)
+                    {
+                        _dirty.Add(coords);
+                    }
+                    continue;
                 }
 
                 chunk.IsMeshingQueued = true;
                 _meshQueue.Enqueue(coords);
-                _dirty.Remove(coords);
                 queued++;
             }
 

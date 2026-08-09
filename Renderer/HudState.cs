@@ -34,6 +34,8 @@ namespace CubeApp.Renderer
 
         /// <summary>Player health 0..10, drives the healthbar heart slice (10 = full heart).</summary>
         public int PlayerHealth;
+        /// <summary>How the player last died (for the respawn screen message).</summary>
+        public DeathCause DeathCause;
 
         /// <summary>
         /// Four world-space corners of the targeted block face, or null if nothing is currently
@@ -101,6 +103,7 @@ namespace CubeApp.Renderer
             BiomeText = string.Empty,
             Hotbar = Array.Empty<int>(),
             PlayerHealth = 10,
+            DeathCause = DeathCause.Unknown,
             HighlightWorldQuad = null,
             PlayerChunkX = 0,
             PlayerChunkZ = 0,

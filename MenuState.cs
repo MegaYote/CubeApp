@@ -11,6 +11,7 @@ namespace CubeApp
         Loading,
         Playing,
         Paused,
+        Dead,
     }
 
     /// <summary>
@@ -29,6 +30,7 @@ namespace CubeApp
         public bool QuitClicked;
         public bool LoadWorldClicked;
         public bool OpenToLanClicked;
+        public bool RespawnClicked;
         public int SelectedWorldIndex = -1;
         /// <summary>Display names of saved worlds (from the saves folder), for the title list.</summary>
         public List<string> SavedWorlds = new();
@@ -57,6 +59,7 @@ namespace CubeApp
             QuitClicked = false;
             LoadWorldClicked = false;
             OpenToLanClicked = false;
+            RespawnClicked = false;
             HostGameClicked = false;
             JoinGameClicked = false;
             MultiplayerBackClicked = false;
