@@ -660,6 +660,10 @@ namespace CubeApp
         private void UpdateCaveAmbience(float deltaSeconds)
         {
             if (Sound == null || World == null) return;
+            // 1.12-style: keep the listener at the camera, then play positioned sounds.
+            Sound.UpdateListener((float)World.PlayerPosition.X, (float)World.PlayerPosition.Y, (float)World.PlayerPosition.Z);
+            Sound.Update();
+
             bool underground = World.PlayerPosition.Y < 0; // below sea level / in the deep layer
             if (!underground)
             {
@@ -673,7 +677,9 @@ namespace CubeApp
                 string name = CaveSoundNames[Random.Shared.Next(CaveSoundNames.Length)];
                 if (Sound.HasSound(name))
                 {
-                    Sound.Play(name, 0.35f);
+                    // Positioned at the player, quiet, ambient category (1.12: playSound with position).
+                    Sound.PlayAt(name, (float)World.PlayerPosition.X, (float)World.PlayerPosition.Y, (float)World.PlayerPosition.Z,
+                        0.35f, SoundEngine.SoundCategory.Ambient);
                 }
                 _caveAmbienceTimer = 12f + (float)Random.Shared.NextDouble() * 13f;
             }
@@ -706,7 +712,7 @@ namespace CubeApp
             {
                 if (removedBlockId == BlockRegistry.GetId("grass") && Sound.HasSound("grass"))
                 {
-                    Sound.Play("grass", 0.6f);
+                    Sound.PlayAt("grass", removedPos.x + 0.5f, removedPos.y + 0.5f, removedPos.z + 0.5f, 0.6f);
                 }
             }
         }
