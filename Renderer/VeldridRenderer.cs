@@ -88,7 +88,7 @@ namespace CubeApp.Renderer
         private DeviceBuffer _skyFogBuffer;
         private ResourceLayout _skyFogLayout;
         private ResourceSet _skyFogSet;
-        private readonly float[] _skyFogParams = new float[12];
+        private readonly float[] _skyFogParams = new float[20]; // fogColor(4)+fogRange(2)+cameraPos(4)+skyTop(4)+skyBottom(4)
         // Infdev draws the sky in CAMERA space (the display lists sit at y=16 relative to the eye,
         // transformed only by the camera rotation + projection). We mirror that: a static
         // camera-space vertex buffer + this rotation-only view-projection, so the sky is
@@ -1905,16 +1905,29 @@ void main() { vWorldPos = aPosition; vColor = aColor; gl_Position = projView * v
             string fsCode = @"#version 450
 layout(location=0) in vec3 vWorldPos;
 layout(set=1, binding=0) uniform SkyFog {
-    vec4 fogColor;   // rgb + pad
-    vec2 fogRange;   // start, end
-    vec4 cameraPos;  // xyz + pad
+    vec4 fogColor;     // horizon/fog color (matches world fog so terrain fades in seamlessly)
+    vec2 fogRange;     // start, end (unused - sky is not distance-fogged)
+    vec4 cameraPos;    // xyz + pad
+    vec4 skyTop;       // overhead sky color
+    vec4 skyBottom;    // below-horizon color
 };
 layout(location=0) out vec4 outColor;
 void main() {
-    // 1.12 sky: a uniform sky color (the fog/sky color pushed every frame in UpdateFog), so the
-    // horizon matches the world fog and clear target exactly. Vertex colors are unused - the
-    // per-vertex color varying misreads on this pipeline, and a uniform sky is the correct look.
-    outColor = vec4(fogColor.rgb, 1.0);
+    // Vertical sky gradient in CAMERA space (planes at +-16): the horizon is the fog color so the
+    // world fades into it exactly, overhead rises to the bright sky color, and below the horizon
+    // falls to the darker undersky - the classic Infdev/Cubuild gradient. Use the VIEW DIRECTION's
+    // y (normalize(vWorldPos).y), not the plane's constant y: that varies smoothly per-fragment
+    // from +1 overhead to 0 at the horizon to -1 below. Vertex colors are unused (that varying
+    // misreads on this pipeline).
+    // Sky gradient in CAMERA space: horizon = fog color (matches the clear gap), bright overhead,
+    // dark undersky below. Both halves ramp from EXACTLY the horizon (edge 0) so the color AND its
+    // slope are continuous across the seam - no hard line. The 0.55 factor spreads the transition
+    // over a wider band so the horizon blends gently.
+    float up = clamp(normalize(vWorldPos).y * 0.55, -1.0, 1.0);
+    vec3 col = up >= 0.0
+        ? mix(fogColor.rgb, skyTop.rgb, smoothstep(0.0, 1.0, up))
+        : mix(fogColor.rgb, skyBottom.rgb, smoothstep(0.0, -1.0, up));
+    outColor = vec4(col, 1.0);
 }";
 
             var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
@@ -1928,10 +1941,11 @@ void main() {
                 new VertexElementDescription("aColor", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
 
             // Dedicated fog uniform for the sky so its range (0 .. farPlane*0.8) doesn't disturb the
-            // world fog buffer (which is currently disabled but shares the same 48-byte layout).
+            // world fog buffer. Layout: fogColor(16) + fogRange(8) + cameraPos(16) + skyTop(16) +
+            // skyBottom(16) = 80 bytes.
             _skyFogLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
                 new ResourceLayoutElementDescription("SkyFog", ResourceKind.UniformBuffer, ShaderStages.Fragment)));
-            _skyFogBuffer = factory.CreateBuffer(new BufferDescription(48, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _skyFogBuffer = factory.CreateBuffer(new BufferDescription(80, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
             _skyFogSet = factory.CreateResourceSet(new ResourceSetDescription(_skyFogLayout, _skyFogBuffer));
 
             // The sky matrix reuses the projView layout (mat4) but holds the ROTATION-ONLY view *
@@ -2636,12 +2650,14 @@ void main() {
             var cl = _commandList;
             cl.Begin();
             cl.SetFramebuffer(_sc.Framebuffer);
-            // Clear to the 1.12 FOG color (= sky color 0x88BBFF dimmed by the celestial angle),
-            // the same color UpdateFog pushes to the world + sky fog uniforms. The sky planes and
-            // terrain fade to this exact color at the far plane, so clearing to it makes the
-            // horizon band blend seamlessly instead of showing a bright ring at the clip edge.
-            // At night the fog color rides the celestial dim so the horizon gap darkens with the sky.
-            cl.ClearColorTarget(0, new RgbaFloat(_nightSkyR, _nightSkyG, _nightSkyB, 1f));
+            // Clear to the FOG color (0xC0D8FF dimmed by the celestial angle) - the same color the
+            // sky horizon fades to and the world fog fades into. The sky planes sit at +-16 blocks,
+            // so at eye level there's a gap between them where only the clear color shows; it must
+            // match the horizon fog color or a stripe appears there.
+            cl.ClearColorTarget(0, new RgbaFloat(
+                (192f / 255f) * _nightSkyDim,
+                (216f / 255f) * _nightSkyDim,
+                1f * _nightSkyDim, 1f));
             cl.ClearDepthStencil(1f);
 
             // Advance the block-break particle simulation with the real frame delta.
@@ -2875,11 +2891,12 @@ void main() {
             // the fog factor there is ~0.96-1.0 (clear). Fog only ramps up toward the horizon.
             float fogStart = fogEnd * 0.25f;
 
-            // Fog color: the sky color (0x88BBFF = 136,187,255) dimmed by the celestial angle, the
-            // same color the sky planes and clear target use - so terrain fades INTO the sky.
-            float fogR = _nightSkyR;
-            float fogG = _nightSkyG;
-            float fogB = _nightSkyB;
+            // Fog color: Infdev/Cubuild fog color 0xC0D8FF (192,216,255) dimmed by the celestial
+            // angle - PALER/whiter than the deep sky blue, so the horizon reads lighter (like MC's
+            // fog vs sky). The world fades into this color, so distant terrain becomes hazy-white.
+            float fogR = (192f / 255f) * _nightSkyDim;
+            float fogG = (216f / 255f) * _nightSkyDim;
+            float fogB = 1f * _nightSkyDim;
 
             _fogParams[0] = fogR;
             _fogParams[1] = fogG;
@@ -2924,6 +2941,19 @@ void main() {
             _skyFogParams[9] = _fogParams[9];
             _skyFogParams[10] = _fogParams[10];
             _skyFogParams[11] = 1f;
+            // Sky gradient, matching Minecraft: OVERHEAD is a bright, saturated sky blue; the
+            // HORIZON (floats 0-2) is the paler fog color so the world fades into it seamlessly;
+            // BELOW the horizon is the darkened undersky. The key difference from the broken
+            // version: skyTop is the DEEPER sky color, NOT the fog color - so the sky has a real
+            // gradient from vivid blue overhead down to pale at the horizon.
+            _skyFogParams[12] = 136f / 255f * _nightSkyDim;  // 0x88BBFF deep sky blue
+            _skyFogParams[13] = 187f / 255f * _nightSkyDim;
+            _skyFogParams[14] = 1f * _nightSkyDim;
+            _skyFogParams[15] = 1f;
+            _skyFogParams[16] = fogR * 0.2f + 0.04f;
+            _skyFogParams[17] = fogG * 0.2f + 0.04f;
+            _skyFogParams[18] = fogB * 0.6f + 0.1f;
+            _skyFogParams[19] = 1f;
             _gd.UpdateBuffer(_skyFogBuffer, 0, _skyFogParams);
         }
 
@@ -2976,41 +3006,37 @@ void main() {
             return (1f - v) / (v * 3f + 1f) * 0.95f + 0.05f;
         }
 
-        // Renders the Infdev sky: two giant fog-blended planes in CAMERA SPACE - the TOP plane sits
-        // 16 blocks above the eye in Infdev's sky color (0x88BBFF); the BOTTOM plane sits 16 below
-        // in the darkened color ((r*0.2+0.04, g*0.2+0.04, b*0.6+0.1)). Both fade to the fog color
-        // (0xC0D8FF) with distance - the classic Infdev sky gradient. The vertices are CAMERA-space
-        // (relative to the eye, spanning the far plane in every direction), transformed by a
-        // ROTATION-ONLY view-projection, so the sky is structurally locked to the camera and can
-        // never drift as the player walks - exactly how Infdev's display lists work.
+        // Renders the Infdev sky: two giant planes in CAMERA SPACE - the TOP plane sits 16 blocks
+        // above the eye, the BOTTOM plane 16 below. The vertical gradient (bright overhead, fog
+        // color at the horizon, darkened undersky) is computed PER-FRAGMENT in the shader from
+        // vWorldPos.y (the vertex-color varying misreads on this pipeline). The vertices are
+        // CAMERA-space (relative to the eye, spanning the far plane in every direction),
+        // transformed by a ROTATION-ONLY view-projection, so the sky is structurally locked to the
+        // camera and can never drift as the player walks - exactly how Infdev's display lists work.
         private void DrawSky(CommandList cl)
         {
             if (_skyPipeline == null) return;
 
-            // 1.12-style sky gradient: the TOP plane is the sky color (0x88BBFF dimmed by the
-            // celestial angle), and the BOTTOM/horizon plane is the FOG color itself (same as the
-            // world fog + clear target) so terrain fades seamlessly into the horizon. The classic
-            // Infdev darkening is dropped - 1.12 keeps a bright, uniform horizon.
-            float skyR = _nightSkyR, skyG = _nightSkyG, skyB = _nightSkyB;
-            float darkR = _nightSkyR, darkG = _nightSkyG, darkB = _nightSkyB;
-
-            // Sky fog params are set once per frame in UpdateFog (same range + color as the world
-            // fog, so the horizon blends seamlessly). Extent large enough to cover the far plane
-            // from any camera yaw (Infdev uses a 64-step grid out to +-384, we use the same scale).
+            // Sky fog/gradient params are set once per frame in UpdateFog. Extent large enough to
+            // cover the far plane from any camera yaw (Infdev uses a 64-step grid out to +-384,
+            // we use the same scale).
             float extent = Math.Max(_farPlane * 2f, 768f);
 
             // 8 vertices in CAMERA space (eye at origin): top quad at y=+16 (verts 0-3), bottom
             // quad at y=-16 (verts 4-7). pos(3) + color(4). Reused buffer (no per-frame alloc).
             var v = _skyVertexScratch;
             if (v.Length < 56) v = _skyVertexScratch = new float[56];
+            float skyR = _nightSkyR, skyG = _nightSkyG, skyB = _nightSkyB;
             SetSkyVertex(v, 0, -extent, 16f, -extent, skyR, skyG, skyB);
             SetSkyVertex(v, 1, extent, 16f, -extent, skyR, skyG, skyB);
             SetSkyVertex(v, 2, extent, 16f, extent, skyR, skyG, skyB);
             SetSkyVertex(v, 3, -extent, 16f, extent, skyR, skyG, skyB);
-            SetSkyVertex(v, 4, -extent, -16f, -extent, darkR, darkG, darkB);
-            SetSkyVertex(v, 5, extent, -16f, -extent, darkR, darkG, darkB);
-            SetSkyVertex(v, 6, extent, -16f, extent, darkR, darkG, darkB);
-            SetSkyVertex(v, 7, -extent, -16f, extent, darkR, darkG, darkB);
+            // Bottom verts: vertex colors are unused by the shader (gradient is per-fragment), so
+            // reuse the sky color - it only needs to be a valid vec4 for the layout.
+            SetSkyVertex(v, 4, -extent, -16f, -extent, skyR, skyG, skyB);
+            SetSkyVertex(v, 5, extent, -16f, -extent, skyR, skyG, skyB);
+            SetSkyVertex(v, 6, extent, -16f, extent, skyR, skyG, skyB);
+            SetSkyVertex(v, 7, -extent, -16f, extent, skyR, skyG, skyB);
 
             _gd.UpdateBuffer(_skyVertexBuffer, 0, v);
 
