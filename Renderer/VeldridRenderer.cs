@@ -3609,18 +3609,22 @@ void main() {
                     uint pack3 = shadeByte | (255u << 8); // opaque
 
                     var src = faces[nFace];
-                    // The wall sits on the SHARED BOUNDARY between the mined cell and the neighbor
-                    // (not inside the mined cell!). The face vertices are in the NEIGHBOR's cell, so
-                    // offset by the neighbor direction: boundary = mined + neighborOffset + vertex.
-                    // The C++ does the same: faceCenter = blockPos + 0.5 + offset * 0.5.
+                    // The wall sits on the SHARED BOUNDARY between the mined cell and the neighbor.
+                    // Nudge it ~0.01 INTO the mined cell (toward the cell center) so it is never
+                    // exactly coplanar with the neighbor's real face - which can survive the
+                    // fp-boundary discard and z-fight. This is the C++ polygon-offset equivalent,
+                    // but in world space where depth precision is reliable.
+                    float px = -neighbors[i].dx;
+                    float py = -neighbors[i].dy;
+                    float pz = -neighbors[i].dz;
                     for (int c = 0; c < 4; c++)
                     {
                         float u = src[c * 3 + 0]; // 0..1
                         float v = src[c * 3 + 1];
                         float w = src[c * 3 + 2];
-                        float x = bx + neighbors[i].dx + u;
-                        float y = by + neighbors[i].dy + v;
-                        float z = bz + neighbors[i].dz + w;
+                        float x = bx + neighbors[i].dx + u + px * 0.01f;
+                        float y = by + neighbors[i].dy + v + py * 0.01f;
+                        float z = bz + neighbors[i].dz + w + pz * 0.01f;
                         float du = (c == 1 || c == 2) ? 0.999f : 0f;
                         float dv = (c == 0 || c == 1) ? 0.999f : 0f; // flipped V
                         uint duFixed = (uint)Math.Clamp((int)Math.Round(du * 256.0), 0, 0xFFFF);
