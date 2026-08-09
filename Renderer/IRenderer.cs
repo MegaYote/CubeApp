@@ -21,6 +21,7 @@ namespace CubeApp.Renderer
         void ToggleGpuCulling();
         void MeshChunkImmediate(CubeApp.ChunkCoordinates coords);
         void ProcessPendingPriorityMeshes();
+        int CountPendingUploads();
         void SetUiInputSnapshot(Veldrid.InputSnapshot snapshot);
         bool TryTakeInventorySelection(out int blockId);
         void SpawnBlockBreakParticles(int worldX, int worldY, int worldZ, int blockId, int count);

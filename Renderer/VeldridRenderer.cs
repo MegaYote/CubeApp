@@ -2660,6 +2660,21 @@ void main() {
                 1f * _nightSkyDim, 1f));
             cl.ClearDepthStencil(1f);
 
+            // During world LOADING, don't draw the world/sky at all - just a solid dark
+            // background + the progress UI. The terrain isn't ready yet, and the user wants
+            // nothing visible until loading finishes.
+            if (_hud.Menu != null && _hud.Menu.Screen == GameScreen.Loading)
+            {
+                cl.ClearColorTarget(0, new RgbaFloat(0.12f, 0.12f, 0.14f, 1f));
+                _imguiRenderer.Update(1f / 60f, _uiInputSnapshot ?? NullInputSnapshot.Instance);
+                BuildHudUi();
+                _imguiRenderer.Render(_gd, cl);
+                cl.End();
+                _gd.SubmitCommands(cl);
+                _gd.SwapBuffers(_sc);
+                return;
+            }
+
             // Advance the block-break particle simulation with the real frame delta.
             long now = _particleClock.ElapsedTicks;
             float particleDt = (float)((now - _lastParticleTicks) / (double)System.Diagnostics.Stopwatch.Frequency);
@@ -5032,10 +5047,10 @@ void main() {
 
         // Tiles the dirt block texture across the screen - the classic Infdev menu background.
         // Uses the BACKGROUND draw list so the ImGui menu windows render on top of it.
-        private void DrawDirtBackground(Vector2 screenSize)
+        private void DrawDirtBackground(Vector2 screenSize, string blockName = "dirt")
         {
             if (_terrainImGuiId == IntPtr.Zero) return;
-            var dirt = BlockRegistry.Get("dirt").AllTexture;
+            var dirt = BlockRegistry.Get(blockName).AllTexture;
             if (!dirt.HasValue) return;
             var tr = dirt.Value;
             float u0 = tr.X / _atlasWidth;
@@ -5064,6 +5079,14 @@ void main() {
             if (m == null) return;
             var io = ImGui.GetIO();
             var size = io.DisplaySize;
+
+            // The loading screen uses the same dirt background as the title, with a phase name +
+            // progress bars on top.
+            if (m.Screen == GameScreen.Loading)
+            {
+                DrawLoadingScreen(m, size);
+                return;
+            }
 
             // The title/create screens get the dirt background; the pause menu just dims the
             // frozen world behind it with a translucent gray wash.
@@ -5256,6 +5279,40 @@ void main() {
             int end = Array.IndexOf(buffer, (byte)0);
             if (end < 0) end = buffer.Length;
             return System.Text.Encoding.UTF8.GetString(buffer, 0, end);
+        }
+
+        // Loading screen: a centered phase label with a per-phase progress bar and a total bar.
+        // The world renders normally behind it (it fills in as chunks generate), so the player
+        // sees the terrain assembling before they're dropped in.
+        private void DrawLoadingScreen(MenuState m, Vector2 size)
+        {
+            // Stone-tiled background (matches the underground theme of world loading); the title
+            // screen keeps its dirt background via the default parameter.
+            DrawDirtBackground(size, "stone");
+
+            ImGuiWindowFlags windowFlags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
+                | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar
+                | ImGuiWindowFlags.NoScrollWithMouse;
+
+            const float winW = 360f;
+            const float winH = 120f;
+            ImGui.SetNextWindowPos(new Vector2((size.X - winW) / 2f, (size.Y - winH) / 2f), ImGuiCond.Always);
+            ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
+            ImGui.Begin("##loading", windowFlags);
+
+            ImGui.SetWindowFontScale(1.6f);
+            ImGui.Text("Building World...");
+            ImGui.SetWindowFontScale(1f);
+            ImGui.Dummy(new Vector2(0, 8));
+
+            ImGui.Text(m.LoadingPhase);
+            ImGui.ProgressBar(m.LoadingPhaseProgress, new Vector2(winW - 40f, 16f));
+
+            ImGui.Dummy(new Vector2(0, 8));
+            ImGui.Text("Overall progress");
+            ImGui.ProgressBar(m.LoadingTotalProgress, new Vector2(winW - 40f, 16f));
+
+            ImGui.End();
         }
 
         private void BuildHudUi()
@@ -5956,6 +6013,13 @@ void main() {
             {
                 WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices, pu.TransparentVertices, pu.TransparentIndices);
             }
+        }
+
+        /// <summary>Total chunk meshes still queued for GPU upload. Used by the world-loading
+        /// screen to know when all pre-generated chunks are fully ready.</summary>
+        public int CountPendingUploads()
+        {
+            return _pendingUploads.Count + _pendingPriorityUploads.Count;
         }
 
         /// <summary>Feeds the real input snapshot to ImGui (for the interactive E-menu inventory).

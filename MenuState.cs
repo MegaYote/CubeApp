@@ -8,6 +8,7 @@ namespace CubeApp
         Title,
         CreateWorld,
         Multiplayer,
+        Loading,
         Playing,
         Paused,
     }
@@ -38,6 +39,15 @@ namespace CubeApp
         public bool MultiplayerBackClicked;
         public string JoinAddress = "127.0.0.1:26065";
         public string HostPort = "26065";
+
+        // ---- loading screen ----
+        /// <summary>Current generation phase name shown on the loading screen ("Generating terrain",
+        /// "Meshing chunks", etc).</summary>
+        public string LoadingPhase = "";
+        /// <summary>Fraction (0..1) of the current phase.</summary>
+        public float LoadingPhaseProgress;
+        /// <summary>Fraction (0..1) of the entire load.</summary>
+        public float LoadingTotalProgress;
 
         public void ResetFlags()
         {

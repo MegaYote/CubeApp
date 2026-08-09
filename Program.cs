@@ -35,6 +35,21 @@ namespace CubeApp
         private int frameCount;
         // Reusable per-frame entity render list (avoids one List allocation every frame).
         private readonly List<MobRenderData> _entityRenderScratch = new();
+
+        // ---- world loading screen ----
+        // Staged loader state: pre-generates + meshes a chunk radius around spawn so the player
+        // drops into a fully ready world (no pop-in), showing a phase progress bar. The loader
+        // runs in the main loop while screen == Loading, then flips to Playing.
+        private int _loadTargetRadius;          // chunk radius to fully prepare
+        private int _loadGroundRequested;       // ground chunks requested so far
+        private int _loadGroundTotal;           // total ground chunks in the target radius
+        private readonly HashSet<ChunkCoordinates> _loadTargetSet = new(); // exact chunk set to prepare
+        private readonly HashSet<ChunkCoordinates> _loadMeshedSet = new(); // meshed+uploaded chunks
+        private int _loadMeshedCount;
+        private int _loadPhase;                 // 0 preparing, 1 generating, 2 meshing, 3 finishing
+        private float _loadPhaseStart;
+        private bool _loadSkipSpawn;            // true when loading a save (position already restored)
+
         private float lastFps;
         private readonly Stopwatch fpsStopwatch = new();
         private float lastUpdateMs;
@@ -107,14 +122,156 @@ namespace CubeApp
                 gpuRenderer.SetWorldSeed(World.Seed);
                 gpuRenderer.ResetWorld();
             }
-            World.EnsureVisibleChunks();
-            World.PlaceCameraAtSafeSpawn();
-            _lastMeshPosition = World.PlayerPosition;
-            World.Mesher.Update();
+            // Pre-generate + mesh a radius around spawn before entering Play so there's no pop-in.
+            BeginWorldLoad();
+        }
+
+        // Begins the staged world-load. The main loop calls UpdateLoading while screen == Loading;
+        // when the target radius is generated AND meshed AND uploaded, it flips to Playing.
+        private void BeginWorldLoad()
+        {
+            _loadPhase = 0;
+            _loadPhaseStart = 0f;
+            _loadSkipSpawn = false;
+            _loadTargetSet.Clear();
+            _loadMeshedSet.Clear();
+            _loadMeshedCount = 0;
+            _loadGroundRequested = 0;
+            // Prepare a full render-distance radius (the default "Far") so the spawn view is done.
+            _loadTargetRadius = ChunkRenderRadius;
+            // Ground chunks in a circle of that radius: ~pi*r^2.
+            _loadGroundTotal = 0;
+            for (int dz = -_loadTargetRadius; dz <= _loadTargetRadius; dz++)
+            {
+                for (int dx = -_loadTargetRadius; dx <= _loadTargetRadius; dx++)
+                {
+                    if ((long)dx * dx + (long)dz * dz > (long)_loadTargetRadius * _loadTargetRadius) continue;
+                    _loadGroundTotal++;
+                }
+            }
+
+            // Phase 0: pick the spawn point first (generates a tiny ring of ground chunks).
+            menu.LoadingPhase = "Preparing spawn";
+            menu.LoadingPhaseProgress = 0f;
+            menu.LoadingTotalProgress = 0f;
+            screen = GameScreen.Loading;
+            menu.Screen = GameScreen.Loading;
+            DisableMouseLook();
+        }
+
+        // Advances the world-load staged pipeline. Runs every frame while screen == Loading.
+        private void UpdateLoading(float deltaSeconds)
+        {
+            if (World == null) { FinishLoading(); return; }
+            _loadPhaseStart += deltaSeconds;
+
+            switch (_loadPhase)
+            {
+                case 0:
+                    // Prepare spawn: find a safe spot (generates the first ring of chunks). When
+                    // loading a save the position was already restored - just use it.
+                    if (!_loadSkipSpawn) World.PlaceCameraAtSafeSpawn();
+                    _lastMeshPosition = World.PlayerPosition;
+                    _loadPhase = 1;
+                    break;
+
+                case 1:
+                    // Generate terrain: request ground chunks in growing rings (workers generate
+                    // them off-thread). Phase progress = rings completed / target radius.
+                    {
+                        int cx = GameWorld.WorldToChunkCoord(World.PlayerPosition.X);
+                        int cz = GameWorld.WorldToChunkCoord(World.PlayerPosition.Z);
+                        int ring = Math.Min(_loadTargetRadius, 1 + (int)(_loadPhaseStart * 4.0)); // ~4 rings/sec
+                        World.Chunks.RequestChunksAround(cx, cz, ring, World.PlayerPosition, ChunkManager.GroundLayer);
+                        _loadGroundRequested = CountGroundChunksInRadius(cx, cz, ring);
+                        menu.LoadingPhase = "Generating terrain";
+                        menu.LoadingPhaseProgress = Math.Clamp(ring / (float)_loadTargetRadius, 0f, 1f);
+                        menu.LoadingTotalProgress = 0.15f * menu.LoadingPhaseProgress;
+                        if (ring >= _loadTargetRadius) _loadPhase = 2;
+                    }
+                    break;
+
+                case 2:
+                    // Mesh chunks: wait until every ground chunk in the target radius is meshed.
+                    // Precompute the expected set once (spawn chunk coords), then check each is
+                    // loaded + meshed. Robust to chunk counts not matching a radius formula.
+                    {
+                        int cx = GameWorld.WorldToChunkCoord(World.PlayerPosition.X);
+                        int cz = GameWorld.WorldToChunkCoord(World.PlayerPosition.Z);
+                        if (_loadTargetSet.Count == 0)
+                        {
+                            for (int dz = -_loadTargetRadius; dz <= _loadTargetRadius; dz++)
+                            {
+                                for (int dx = -_loadTargetRadius; dx <= _loadTargetRadius; dx++)
+                                {
+                                    if ((long)dx * dx + (long)dz * dz > (long)_loadTargetRadius * _loadTargetRadius) continue;
+                                    _loadTargetSet.Add(new ChunkCoordinates(ChunkManager.GroundLayer, cx + dx, cz + dz));
+                                }
+                            }
+                            _loadGroundTotal = _loadTargetSet.Count;
+                        }
+
+                        World.Chunks.RequestChunksAround(cx, cz, _loadTargetRadius, World.PlayerPosition, ChunkManager.GroundLayer);
+                        World.Mesher.Update();
+                        gpuRenderer?.ProcessPendingPriorityMeshes();
+
+                        _loadMeshedCount = 0;
+                        foreach (var key in _loadTargetSet)
+                        {
+                            if (World.Chunks.TryGetLoadedChunk(key, out var ch)
+                                && !ch.NeedsRemesh && !ch.IsMeshingQueued)
+                            {
+                                _loadMeshedSet.Add(key);
+                            }
+                        }
+                        _loadMeshedCount = _loadMeshedSet.Count;
+                        menu.LoadingPhase = "Meshing chunks";
+                        menu.LoadingPhaseProgress = Math.Clamp(_loadMeshedCount / (float)_loadGroundTotal, 0f, 1f);
+                        // 0.15 (generating) + 0.85 (meshing) -> reaches exactly 1.0 when done.
+                        menu.LoadingTotalProgress = 0.15f + 0.85f * menu.LoadingPhaseProgress;
+                        if (_loadMeshedCount >= _loadGroundTotal)
+                        {
+                            _loadPhaseStart = 0f; // fresh timer for the finishing grace period
+                            _loadPhase = 3;
+                        }
+                    }
+                    break;
+
+                case 3:
+                    // Finishing: give uploads a moment to land, then start playing. A short fixed
+                    // grace time (instead of waiting for pendingUploads == 0, which can stall if a
+                    // re-mesh keeps queuing) - a few frames is plenty since all chunks are meshed.
+                    World.Mesher.Update();
+                    gpuRenderer?.ProcessPendingPriorityMeshes();
+                    menu.LoadingPhase = "Finishing";
+                    menu.LoadingPhaseProgress = 1f;
+                    menu.LoadingTotalProgress = 1f;
+                    if (_loadPhaseStart >= 0.5f) FinishLoading();
+                    break;
+            }
+        }
+
+        private void FinishLoading()
+        {
             screen = GameScreen.Playing;
             menu.Screen = GameScreen.Playing;
             _ignoreInteractFrames = 2;
             EnableMouseLook();
+            menu.LoadingPhase = "";
+        }
+
+        private static int CountGroundChunksInRadius(int cx, int cz, int radius)
+        {
+            int n = 0;
+            for (int dz = -radius; dz <= radius; dz++)
+            {
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    if ((long)dx * dx + (long)dz * dz > (long)radius * radius) continue;
+                    n++;
+                }
+            }
+            return n;
         }
 
         private void OnChunkGenerated() => needsMeshUpdate = true;
@@ -379,6 +536,7 @@ namespace CubeApp
 
         private void LoadWorld(WorldSave save)
         {
+            _loadSkipSpawn = true;
             StartNewWorld(save.Seed, save.Name);
             foreach (var c in save.Chunks)
             {
@@ -481,7 +639,14 @@ namespace CubeApp
                         fpsStopwatch.Restart();
                     }
                     var t0 = stageStopwatch.ElapsedTicks;
-                    StepSimulation(input.CaptureTickInput(), (float)deltaSeconds);
+                    if (screen == GameScreen.Loading)
+                    {
+                        UpdateLoading((float)deltaSeconds);
+                    }
+                    else
+                    {
+                        StepSimulation(input.CaptureTickInput(), (float)deltaSeconds);
+                    }
                     var t1 = stageStopwatch.ElapsedTicks;
                     lastUpdateMs = (t1 - t0) * 1000f / Stopwatch.Frequency;
                     var t2 = stageStopwatch.ElapsedTicks;
