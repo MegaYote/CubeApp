@@ -2777,30 +2777,27 @@ void main() {
             _fogParams[5] = 1e6f;
             if (_cameraPosition.HasValue)
             {
-                _fogParams[6] = (float)_cameraPosition.Value.X;
-                _fogParams[7] = (float)_cameraPosition.Value.Y;
-                _fogParams[8] = (float)_cameraPosition.Value.Z;
+                // std140: vec4 cameraPos must start at a 16-byte boundary -> floats 8-11.
+                _fogParams[8] = (float)_cameraPosition.Value.X;
+                _fogParams[9] = (float)_cameraPosition.Value.Y;
+                _fogParams[10] = (float)_cameraPosition.Value.Z;
             }
-            _fogParams[9] = 1f;
+            _fogParams[11] = 1f;
 
-            // The world's night dimming happens in the LIGHTING ENGINE (ChunkLighting lowers its
-            // sky seed by SkylightSubtracted, then chunks are remeshed) - faithful to Infdev's
-            // skylightSubtracted. Here we only darken the fog color so the horizon matches the sky.
-            _fogParams[10] = _nightSkyDim; // fog color multiplier (fades to dark at night)
             // Hidden mining cell: the world shaders discard fragments inside this cell so the
             // shrinking-block overlay shows through while a block is being mined.
+            // std140: vec4 hiddenCell -> floats 12-15.
             if (_hud.MiningProgress > 0f && _hud.MiningBlockId > 0)
             {
-                _fogParams[11] = _hud.MiningBlockPos.X;
-                _fogParams[12] = _hud.MiningBlockPos.Y;
-                _fogParams[13] = _hud.MiningBlockPos.Z;
-                _fogParams[14] = 1f;
+                _fogParams[12] = _hud.MiningBlockPos.X;
+                _fogParams[13] = _hud.MiningBlockPos.Y;
+                _fogParams[14] = _hud.MiningBlockPos.Z;
+                _fogParams[15] = 1f;
             }
             else
             {
-                _fogParams[14] = 0f;
+                _fogParams[15] = 0f;
             }
-            _fogParams[15] = 0f;
             _gd.UpdateBuffer(_fogBuffer, 0, _fogParams);
         }
 
