@@ -53,7 +53,6 @@ namespace CubeApp.Renderer
         // the glass tint over whatever is behind it - so water behind glass stays visible through
         // the transparent panes while the opaque frames (drawn in the glass pass) still occlude.
         private Pipeline _translucentPipeline;
-        private byte[] _worldVsSpirvBytes = Array.Empty<byte>();
         private Pipeline _highlightPipeline;
         private DeviceBuffer _highlightVertexBuffer;
         private DeviceBuffer _highlightIndexBuffer;
@@ -1168,7 +1167,6 @@ void main() {
 }";
 
             var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
-            _worldVsSpirvBytes = vsSpirv.SpirvBytes;
             var fsSpirv = SpirvCompilation.CompileGlslToSpirv(fsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
 
             var vsDesc = new ShaderDescription(ShaderStages.Vertex, vsSpirv.SpirvBytes, "main");
@@ -1700,13 +1698,49 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
 
             // Dedicated pipeline for the shrinking cube: same packed vertex format + atlas + fog,
             // depth-tested like terrain (so it doesn't paint over blocks behind it), but WITHOUT
-            // the hidden-cell discard so the cube itself is visible in the mined cell. Uses the
-            // WORLD vertex shader (packed decode) and a dedicated fragment shader.
+            // the hidden-cell discard so the cube itself is visible in the mined cell. Its vertex
+            // shader applies a clip-space depth bias (the C++ used glPolygonOffset(-1,-1)) so the
+            // cube always wins against coplanar/behind faces - no z-fighting at the cell walls.
             var worldVertexLayout = new VertexLayoutDescription(
                 new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
                 new VertexElementDescription("aPack1", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1),
                 new VertexElementDescription("aPack2", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1),
                 new VertexElementDescription("aPack3", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1));
+            float shrinkAtlasW = Math.Max(1f, _atlasWidth);
+            float shrinkAtlasH = Math.Max(1f, _atlasHeight);
+            string shrinkVsCode = $@"#version 450
+layout(location=0) in vec3 aPosition;
+layout(location=1) in uint aPack1;
+layout(location=2) in uint aPack2;
+layout(location=3) in uint aPack3;
+layout(location=0) out vec2 vLocalUV;
+layout(location=1) out vec4 vTileRect;
+layout(location=2) out vec4 vColor;
+layout(location=3) out vec3 vWorldPos;
+layout(set=0, binding=0) uniform ProjectionView {{ mat4 projView; }};
+const float ATLAS_INV_X = 1.0 / {shrinkAtlasW.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
+const float ATLAS_INV_Y = 1.0 / {shrinkAtlasH.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
+void main() {{
+    float du = float((aPack1 >> 16) & 0xFFFFu) / 256.0;
+    float dv = float(aPack1 & 0xFFFFu) / 256.0;
+    vLocalUV = vec2(du, dv);
+    float tx = float((aPack2 >> 24) & 0xFFu) * ATLAS_INV_X;
+    float ty = float((aPack2 >> 16) & 0xFFu) * ATLAS_INV_Y;
+    float tw = float((aPack2 >> 8) & 0xFFu) * ATLAS_INV_X;
+    float th = float(aPack2 & 0xFFu) * ATLAS_INV_Y;
+    vTileRect = vec4(tx, ty, tw, th);
+    float shade = float(aPack3 & 0xFFu) / 255.0;
+    uint alphaByte = (aPack3 >> 8) & 0xFFu;
+    uint mode = (aPack3 >> 16) & 0x3u;
+    float alpha = mode == 0u ? float(alphaByte) / 255.0 : (mode == 1u ? -100.0 : -200.0);
+    vColor = vec4(shade, shade, shade, alpha);
+    vWorldPos = aPosition;
+    vec4 clip = projView * vec4(aPosition, 1.0);
+    // Polygon-offset equivalent (C++ glPolygonOffset(-1,-1)): pull depth toward the camera so
+    // the shrink cube wins the depth test against any coplanar face at the cell walls.
+    clip.z -= 0.0005 * clip.w;
+    gl_Position = clip;
+}}";
             string shrinkFsCode = @"#version 450
 layout(location=0) in vec2 vLocalUV;
 layout(location=1) in vec4 vTileRect;
@@ -1729,9 +1763,10 @@ void main() {
     float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
     outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);
 }";
+            var shrinkVsSpirv = SpirvCompilation.CompileGlslToSpirv(shrinkVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
             var shrinkFsSpirv = SpirvCompilation.CompileGlslToSpirv(shrinkFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
             var shrinkShaders = factory.CreateFromSpirv(
-                new ShaderDescription(ShaderStages.Vertex, _worldVsSpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Vertex, shrinkVsSpirv.SpirvBytes, "main"),
                 new ShaderDescription(ShaderStages.Fragment, shrinkFsSpirv.SpirvBytes, "main"));
             _shrinkCubePipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
             {
