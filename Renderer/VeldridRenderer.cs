@@ -1709,7 +1709,11 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
                 new VertexElementDescription("aPack3", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1));
             float shrinkAtlasW = Math.Max(1f, _atlasWidth);
             float shrinkAtlasH = Math.Max(1f, _atlasHeight);
-            string shrinkVsCode = $@"#version 450
+            // Build the shared vertex shader with a configurable clip-space depth bias: the CUBE
+            // uses a STRONGER bias so it always wins its faces at the cell boundary; the WALLS use
+            // a weaker bias so they show through only where the cube has shrunk away. This is the
+            // C++ polygon-offset ordering (walls behind, cube on top).
+            string MakeShrinkVs(string biasExpr) => $@"#version 450
 layout(location=0) in vec3 aPosition;
 layout(location=1) in uint aPack1;
 layout(location=2) in uint aPack2;
@@ -1737,11 +1741,12 @@ void main() {{
     vColor = vec4(shade, shade, shade, alpha);
     vWorldPos = aPosition;
     vec4 clip = projView * vec4(aPosition, 1.0);
-    // Polygon-offset equivalent (C++ glPolygonOffset(-1,-1)): pull depth toward the camera so
-    // the shrink cube wins the depth test against any coplanar face at the cell walls.
-    clip.z -= 0.002 * clip.w;
+    // Polygon-offset equivalent (C++ glPolygonOffset(-1,-1)): pull depth toward the camera.
+    clip.z -= {biasExpr} * clip.w;
     gl_Position = clip;
 }}";
+            string shrinkVsCode = MakeShrinkVs("0.002");
+            string wallVsCode = MakeShrinkVs("0.0005");
             string shrinkFsCode = @"#version 450
 layout(location=0) in vec2 vLocalUV;
 layout(location=1) in vec4 vTileRect;
@@ -1769,6 +1774,10 @@ void main() {
             var shrinkShaders = factory.CreateFromSpirv(
                 new ShaderDescription(ShaderStages.Vertex, shrinkVsSpirv.SpirvBytes, "main"),
                 new ShaderDescription(ShaderStages.Fragment, shrinkFsSpirv.SpirvBytes, "main"));
+            var wallVsSpirv = SpirvCompilation.CompileGlslToSpirv(wallVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var wallShaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, wallVsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, shrinkFsSpirv.SpirvBytes, "main"));
             _shrinkCubePipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
             {
                 BlendState = BlendStateDescription.SingleDisabled,
@@ -1783,10 +1792,9 @@ void main() {
                 Outputs = _sc.Framebuffer.OutputDescription
             });
 
-            // Neighbor-wall pipeline: same shaders, NO clip-space depth bias. The cube (biased
-            // toward the camera) always wins its own faces at the cell boundary; the walls are
-            // drawn AFTER the cube with no bias, so they only pass the depth test where the cube
-            // has shrunk away and the world faces were discarded - no coplanar z-fighting.
+            // Neighbor-wall pipeline: same fragment shader but a WEAKER vertex depth bias than the
+            // cube. Walls are drawn after the cube; where they overlap the cube wins (stronger
+            // bias), and where the cube has shrunk away the walls show through. No coplanar fight.
             _shrinkWallPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
             {
                 BlendState = BlendStateDescription.SingleDisabled,
@@ -1794,7 +1802,7 @@ void main() {
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
                 ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
-                ShaderSet = new ShaderSetDescription(new[] { worldVertexLayout }, new[] { shrinkShaders[0], shrinkShaders[1] }),
+                ShaderSet = new ShaderSetDescription(new[] { worldVertexLayout }, new[] { wallShaders[0], wallShaders[1] }),
                 Outputs = _sc.Framebuffer.OutputDescription
             });
         }
@@ -3626,21 +3634,17 @@ void main() {
 
                     var src = faces[nFace];
                     // The wall sits on the SHARED BOUNDARY between the mined cell and the neighbor.
-                    // Nudge it ~0.01 INTO the mined cell (toward the cell center) so it is never
-                    // exactly coplanar with the neighbor's real face - which can survive the
-                    // fp-boundary discard and z-fight. This is the C++ polygon-offset equivalent,
-                    // but in world space where depth precision is reliable.
-                    float px = -neighbors[i].dx;
-                    float py = -neighbors[i].dy;
-                    float pz = -neighbors[i].dz;
+                    // The cube has a stronger depth bias and draws first (writes depth), so it wins
+                    // where they overlap; the walls (weaker bias, drawn after) only pass where the
+                    // cube has shrunk away. No world-space nudge needed.
                     for (int c = 0; c < 4; c++)
                     {
                         float u = src[c * 3 + 0]; // 0..1
                         float v = src[c * 3 + 1];
                         float w = src[c * 3 + 2];
-                        float x = bx + neighbors[i].dx + u + px * 0.05f;
-                        float y = by + neighbors[i].dy + v + py * 0.05f;
-                        float z = bz + neighbors[i].dz + w + pz * 0.05f;
+                        float x = bx + neighbors[i].dx + u;
+                        float y = by + neighbors[i].dy + v;
+                        float z = bz + neighbors[i].dz + w;
                         float du = (c == 1 || c == 2) ? 0.999f : 0f;
                         float dv = (c == 0 || c == 1) ? 0.999f : 0f; // flipped V
                         uint duFixed = (uint)Math.Clamp((int)Math.Round(du * 256.0), 0, 0xFFFF);
