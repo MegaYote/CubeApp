@@ -22,7 +22,10 @@ namespace CubeApp
         private readonly GravitySimulation _gravity;
         private readonly GrassSpreadSimulation _grass;
         private readonly Dictionary<ChunkCoordinates, Dictionary<(int x, int y, int z), int>> _pending = new();
-        private readonly List<(int x, int y, int z)> _due = new();
+        // Min-heap of (dueTick, cell) so TickOnce pops only entries that are actually due instead
+        // of scanning the whole _pending tree every tick (FPS roadmap #5). The bucket dict keeps
+        // duplicate-schedule collapsing and per-chunk cleanup; the heap is the work queue.
+        private readonly PriorityQueue<(int due, int x, int y, int z), int> _queue = new();
         private readonly List<ChunkCoordinates> _emptyBuckets = new();
         private int _tick;
         private double _accumulator;
@@ -63,10 +66,11 @@ namespace CubeApp
             int due = _tick + delayTicks;
             if (bucket.TryGetValue((x, y, z), out var existing) && existing <= due)
             {
-                return;
+                return; // already scheduled for an earlier-or-equal tick
             }
 
             bucket[(x, y, z)] = due;
+            _queue.Enqueue((due, x, y, z), due);
         }
 
         /// <summary>Wake nearby water + gravity + grass after any world change (block placed/removed).</summary>
@@ -100,37 +104,30 @@ namespace CubeApp
         private void TickOnce()
         {
             _tick++;
-            _due.Clear();
 
-            foreach (var (chunkKey, bucket) in _pending)
-            {
-                foreach (var (cell, due) in bucket)
-                {
-                    if (due <= _tick)
-                    {
-                        _due.Add(cell);
-                    }
-                }
-            }
-
-            if (_due.Count == 0)
-            {
-                return;
-            }
-
-            int budget = Math.Min(MaxUpdatesPerTick, _due.Count);
+            // Pop only entries whose due tick has arrived; the heap's min-key means the scan is
+            // bounded by the actually-due work, not the whole schedule.
             int processed = 0;
-            for (int i = 0; i < _due.Count && processed < budget; i++)
+            while (processed < MaxUpdatesPerTick && _queue.TryPeek(out var item, out var priority) && priority <= _tick)
             {
-                var (x, y, z) = _due[i];
-            var key = new ChunkCoordinates(ChunkManager.LayerForWorldY(y),
-                (int)Math.Floor(x / (double)ChunkManager.ChunkSize), (int)Math.Floor(z / (double)ChunkManager.ChunkSize));
-                if (_pending.TryGetValue(key, out var bucket) && bucket.Remove((x, y, z)))
+                _queue.Dequeue();
+
+                var key = new ChunkCoordinates(ChunkManager.LayerForWorldY(item.y),
+                    (int)Math.Floor(item.x / (double)ChunkManager.ChunkSize), (int)Math.Floor(item.z / (double)ChunkManager.ChunkSize));
+                if (!_pending.TryGetValue(key, out var bucket) || !bucket.Remove((item.x, item.y, item.z)))
                 {
-                    _gravity.TickBlock(x, y, z);
-                    _fluid.TickBlock(x, y, z);
-                    _grass.TickBlock(x, y, z);
-                    processed++;
+                    continue; // superseded by a later re-schedule; nothing to tick
+                }
+
+                _gravity.TickBlock(item.x, item.y, item.z);
+                _fluid.TickBlock(item.x, item.y, item.z);
+                _grass.TickBlock(item.x, item.y, item.z);
+                processed++;
+
+                // Drop the bucket once empty so _pending never grows with dead chunks.
+                if (bucket.Count == 0)
+                {
+                    _pending.Remove(key);
                 }
             }
 
