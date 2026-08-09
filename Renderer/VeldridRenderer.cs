@@ -61,6 +61,15 @@ namespace CubeApp.Renderer
         private DeviceBuffer _highlightTintBuffer;
         private ResourceSet _highlightTintSet;
 
+        // Shrinking-block mining overlay (Cubuild C++ BreakingBlockRenderer): a cube textured
+        // with the mined block's tiles that scales from 1.0 down to 0.1 as progress goes 0->1,
+        // drawn with the world pipeline so it depth-tests and fogs like terrain. The cube's
+        // 24 vertices are packed into the world vertex format each frame with the scale baked
+        // into the positions, centered in the block cell.
+        private DeviceBuffer _shrinkCubeVertexBuffer;
+        private DeviceBuffer _shrinkCubeIndexBuffer;
+        private readonly float[] _shrinkCubeVertexScratch = new float[24 * 6]; // 24 verts * 6 floats
+
         // Pipeline for chunk border wireframe rendering (F3 debug)
         private Pipeline _chunkBorderPipeline;
         private DeviceBuffer _chunkBorderVertexBuffer;
@@ -1650,6 +1659,24 @@ void main() { outColor = uTint; }";
             _highlightIndexBuffer = factory.CreateBuffer(new BufferDescription(
                 6 * sizeof(ushort), BufferUsage.IndexBuffer));
             _gd.UpdateBuffer(_highlightIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3 });
+
+            // Shrinking-block mining overlay cube: 24 vertices (packed world format) + 36 indices.
+            _shrinkCubeVertexBuffer = factory.CreateBuffer(new BufferDescription(
+                (uint)(_shrinkCubeVertexScratch.Length * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            _shrinkCubeIndexBuffer = factory.CreateBuffer(new BufferDescription(
+                36 * sizeof(ushort), BufferUsage.IndexBuffer));
+            var cubeIndices = new ushort[36];
+            for (int face = 0; face < 6; face++)
+            {
+                int fv = face * 4;
+                cubeIndices[face * 6 + 0] = (ushort)(fv + 0);
+                cubeIndices[face * 6 + 1] = (ushort)(fv + 1);
+                cubeIndices[face * 6 + 2] = (ushort)(fv + 2);
+                cubeIndices[face * 6 + 3] = (ushort)(fv + 0);
+                cubeIndices[face * 6 + 4] = (ushort)(fv + 2);
+                cubeIndices[face * 6 + 5] = (ushort)(fv + 3);
+            }
+            _gd.UpdateBuffer(_shrinkCubeIndexBuffer, 0, cubeIndices);
         }
 
         // Pipeline for chunk border wireframe rendering (F3 debug)
@@ -2527,6 +2554,7 @@ void main() {
             DrawPlayers(cl);
             DrawCoyotes(cl);
             DrawHighlight(cl);
+            DrawShrinkCube(cl);
             DrawChunkBorders(cl);
 
             _imguiRenderer.Update(1f / 60f, _uiInputSnapshot ?? NullInputSnapshot.Instance);
@@ -3362,6 +3390,87 @@ void main() {
             cl.SetVertexBuffer(0, _highlightVertexBuffer);
             cl.SetIndexBuffer(_highlightIndexBuffer, IndexFormat.UInt16);
             cl.DrawIndexed(6, 1, 0, 0, 0);
+        }
+
+        // Cubuild C++ shrinking-block mining overlay: a cube textured with the mined block's
+        // tiles, centered in the block cell and scaled from 1.0 down to 0.1 as progress -> 1.
+        // Vertices are packed into the world pipeline's 24-byte format (Float3 + 3x UInt1) so it
+        // depth-tests, textures and fogs exactly like terrain.
+        private void DrawShrinkCube(CommandList cl)
+        {
+            if (_pipeline == null || _shrinkCubeVertexBuffer == null || _shrinkCubeIndexBuffer == null) return;
+            float p = _hud.MiningProgress;
+            if (p <= 0.001f || _hud.MiningBlockId <= 0) return;
+
+            float scale = 1f - p * 0.9f; // C++: 1.0 -> 0.1
+            if (scale < 0.001f) return;
+
+            var center = _hud.MiningBlockPos + new Vector3(0.5f);
+            var def = BlockRegistry.GetById(_hud.MiningBlockId);
+            float atlasW = Math.Max(1f, _atlasWidth);
+            float atlasH = Math.Max(1f, _atlasHeight);
+            // Infdev per-face shade (top 1.0 / bottom 0.5 / N+S 0.8 / E+W 0.6).
+            float[] faceShade = { 0.8f, 0.8f, 0.5f, 1.0f, 0.6f, 0.6f };
+            // Unit-cube face corners (back/front/bottom/top/right/left), same as FallingCubeFaces.
+            float[][] faces =
+            {
+                new[] { 0f,0f,0f, 1f,0f,0f, 1f,1f,0f, 0f,1f,0f }, // back (-Z)
+                new[] { 1f,0f,1f, 0f,0f,1f, 0f,1f,1f, 1f,1f,1f }, // front (+Z)
+                new[] { 0f,0f,0f, 1f,0f,0f, 1f,0f,1f, 0f,0f,1f }, // bottom (-Y)
+                new[] { 0f,1f,0f, 0f,1f,1f, 1f,1f,1f, 1f,1f,0f }, // top (+Y)
+                new[] { 1f,0f,1f, 1f,0f,0f, 1f,1f,0f, 1f,1f,1f }, // right (+X)
+                new[] { 0f,0f,0f, 0f,0f,1f, 0f,1f,1f, 0f,1f,0f }, // left (-X)
+            };
+            Point3D[] faceNormals =
+            {
+                new Point3D(0,0,-1), new Point3D(0,0,1), new Point3D(0,-1,0),
+                new Point3D(0,1,0), new Point3D(1,0,0), new Point3D(-1,0,0),
+            };
+
+            int vf = 0;
+            for (int face = 0; face < 6; face++)
+            {
+                var tr = def.FaceTexture(faceNormals[face]);
+                uint tileX = (uint)Math.Clamp(tr.X, 0, 255);
+                uint tileY = (uint)Math.Clamp(tr.Y, 0, 255);
+                uint tileW = (uint)Math.Clamp(Math.Max(1, tr.Width), 0, 255);
+                uint tileH = (uint)Math.Clamp(Math.Max(1, tr.Height), 0, 255);
+                uint pack2 = (tileX << 24) | (tileY << 16) | (tileW << 8) | tileH;
+                uint shadeByte = (uint)Math.Clamp((int)Math.Round(faceShade[face] * 255f), 0, 255);
+                uint pack3 = shadeByte | (255u << 8); // opaque
+
+                var src = faces[face];
+                for (int c = 0; c < 4; c++)
+                {
+                    float u = src[c * 3 + 0] * 2f - 1f; // -1..1
+                    float v = src[c * 3 + 1] * 2f - 1f;
+                    float w = src[c * 3 + 2] * 2f - 1f;
+                    float x = center.X + u * scale * 0.5f;
+                    float y = center.Y + v * scale * 0.5f;
+                    float z = center.Z + w * scale * 0.5f;
+                    float du = (c == 1 || c == 2) ? 0.999f : 0f;
+                    float dv = (c == 2 || c == 3) ? 0.999f : 0f;
+                    uint duFixed = (uint)Math.Clamp((int)Math.Round(du * 256.0), 0, 0xFFFF);
+                    uint dvFixed = (uint)Math.Clamp((int)Math.Round(dv * 256.0), 0, 0xFFFF);
+                    uint pack1 = (duFixed << 16) | dvFixed;
+                    _shrinkCubeVertexScratch[vf++] = x;
+                    _shrinkCubeVertexScratch[vf++] = y;
+                    _shrinkCubeVertexScratch[vf++] = z;
+                    _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack1);
+                    _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack2);
+                    _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack3);
+                }
+            }
+
+            _gd.UpdateBuffer(_shrinkCubeVertexBuffer, 0, _shrinkCubeVertexScratch);
+
+            cl.SetPipeline(_pipeline);
+            cl.SetGraphicsResourceSet(0, _projViewSet);
+            if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
+            cl.SetGraphicsResourceSet(2, _fogSet);
+            cl.SetVertexBuffer(0, _shrinkCubeVertexBuffer);
+            cl.SetIndexBuffer(_shrinkCubeIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed(36, 1, 0, 0, 0);
         }
 
         private void DrawChunkBorders(CommandList cl)
@@ -4845,6 +4954,11 @@ void main() {
             _highlightVertexBuffer?.Dispose();
             _highlightIndexBuffer?.Dispose();
             _highlightPipeline?.Dispose();
+            _highlightTintBuffer?.Dispose();
+            _highlightTintSet?.Dispose();
+            _highlightTintLayout?.Dispose();
+            _shrinkCubeVertexBuffer?.Dispose();
+            _shrinkCubeIndexBuffer?.Dispose();
             _duckVertexBuffer?.Dispose();
             _duckIndexBuffer?.Dispose();
             _duckTextureSet?.Dispose();

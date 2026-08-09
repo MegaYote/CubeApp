@@ -66,6 +66,11 @@ namespace CubeApp.Renderer
         /// darkens the block-highlight quad as the player mines it, like Cubuild's crack overlay.</summary>
         public float MiningProgress;
 
+        /// <summary>World position + block id of the block currently being mined (for the
+        /// shrinking-block overlay). Only valid while MiningProgress > 0.</summary>
+        public Vector3 MiningBlockPos;
+        public int MiningBlockId;
+
         public static HudState Empty => new HudState
         {
             ShowDebug = false,
@@ -92,6 +97,8 @@ namespace CubeApp.Renderer
             NetStatus = string.Empty,
             MultiplayerError = string.Empty,
             MiningProgress = 0f,
+            MiningBlockPos = Vector3.Zero,
+            MiningBlockId = 0,
         };
     }
 }

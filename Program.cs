@@ -913,12 +913,16 @@ namespace CubeApp
             if (pickResult.HasValue) highlightQuad = ComputeHighlightWorldQuad(pickResult.Value);
             // Mining overlay only shows on the block actually being mined.
             float miningProgress = 0f;
+            Vector3 miningBlockPos = Vector3.Zero;
+            int miningBlockId = 0;
             if (_miningTarget.HasValue && pickResult.HasValue)
             {
                 var t = pickResult.Value.Remove;
                 if (_miningTarget.Value.x == t.x && _miningTarget.Value.y == t.y && _miningTarget.Value.z == t.z)
                 {
                     miningProgress = _miningProgress;
+                    miningBlockPos = new Vector3(t.x, t.y, t.z);
+                    miningBlockId = _miningBlockId;
                 }
             }
             return new HudState
@@ -940,6 +944,8 @@ namespace CubeApp
                 NetStatus = netStatus,
                 MultiplayerError = mpError,
                 MiningProgress = miningProgress,
+                MiningBlockPos = miningBlockPos,
+                MiningBlockId = miningBlockId,
             };
         }
 
