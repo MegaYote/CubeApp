@@ -1773,7 +1773,10 @@ void main() {
             {
                 BlendState = BlendStateDescription.SingleDisabled,
                 DepthStencilState = new DepthStencilStateDescription(true, true, ComparisonKind.LessEqual),
-                RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                // Culling OFF, matching the C++ breaking cube (it never enables GL_CULL_FACE).
+                // The shrink cube's winding is camera-independent - back-face culling would kill
+                // the faces whose winding reads clockwise from the viewer (e.g. north/south).
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
                 ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
                 ShaderSet = new ShaderSetDescription(new[] { worldVertexLayout }, new[] { shrinkShaders[0], shrinkShaders[1] }),
