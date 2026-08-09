@@ -110,6 +110,7 @@ namespace CubeApp
             // bound), so "players build up high" needs no special handling.
             bool[] blockAtY = new bool[height];
             bool anyBlock = false;
+            int topSolidLocalY = -1;
             for (int y = 0; y < height; y++)
             {
                 bool has = false;
@@ -124,7 +125,12 @@ namespace CubeApp
                 }
                 blockAtY[y] = has;
                 anyBlock |= has;
+                if (has) topSolidLocalY = y;
             }
+
+            // Heightmap occlusion data: the highest solid world Y in this chunk. The mesh worker
+            // owns this chunk exclusively, so writing here is race-free (same lock as MeshFaces).
+            chunk.TopSolidY = topSolidLocalY >= 0 ? chunk.OriginY + topSolidLocalY : chunk.OriginY - 1;
 
             for (int d = 0; d < 3; d++)
             {

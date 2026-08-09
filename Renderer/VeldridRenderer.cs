@@ -4427,6 +4427,21 @@ void main() {
         // buffer, so each pass must re-upload ITS OWN data via the CommandList (recorded in-order
         // before its dispatch) - a GraphicsDevice-level upload executes immediately and would be
         // overwritten by the last pass, making every dispatch read the wrong AABBs.
+        private void ApplyHeightmapOcclusion(
+            System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            ref uint[] cullData)
+        {
+            // cullData is indexed the same as commands (i*16 per chunk, InstanceCount at +9).
+            if (cullData.Length < commands.Count * 16) return;
+            for (int i = 0; i < commands.Count; i++)
+            {
+                if (IsHeightmapOccluded(commands[i].Coord))
+                {
+                    cullData[i * 16 + 9] = 0; // InstanceCount = 0 -> skipped by the GPU draw
+                }
+            }
+        }
+
         private void RunGpuCull(
             CommandList cl,
             System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
@@ -4442,6 +4457,10 @@ void main() {
             {
                 FillCullData(commands, ref cullData);
             }
+            // Per-frame heightmap occlusion: zero the InstanceCount of chunks hidden behind
+            // terrain. The GPU shader copies InstanceCount through, so 0 = skipped (Sodium-style
+            // occlusion culling composes with the GPU frustum test).
+            ApplyHeightmapOcclusion(commands, ref cullData);
             cl.UpdateBuffer(_cullDataBuffer, 0, cullData);
 
             // Update the frustum planes (row-vector view-projection -> 6 clip planes). Same
@@ -4600,6 +4619,65 @@ void main() {
             }
         }
 
+        // Heightmap occlusion: is the view from the camera to this chunk blocked by a NEARER
+        // chunk whose terrain top subtends a larger angle than the target's own top? This is the
+        // classic horizon test - a close tall ridge hides a far chunk; a far peak over a near
+        // valley does not. Conservative on purpose: we only claim occlusion when the blocker's
+        // angular height clearly beats the target's, with a margin, so nothing pops while visible.
+        private const double BlockingMargin = 0.12; // angular margin (radians-ish, slope units)
+        private const int NearSkipChunks = 2;
+        private bool IsHeightmapOccluded(CubeApp.ChunkCoordinates coord)
+        {
+            if (_chunkManager == null || !_cameraPosition.HasValue) return false;
+            if (coord.Layer != ChunkManager.GroundLayer) return false; // only ground terrain occludes
+
+            var cam = _cameraPosition.Value;
+            double camCx = cam.X / (double)ChunkManager.ChunkSize;
+            double camCz = cam.Z / (double)ChunkManager.ChunkSize;
+            double targetCx = coord.X + 0.5;
+            double targetCz = coord.Z + 0.5;
+
+            double dx = targetCx - camCx;
+            double dz = targetCz - camCz;
+            double dist = Math.Sqrt(dx * dx + dz * dz);
+            if (dist < NearSkipChunks + 1.0) return false; // too close to the camera to ever hide
+
+            // Target chunk terrain top (world Y). Unknown = don't occlude (conservative).
+            if (!_chunkManager.TryGetLoadedChunk(coord, out var targetChunk)) return false;
+            if (targetChunk.TopSolidY == int.MinValue) return false;
+            double targetTop = targetChunk.TopSolidY;
+
+            // Camera above the target's terrain can always see it (looking down).
+            if (cam.Y >= targetTop) return false;
+
+            // Angular height of the target's terrain top above the camera (rise over run).
+            double targetSlope = (targetTop - cam.Y) / (dist * ChunkManager.ChunkSize);
+
+            // March toward the target; if any nearer chunk's terrain top subtends a LARGER angle
+            // (by the margin), the target is hidden behind it.
+            double stepX = dx / dist;
+            double stepZ = dz / dist;
+            int steps = (int)Math.Ceiling(dist);
+            for (int s = 1; s < steps; s++)
+            {
+                int cx = (int)Math.Floor(camCx + stepX * s + 0.5);
+                int cz = (int)Math.Floor(camCz + stepZ * s + 0.5);
+                if (cx == coord.X && cz == coord.Z) break; // reached the target column
+
+                if (_chunkManager.TryGetLoadedChunk(new CubeApp.ChunkCoordinates(ChunkManager.GroundLayer, cx, cz), out var blocker))
+                {
+                    if (blocker.TopSolidY == int.MinValue) continue;
+                    double blockDist = Math.Max(1.0, Math.Sqrt((cx - camCx) * (cx - camCx) + (cz - camCz) * (cz - camCz)));
+                    double blockSlope = (blocker.TopSolidY - cam.Y) / (blockDist * ChunkManager.ChunkSize);
+                    if (blockSlope > targetSlope + BlockingMargin && cam.Y < blocker.TopSolidY)
+                    {
+                        return true; // this nearer column clearly rises above the target's line of sight
+                    }
+                }
+            }
+            return false;
+        }
+
         // Fills the given indirect scratch array with the commands from a pass list that are inside
         // the current view frustum. Returns the visible count; falls back to "everything" when no
         // camera is set.
@@ -4613,7 +4691,7 @@ void main() {
                 ExtractFrustumPlanes(_viewProjection.Value);
                 for (int i = 0; i < commands.Count; i++)
                 {
-                    if (ChunkInFrustum(commands[i].Coord))
+                    if (ChunkInFrustum(commands[i].Coord) && !IsHeightmapOccluded(commands[i].Coord))
                     {
                         scratch[n++] = commands[i].Cmd;
                     }
@@ -4643,8 +4721,7 @@ void main() {
         // AABB-vs-frustum via the positive-vertex trick. The chunk AABB covers the full world
         // height, so this culls by horizontal footprint only - still rejects everything off-screen.
         private bool ChunkInFrustum(CubeApp.ChunkCoordinates coord)
-        {
-            float minX = coord.X * ChunkManager.ChunkSize;
+        {            float minX = coord.X * ChunkManager.ChunkSize;
             float maxX = minX + ChunkManager.ChunkSize;
             float minZ = coord.Z * ChunkManager.ChunkSize;
             float maxZ = minZ + ChunkManager.ChunkSize;

@@ -64,6 +64,11 @@ namespace CubeApp
         // Incremented each time MeshFaces is updated by the mesher
         public int MeshVersion = 0;
 
+        /// <summary>World Y of the highest solid block in this chunk (or OriginY-1 if empty).
+        /// Computed by the mesher from the live block scan. Used by heightmap occlusion culling
+        /// to skip chunks hidden behind nearer terrain.</summary>
+        public int TopSolidY = int.MinValue;
+
         public object MeshLock => _meshLock;
 
         public Chunk(int width, int height, int depth, int originX, int originY, int originZ)
