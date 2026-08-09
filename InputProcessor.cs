@@ -249,11 +249,8 @@ namespace CubeApp
 
             foreach (var mouseEvent in snapshot.MouseEvents)
             {
-                if (!mouseEvent.Down)
-                {
-                    continue;
-                }
-
+                // Track held state on BOTH press and release so breakHeld/placeHeld reset properly.
+                // (Skipping release events left breakHeld stuck true forever -> auto-mining.)
                 if (mouseEvent.MouseButton == MouseButton.Left)
                 {
                     breakHeld = mouseEvent.Down;
