@@ -403,7 +403,9 @@ namespace CubeApp.Renderer
         // command, tests the 6 frustum planes in parallel, and zeroes InstanceCount for culled
         // chunks. It writes args into a StructuredBufferReadWrite scratch, which is copied into
         // the IndirectBuffer for the draw - no CPU scan, no scratch copy on CPU, no readback.
-        private bool _gpuCullEnabled;
+        // Default ON: the GPU path removes the per-frame CPU frustum scan of every chunk command
+        // (F7 toggles back to CPU culling for debugging).
+        private bool _gpuCullEnabled = true;
         private bool _gpuCullSupported;
         private Pipeline _cullPipeline;
         private ResourceLayout _cullDataLayout;   // set 0: frustum planes (uniform)
@@ -433,11 +435,11 @@ namespace CubeApp.Renderer
         private readonly System.Collections.Concurrent.ConcurrentQueue<PendingUpload> _pendingPriorityUploads = new(); // player edits jump the line
         private readonly System.Collections.Concurrent.ConcurrentQueue<CubeApp.ChunkCoordinates> _pendingRemovals = new();
         private ChunkManager? _chunkManager; // set via SetChunkManager, used by MeshChunkImmediate
-        // Cached mining-block light (0..15), captured once per mining target like the C++
+        // Cached mining-block light (0..15), captured once per mining CHUNK like the C++
         // startBreaking: the max of the 6 neighbors' combined light. Used to shade the shrink
         // cube + walls with the same brightness as regular world blocks.
         private int _miningLightLevel = 15;
-        private Vector3 _miningLightAt = new(float.NaN, float.NaN, float.NaN);
+        private long _miningLightChunkKey = long.MinValue;
         // Upload budget per frame to avoid large spikes
         private int _maxUploadsPerFrame = 4;
 
@@ -3550,11 +3552,18 @@ void main() {
         // coplanar can ever z-fight. No walls, no fake faces.
         // C++ Game.cpp startBreaking light capture: sample the 6 neighbors' combined light and
         // keep the brightest, so the shrink cube matches the block's surroundings (the block
-        // itself is solid -> light 0 inside). ChunkLighting is rebuilt per mining target only
-        // (a 3x3-chunk region like the mesher's), then cached until the target changes.
-        private void CaptureMiningLight(Vector3 blockPos)
+        // itself is solid -> light 0 inside). ChunkLighting is a full 3x3-chunk flood fill, so
+        // cache the result PER CHUNK: walking across blocks in the same chunk (rapidly re-targeting
+        // while holding mine) reuses the cached light instead of recomputing ~590k cells every
+        // few frames. Only crossing into a new chunk (or a new mining block in a different chunk)
+        // triggers the rebuild.
+        private void CaptureMiningLight(Vector3 blockPos, long chunkKey)
         {
-            _miningLightAt = blockPos;
+            if (chunkKey == _miningLightChunkKey)
+            {
+                return; // already captured for this chunk
+            }
+            _miningLightChunkKey = chunkKey;
             _miningLightLevel = 15;
             if (_chunkManager == null) return;
 
@@ -3604,12 +3613,14 @@ void main() {
             float scale = 1f - p * 0.9f; // C++: 1.0 -> 0.1
             if (scale < 0.001f) return;
 
-            // Capture the mining block's light once per target (C++ startBreaking does the same)
-            // and shade the overlay like the world mesh: brightness = faceShade * Brightness(light).
-            if (_miningLightAt != _hud.MiningBlockPos)
-            {
-                CaptureMiningLight(_hud.MiningBlockPos);
-            }
+            // Capture the mining block's light once per mining CHUNK (C++ startBreaking does the
+            // same) and shade the overlay like the world mesh: brightness = faceShade *
+            // Brightness(light). Cached per chunk so rapid re-targeting while walking doesn't
+            // rebuild the 3x3 flood-fill light every few frames.
+            var mbp = _hud.MiningBlockPos;
+            long mchunkKey = ((long)(int)Math.Floor(mbp.X / (double)ChunkManager.ChunkSize) << 32)
+                           | (uint)(int)Math.Floor(mbp.Z / (double)ChunkManager.ChunkSize);
+            CaptureMiningLight(mbp, mchunkKey);
             float lightMult = ChunkLighting.Brightness(_miningLightLevel);
 
             var center = _hud.MiningBlockPos + new Vector3(0.5f);
