@@ -4205,7 +4205,18 @@ void main() {
                 _transparentRanges.Remove(coord);
             }
 
-            _drawCommandsDirty = true;
+            // Incrementally update this chunk's draw command in each pass instead of rebuilding
+            // all passes from scratch (FPS roadmap #4). The GPU cull data must refresh too, since
+            // the new AABB/args replace the old one.
+            _chunkRanges.TryGetValue(coord, out var newOpaque);
+            _cutoutRanges.TryGetValue(coord, out var newCutout);
+            _glassRanges.TryGetValue(coord, out var newGlass);
+            _transparentRanges.TryGetValue(coord, out var newTrans);
+            SyncPassCommand(_drawCommands, ref _indirectScratch, coord, newOpaque);
+            SyncPassCommand(_cutoutDrawCommands, ref _cutoutIndirectScratch, coord, newCutout);
+            SyncPassCommand(_glassDrawCommands, ref _glassIndirectScratch, coord, newGlass);
+            SyncPassCommand(_transparentDrawCommands, ref _transparentIndirectScratch, coord, newTrans);
+            _gpuCullDataDirty = true;
         }
 
         // First-fit allocator: reuse a freed hole if one's big enough, else append at the tail
@@ -4233,8 +4244,9 @@ void main() {
 
         private void FreeRange(ChunkRange r)
         {
+            // Callers (WriteChunkData / FreeChunkRange) sync the affected chunk's draw commands
+            // incrementally - no full-rebuild flag here (FPS roadmap #4).
             _freeBlocks.Add((r.VbOffsetBytes, r.VbBytes, r.IbOffsetBytes, r.IndexCount * sizeof(ushort)));
-            _drawCommandsDirty = true;
         }
 
         private void FreeChunkRange(CubeApp.ChunkCoordinates coord)
@@ -4259,6 +4271,13 @@ void main() {
                 FreeRange(tr);
                 _transparentRanges.Remove(coord);
             }
+
+            // Remove this chunk's draw commands from every pass (incremental, not a full rebuild).
+            SyncPassCommand(_drawCommands, ref _indirectScratch, coord, null);
+            SyncPassCommand(_cutoutDrawCommands, ref _cutoutIndirectScratch, coord, null);
+            SyncPassCommand(_glassDrawCommands, ref _glassIndirectScratch, coord, null);
+            SyncPassCommand(_transparentDrawCommands, ref _transparentIndirectScratch, coord, null);
+            _gpuCullDataDirty = true;
         }
 
         // Grows the mega vertex buffer to 2x (or to the needed size) when the tail would overflow.
@@ -4438,6 +4457,57 @@ void main() {
 
             // Copy the compute-written args into the indirect buffer for the draw.
             cl.CopyBuffer(_cullArgsBuffer, 0, _indirectBuffer, 0, (uint)commands.Count * IndirectCommandStride);
+        }
+
+        // Incrementally syncs ONE chunk's draw command in a pass list instead of rebuilding the
+        // whole pass from scratch (FPS roadmap #4). Upserts the existing entry for `coord`, appends
+        // a new one, or removes the entry when the chunk no longer has faces in this pass. Also
+        // grows the pass's indirect scratch so CPU-cull draws have room.
+        private void SyncPassCommand(
+            System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            ref IndirectDrawIndexedArguments[] scratch,
+            CubeApp.ChunkCoordinates coord,
+            ChunkRange? range)
+        {
+            int found = -1;
+            for (int i = 0; i < commands.Count; i++)
+            {
+                if (commands[i].Coord.Equals(coord))
+                {
+                    found = i;
+                    break;
+                }
+            }
+
+            if (range == null)
+            {
+                if (found >= 0) commands.RemoveAt(found);
+                return;
+            }
+
+            var r = range.Value;
+            var cmd = new IndirectDrawIndexedArguments
+            {
+                IndexCount = r.IndexCount,
+                InstanceCount = 1,
+                FirstIndex = r.IbOffsetBytes / 2,           // ushort index units
+                VertexOffset = (int)(r.VbOffsetBytes / VertexStrideBytes),
+                FirstInstance = 0,
+            };
+
+            if (found >= 0)
+            {
+                commands[found] = (coord, cmd);
+            }
+            else
+            {
+                commands.Add((coord, cmd));
+            }
+
+            if (scratch.Length < commands.Count)
+            {
+                scratch = new IndirectDrawIndexedArguments[Math.Max(256, commands.Count * 2)];
+            }
         }
 
         private void RebuildDrawCommands()
