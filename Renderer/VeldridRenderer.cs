@@ -2860,21 +2860,20 @@ void main() {
             }
         }
 
-        // Pushes 1.12-style distance fog. The reference (EntityRenderer.setupFog, render distance
-        // >= 4 chunks) uses GL_LINEAR fog with fogStart = 0 and fogEnd = the far plane - terrain
-        // fades linearly into the fog color across the whole view distance. Fog color = sky color
-        // (Infdev/Cubuild day sky 0x88BBFF dimmed by the celestial angle at night), so the horizon
-        // blends seamlessly into the clear color. Both the world shaders and the sky shader read
-        // the SAME range, so there's no seam between terrain and sky.
+        // Pushes 1.12-style distance fog, tuned so NEAR geometry (like cave walls) is completely
+        // clear - the fog only visibly kicks in at distance. Fog color = sky color, dimmed by the
+        // celestial angle, so the horizon blends seamlessly. Raising fogStart to 25% of fogEnd
+        // keeps close terrain (and cave walls 3-20 blocks away) at ~zero fog - that's why
+        // Minecraft caves feel dark and creepy: the darkness comes from block light, and the fog
+        // never brightens near walls.
         private void UpdateFog()
         {
             ComputeNightFactors();
 
-            // 1.12: fogStart 0, fogEnd = render distance in blocks (set by SetRenderDistance).
-            // The far plane is larger, so geometry beyond the fog exists but is fully hidden -
-            // matching 1.12 where fog hides the chunk loading edge.
             float fogEnd = _fogEnd;
-            float fogStart = 0f;
+            // 25% of fogEnd: Infdev's farPlane*0.25 start. Cave walls are within a few blocks, so
+            // the fog factor there is ~0.96-1.0 (clear). Fog only ramps up toward the horizon.
+            float fogStart = fogEnd * 0.25f;
 
             // Fog color: the sky color (0x88BBFF = 136,187,255) dimmed by the celestial angle, the
             // same color the sky planes and clear target use - so terrain fades INTO the sky.

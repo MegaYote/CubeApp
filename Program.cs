@@ -762,15 +762,25 @@ namespace CubeApp
             return true;
         }
 
-        // Plays a random cave sound at a slow interval while the player is underground. Only the
-        // seven cavesoundN.mp3 files exist, so the timer picks among those; new ambience can be
-        // dropped in by filename later.
+        // Plays a random cave sound like 1.12's EntityRenderer.updateCaveSounds:
+        //   - Trigger: the block light at the player's feet is < 7 (darkness, NOT depth). A lit
+        //     cave or torch-lit tunnel makes no cave sounds; a dark one does.
+        //   - Timing: a long, irregular mood-sound timer with a per-tick probability roll, so
+        //     sounds are rare and unpredictable - not a fixed 12-25s loop.
+        //   - Position: the sound is placed at a RANDOM OFFSET near the player (a few blocks
+        //     away), not AT the player - which is what made the old version read as "sounds
+        //     follow me."
         private float _caveAmbienceTimer;
         private static readonly string[] CaveSoundNames =
         {
             "cavesound1", "cavesound2", "cavesound3", "cavesound4",
             "cavesound5", "cavesound6", "cavesound7",
         };
+        // Cached lighting region around the player, rebuilt only on chunk-crossing (like the
+        // mining-light cache) so the darkness gate never runs a full 3x3 flood fill per frame.
+        private ChunkLighting? _caveLighting;
+        private int _caveLightChunkX = int.MinValue;
+        private int _caveLightChunkZ = int.MinValue;
         private void UpdateCaveAmbience(float deltaSeconds)
         {
             if (Sound == null || World == null) return;
@@ -778,34 +788,93 @@ namespace CubeApp
             Sound.UpdateListener((float)World.PlayerPosition.X, (float)World.PlayerPosition.Y, (float)World.PlayerPosition.Z);
             Sound.Update();
 
-            // NOTE: cave ambience is DISABLED temporarily to isolate the grass-break sound path.
-            // It was playing at the player position every 12-25s underground, which read as
-            // "sounds repeat and follow me." Re-enable when block sounds are confirmed clean.
-            return;
-
-            bool underground = World.PlayerPosition.Y < 0; // below sea level / in the deep layer
-            if (!underground)
+            // 1.12 gate: darkness, not depth. The block light at the player's feet must be < 7.
+            if (!TryGetPlayerLight(out int light))
+            {
+                _caveAmbienceTimer = 0f;
+                return;
+            }
+            if (light >= 7)
             {
                 _caveAmbienceTimer = 0f;
                 return;
             }
 
-            // 12-25 seconds between cave sounds (random each cycle).
-            if (_caveAmbienceTimer <= 0f)
+            // Random-offset position: a few blocks around the player so it doesn't track the ear.
+            const float CaveSoundRadius = 6f;
+
+            // 1.12 mood timer: count down in SECONDS; only roll the cave-sound chance when the
+            // timer expires (once per second), NEVER per frame - a per-frame roll at 1/500 would
+            // fire ~60x too often at 60fps.
+            if (_caveAmbienceTimer > 0f)
+            {
+                _caveAmbienceTimer -= deltaSeconds;
+                return;
+            }
+
+            // Roll ONCE per second. 1.12 rolls 1/10000 per game tick (20/sec) = ~1/500 per
+            // second, so the expected spacing while dark is ~8 minutes.
+            if (Random.Shared.NextDouble() < 1.0 / 500.0)
             {
                 string name = CaveSoundNames[Random.Shared.Next(CaveSoundNames.Length)];
                 if (Sound.HasSound(name))
                 {
-                    // Positioned at the player, quiet, ambient category (1.12: playSound with position).
-                    Sound.PlayAt(name, (float)World.PlayerPosition.X, (float)World.PlayerPosition.Y, (float)World.PlayerPosition.Z,
-                        0.35f, SoundEngine.SoundCategory.Ambient);
+                    float px = (float)World.PlayerPosition.X + (float)((Random.Shared.NextDouble() * 2.0 - 1.0) * CaveSoundRadius);
+                    float py = (float)World.PlayerPosition.Y + (float)(Random.Shared.NextDouble() * 2.0);
+                    float pz = (float)World.PlayerPosition.Z + (float)((Random.Shared.NextDouble() * 2.0 - 1.0) * CaveSoundRadius);
+                    Sound.PlayAt(name, px, py, pz, 0.35f, SoundEngine.SoundCategory.Ambient);
                 }
-                _caveAmbienceTimer = 12f + (float)Random.Shared.NextDouble() * 13f;
+                // 1.12 re-roll interval after a hit: a short 1-6s wait, then the tiny per-second
+                // chance dominates the spacing (so sounds stay rare, not clustered).
+                _caveAmbienceTimer = 1f + (float)Random.Shared.NextDouble() * 5f;
             }
             else
             {
-                _caveAmbienceTimer -= deltaSeconds;
+                // Failed roll: wait one full second before rolling again (1.12's tick pacing).
+                _caveAmbienceTimer = 1f;
             }
+        }
+
+        // Samples the block light at the player's feet using a cached lighting region. Rebuilds
+        // the ChunkLighting only when the player crosses into a new chunk (expensive otherwise).
+        private bool TryGetPlayerLight(out int light)
+        {
+            light = 15;
+            var pos = World.PlayerPosition;
+            int bx = (int)Math.Floor(pos.X);
+            int by = (int)Math.Floor(pos.Y);
+            int bz = (int)Math.Floor(pos.Z);
+            int layer = ChunkManager.LayerForWorldY(by);
+            int cx = (int)Math.Floor(pos.X / (double)ChunkManager.ChunkSize);
+            int cz = (int)Math.Floor(pos.Z / (double)ChunkManager.ChunkSize);
+
+            if (_caveLighting == null || cx != _caveLightChunkX || cz != _caveLightChunkZ)
+            {
+                _caveLightChunkX = cx;
+                _caveLightChunkZ = cz;
+                var region = new Dictionary<ChunkCoordinates, Chunk>();
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    for (int dz = -1; dz <= 1; dz++)
+                    {
+                        var key = new ChunkCoordinates(layer, cx + dx, cz + dz);
+                        if (World.Chunks.TryGetLoadedChunk(key, out var c)) region[key] = c;
+                    }
+                }
+                if (region.Count == 0) return false;
+                try
+                {
+                    _caveLighting = new ChunkLighting(region, ChunkManager.ChunkSize, ChunkManager.HeightForLayer(layer));
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            int ly = by - _caveLighting.OriginY;
+            light = _caveLighting.GetLight(bx, ly, bz);
+            return true;
         }
 
         private void ApplyLookInput(Vector2 lookDelta)
