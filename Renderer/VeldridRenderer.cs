@@ -256,6 +256,14 @@ namespace CubeApp.Renderer
         public System.Numerics.Matrix4x4? ViewProjection => _viewProjection;
         private readonly Vector4[] _frustumPlanes = new Vector4[6];
 
+        // Last chunk the camera was in when the glass/water passes were sorted. The back-to-front
+        // sort only needs re-running when the camera crosses a chunk boundary - within a chunk the
+        // distance order of far-to-near chunks doesn't change enough to matter, and skipping the
+        // O(n log n) sort every frame is a real win (FPS roadmap #2).
+        private int _lastSortChunkX = int.MinValue;
+        private int _lastSortChunkZ = int.MinValue;
+        private int _lastSortCount = -1;
+
         private CommandList _commandList;
         private ImGuiRenderer _imguiRenderer;
         private HudState _hud = HudState.Empty;
@@ -2715,10 +2723,23 @@ void main() {
         // Sorts a no-depth-write pass (glass/water) far-to-near from the camera so the nearest
         // chunk draws last and paints over farther ones - the back-to-front order THREE.js applies
         // to transparent objects in Cubuild.
+        // Gated (FPS roadmap #2): only re-sorts when the camera crosses into a new chunk OR the
+        // command list changed (streaming added/removed chunks). Within a chunk, the far-to-near
+        // order is stable, so the O(n log n) sort doesn't need to run every frame.
         private void SortPassBackToFront(System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands)
         {
             if (!_cameraPosition.HasValue) return;
             var cam = _cameraPosition.Value;
+            int camChunkX = (int)Math.Floor(cam.X / (double)ChunkManager.ChunkSize);
+            int camChunkZ = (int)Math.Floor(cam.Z / (double)ChunkManager.ChunkSize);
+            if (camChunkX == _lastSortChunkX && camChunkZ == _lastSortChunkZ && commands.Count == _lastSortCount)
+            {
+                return; // nothing changed: keep the existing order
+            }
+            _lastSortChunkX = camChunkX;
+            _lastSortChunkZ = camChunkZ;
+            _lastSortCount = commands.Count;
+
             commands.Sort((a, b) => ChunkCenterDistSq(b.Coord, cam).CompareTo(ChunkCenterDistSq(a.Coord, cam))); // far first
         }
 
