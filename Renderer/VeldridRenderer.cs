@@ -23,7 +23,7 @@ namespace CubeApp.Renderer
         private DeviceBuffer _fogBuffer;
         private ResourceLayout _fogLayout;
         private ResourceSet _fogSet;
-        private readonly float[] _fogParams = new float[12];
+        private readonly float[] _fogParams = new float[16];
         // Day/night: computed from HudState.WorldTime each frame. _nightDim scales world light,
         // _nightSkyDim scales the fog color toward night dark.
         private float _nightDim = 1f;
@@ -53,6 +53,9 @@ namespace CubeApp.Renderer
         // the glass tint over whatever is behind it - so water behind glass stays visible through
         // the transparent panes while the opaque frames (drawn in the glass pass) still occlude.
         private Pipeline _translucentPipeline;
+        private Shader _worldVs;
+        private Shader _worldFs;
+        private byte[] _worldVsSpirvBytes = Array.Empty<byte>();
         private Pipeline _highlightPipeline;
         private DeviceBuffer _highlightVertexBuffer;
         private DeviceBuffer _highlightIndexBuffer;
@@ -68,6 +71,7 @@ namespace CubeApp.Renderer
         // into the positions, centered in the block cell.
         private DeviceBuffer _shrinkCubeVertexBuffer;
         private DeviceBuffer _shrinkCubeIndexBuffer;
+        private Pipeline _shrinkCubePipeline;
         private readonly float[] _shrinkCubeVertexScratch = new float[24 * 6]; // 24 verts * 6 floats
 
         // Pipeline for chunk border wireframe rendering (F3 debug)
@@ -1141,9 +1145,17 @@ layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;   // rgb + pad
     vec2 fogRange;   // start, end
     vec4 cameraPos;  // xyz + pad
+    vec4 hiddenCell; // xyz = mining cell (floor), w = 1 when a block is being hidden
 };
 layout(location=0) out vec4 outColor;
 void main() {
+    // While a block is being mined, its cell is hidden so the shrinking-block overlay shows.
+    if (hiddenCell.w > 0.5 &&
+        vWorldPos.x >= hiddenCell.x && vWorldPos.x < hiddenCell.x + 1.0 &&
+        vWorldPos.y >= hiddenCell.y && vWorldPos.y < hiddenCell.y + 1.0 &&
+        vWorldPos.z >= hiddenCell.z && vWorldPos.z < hiddenCell.z + 1.0) {
+        discard;
+    }
     // fract() tiles the same atlas tile regardless of how many blocks the face spans.
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
     vec4 tex = texture(uAtlas, atlasUV);
@@ -1157,6 +1169,7 @@ void main() {
 }";
 
             var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            _worldVsSpirvBytes = vsSpirv.SpirvBytes;
             var fsSpirv = SpirvCompilation.CompileGlslToSpirv(fsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
 
             var vsDesc = new ShaderDescription(ShaderStages.Vertex, vsSpirv.SpirvBytes, "main");
@@ -1166,6 +1179,8 @@ void main() {
             // language (HLSL for D3D11) internally. Calling factory.CreateShader directly with raw
             // SPIR-V bytes skips that translation and fails to compile on non-Vulkan backends.
             var shaders = factory.CreateFromSpirv(vsDesc, fsDesc);
+            _worldVs = shaders[0];
+            _worldFs = shaders[1];
             var vs = shaders[0];
             var fs = shaders[1];
 
@@ -1185,7 +1200,7 @@ void main() {
             // Distance fog uniform block (set 2), shared by all world pipelines.
             _fogLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
                 new ResourceLayoutElementDescription("FogParams", ResourceKind.UniformBuffer, ShaderStages.Fragment)));
-            _fogBuffer = factory.CreateBuffer(new BufferDescription(48, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _fogBuffer = factory.CreateBuffer(new BufferDescription(64, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
             _fogSet = factory.CreateResourceSet(new ResourceSetDescription(_fogLayout, _fogBuffer));
 
             var pipelineDesc = new GraphicsPipelineDescription()
@@ -1218,9 +1233,16 @@ layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;
     vec2 fogRange;
     vec4 cameraPos;
+    vec4 hiddenCell;
 };
 layout(location=0) out vec4 outColor;
 void main() {
+    if (hiddenCell.w > 0.5 &&
+        vWorldPos.x >= hiddenCell.x && vWorldPos.x < hiddenCell.x + 1.0 &&
+        vWorldPos.y >= hiddenCell.y && vWorldPos.y < hiddenCell.y + 1.0 &&
+        vWorldPos.z >= hiddenCell.z && vWorldPos.z < hiddenCell.z + 1.0) {
+        discard;
+    }
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
     vec4 tex = texture(uAtlas, atlasUV);
     if (tex.a < 0.5) discard; // sprite background falls away; no blending
@@ -1276,10 +1298,17 @@ layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;
     vec2 fogRange;
     vec4 cameraPos;
+    vec4 hiddenCell;
 };
 layout(location=0) out vec4 outColor;
 void main() {
     if (vColor.a > -150.0) discard; // only translucent (colored) glass - sentinel ~ -200
+    if (hiddenCell.w > 0.5 &&
+        vWorldPos.x >= hiddenCell.x && vWorldPos.x < hiddenCell.x + 1.0 &&
+        vWorldPos.y >= hiddenCell.y && vWorldPos.y < hiddenCell.y + 1.0 &&
+        vWorldPos.z >= hiddenCell.z && vWorldPos.z < hiddenCell.z + 1.0) {
+        discard;
+    }
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
     vec4 tex = texture(uAtlas, atlasUV);
     if (tex.a >= 0.5) discard;      // opaque frame pixels already drawn by the glass pass
@@ -1677,6 +1706,52 @@ void main() { outColor = uTint; }";
                 cubeIndices[face * 6 + 5] = (ushort)(fv + 3);
             }
             _gd.UpdateBuffer(_shrinkCubeIndexBuffer, 0, cubeIndices);
+
+            // Dedicated pipeline for the shrinking cube: same packed vertex format + atlas + fog,
+            // depth-tested like terrain (so it doesn't paint over blocks behind it), but WITHOUT
+            // the hidden-cell discard so the cube itself is visible in the mined cell. Uses the
+            // WORLD vertex shader (packed decode) and a dedicated fragment shader.
+            var worldVertexLayout = new VertexLayoutDescription(
+                new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                new VertexElementDescription("aPack1", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1),
+                new VertexElementDescription("aPack2", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1),
+                new VertexElementDescription("aPack3", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1));
+            string shrinkFsCode = @"#version 450
+layout(location=0) in vec2 vLocalUV;
+layout(location=1) in vec4 vTileRect;
+layout(location=2) in vec4 vColor;
+layout(location=3) in vec3 vWorldPos;
+layout(set=1, binding=0) uniform sampler2D uAtlas;
+layout(set=2, binding=0) uniform FogParams {
+    vec4 fogColor;
+    vec2 fogRange;
+    vec4 cameraPos;
+    vec4 hiddenCell;
+};
+layout(location=0) out vec4 outColor;
+void main() {
+    // No hidden-cell discard here - the shrink cube must draw inside the mined cell.
+    vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
+    vec4 tex = texture(uAtlas, atlasUV);
+    outColor = vec4(tex.rgb * vColor.rgb, 1.0);
+    float dist = length(vWorldPos - cameraPos.xyz);
+    float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
+    outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);
+}";
+            var shrinkFsSpirv = SpirvCompilation.CompileGlslToSpirv(shrinkFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var shrinkShaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, _worldVsSpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, shrinkFsSpirv.SpirvBytes, "main"));
+            _shrinkCubePipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleDisabled,
+                DepthStencilState = new DepthStencilStateDescription(true, true, ComparisonKind.LessEqual),
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
+                ShaderSet = new ShaderSetDescription(new[] { worldVertexLayout }, new[] { shrinkShaders[0], shrinkShaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
         }
 
         // Pipeline for chunk border wireframe rendering (F3 debug)
@@ -2712,6 +2787,20 @@ void main() {
             // sky seed by SkylightSubtracted, then chunks are remeshed) - faithful to Infdev's
             // skylightSubtracted. Here we only darken the fog color so the horizon matches the sky.
             _fogParams[10] = _nightSkyDim; // fog color multiplier (fades to dark at night)
+            // Hidden mining cell: the world shaders discard fragments inside this cell so the
+            // shrinking-block overlay shows through while a block is being mined.
+            if (_hud.MiningProgress > 0f && _hud.MiningBlockId > 0)
+            {
+                _fogParams[11] = _hud.MiningBlockPos.X;
+                _fogParams[12] = _hud.MiningBlockPos.Y;
+                _fogParams[13] = _hud.MiningBlockPos.Z;
+                _fogParams[14] = 1f;
+            }
+            else
+            {
+                _fogParams[14] = 0f;
+            }
+            _fogParams[15] = 0f;
             _gd.UpdateBuffer(_fogBuffer, 0, _fogParams);
         }
 
@@ -3464,7 +3553,10 @@ void main() {
 
             _gd.UpdateBuffer(_shrinkCubeVertexBuffer, 0, _shrinkCubeVertexScratch);
 
-            cl.SetPipeline(_pipeline);
+            // Dedicated shrink-cube pipeline: depth-tests against terrain (won't paint over blocks
+            // behind it) but WITHOUT the hidden-cell discard, so the cube itself renders inside
+            // the mined cell while the real block's faces are discarded by the world shaders.
+            cl.SetPipeline(_shrinkCubePipeline ?? _pipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
             if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
             cl.SetGraphicsResourceSet(2, _fogSet);
