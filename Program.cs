@@ -33,6 +33,8 @@ namespace CubeApp
         private string baseTitle = "Chunk Mesh Example";
         private bool showFps;
         private int frameCount;
+        // Reusable per-frame entity render list (avoids one List allocation every frame).
+        private readonly List<MobRenderData> _entityRenderScratch = new();
         private float lastFps;
         private readonly Stopwatch fpsStopwatch = new();
         private float lastUpdateMs;
@@ -516,11 +518,11 @@ namespace CubeApp
                         if (World != null)
                         {
                             gpuRenderer.UpdateCamera(thirdPersonView ? GetThirdPersonCameraPosition() : World.PlayerPosition, World.PlayerYaw, World.PlayerPitch);
-                            var withPlayer = new List<MobRenderData>(World.Entities.MobRenderData.Count + 8);
-                            withPlayer.AddRange(World.Entities.MobRenderData);
-                            if (thirdPersonView) withPlayer.Add(BuildLocalPlayerRenderData());
-                            AddRemotePlayersToRender(withPlayer);
-                            gpuRenderer.SetEntities(withPlayer);
+                            _entityRenderScratch.Clear();
+                            _entityRenderScratch.AddRange(World.Entities.MobRenderData);
+                            if (thirdPersonView) _entityRenderScratch.Add(BuildLocalPlayerRenderData());
+                            AddRemotePlayersToRender(_entityRenderScratch);
+                            gpuRenderer.SetEntities(_entityRenderScratch);
                             gpuRenderer.SetFallingBlocks(World.BlockTicks.Gravity.FallingBlocks);
                         }
                         gpuRenderer.ProcessPendingPriorityMeshes();

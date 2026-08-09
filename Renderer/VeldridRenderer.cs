@@ -83,6 +83,8 @@ namespace CubeApp.Renderer
         private Pipeline _skyPipeline;
         private DeviceBuffer _skyVertexBuffer;
         private DeviceBuffer _skyIndexBuffer;
+        private float[] _skyVertexScratch = new float[56];      // reused per frame (no alloc)
+        private float[] _celestialVertexScratch = new float[40]; // reused per frame (no alloc)
         private DeviceBuffer _skyFogBuffer;
         private ResourceLayout _skyFogLayout;
         private ResourceSet _skyFogSet;
@@ -212,6 +214,11 @@ namespace CubeApp.Renderer
         private uint _duckVertexCapacity;
         private uint _duckIndexCapacity;
         private IReadOnlyList<CubeApp.DuckInstance> _duckInstances = Array.Empty<CubeApp.DuckInstance>();
+        // Reusable backing lists (cleared + refilled each frame) so SetEntities doesn't allocate
+        // three Lists every frame (FPS roadmap #6). The draw loops read these via the fields above.
+        private readonly List<CubeApp.DuckInstance> _duckList = new();
+        private readonly List<CubeApp.DuckInstance> _playerList = new();
+        private readonly List<CubeApp.DuckInstance> _coyoteList = new();
         private float[] _duckVertexScratch = Array.Empty<float>();
         private ushort[] _duckIndexScratch = Array.Empty<ushort>();
         private const int DuckFloatsPerVertex = 9; // pos(3) + uv(2) + color(4)
@@ -2561,6 +2568,9 @@ void main() {
             // Route the unified MobRenderData snapshots to per-model instance lists. DuckInstance
             // carries exactly the fields both models need, so it doubles as the player instance.
             _allMobRenderData = mobRenderData ?? Array.Empty<CubeApp.MobRenderData>();
+            _duckList.Clear();
+            _playerList.Clear();
+            _coyoteList.Clear();
             if (mobRenderData == null || mobRenderData.Count == 0)
             {
                 _duckInstances = Array.Empty<CubeApp.DuckInstance>();
@@ -2569,9 +2579,7 @@ void main() {
                 return;
             }
 
-            List<CubeApp.DuckInstance>? ducks = null;
-            List<CubeApp.DuckInstance>? players = null;
-            List<CubeApp.DuckInstance>? coyotes = null;
+            // Reuse the backing lists (no per-frame allocation - FPS roadmap #6).
             for (int i = 0; i < mobRenderData.Count; i++)
             {
                 var md = mobRenderData[i];
@@ -2586,14 +2594,14 @@ void main() {
                     md.VelocityY, md.OnGround,
                     md.IsDead, md.DeathT, md.DeathRollDir, md.HurtTimer);
 
-                if (isDuck) (ducks ??= new List<CubeApp.DuckInstance>()).Add(inst);
-                else if (isPlayer) (players ??= new List<CubeApp.DuckInstance>()).Add(inst);
-                else (coyotes ??= new List<CubeApp.DuckInstance>()).Add(inst);
+                if (isDuck) _duckList.Add(inst);
+                else if (isPlayer) _playerList.Add(inst);
+                else _coyoteList.Add(inst);
             }
 
-            _duckInstances = (IReadOnlyList<CubeApp.DuckInstance>?)ducks ?? Array.Empty<CubeApp.DuckInstance>();
-            _playerInstances = (IReadOnlyList<CubeApp.DuckInstance>?)players ?? Array.Empty<CubeApp.DuckInstance>();
-            _coyoteInstances = (IReadOnlyList<CubeApp.DuckInstance>?)coyotes ?? Array.Empty<CubeApp.DuckInstance>();
+            _duckInstances = _duckList;
+            _playerInstances = _playerList;
+            _coyoteInstances = _coyoteList;
         }
 
         public void Render()
@@ -2981,8 +2989,9 @@ void main() {
             float extent = Math.Max(_farPlane * 2f, 768f);
 
             // 8 vertices in CAMERA space (eye at origin): top quad at y=+16 (verts 0-3), bottom
-            // quad at y=-16 (verts 4-7). pos(3) + color(4).
-            var v = new float[56];
+            // quad at y=-16 (verts 4-7). pos(3) + color(4). Reused buffer (no per-frame alloc).
+            var v = _skyVertexScratch;
+            if (v.Length < 56) v = _skyVertexScratch = new float[56];
             SetSkyVertex(v, 0, -extent, 16f, -extent, skyR, skyG, skyB);
             SetSkyVertex(v, 1, extent, 16f, -extent, skyR, skyG, skyB);
             SetSkyVertex(v, 2, extent, 16f, extent, skyR, skyG, skyB);
@@ -3037,7 +3046,8 @@ void main() {
             // ({0,1,2,0,2,3} = sun, {4,5,6,4,6,7} = moon). Drawing the moon at index start 6
             // with the SAME offset-0 data was the bug: both draws used verts 0-3, so the moon
             // always rendered on top of the sun regardless of the y position given.
-            var v = new float[8 * 5];
+            var v = _celestialVertexScratch;
+            if (v.Length < 40) v = _celestialVertexScratch = new float[40];
             WriteCelestialQuad(v, 0, cosA, sinA, 100f, 15f, 0f, 0f, 1f, 1f);   // sun
             WriteCelestialQuad(v, 4, cosA, sinA, -100f, 10f, 1f, 0f, 0f, 1f);  // moon
             _gd.UpdateBuffer(_celestialVertexBuffer, 0, v);

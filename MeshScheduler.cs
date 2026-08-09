@@ -17,6 +17,8 @@ namespace CubeApp
         // Dirty-list of chunks needing a mesh rebuild (instead of scanning every loaded chunk).
         // Populated via MarkDirty (called wherever NeedsRemesh is set); Update() drains only these.
         private readonly HashSet<ChunkCoordinates> _dirty = new();
+        // Reusable scratch so Update() doesn't allocate a List per call.
+        private readonly List<ChunkCoordinates> _dirtyScratch = new();
 
         public MeshScheduler(ChunkManager manager, IMeshQueue meshQueue)
         {
@@ -50,8 +52,11 @@ namespace CubeApp
                 return 0;
             }
 
-            // Copy so we can safely remove entries while iterating.
-            foreach (var coords in new List<ChunkCoordinates>(_dirty))
+            // Copy so we can safely remove entries while iterating. Reuse the scratch list to
+            // avoid a per-update allocation (FPS roadmap #6).
+            _dirtyScratch.Clear();
+            _dirtyScratch.AddRange(_dirty);
+            foreach (var coords in _dirtyScratch)
             {
                 if (!_manager.TryGetLoadedChunk(coords, out var chunk))
                 {
