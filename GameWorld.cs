@@ -109,6 +109,11 @@ namespace CubeApp
         public const float JumpVelocity = 8.0f;
         public const float Gravity = 24.0f;
         public const float MaxFallSpeed = 36.0f;
+        /// <summary>Horizontal acceleration (units/s^2) toward the desired walk speed, so movement
+        /// ramps in smoothly instead of snapping to full speed instantly.</summary>
+        public const float GroundAcceleration = 35f;
+        /// <summary>Deceleration (units/s^2) when no direction is held, so you coast to a stop.</summary>
+        public const float GroundFriction = 22f;
         /// <summary>Impact speed (positive downward, units/s) below which a landing is safe.
         /// With gravity 24, this is ~a 3-block fall.</summary>
         public const double FallDamageThreshold = 12.0;
@@ -662,7 +667,29 @@ namespace CubeApp
                 return;
             }
 
-            var horizontalVelocity = desiredDirection * WalkSpeed;
+            // Natural horizontal movement: accelerate toward the desired direction/speed instead
+            // of snapping, and coast to a stop with friction when nothing is held. Walking
+            // backward is a touch slower, which reads as more human.
+            var horizontalVelocity = new Point3D(p.Velocity.X, 0, p.Velocity.Z);
+            float speed = WalkSpeed;
+            if (tickInput.MoveBackward) speed *= 0.72f;
+            var targetH = desiredDirection * speed;
+            bool moving = tickInput.MoveForward || tickInput.MoveBackward || tickInput.MoveLeft || tickInput.MoveRight;
+            double accel = moving ? GroundAcceleration : GroundFriction;
+            double dx = targetH.X - horizontalVelocity.X;
+            double dz = targetH.Z - horizontalVelocity.Z;
+            double dist = Math.Sqrt(dx * dx + dz * dz);
+            double maxStep = accel * deltaSeconds;
+            if (dist <= maxStep)
+            {
+                horizontalVelocity = new Point3D(targetH.X, 0, targetH.Z);
+            }
+            else
+            {
+                double f = maxStep / dist;
+                horizontalVelocity = new Point3D(horizontalVelocity.X + dx * f, 0, horizontalVelocity.Z + dz * f);
+            }
+
             var verticalVelocity = p.Velocity.Y;
             if (tickInput.JumpPressed && p.Grounded)
             {

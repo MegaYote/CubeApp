@@ -6295,13 +6295,26 @@ void main() {
             return a.X * b.X + a.Y * b.Y + a.Z * b.Z;
         }
 
-        public void UpdateCamera(CubeApp.Point3D position, float yaw, float pitch)
+        public void UpdateCamera(CubeApp.Point3D position, float yaw, float pitch,
+            float walkPhase = 0f, float walkAmount = 0f, bool firstPerson = false, bool grounded = true)
         {
             var proj = Matrix4x4.CreatePerspectiveFieldOfView((float)(Math.PI / 2.0), (float)_sc.Framebuffer.Width / _sc.Framebuffer.Height, _nearPlane, _farPlane);
             var yawRad = yaw * (float)Math.PI / 180f;
             var pitchRad = pitch * (float)Math.PI / 180f;
             var forward = new Vector3((float)(Math.Cos(pitchRad) * Math.Sin(yawRad)), (float)Math.Sin(pitchRad), (float)(Math.Cos(pitchRad) * Math.Cos(yawRad)));
             var cameraPos = new Vector3((float)position.X, (float)position.Y, (float)position.Z);
+            // First-person head bob: a soft vertical bounce (one per step) plus a slight side sway
+            // scaled by how fast you're actually moving. Only while grounded - never mid-air.
+            if (firstPerson && grounded && walkAmount > 0.02f)
+            {
+                float bobAmp = Math.Min(1f, walkAmount) * 0.09f;
+                float swayAmp = Math.Min(1f, walkAmount) * 0.05f;
+                float rightX = (float)Math.Cos(yawRad);
+                float rightZ = (float)-Math.Sin(yawRad);
+                float bobY = Math.Abs((float)Math.Sin(walkPhase)) * bobAmp;
+                float sway = (float)Math.Sin(walkPhase) * swayAmp;
+                cameraPos += new Vector3(rightX * sway, bobY, rightZ * sway);
+            }
             // Damage shake: a small decaying random offset plus a visible roll tilt, so hits read
             // as an "ow" in the POV. Purely visual - _cameraPosition (culling/collisions) keeps
             // the real position below.

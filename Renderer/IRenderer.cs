@@ -9,7 +9,7 @@ namespace CubeApp.Renderer
         void UploadChunk(CubeApp.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces);
         void UploadChunkPriority(CubeApp.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces);
         void RemoveChunk(CubeApp.ChunkCoordinates coords);
-        void UpdateCamera(CubeApp.Point3D position, float yaw, float pitch);
+        void UpdateCamera(CubeApp.Point3D position, float yaw, float pitch, float walkPhase = 0f, float walkAmount = 0f, bool firstPerson = false, bool grounded = true);
         CubeApp.Point3D? CameraPosition { get; }
         System.Numerics.Matrix4x4? ViewProjection { get; }
         void SetRenderDistance(int chunkRadius);

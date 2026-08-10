@@ -733,7 +733,9 @@ namespace CubeApp
                         gpuRenderer.SetHud(BuildHud());
                         if (World != null)
                         {
-                            gpuRenderer.UpdateCamera(thirdPersonView ? GetThirdPersonCameraPosition() : World.PlayerPosition, World.PlayerYaw, World.PlayerPitch);
+                            var lp = World.LocalPlayer;
+                            gpuRenderer.UpdateCamera(thirdPersonView ? GetThirdPersonCameraPosition() : lp.Position,
+                                lp.Yaw, lp.Pitch, lp.WalkPhase, lp.WalkAmount, !thirdPersonView, lp.Grounded);
                             _entityRenderScratch.Clear();
                             _entityRenderScratch.AddRange(World.Entities.MobRenderData);
                             if (thirdPersonView) _entityRenderScratch.Add(BuildLocalPlayerRenderData());
