@@ -3,10 +3,10 @@ using System;
 namespace CubeApp
 {
     /// <summary>
-    /// Samples the block world to decide which pathfinding nodes are walkable, mirroring 1.12's
-    /// NodeProcessor/WalkNodeProcessor. A node at (x,y,z) is walkable if the mob's feet cell is
-    /// open (air/transparent) and there is a solid block to stand on (either directly below, or
-    /// reachable via a 1-high step - the mob already steps up 0.45 blocks).
+    /// Samples the block world to decide which pathfinding nodes are walkable. A node at (x,y,z)
+    /// is walkable if the mob's feet cell is open (air/transparent) and there is a solid block to
+    /// stand on (either directly below, or reachable via a 1-high step - the mob already steps up
+    /// 0.45 blocks).
     ///
     /// The world is sampled through the ChunkManager: unloaded chunks read as air, so paths can't
     /// route through unexplored space (the seeker only expands loaded cells, which matches the

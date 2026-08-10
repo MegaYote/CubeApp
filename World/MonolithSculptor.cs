@@ -3,11 +3,11 @@ using System;
 namespace CubeApp.World
 {
     /// <summary>
-    /// Controllable monolith feature. Infdev's real terrain noise accidentally produces
-    /// "monoliths" (tall stone towers) when the relief noise spikes while the 3D body noise is
-    /// positive high up, and the same noise's valleys hollow their bases into floating islands.
-    /// Rather than rely on that accident, this post-pass sculpts them deliberately from a
-    /// dedicated seeded noise field with tunable knobs:
+    /// Controllable monolith feature. The terrain's relief noise can accidentally produce
+    /// "monoliths" (tall stone towers) when the relief signal spikes while the 3D body noise is
+    /// positive high up, and its valleys hollow their bases into floating islands. Rather than
+    /// rely on that accident, this post-pass sculpts them deliberately from a dedicated seeded
+    /// noise field with tunable knobs:
     ///
     ///   Frequency  - how many monolith seed points exist (a 2D noise threshold).
     ///   Size       - base radius of each monolith in blocks.
@@ -40,17 +40,17 @@ namespace CubeApp.World
         public float CarveNoise = 1.0f;
 
         private readonly int _seed;
-        private readonly InfdevOctaves _placement;
-        private readonly InfdevOctaves _carve;
-        private readonly InfdevOctaves _shade;
+        private readonly NoiseOctaves _placement;
+        private readonly NoiseOctaves _carve;
+        private readonly NoiseOctaves _shade;
 
         public MonolithSculptor(int seed)
         {
             _seed = seed;
             var rand = new Random(unchecked((int)(seed ^ 0x9E3779B9)));
-            _placement = new InfdevOctaves(rand, 2, 0); // broad 2D placement
-            _carve = new InfdevOctaves(rand, 4, 0);     // medium-frequency carve noise
-            _shade = new InfdevOctaves(rand, 4, 0);     // radius/height shaping noise
+            _placement = new NoiseOctaves(rand, 2, 0); // broad 2D placement
+            _carve = new NoiseOctaves(rand, 4, 0);     // medium-frequency carve noise
+            _shade = new NoiseOctaves(rand, 4, 0);     // radius/height shaping noise
         }
 
         public void Sculpt(Chunk chunk, int terrainBandStart, int chunkSize, int chunkHeight)
@@ -147,7 +147,7 @@ namespace CubeApp.World
 
         // Hollows the base of the monolith like the "carved out" floating-island look: removes a
         // wide gap of stone AROUND the tower base (radius grows with Carve), so the monolith
-        // stands on a narrowing stalk or floats above a hollow - the Infdev noise-valley effect.
+        // stands on a narrowing stalk or floats above a hollow - the noise-valley effect.
         private void CarveBase(Chunk chunk, int chunkSize, int chunkHeight, int terrainBandStart,
             int lx, int lz, int wx, int wz, int surfaceY, float size, double strength)
         {

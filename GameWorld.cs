@@ -24,7 +24,7 @@ namespace CubeApp
         public int Seed { get; private set; }
         public string Name { get; private set; } = "World 1";
         public ChunkManager Chunks { get; private set; }
-        public World.InfdevChunkProvider ChunkProvider { get; private set; }
+        public World.TerrainChunkProvider ChunkProvider { get; private set; }
         public World.SkyChunkProvider SkyChunkProvider { get; private set; }
         public EntityManager Entities { get; private set; }
         public MeshScheduler Mesher { get; private set; }
@@ -100,13 +100,13 @@ namespace CubeApp
             ChunkRenderRadius = chunkRenderRadius;
             _getRenderer = getRenderer ?? throw new ArgumentNullException(nameof(getRenderer));
 
-            ChunkProvider = new World.InfdevChunkProvider(seed);
+            ChunkProvider = new World.TerrainChunkProvider(seed);
             SkyChunkProvider = new World.SkyChunkProvider(seed);
             Chunks = new ChunkManager(new World.DeepChunkProvider(seed), ChunkProvider, SkyChunkProvider);
             Entities = new EntityManager(Chunks);
-            // Infdev monster spawning gates on darkness; give the spawner the time-of-day so
+            // Monster spawning gates on darkness; give the spawner the time-of-day so
             // zombies flood caves during the day and the surface at night.
-            Entities.SetSkylightSource(() => CalculateSkylightSubtracted(0f));
+            Entities.SetSkylightSource(() => NightDimLevel(0f));
             // Mesh workers scale with the machine: at least 2, up to ~cores/4. Chunk gen already
             // takes ProcessorCount-2 threads, so meshing gets a share of what's left without
             // starving the render thread on low-end machines.
@@ -306,7 +306,7 @@ namespace CubeApp
         /// <summary>Advance the simulation by one frame. Pure logic; no rendering here.</summary>
         public void StepSimulation(TickInputState tickInput, float deltaSeconds)
         {
-            // Day/night clock: MC advances worldTime at a fixed 20 ticks/sec (Infdev: worldTime
+            // Day/night clock: worldTime advances at a fixed 20 ticks/sec (worldTime
             // advances once per tick, full cycle = 24000 ticks = 20 minutes). Accumulate the
             // fractional delta so time flows at exactly 20 tps regardless of frame rate.
             // Math.Round(deltaSeconds*20) froze the clock at high FPS (0.333 rounds to 0 every
@@ -360,7 +360,7 @@ namespace CubeApp
         private bool _lastBelowDeep;
         private bool _lastAboveSky;
 
-        /// <summary>Day/night clock in world ticks. Full cycle = 24000 ticks (Infdev).</summary>
+        /// <summary>Day/night clock in world ticks. Full cycle = 24000 ticks.</summary>
         public long WorldTime { get; private set; }
 
         /// <summary>Force-advance the day/night clock by 25% of its 24000-tick cycle (T key).</summary>
@@ -374,10 +374,10 @@ namespace CubeApp
         private double _worldTimeAccumulator;
 
         /// <summary>
-        /// Infdev's getCelestialAngle: 0..1 sun position across the day (0.25 = dawn, 0.75 = dusk).
-        /// Faithful port of World.getCelestialAngle.
+        /// Sun position 0..1 across the day (0.25 = dawn, 0.75 = dusk). 0..1 where 0 = midnight-ish
+        /// start of the cycle; eased so the sun lingers near the horizon rather than snapping.
         /// </summary>
-        public float GetCelestialAngle(float partialTick)
+        public float SunPosition(float partialTick)
         {
             long t = WorldTime % 24000;
             float ang = (float)(t + partialTick) / 24000.0f - 0.25f;
@@ -390,22 +390,22 @@ namespace CubeApp
         }
 
         /// <summary>
-        /// Infdev's calculateSkylightSubtracted: 0 (noon) .. 11 (midnight) amount subtracted from
-        /// sky light at render time. Faithful port of World.calculateSkylightSubtracted.
+        /// Night dim level: 0 (noon) .. 11 (midnight) — how much daylight is removed from the sky
+        /// light after the sun goes down.
         /// </summary>
-        public int CalculateSkylightSubtracted(float partialTick)
+        public int NightDimLevel(float partialTick)
         {
-            float celestial = GetCelestialAngle(partialTick);
+            float celestial = SunPosition(partialTick);
             float v = 1f - (float)(Math.Cos(celestial * Math.PI * 2.0) * 2.0 + 0.5);
             if (v < 0f) v = 0f;
             if (v > 1f) v = 1f;
             return (int)(v * 11f);
         }
 
-        /// <summary>Infdev's sky-color dimming factor (1.0 at noon, near 0 at midnight).</summary>
-        public float GetSkyBrightnessFactor(float partialTick)
+        /// <summary>Sky brightness factor (1.0 at noon, near 0 at midnight).</summary>
+        public float SkyBrightness(float partialTick)
         {
-            float celestial = GetCelestialAngle(partialTick);
+            float celestial = SunPosition(partialTick);
             float v = (float)(Math.Cos(celestial * Math.PI * 2.0) * 2.0 + 0.5);
             if (v < 0f) v = 0f;
             if (v > 1f) v = 1f;
@@ -727,9 +727,8 @@ namespace CubeApp
             int blockToPlace = SelectedBlock;
             int meta = 0;
 
-            // Minecraft's "wait for it to fall" rule: you can't place INTO a cell a falling
-            // block is currently passing through. Otherwise a spam of placements in one column
-            // would stack into a moving block / collide mid-air.
+            // Can't place INTO a cell a falling block is currently passing through. Otherwise a
+            // spam of placements in one column would stack into a moving block / collide mid-air.
             if (BlockTicks != null && BlockTicks.IsCellOccupiedByFalling(place.x, place.y, place.z))
             {
                 return false;

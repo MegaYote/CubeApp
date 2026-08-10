@@ -41,16 +41,16 @@ namespace CubeApp.World
         public bool AutoHighFill { get; set; }
 
         private readonly ConcurrentDictionary<ChunkCoordinates, byte> _filled = new();
-        private readonly InfdevOctaves _placement;
-        private readonly InfdevOctaves _shape;
-        private readonly InfdevOctaves _detail;
+        private readonly NoiseOctaves _placement;
+        private readonly NoiseOctaves _shape;
+        private readonly NoiseOctaves _detail;
 
         public SkyIslandSculptor(int seed)
         {
             var rand = new Random(unchecked((int)(seed * 31 + 0x51AB3D)));
-            _placement = new InfdevOctaves(rand, 2, 0); // broad 2D placement
-            _shape = new InfdevOctaves(rand, 3, 0);     // island outline shaping
-            _detail = new InfdevOctaves(rand, 4, 0);    // underside detail
+            _placement = new NoiseOctaves(rand, 2, 0); // broad 2D placement
+            _shape = new NoiseOctaves(rand, 3, 0);     // island outline shaping
+            _detail = new NoiseOctaves(rand, 4, 0);    // underside detail
         }
 
         public double DebugPlacement(int wx, int wz) => _placement.Noise2D(wx * 0.02, wz * 0.02);

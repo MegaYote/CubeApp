@@ -16,7 +16,7 @@ namespace CubeApp
         private readonly Dictionary<string, MobModel> _loadedModels = new();
         private readonly Random _rand = new();
 
-        // Natural spawning + despawning (1.12-style). Set to null to disable.
+        // Natural spawning + despawning. Set to null to disable.
         private MobSpawner? _spawner;
         private MobSpawner? _monsterSpawner;
         private double _spawnAccumulator;
@@ -43,8 +43,8 @@ namespace CubeApp
                 AddMobAt,
                 () => _mobs.Count,
                 CountMobsOfType);
-            // Infdev monsters (zombies): separate spawner with the authentic SpawnerMonsters
-            // darkness/cave logic and a 100-mob cap.
+            // Night monsters (zombies): separate spawner with the darkness/cave logic
+            // and a 100-mob cap.
             _monsterSpawner = new MobSpawner(
                 new[] { new MobSpawnEntry("zombie", 1, 1, 4) },
                 AddMobAt,
@@ -57,12 +57,8 @@ namespace CubeApp
         public int CountMobs(Point3D ignore) => _mobs.Count;
 
         /// <summary>
-        /// Supplies the current skylight subtraction (0..11) for the Infdev monster darkness gate.
-        /// Wired to GameWorld.CalculateSkylightSubtracted so zombies know when the surface is dark.
-        /// </summary>
-        /// <summary>
-        /// Supplies the current skylight subtraction (0..11) for the Infdev monster darkness gate.
-        /// Wired to GameWorld.CalculateSkylightSubtracted so zombies know when the surface is dark.
+        /// Supplies the current night-dim level (0..11) for the monster darkness gate.
+        /// Wired to GameWorld.NightDimLevel so zombies know when the surface is dark.
         /// </summary>
         public void SetSkylightSource(Func<int> skylightSubtractedFn)
         {
@@ -227,7 +223,7 @@ namespace CubeApp
                         continue;
                     }
 
-                    // Despawn: too far away, or idle too long at medium distance (1.12).
+                    // Despawn: too far away, or idle too long at medium distance.
                     if (enableSpawning && ShouldDespawn(mobEntity, playerPosition))
                     {
                         _mobs.RemoveAt(i);
@@ -235,9 +231,9 @@ namespace CubeApp
                 }
             }
 
-            // Natural spawning. Like Infdev's SpawnerAnimals.onUpdate, we attempt multiple passes
-            // (Infdev did 10) each tick while under the cap; the interval only gates how often we
-            // check so an empty area fills quickly without hammering every frame.
+            // Natural spawning: attempt multiple passes each tick while under the cap (the
+            // interval only gates how often we check, so an empty area fills quickly without
+            // hammering every frame).
             if (enableSpawning && _spawner != null)
             {
                 _spawnAccumulator += deltaSeconds;
@@ -251,9 +247,9 @@ namespace CubeApp
                 }
             }
 
-            // Infdev monster spawning: same cadence, but zombies only appear in darkness and are
-            // strongly biased toward caves (SpawnerMonsters). The light gate uses the current
-            // sky-light subtraction so they pour out of caves all day and over the surface at night.
+            // Night monster spawning: same cadence, but zombies only appear in darkness and are
+            // strongly biased toward caves. The light gate uses the current night-dim level so they
+            // pour out of caves all day and over the surface at night.
             if (enableSpawning && _monsterSpawner != null && _skylightSubtractedFn != null)
             {
                 _monsterSpawnAccumulator += deltaSeconds;
@@ -277,7 +273,7 @@ namespace CubeApp
             }
         }
 
-        // Despawn (1.12-style but tuned so natural spawns don't instantly vanish): instant despawn
+        // Despawn (tuned so natural spawns don't instantly vanish): instant despawn
         // beyond 128 blocks; between 64 and 128 blocks, despawn after 600 idle ticks. The natural
         // spawn ring is 24-32 blocks, so mobs that wander a little don't cross the idle threshold.
         private static double DistSq(Point3D a, Point3D b)
@@ -497,8 +493,8 @@ namespace CubeApp
         // be the registry id (e.g. "zombie"), not the class name "genericmobentity".
         public override string MobTypeName => _definition.Id;
 
-        // Infdev EntityZombie.onLivingUpdate: in daytime, if the sky is visible above and the
-        // brightness is high enough, the zombie periodically catches fire (fire=300).
+        // Zombie sunburn: in daytime, if the sky is visible above and the brightness is high
+        // enough, the zombie periodically catches fire.
         private float _burnAccumulator;
 
         protected override void UpdateEnvironment(float dt, ChunkManager manager)
@@ -508,9 +504,9 @@ namespace CubeApp
             if (SkylightSource == null) return;
 
             int skylight = SkylightSource();
-            if (skylight >= 4) return; // not daytime (Infdev isDaytime: skylightSubtracted < 4)
+            if (skylight >= 4) return; // not daytime (night-dim 0..3 = daylight)
 
-            // canBlockSeeTheSky: nothing opaque above within the probe range.
+            // Nothing opaque above within the probe range (sky visible).
             for (int wy = (int)Math.Floor(Position.Y) + 1; wy <= (int)Math.Floor(Position.Y) + 8; wy++)
             {
                 int id = manager.GetBlockAt((int)Math.Floor(Position.X), wy, (int)Math.Floor(Position.Z));
@@ -518,7 +514,7 @@ namespace CubeApp
             }
 
             _burnAccumulator += dt;
-            // Infdev: rand.nextFloat() * 30 < (brightness - 0.4) * 2  -> roughly 1/20s at noon.
+            // Fire chance scales with how bright the daylight is (roughly 1/20s at noon).
             float brightness = Math.Max(0f, (15f - skylight) / 15f);
             float chancePerSecond = ((brightness - 0.4f) * 2f) / 30f;
             if (_burnAccumulator > 1f / Math.Max(0.001f, chancePerSecond))

@@ -15,12 +15,11 @@ namespace CubeApp
     }
 
     /// <summary>
-    /// A Minecraft-classic-style player model (Steve proportions): 8x8x8 head, 8x12x4 body and
-    /// 4x12x4 arms/legs, mapped against a standard modern 64x64 skin. Conventions match
-    /// <see cref="DuckModel"/>: coordinates are texture pixels (16 px = 1 block), the feet sit at
-    /// y = 0, the model is centred on x = 0 and faces -Z. Because the model faces -Z (vanilla
-    /// Minecraft models face +Z), the whole rig is x-mirrored: the player's RIGHT side is +X in
-    /// model space, which makes the standard skin regions land on the correct sides.
+    /// A classic voxel-style player model: 8x8x8 head, 8x12x4 body and 4x12x4 arms/legs, mapped
+    /// against a standard modern 64x64 skin. Conventions match <see cref="DuckModel"/>:
+    /// coordinates are texture pixels (16 px = 1 block), the feet sit at y = 0, the model is
+    /// centred on x = 0 and faces -Z. The whole rig is x-mirrored: the player's RIGHT side is +X
+    /// in model space, which makes the standard skin regions land on the correct sides.
     /// </summary>
     public static class PlayerModel
     {
@@ -55,10 +54,11 @@ namespace CubeApp
         }
 
         /// <summary>
-        /// Expands a standard Minecraft box-UV region at (u, v) for a box of size w x h x d into
-        /// per-face pixel UV rects in the duck-model face order (east, west, up, down, south, north).
-        /// The mapping accounts for the model being x-mirrored relative to vanilla (front = -Z):
-        /// the skin's "right" column lands on the +X face and texture wrap stays seamless.
+        /// Expands a standard box-UV region at (u, v) for a box of size w x h x d into per-face
+        /// pixel UV rects in the duck-model face order (east, west, up, down, south, north).
+        /// The mapping accounts for the model being x-mirrored relative to the classic layout
+        /// (front = -Z): the skin's "right" column lands on the +X face and texture wrap stays
+        /// seamless.
         /// </summary>
         private static float[] BoxUV(float u, float v, float w, float h, float d)
         {

@@ -71,8 +71,8 @@ namespace CubeApp
         public bool HasPath => _path != null && !_path.IsDone;
 
         /// <summary>
-        /// Supplies the current skylight subtraction (0..11) so environmental behaviors (Infdev
-        /// zombie sunburn) can tell day from night. Wired by the EntityManager from the world clock.
+        /// Supplies the current night-dim level (0..11) so environmental behaviors (zombie
+        /// sunburn) can tell day from night. Wired by the EntityManager from the world clock.
         /// </summary>
         public Func<int>? SkylightSource { get; set; }
 
@@ -81,7 +81,7 @@ namespace CubeApp
         /// <summary>True when this mob hunts humans (zombies). Wired from the mob config.</summary>
         public bool Hostile { get; protected set; }
 
-        /// <summary>Damage dealt per attack (Infdev zombie attackStrength = 5).</summary>
+        /// <summary>Damage dealt per attack.</summary>
         public int AttackDamage { get; protected set; } = 5;
 
         /// <summary>Horizontal range at which the mob starts chasing its target (blocks).</summary>
@@ -226,7 +226,7 @@ namespace CubeApp
         }
 
         /// <summary>
-        /// Environmental damage hook (Infdev zombies burn in daylight). Virtual so subclasses can
+        /// Environmental damage hook (zombies burn in daylight). Virtual so subclasses can
         /// opt in without touching the base simulation.
         /// </summary>
         protected virtual void UpdateEnvironment(float dt, ChunkManager manager) { }
@@ -317,7 +317,7 @@ namespace CubeApp
 
         /// <summary>
         /// Ask the navigator to path to a world position. The mob steers along the computed
-        /// waypoints (A*, ported from 1.12) until the goal is reached or the path is exhausted.
+        /// waypoints (A*) until the goal is reached or the path is exhausted.
         /// Set <paramref name="maxDistance"/> to bound how far the search will look.
         /// </summary>
         public void SetPathGoal(double goalX, double goalZ, double maxDistance = 64.0)

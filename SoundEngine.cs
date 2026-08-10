@@ -9,12 +9,11 @@ using Silk.NET.OpenAL;
 namespace CubeApp
 {
     /// <summary>
-    /// A faithful port of Minecraft 1.12's SoundManager (SoundManager.java) onto OpenAL - the SAME
-    /// backend MC uses (paulscode LibraryLWJGLOpenAL). OpenAL gives every sound its own hardware
-    /// source that plays once and transitions to Stopped on its own: no custom mixer, no shared
-    /// mutable voice, no stuck-buffer loop.
+    /// OpenAL sound playback: every sound gets its own hardware source that plays once and
+    /// transitions to Stopped on its own: no custom mixer, no shared mutable voice, no stuck-buffer
+    /// loop.
     ///
-    /// 1.12 structure preserved:
+    /// Structure:
     ///  - playSound() creates an isolated source per play (unique channel), applies volume/pitch
     ///    and position, plays it.
     ///  - updateAllSounds() every tick polls each source; when OpenAL reports Stopped, the source
@@ -23,14 +22,14 @@ namespace CubeApp
     ///  - Positioned sounds use OpenAL's native linear rolloff (16-block reference distance).
     ///  - Sound categories (master/blocks/ambient) with independent volumes.
     ///
-    /// Decoding still happens once at startup (NAudio -> PCM), then the PCM is uploaded into an
-    /// OpenAL buffer. The game thread only enqueues tiny play requests.
+    /// Decoding happens once at startup (NAudio -> PCM), then the PCM is uploaded into an OpenAL
+    /// buffer. The game thread only enqueues tiny play requests.
     /// </summary>
     public sealed class SoundEngine : IDisposable
     {
         private const int DefaultSampleRate = 44100;
-        private const int MaxSources = 32;          // 1.12-style source cap
-        private const float AttenuationRange = 16f; // MC: linear attenuation reference distance
+        private const int MaxSources = 32;
+        private const float AttenuationRange = 16f; // linear attenuation reference distance
 
         public enum SoundCategory { Master, Blocks, Ambient }
 
@@ -234,7 +233,7 @@ namespace CubeApp
         }
 
         // ------------------------------------------------------------------
-        // 1.12-style API
+        // Playback API
         // ------------------------------------------------------------------
 
         public bool HasSound(string name) => _clips.ContainsKey(name);
@@ -264,8 +263,8 @@ namespace CubeApp
             _queue.Enqueue(new PlayRequest(name, volume, pitch, x, y, z, true, category));
         }
 
-        /// <summary>1.12's updateAllSounds: drain pending plays, poll every source, delete the
-        /// finished ones and free their slots. Call every tick from the game thread.</summary>
+        /// <summary>Drain pending plays, poll every source, delete the finished ones and free
+        /// their slots. Call every tick from the game thread.</summary>
         public void Update()
         {
             if (_disposed) return;
@@ -281,7 +280,7 @@ namespace CubeApp
                     _al.GetSourceProperty(ch.Source, GetSourceInteger.SourceState, &state);
                     if (state != (int)SourceState.Playing && state != (int)SourceState.Paused)
                     {
-                        // 1.12: removeSource + free the slot.
+                        // Remove the source and free the slot.
                         _al.SourceStop(ch.Source);
                         ch.InUse = false;
                     }
@@ -298,7 +297,7 @@ namespace CubeApp
                 if (!_clips.TryGetValue(req.Name, out var clip)) continue;
 
                 Channel ch = FindFreeChannel();
-                if (ch == null) continue; // source cap hit - 1.12 drops new plays when full
+                if (ch == null) continue; // source cap hit - drop new plays when full
 
                 float catVol = req.Category switch
                 {

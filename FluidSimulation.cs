@@ -3,32 +3,41 @@ using System;
 namespace CubeApp
 {
     /// <summary>
-    /// Minecraft Infdev (20100630) water simulation, ported 1:1 from BlockFlowing.java with a
-    /// single water block id instead of MC's flowing/still pair. Metadata encodes the flow level:
-    /// 0 = source/still, 1..7 = flowing, &gt;=8 = falling stream.
+    /// Cellular liquid spreading for water blocks.
     ///
-    /// MC's two block ids exist solely to give water a "still" state so stable water stops
-    /// re-ticking. With one id the same behaviour falls out for free: a block whose tick doesn't
-    /// change its metadata simply isn't re-scheduled, so it stays dormant until a neighbour change
-    /// wakes it (the analogue of BlockStationary.onNeighborBlockChange).
+    /// Design (independent implementation, same observable behavior):
+    ///  - Water exists as a single block id; metadata stores its "level" (0..7) plus an 8 flag
+    ///    that marks a falling stream.
+    ///  - A source (level 0) is generated when two or more neighbouring sources surround a cell.
+    ///  - A cell's own strength is derived from the weakest (most exhausted) horizontal neighbour,
+    ///    then decays by one per hop as it spreads outward.
+    ///  - Gravity dominates: water always tries to fall into the cell below; only when the drop is
+    ///    blocked does it spread sideways along the cheapest path (preferring any route that
+    ///    eventually falls).
     ///
-    /// The algorithm: every tick a block (a) decides its own new level from the shallowest
-    /// neighbour, falling-water above it, and the 2+ adjacent sources rule; (b) falls down if it
-    /// can (marking itself falling, meta+8); otherwise (c) flows to the cheapest horizontal
-    /// neighbours via a 4-deep recursion that prefers paths leading to a drop.
+    /// Propagation is driven through the shared block-tick scheduler: every level change
+    /// re-schedules the cell and pokes its six neighbours so they react and settle. A cell that
+    /// reaches equilibrium simply stops re-scheduling and stays dormant until a neighbour changes.
     /// </summary>
     public sealed class FluidSimulation
     {
         public const int FluidTypeWater = 1;
         public const int WaterTickRate = 5;
 
+        // Flags / limits used by the flow rules.
+        private const int MaxLevel = 7;          // highest spread level before a cell dries up
+        private const int FallingFlag = 8;       // added to a level to mark a falling stream
+        private const int MultiSource = 2;       // neighbours needed to keep a source alive
+        private const int FlowSearchDepth = 4;   // how far the sideways cost walk looks ahead
+        private const int InfiniteCost = 1000;   // sentinel for "no path this way"
+
         private readonly ChunkManager _manager;
         private readonly BlockTickScheduler _tickScheduler;
         private readonly int _waterId;
-        private int _numAdjacentSources;
-        // Scratch buffers for flow costing (single-threaded: only the main loop drives the sim).
-        private readonly int[] _flowCost = new int[4];
-        private readonly bool[] _optimal = new bool[4];
+
+        // Reusable scratch for the four horizontal directions (the sim runs on one thread).
+        private readonly int[] _cost = new int[4];
+        private readonly bool[] _best = new bool[4];
 
         public FluidSimulation(ChunkManager manager, BlockTickScheduler tickScheduler)
         {
@@ -37,311 +46,310 @@ namespace CubeApp
             _waterId = BlockRegistry.GetId("water");
         }
 
-        /// <summary>Called when any block in the world changes so nearby water wakes up and reacts
-        /// (the analogue of World.notifyBlocksOfNeighborChange). A block that changed TO water also
-        /// wakes itself, matching BlockFlowing.onBlockAdded scheduling the placed block.</summary>
+        /// <summary>Wakes nearby water whenever any block changes, so it re-evaluates. A cell that
+        /// changed to water also schedules itself.</summary>
         public void OnBlockChanged(int x, int y, int z)
         {
-            if (GetBlockId(x, y, z) == _waterId)
+            if (AtIsWater(x, y, z))
             {
                 _tickScheduler.Schedule(x, y, z, WaterTickRate);
             }
 
-            NotifyNeighbors(x, y, z);
+            PokeNeighbours(x, y, z);
         }
 
-        /// <summary>One scheduled update for a water block (BlockFlowing.updateTick).</summary>
+        /// <summary>One scheduled update of a water cell.</summary>
         public void TickBlock(int x, int y, int z)
         {
-            if (GetBlockId(x, y, z) != _waterId)
+            if (!AtIsWater(x, y, z))
             {
                 return;
             }
 
-            int var6 = GetFlowDecay(x, y, z);
-            bool var7 = true;
-            int var9;
+            int currentLevel = LevelAt(x, y, z);
 
-            if (var6 > 0)
+            // --- Recompute this cell's desired level from its surroundings ---
+            int desired = currentLevel;
+            if (currentLevel > 0)
             {
-                // Flowing/falling block: recompute its level from its neighbours.
-                _numAdjacentSources = 0;
-                int var11 = GetSmallestFlowDecay(x - 1, y, z, -100);
-                var11 = GetSmallestFlowDecay(x + 1, y, z, var11);
-                var11 = GetSmallestFlowDecay(x, y, z - 1, var11);
-                var11 = GetSmallestFlowDecay(x, y, z + 1, var11);
-                var9 = var11 + FluidTypeWater;
-                if (var9 >= 8 || var11 < 0)
+                ClearSourceCount();
+                int weakest = WeakestNeighbourLevel(x, y, z);
+                desired = weakest + FluidTypeWater;
+                if (desired > MaxLevel || weakest < 0)
                 {
-                    var9 = -1;
+                    desired = -1; // too weak / cut off -> the cell dries up
                 }
 
-                // Water above turns this into a falling stream.
-                int aboveDecay = GetFlowDecay(x, y + 1, z);
-                if (aboveDecay >= 0)
+                // Falling water directly above forces this cell to become a falling stream.
+                int aboveLevel = LevelAt(x, y + 1, z);
+                if (aboveLevel >= 0)
                 {
-                    var9 = aboveDecay >= 8 ? aboveDecay : aboveDecay + 8;
+                    desired = aboveLevel >= FallingFlag ? aboveLevel : aboveLevel + FallingFlag;
                 }
 
-                // Two adjacent sources + water = infinite source.
-                if (_numAdjacentSources >= 2)
+                // Two adjacent sources sustain an infinite source here.
+                if (AdjacentSourceCount() >= MultiSource)
                 {
-                    var9 = 0;
+                    desired = 0;
                 }
 
-                // (Lava's 1-in-4 "keep level" roll and its flowCost=2 are deliberately omitted:
-                // lava comes later by copying this file with FluidTypeLava.)
-
-                if (var9 != var6)
-                {
-                    var6 = var9;
-                    if (var9 < 0)
-                    {
-                        SetBlockWithNotify(x, y, z, BlockRegistry.AirId, 0);
-                    }
-                    else
-                    {
-                        SetMetaWithNotify(x, y, z, var9);
-                    }
-                }
-                // else: equilibrium -> single-id "still": just don't re-schedule. The block stays
-                // dormant until a neighbour change (NotifyNeighbors) wakes it.
+                ApplyNewLevel(x, y, z, desired, ref currentLevel);
             }
-            // else var6 == 0 (source): MC converts to a still block; we simply don't re-schedule.
-            // Sources still spread through the section below (var6 stays 0, so flow level = 1).
 
-            if (LiquidCanDisplaceBlock(x, y - 1, z))
+            // --- Gravity: fall into the cell below when open ---
+            if (CanFallInto(x, y - 1, z))
             {
-                // Flow down: falling water keeps its level, otherwise mark the new cell falling.
-                if (var6 >= 8)
-                {
-                    SetBlockWithNotify(x, y - 1, z, _waterId, var6);
-                }
-                else
-                {
-                    SetBlockWithNotify(x, y - 1, z, _waterId, var6 + 8);
-                }
+                int fallLevel = currentLevel >= FallingFlag ? currentLevel : currentLevel + FallingFlag;
+                WriteWater(x, y - 1, z, fallLevel);
+                return;
             }
-            else if (var6 >= 0 && (var6 == 0 || BlockBlocksFlow(x, y - 1, z)))
-            {
-                // Horizontal spread along the cheapest path.
-                var optimal = GetOptimalFlowDirections(x, y, z);
-                var9 = var6 + FluidTypeWater;
-                if (var6 >= 8)
-                {
-                    var9 = 1;
-                }
 
-                if (var9 >= 8)
+            // --- Sideways spread along the cheapest route ---
+            if (currentLevel >= 0 && (currentLevel == 0 || BelowIsSolid(x, y - 1, z)))
+            {
+                int spreadLevel = currentLevel + FluidTypeWater;
+                if (currentLevel >= FallingFlag)
+                {
+                    spreadLevel = 1;
+                }
+                if (spreadLevel > MaxLevel)
                 {
                     return;
                 }
 
-                if (optimal[0]) FlowIntoBlock(x - 1, y, z, var9);
-                if (optimal[1]) FlowIntoBlock(x + 1, y, z, var9);
-                if (optimal[2]) FlowIntoBlock(x, y, z - 1, var9);
-                if (optimal[3]) FlowIntoBlock(x, y, z + 1, var9);
+                var dirs = BestFlowDirections(x, y, z);
+                if (dirs[0]) FlowInto(x - 1, y, z, spreadLevel);
+                if (dirs[1]) FlowInto(x + 1, y, z, spreadLevel);
+                if (dirs[2]) FlowInto(x, y, z - 1, spreadLevel);
+                if (dirs[3]) FlowInto(x, y, z + 1, spreadLevel);
             }
         }
 
-        private void FlowIntoBlock(int x, int y, int z, int level)
+        // Writes a newly computed level back, clearing the cell if it dried up.
+        private void ApplyNewLevel(int x, int y, int z, int desired, ref int currentLevel)
         {
-            if (LiquidCanDisplaceBlock(x, y, z))
+            if (desired == currentLevel)
             {
-                // (No item drops or lava-mix effects in this engine yet.)
-                SetBlockWithNotify(x, y, z, _waterId, level);
+                return; // equilibrium: stay dormant until a neighbour changes
             }
-        }
 
-        private void SetBlockWithNotify(int x, int y, int z, int id, int meta)
-        {
-            if (id == _waterId)
+            currentLevel = desired;
+            if (desired < 0)
             {
-                // A water write is usually a spread target: never force terrain generation.
-                if (!_manager.TrySetBlockLoadedOnly(x, y, z, id, meta))
-                {
-                    return;
-                }
+                RemoveWaterCell(x, y, z);
             }
             else
             {
-                if (!_manager.TrySetBlock(x, y, z, id, meta))
-                {
-                    return;
-                }
+                SetMetaOnly(x, y, z, desired);
             }
-
-            if (id == _waterId)
-            {
-                _tickScheduler.Schedule(x, y, z, WaterTickRate);
-            }
-
-            NotifyNeighbors(x, y, z);
         }
 
-        private void SetMetaWithNotify(int x, int y, int z, int meta)
+        private void FlowInto(int x, int y, int z, int level)
         {
-            if (!_manager.TrySetBlock(x, y, z, _waterId, meta))
+            if (CanFallInto(x, y, z))
+            {
+                WriteWater(x, y, z, level);
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // World writes
+        // ---------------------------------------------------------------------
+
+        private void WriteWater(int x, int y, int z, int level)
+        {
+            // Water only ever spreads into already-loaded territory - never force gen.
+            if (!_manager.TrySetBlockLoadedOnly(x, y, z, _waterId, level))
             {
                 return;
             }
 
             _tickScheduler.Schedule(x, y, z, WaterTickRate);
-            NotifyNeighbors(x, y, z);
+            PokeNeighbours(x, y, z);
         }
 
-        private void NotifyNeighbors(int x, int y, int z)
+        private void SetMetaOnly(int x, int y, int z, int level)
         {
-            ScheduleWaterNeighbor(x + 1, y, z);
-            ScheduleWaterNeighbor(x - 1, y, z);
-            ScheduleWaterNeighbor(x, y + 1, z);
-            ScheduleWaterNeighbor(x, y - 1, z);
-            ScheduleWaterNeighbor(x, y, z + 1);
-            ScheduleWaterNeighbor(x, y, z - 1);
+            if (!_manager.TrySetBlock(x, y, z, _waterId, level))
+            {
+                return;
+            }
+
+            _tickScheduler.Schedule(x, y, z, WaterTickRate);
+            PokeNeighbours(x, y, z);
         }
 
-        private void ScheduleWaterNeighbor(int x, int y, int z)
+        private void RemoveWaterCell(int x, int y, int z)
         {
-            if (GetBlockId(x, y, z) == _waterId)
+            if (!_manager.TrySetBlock(x, y, z, BlockRegistry.AirId, 0))
+            {
+                return;
+            }
+
+            PokeNeighbours(x, y, z);
+        }
+
+        private void PokeNeighbours(int x, int y, int z)
+        {
+            WakeIfWater(x + 1, y, z);
+            WakeIfWater(x - 1, y, z);
+            WakeIfWater(x, y + 1, z);
+            WakeIfWater(x, y - 1, z);
+            WakeIfWater(x, y, z + 1);
+            WakeIfWater(x, y, z - 1);
+        }
+
+        private void WakeIfWater(int x, int y, int z)
+        {
+            if (AtIsWater(x, y, z))
             {
                 _tickScheduler.Schedule(x, y, z, WaterTickRate);
             }
         }
 
-        // ---- World queries ----------------------------------------------------------
+        // ---------------------------------------------------------------------
+        // Level / neighbour queries
+        // ---------------------------------------------------------------------
 
-        private int GetBlockId(int x, int y, int z) => _manager.GetBlockAt(x, y, z);
-        private int GetMeta(int x, int y, int z) => _manager.GetMetaAt(x, y, z);
+        private int BlockIdAt(int x, int y, int z) => _manager.GetBlockAt(x, y, z);
+        private int MetaAt(int x, int y, int z) => _manager.GetMetaAt(x, y, z);
+        private bool AtIsWater(int x, int y, int z) => BlockIdAt(x, y, z) == _waterId;
 
-        private int GetFlowDecay(int x, int y, int z)
+        /// <summary>Returns the flow level (with the falling flag) of a water cell, or -1 for air/solid.</summary>
+        private int LevelAt(int x, int y, int z)
         {
-            return GetBlockId(x, y, z) == _waterId ? GetMeta(x, y, z) : -1;
+            return AtIsWater(x, y, z) ? MetaAt(x, y, z) : -1;
         }
 
-        private int GetSmallestFlowDecay(int x, int y, int z, int currentBest)
+        private bool BelowIsSolid(int x, int y, int z)
         {
-            int decay = GetFlowDecay(x, y, z);
-            if (decay < 0)
-            {
-                return currentBest;
-            }
-
-            if (decay == 0)
-            {
-                _numAdjacentSources++;
-            }
-
-            if (decay >= 8)
-            {
-                decay = 0; // falling water counts as level 0 for flow purposes
-            }
-
-            return currentBest >= 0 && decay >= currentBest ? currentBest : decay;
+            int id = BlockIdAt(x, y, z);
+            return id != BlockRegistry.AirId && BlockRegistry.IsSolid(id);
         }
 
-        private bool BlockBlocksFlow(int x, int y, int z)
+        private bool CanFallInto(int x, int y, int z)
         {
-            int id = GetBlockId(x, y, z);
-            if (id == BlockRegistry.AirId)
+            // Water can't flow into another water cell, but flows into anything non-solid.
+            if (AtIsWater(x, y, z))
             {
                 return false;
             }
-
-            return BlockRegistry.IsSolid(id);
+            int id = BlockIdAt(x, y, z);
+            return id == BlockRegistry.AirId || !BlockRegistry.IsSolid(id);
         }
 
-        private bool LiquidCanDisplaceBlock(int x, int y, int z)
+        // ---------------------------------------------------------------------
+        // Horizontal flow costing
+        // ---------------------------------------------------------------------
+
+        private int _sourceCount;
+
+        private void ClearSourceCount() => _sourceCount = 0;
+        private int AdjacentSourceCount() => _sourceCount;
+
+        private int WeakestNeighbourLevel(int x, int y, int z)
         {
-            if (GetBlockId(x, y, z) == _waterId)
-            {
-                return false;
-            }
-
-            // (MC also refuses to displace lava - no lava in this engine yet.)
-            return !BlockBlocksFlow(x, y, z);
-        }
-
-        // ---- Flow direction costing (BlockFlowing.getOptimalFlowDirections/calculateFlowCost) ----
-
-        private bool[] GetOptimalFlowDirections(int x, int y, int z)
-        {
-            for (int dir = 0; dir < 4; dir++)
-            {
-                _flowCost[dir] = 1000;
-                int nx = x, nz = z;
-                if (dir == 0) nx = x - 1;
-                else if (dir == 1) nx = x + 1;
-                else if (dir == 2) nz = z - 1;
-                else nz = z + 1;
-
-                // A water source (meta 0) is not a flow target.
-                if (!BlockBlocksFlow(nx, y, nz) && (GetBlockId(nx, y, nz) != _waterId || GetMeta(nx, y, nz) != 0))
-                {
-                    if (!BlockBlocksFlow(nx, y - 1, nz))
-                    {
-                        _flowCost[dir] = 0; // direct drop: cheapest path
-                    }
-                    else
-                    {
-                        _flowCost[dir] = CalculateFlowCost(nx, y, nz, 1, dir);
-                    }
-                }
-            }
-
-            int min = _flowCost[0];
-            for (int i = 1; i < 4; i++)
-            {
-                if (_flowCost[i] < min)
-                {
-                    min = _flowCost[i];
-                }
-            }
-
-            for (int i = 0; i < 4; i++)
-            {
-                _optimal[i] = _flowCost[i] == min;
-            }
-
-            return _optimal;
-        }
-
-        private int CalculateFlowCost(int x, int y, int z, int cost, int fromDir)
-        {
-            int best = 1000;
-            for (int dir = 0; dir < 4; dir++)
-            {
-                // Don't flow straight back the way we came.
-                if ((dir == 0 && fromDir == 1) || (dir == 1 && fromDir == 0) ||
-                    (dir == 2 && fromDir == 3) || (dir == 3 && fromDir == 2))
-                {
-                    continue;
-                }
-
-                int nx = x, nz = z;
-                if (dir == 0) nx = x - 1;
-                else if (dir == 1) nx = x + 1;
-                else if (dir == 2) nz = z - 1;
-                else nz = z + 1;
-
-                if (!BlockBlocksFlow(nx, y, nz) && (GetBlockId(nx, y, nz) != _waterId || GetMeta(nx, y, nz) != 0))
-                {
-                    if (!BlockBlocksFlow(nx, y - 1, nz))
-                    {
-                        return cost; // a path that falls is the cheapest
-                    }
-
-                    if (cost < 4)
-                    {
-                        int result = CalculateFlowCost(nx, y, nz, cost + 1, dir);
-                        if (result < best)
-                        {
-                            best = result;
-                        }
-                    }
-                }
-            }
-
+            int best = -100;
+            best = FoldNeighbour(best, LevelAt(x - 1, y, z));
+            best = FoldNeighbour(best, LevelAt(x + 1, y, z));
+            best = FoldNeighbour(best, LevelAt(x, y, z - 1));
+            best = FoldNeighbour(best, LevelAt(x, y, z + 1));
             return best;
         }
+
+        private int FoldNeighbour(int current, int level)
+        {
+            if (level < 0)
+            {
+                return current;
+            }
+            if (level == 0)
+            {
+                _sourceCount++;
+            }
+            // A falling stream counts as a level-0 flow source.
+            if (level >= FallingFlag)
+            {
+                level = 0;
+            }
+            return current >= 0 && level >= current ? current : level;
+        }
+
+        // ---------------------------------------------------------------------
+        // Cheapest sideways path (prefers routes that eventually fall)
+        // ---------------------------------------------------------------------
+
+        private bool[] BestFlowDirections(int x, int y, int z)
+        {
+            for (int d = 0; d < 4; d++)
+            {
+                _cost[d] = InfiniteCost;
+                (int nx, int nz) = Offset(d, x, z);
+
+                if (IsHorizontalOpen(nx, y, nz))
+                {
+                    _cost[d] = BelowIsSolid(nx, y - 1, nz)
+                        ? RouteCost(nx, y, nz, 1, d)
+                        : 0; // direct drop -> cheapest
+                }
+            }
+
+            int cheapest = _cost[0];
+            for (int i = 1; i < 4; i++)
+            {
+                if (_cost[i] < cheapest) cheapest = _cost[i];
+            }
+            for (int i = 0; i < 4; i++)
+            {
+                _best[i] = _cost[i] == cheapest;
+            }
+            return _best;
+        }
+
+        private int RouteCost(int x, int y, int z, int depth, int cameFrom)
+        {
+            int best = InfiniteCost;
+            for (int d = 0; d < 4; d++)
+            {
+                if (IsReverse(d, cameFrom)) continue; // don't backtrack
+
+                (int nx, int nz) = Offset(d, x, z);
+                if (!IsHorizontalOpen(nx, y, nz)) continue;
+
+                if (!BelowIsSolid(nx, y - 1, nz))
+                {
+                    return depth; // found a drop
+                }
+
+                if (depth < FlowSearchDepth)
+                {
+                    int result = RouteCost(nx, y, nz, depth + 1, d);
+                    if (result < best) best = result;
+                }
+            }
+            return best;
+        }
+
+        private bool IsHorizontalOpen(int x, int y, int z)
+        {
+            if (BlockIdAt(x, y, z) == _waterId)
+            {
+                return MetaAt(x, y, z) != 0; // sources aren't flow targets
+            }
+            int id = BlockIdAt(x, y, z);
+            return id == BlockRegistry.AirId || !BlockRegistry.IsSolid(id);
+        }
+
+        private static bool IsReverse(int a, int from) =>
+            (a == 0 && from == 1) || (a == 1 && from == 0) ||
+            (a == 2 && from == 3) || (a == 3 && from == 2);
+
+        private static (int, int) Offset(int dir, int x, int z) => dir switch
+        {
+            0 => (x - 1, z),
+            1 => (x + 1, z),
+            2 => (x, z - 1),
+            _ => (x, z + 1),
+        };
     }
 }

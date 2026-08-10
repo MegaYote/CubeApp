@@ -19,9 +19,8 @@ namespace CubeApp
         public float Alpha { get; }
         /// <summary>
         /// When true (fluid side walls), the tile's bottom edge is anchored to the lowest face
-        /// vertex and the fluid surface cuts across the tile, matching Infdev's
-        /// RenderBlocks.renderBlockFluids. Without it, a partial-height wall shows the tile's
-        /// TOP strip instead of its bottom portion.
+        /// vertex and the fluid surface cuts across the tile. Without it, a partial-height wall
+        /// shows the tile's TOP strip instead of its bottom portion.
         /// </summary>
         public bool AnchorVBottom { get; }
 

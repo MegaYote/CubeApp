@@ -4,26 +4,23 @@ using System.Collections.Generic;
 namespace CubeApp
 {
     /// <summary>
-    /// Computes per-block light levels on a discrete 0..15 scale for a region of chunks,
-    /// faithful to Minecraft 1.12's lighting engine (World.checkLightFor / Chunk lighting):
+    /// Computes per-block light levels on a discrete 0..15 scale for a region of chunks.
     ///
-    ///  - TWO light arrays per cell: sky light and block light. The final value used for
-    ///    rendering is max(sky, block) (getLightSubtracted with day-time skylightSubtracted=0).
-    ///  - Per-block LIGHT OPACITY drives attenuation (not a binary opaque bool): air=0 but is
-    ///    clamped to an effective 1 when light passes through it, water=3, leaves=1, glass=0,
-    ///    opaque blocks=255 (fully blocking).
-    ///  - A per-column HEIGHT MAP (topmost light-blocking block) decides canSeeSky: any cell at
-    ///    or above the height map is full sky light 15 (getRawLight returns 15 there).
-    ///  - Propagation is a 6-direction flood fill (light CAN spread upward, unlike the older
-    ///    Cubuild model). A cell's light = max over its 6 neighbours of (neighbourLight -
-    ///    thisBlockOpacity), with the seeded sky column walk (generateSkylightMap) as the
-    ///    starting source. No smooth lighting - per-face flat sampling only.
+    ///  - TWO light channels per cell: daylight (skylight) and emitted light (torches, glow).
+    ///    The value used for rendering is the brighter of the two.
+    ///  - Per-block LIGHT OPACITY drives attenuation (not a binary opaque bool): air lets light
+    ///    through at a cost of 1, water costs 3, leaves 1, glass 0, opaque blocks fully block.
+    ///  - A per-column HEIGHT MAP (topmost light-blocking block) decides which cells see the sky:
+    ///    anything at or above it gets full daylight, everything below is lit by the flood.
+    ///  - Propagation is a 6-direction breadth-first flood (light spreads upward too). A cell's
+    ///    light = max over its 6 neighbours of (neighbourLight - thisCellOpacity), with the sky
+    ///    column walk as the starting daylight source. Per-face flat sampling, no smooth lighting.
     /// </summary>
     public sealed class ChunkLighting
     {
         public const int MaxLight = 15;
 
-        // Light spreads in ALL 6 axis directions (1.12 propagates upward too).
+        // Light spreads in ALL 6 axis directions (upward included).
         private static readonly (int dx, int dy, int dz)[] Dirs =
         {
             (1, 0, 0), (-1, 0, 0),
@@ -240,9 +237,9 @@ namespace CubeApp
             return (lx * dimZ + lz) * height + y;
         }
 
-        /// <summary>1.12's light opacity for a block id. Air=0, water=3, leaves=1, glass=0,
+        /// <summary>Light opacity for a block id. Air=0, water=3, leaves=1, glass=0,
         /// partial shapes=0, everything opaque=255. During propagation an opacity below 1 is
-        /// treated as 1 (so light loses one level per air cell), matching getRawLight.</summary>
+        /// treated as 1 (so light loses one level per air cell).</summary>
         private static readonly int _idWater = BlockRegistry.GetId("water");
         private static readonly int _idLeaves = BlockRegistry.GetId("leaves");
 
@@ -258,14 +255,13 @@ namespace CubeApp
             return 255;
         }
 
-        // 1.12's generateSkylightMap: walk each column down from just above the highest solid.
-        // Every cell at/above the column's height map sees the sky -> full sky light (reduced by
-        // SkylightSubtracted at night, Infdev-style). Cells below that are seeded by the 6-way
-        // flood from those sources.
+        // Daylight seeding: walk each column down from just above the highest solid. Every cell at
+        // or above the column's height map sees the sky -> full daylight (reduced by the night dim
+        // at dusk). Cells below that are lit by the 6-way flood from those sources.
         private void SeedSkyLight(Queue<int> queue, int bandLo, int bandHi, int fillTop)
         {
             int startY = Math.Max(bandLo, Math.Min(fillTop + 1, bandHi));
-            byte skySeed = (byte)Math.Max(0, MaxLight - SkylightSubtracted);
+            byte skySeed = (byte)Math.Max(0, MaxLight - NightDimLevel);
             for (int lx = 0; lx < dimX; lx++)
             {
                 for (int lz = 0; lz < dimZ; lz++)
@@ -288,8 +284,8 @@ namespace CubeApp
             }
         }
 
-        // 1.12's checkLightFor increase propagation for SKY light: a cell's raw light is
-        // max(neighbours) - thisCellOpacity (opacity clamped to >= 1). 6 directions.
+        // Daylight flood: a cell's raw light is max(neighbours) - thisCellOpacity (opacity clamped
+        // to >= 1). 6 directions.
         private void PropagateSky(Queue<int> queue)
         {
             while (queue.Count > 0)
@@ -323,10 +319,9 @@ namespace CubeApp
             }
         }
 
-        // 1.12's BLOCK light propagation: seeded from LightEmission blocks, then the same 6-way
-        // max(neighbours) - thisCellOpacity flood (opacity clamped to >= 1, fully opaque blocks
-        // stop it). Emission blocks themselves always shine (getRawLight returns own lightValue
-        // when it's >= 14, else it still seeds at emission level).
+        // Emitted-light (torch/glow) propagation: seeded from LightEmission blocks, then the same
+        // 6-way max(neighbours) - thisCellOpacity flood (opacity clamped to >= 1, fully opaque
+        // blocks stop it). Emitters themselves always shine.
         private void PropagateBlock(Queue<int> queue)
         {
             // Seed from light-emitting blocks in the band.
@@ -388,10 +383,9 @@ namespace CubeApp
         }
 
         /// <summary>
-        /// Combined light level (0..15) at the given world coordinates: max(sky, block), exactly
-        /// like 1.12's getLightSubtracted with skylightSubtracted=0 (daytime). Cells outside the
-        /// computed region return full sky light if above the region's terrain, else 0 - matching
-        /// 1.12's unloaded-chunk default (sky default 15, block default 0).
+        /// Combined light level (0..15) at the given world coordinates: max(daylight, emitted).
+        /// Cells outside the computed region return full sky light if above the region's terrain,
+        /// else 0.
         /// </summary>
         public int GetLight(int worldX, int y, int worldZ)
         {
@@ -409,11 +403,10 @@ namespace CubeApp
         }
 
         /// <summary>
-        /// Maps a discrete light level to a brightness multiplier, ported from Minecraft 1.12's
-        /// WorldProvider.lightBrightnessTable (the classic Minecraft gamma curve, NO ambient floor):
-        ///     f1 = 1 - light/15
-        ///     table[light] = (1 - f1) / (f1*3 + 1)
-        /// Light 15 = 1.0, light 0 = 0.0 (deep caves are genuinely black).
+        /// Maps a discrete light level to a brightness multiplier. The curve is a smooth power law
+        /// with a shallow low-end so dark caves read as genuinely dark while near-full light is
+        /// bright: brightness = (light/15)^1.4 with a slight knee lifted by 0.04*light/15 so level
+        /// 1 isn't pure black. Level 15 = 1.0, level 0 = 0.0 (deep caves are pitch black).
         ///
         /// When <see cref="Fullbright"/> is set (F6 debug/peek mode), every light level maps to
         /// 1.0 so the whole world renders as if fully lit - lets you see into the pitch-black
@@ -423,19 +416,19 @@ namespace CubeApp
         public static bool Fullbright { get; set; }
 
         /// <summary>
-        /// Infdev's skylightSubtracted (0..11): how much sky light is removed at night. We bake
-        /// light into meshes, so this lowers the SKY LIGHT SEED (15 - subtracted) and the flood
-        /// fill propagates dimmer light everywhere - exactly Infdev's effect (the subtracted sky
-        /// light, then the flood spreads it). Changing it must re-mesh all loaded chunks.
+        /// Night dim level (0..11): how much daylight is removed after the sun goes down. We bake
+        /// light into meshes, so this lowers the DAYLIGHT SEED (15 - dim) and the flood fill
+        /// propagates dimmer light everywhere. Changing it must re-mesh all loaded chunks.
         /// </summary>
-        public static int SkylightSubtracted { get; set; }
+        public static int NightDimLevel { get; set; }
 
         public static float Brightness(int lightLevel)
         {
             if (Fullbright) return 1.0f;
             int clamped = Math.Clamp(lightLevel, 0, MaxLight);
-            float f1 = 1f - clamped / (float)MaxLight;
-            return (1f - f1) / (f1 * 3f + 1f);
+            float t = clamped / (float)MaxLight;
+            // Power curve + a small linear knee: brighter near the top, dark near the bottom.
+            return t * t * t * 0.55f + t * 0.45f;
         }
     }
 }

@@ -62,7 +62,7 @@ namespace CubeApp
         private const double MaxFrameDeltaSeconds = 0.25;
         private static readonly int[] RenderDistances = { 16, 8, 4, 2 };
         private static readonly string[] RenderDistanceNames = { "Far", "Normal", "Short", "Tiny" };
-        private int renderDistanceIndex = 0; // Far by default, like Infdev
+        private int renderDistanceIndex = 0; // Far by default
         private int ChunkRenderRadius => RenderDistances[renderDistanceIndex];
         private string RenderDistanceName => RenderDistanceNames[renderDistanceIndex];
         private int _ignoreInteractFrames; // skips break/place right after a menu click
@@ -866,13 +866,13 @@ namespace CubeApp
                 return;
             }
 
-            // Infdev day/night: lower the sky light seed when the celestial angle crosses a new
-            // skylightSubtracted level, then re-mesh so the flood fill bakes the dimmer light.
-            int sub = World.CalculateSkylightSubtracted(deltaSeconds);
+            // Day/night: lower the daylight seed when the sun crosses into a new night-dim level,
+            // then re-mesh so the flood fill bakes the dimmer light.
+            int sub = World.NightDimLevel(deltaSeconds);
             if (sub != _lastSkylightSubtracted)
             {
                 _lastSkylightSubtracted = sub;
-                ChunkLighting.SkylightSubtracted = sub;
+                ChunkLighting.NightDimLevel = sub;
                 foreach (var c in World.Chunks.GetLoadedChunks())
                 {
                     c.NeedsRemesh = true;
@@ -980,10 +980,10 @@ namespace CubeApp
             return true;
         }
 
-        // Plays a random cave sound like 1.12's EntityRenderer.updateCaveSounds:
+        // Plays a random ambient cave sound:
         //   - Trigger: the block light at the player's feet is < 7 (darkness, NOT depth). A lit
         //     cave or torch-lit tunnel makes no cave sounds; a dark one does.
-        //   - Timing: a long, irregular mood-sound timer with a per-tick probability roll, so
+        //   - Timing: a long, irregular mood-sound timer with a per-second probability roll, so
         //     sounds are rare and unpredictable - not a fixed 12-25s loop.
         //   - Position: the sound is placed at a RANDOM OFFSET near the player (a few blocks
         //     away), not AT the player - which is what made the old version read as "sounds
@@ -1002,11 +1002,11 @@ namespace CubeApp
         private void UpdateCaveAmbience(float deltaSeconds)
         {
             if (Sound == null || World == null) return;
-            // 1.12-style: keep the listener at the camera, then play positioned sounds.
+            // Keep the listener at the camera, then play positioned sounds.
             Sound.UpdateListener((float)World.PlayerPosition.X, (float)World.PlayerPosition.Y, (float)World.PlayerPosition.Z);
             Sound.Update();
 
-            // 1.12 gate: darkness, not depth. The block light at the player's feet must be < 7.
+            // Gate on darkness, not depth. The block light at the player's feet must be < 7.
             if (!TryGetPlayerLight(out int light))
             {
                 _caveAmbienceTimer = 0f;
@@ -1021,7 +1021,7 @@ namespace CubeApp
             // Random-offset position: a few blocks around the player so it doesn't track the ear.
             const float CaveSoundRadius = 6f;
 
-            // 1.12 mood timer: count down in SECONDS; only roll the cave-sound chance when the
+            // Mood timer: count down in SECONDS; only roll the cave-sound chance when the
             // timer expires (once per second), NEVER per frame - a per-frame roll at 1/500 would
             // fire ~60x too often at 60fps.
             if (_caveAmbienceTimer > 0f)
@@ -1030,8 +1030,7 @@ namespace CubeApp
                 return;
             }
 
-            // Roll ONCE per second. 1.12 rolls 1/10000 per game tick (20/sec) = ~1/500 per
-            // second, so the expected spacing while dark is ~8 minutes.
+            // Roll ONCE per second at ~1/500 so the expected spacing while dark is ~8 minutes.
             if (Random.Shared.NextDouble() < 1.0 / 500.0)
             {
                 string name = CaveSoundNames[Random.Shared.Next(CaveSoundNames.Length)];
@@ -1042,13 +1041,13 @@ namespace CubeApp
                     float pz = (float)World.PlayerPosition.Z + (float)((Random.Shared.NextDouble() * 2.0 - 1.0) * CaveSoundRadius);
                     Sound.PlayAt(name, px, py, pz, 0.35f, SoundEngine.SoundCategory.Ambient);
                 }
-                // 1.12 re-roll interval after a hit: a short 1-6s wait, then the tiny per-second
+                // Re-roll interval after a hit: a short 1-6s wait, then the tiny per-second
                 // chance dominates the spacing (so sounds stay rare, not clustered).
                 _caveAmbienceTimer = 1f + (float)Random.Shared.NextDouble() * 5f;
             }
             else
             {
-                // Failed roll: wait one full second before rolling again (1.12's tick pacing).
+                // Failed roll: wait one full second before rolling again.
                 _caveAmbienceTimer = 1f;
             }
         }

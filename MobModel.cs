@@ -74,11 +74,10 @@ namespace CubeApp
             catch { return false; }
         }
 
-        // Classic Minecraft directional face shading (Infdev RenderBlocks.java): bottom 0.5,
-        // top 1.0, N/S 0.8, E/W 0.6. For each triangle, the face normal picks a shade; every
-        // vertex of that triangle gets the same shade so GLB models read like the hand-authored
-        // duck/player cube models. Vertices shared across faces take the max (brightest) shade so
-        // seams stay clean.
+        // Classic directional face shading: bottom 0.5, top 1.0, N/S 0.8, E/W 0.6. For each
+        // triangle, the face normal picks a shade; every vertex of that triangle gets the same
+        // shade so GLB models read like the hand-authored duck/player cube models. Vertices shared
+        // across faces take the max (brightest) shade so seams stay clean.
         private void ComputeFaceShades()
         {
             foreach (var part in _parts)

@@ -4,7 +4,7 @@ namespace CubeApp
 {
     /// <summary>
     /// A binary min-heap of PathPoints ordered by their A* f-score (TotalPathDistance +
-    /// DistanceToTarget). Mirrors 1.12's PathHeap.
+    /// DistanceToTarget).
     /// </summary>
     public sealed class PathHeap
     {
@@ -69,8 +69,7 @@ namespace CubeApp
         public void ChangeDistance(PathPoint point, float newDistance)
         {
             point.TotalPathDistance = newDistance;
-            // Re-sift the point up from its (unknown) position by scanning - 1.12 does the same
-            // (it's O(n) but paths are small).
+            // Re-sift the point up from its (unknown) position by scanning (O(n), but paths are small).
             for (int i = 0; i < _count; i++)
             {
                 if (!ReferenceEquals(_points[i], point)) continue;

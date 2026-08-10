@@ -27,18 +27,18 @@ namespace CubeApp.World
         /// <summary>Fraction of stone blocks converted (0..1); less than 1 leaves natural gaps.</summary>
         public float Fill = 0.8f;
 
-        private readonly InfdevOctaves _hostNoise;      // low freq: where veins exist at all
-        private readonly InfdevOctaves _depthNoise;     // follows terrain: depth of the band
-        private readonly InfdevOctaves _thicknessNoise; // medium freq: band thickness
-        private readonly InfdevOctaves _presenceNoise;  // high freq: per-block scatter
+        private readonly NoiseOctaves _hostNoise;      // low freq: where veins exist at all
+        private readonly NoiseOctaves _depthNoise;     // follows terrain: depth of the band
+        private readonly NoiseOctaves _thicknessNoise; // medium freq: band thickness
+        private readonly NoiseOctaves _presenceNoise;  // high freq: per-block scatter
 
         public QuartzVeinGenerator(int seed)
         {
             var rand = new Random(unchecked((int)(seed * 13 + 0x5A41B3)));
-            _hostNoise = new InfdevOctaves(rand, 2, 0);
-            _depthNoise = new InfdevOctaves(rand, 3, 0);
-            _thicknessNoise = new InfdevOctaves(rand, 2, 0);
-            _presenceNoise = new InfdevOctaves(rand, 4, 0);
+            _hostNoise = new NoiseOctaves(rand, 2, 0);
+            _depthNoise = new NoiseOctaves(rand, 3, 0);
+            _thicknessNoise = new NoiseOctaves(rand, 2, 0);
+            _presenceNoise = new NoiseOctaves(rand, 4, 0);
         }
 
         public void Generate(Chunk chunk, int chunkX, int chunkZ, int terrainBandStart, int chunkSize, int chunkHeight)

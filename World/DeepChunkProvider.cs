@@ -6,8 +6,8 @@ namespace CubeApp.World
     /// Generates the DEEP layer (world -256..-65): solid stone carved into a labyrinth of
     /// NIGHTMARE caves, plus a bedrock floor at the very bottom (local 0..3, world -256..-253).
     ///
-    /// The goal is genuine dread: huge pitch-black cathedral caverns (1.12 lighting means zero
-    /// light down here), long snaking web-tunnels that cross chunk borders, sheer vertical
+    /// The goal is genuine dread: huge pitch-black cathedral caverns (no light reaches down here),
+    /// long snaking web-tunnels that cross chunk borders, sheer vertical
     /// shafts that drop you into darkness, claustrophobic crawl spaces, and walls left jagged
     /// and raw. The player should think twice about going down there.
     ///

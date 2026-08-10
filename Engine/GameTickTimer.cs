@@ -3,8 +3,10 @@ using System.Diagnostics;
 
 namespace CubeApp.Engine
 {
-    // Fixed-step timer modeled after the IF-20100630 Timer update pattern.
-    public sealed class InfdevTimer
+    // Fixed-step simulation timer. Clocks a high-resolution source against the system clock to
+    // correct for drift, accumulates fractional ticks, and exposes how many whole ticks elapse
+    // plus the partial tick for render interpolation.
+    public sealed class GameTickTimer
     {
         private readonly float ticksPerSecond;
         private double lastHighResTime;
@@ -17,7 +19,7 @@ namespace CubeApp.Engine
         public float TimerSpeed { get; set; } = 1.0f;
         public float ElapsedPartialTicks { get; private set; }
 
-        public InfdevTimer(float ticksPerSecond)
+        public GameTickTimer(float ticksPerSecond)
         {
             this.ticksPerSecond = ticksPerSecond;
             lastSyncSystemClock = Environment.TickCount64;

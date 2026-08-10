@@ -66,8 +66,8 @@ namespace CubeApp
         public IReadOnlyList<FallingBlockData> FallingBlocks => _falling;
 
         /// <summary>True when a falling block currently occupies the given world cell. Placement
-        /// refuses cells a falling block is passing through (Minecraft's "wait for it to fall out
-        /// of the way" behaviour - you can't stack a new block into a moving one).</summary>
+        /// refuses cells a falling block is passing through - you can't stack a new block into a
+        /// moving one.</summary>
         public bool IsCellOccupiedByFalling(int x, int y, int z)
         {
             // n is small (a handful during normal play); a big cave-in rarely sees simultaneous

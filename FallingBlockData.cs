@@ -1,7 +1,7 @@
 namespace CubeApp
 {
     /// <summary>
-    /// Render data for one falling block (the Minecraft "falling sand/gravel" entity). The block
+    /// Render data for one falling block (a gravity-simulated block). The block
     /// was removed from the world grid and is falling through the air; the renderer draws it as a
     /// 3D cube of the block's tiles using the world pipeline (so it depth-tests against terrain).
     /// </summary>

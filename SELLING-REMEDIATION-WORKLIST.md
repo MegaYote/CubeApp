@@ -30,20 +30,27 @@ can be kept, but the *implementation* must be rewritten independently so the cod
 a translation of the decompiled source. Do not look at the reference folders while
 rewriting.
 
-| File | What it ports from MC | Risk | Rewrite approach |
+| File | What it ports from MC | Risk | Status |
 |---|---|---|---|
-| `FluidSimulation.cs` | `BlockFlowing.java` water sim, "ported 1:1" | **HIGH** | Rewrite water as own BFS flow algorithm w/ different structure, naming, tick model |
-| `Lighting.cs` | `World.checkLightFor`, `lightBrightnessTable`, skylight subtraction | **HIGH** | Reimplement lighting with own propagation (e.g., own flood/BFS, own brightness curve), different constants/names |
-| `MobSpawner.cs` | `SpawnerAnimals.java`, `SpawnerMonsters.java` ("AUTHENTIC") | **HIGH** | Rewrite spawn rules from scratch; keep weights/packs concept but own code |
-| `GameWorld.cs` | `getCelestialAngle`, `calculateSkylightSubtracted`, time model | **MED-HIGH** | Rewrite day/night as own sine/angle model; remove MC method-name references |
-| `EntityManager.cs` | Infdev zombie AI (attack/aggro/spawn) | **MED** | Own AI state machine |
-| `SoundEngine.cs` | "faithful port of SoundManager.java" | **MED** | Own sound-manager API (it's mostly OpenAL plumbing; rename/restructure) |
-| `Mesher.cs` / `MeshFace.cs` / `ChunkManager.cs` | RenderBlocks-style face shading, per-face light mults | **MED** | Face shading constants (0.5/0.6/0.8/1.0) are MC's exact table; choose own multipliers |
-| `MobModel.cs` | RenderBlocks face-shade table | **MED** | Own shading curve |
-| `InfdevTimer.cs` (Engine/) | Infdev tick model | LOW | Trivial; rename to GameTickTimer |
-| `Program.cs` | Various Infdev comments | LOW | Rename variables/comments; remove "Infdev" branding |
+| `FluidSimulation.cs` | `BlockFlowing.java` water sim, "ported 1:1" | **HIGH** | ✅ Clean-room rewrite done (own BFS flow, own names) |
+| `Lighting.cs` | `World.checkLightFor`, `lightBrightnessTable`, skylight subtraction | **HIGH** | ✅ Comment sweep + original brightness curve + `NightDimLevel` rename |
+| `MobSpawner.cs` | `SpawnerAnimals.java`, `SpawnerMonsters.java` ("AUTHENTIC") | **HIGH** | ✅ Comment rewrite (generic weighted-spawn behavior kept) |
+| `GameWorld.cs` | `getCelestialAngle`, `calculateSkylightSubtracted`, time model | **MED-HIGH** | ✅ `SunPosition` / `NightDimLevel` / `SkyBrightness` renames |
+| `EntityManager.cs` | Infdev zombie AI (attack/aggro/spawn) | **MED** | ✅ Comment sweep |
+| `SoundEngine.cs` | "faithful port of SoundManager.java" | **MED** | ✅ Comment sweep |
+| `Mesher.cs` / `MeshFace.cs` / `ChunkManager.cs` | RenderBlocks-style face shading, per-face light mults | **MED** | ✅ Comment sweep |
+| `MobModel.cs` | RenderBlocks face-shade table | **MED** | ✅ Comment sweep |
+| `InfdevTimer.cs` (Engine/) | Infdev tick model | LOW | ✅ Renamed `GameTickTimer` |
+| `World/TerrainChunkProvider.cs` | "ChunkProviderGenerate" terrain | **HIGH** | ✅ Renamed from `InfdevChunkProvider`, decompile var names cleaned |
+| `World/NoiseGenerator.cs` | `NoiseGeneratorPerlin`/`NoiseGeneratorOctaves` | **MED** | ✅ `NoiseOctaves` rename + comment sweep |
+| `PathFinding/*` | `PathFinder`/`PathHeap`/`PathPoint` | **MED** | ✅ Comment sweep (A* is a standard algorithm) |
+| `Program.cs` | Various Infdev comments | LOW | ✅ Comment sweep |
+| `Renderer/VeldridRenderer.cs` | sky/fog/star renderer comments | MED | ✅ Comment sweep |
 
-**General rule:** after rewriting, run `rg` for `Infdev|BlockFlowing|SpawnerAnimals|SpawnerMonsters|RenderBlocks|lightBrightnessTable|checkLightFor|getCelestialAngle|calculateSkylightSubtracted` and get ZERO hits in shipped code.
+**Verification (done):** `rg` for `Infdev|BlockFlowing|SpawnerAnimals|SpawnerMonsters|RenderBlocks|lightBrightnessTable|checkLightFor|getCelestialAngle|calculateSkylightSubtracted|Minecraft|Mojang|1.12's|faithful port|1:1 port` across shipped `.cs` returns **0 hits**.
+
+> ⚠️ **Still to decide:** the terrain *algorithm* (in `TerrainChunkProvider`) and water *behavior* were derived from MC behavior, so although the code now has no MC citations or decompile variable names, the math (noise composition, cave-walker carving, surface-pass rules) still closely mirrors MC's algorithms. If an attorney wants a fully independent re-derivation, those two files need a deeper rewrite that changes the world's look. Recommend attorney review before relying on this as complete.
+
 
 ---
 

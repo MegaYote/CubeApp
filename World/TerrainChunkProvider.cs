@@ -3,20 +3,19 @@ using System;
 namespace CubeApp.World
 {
     /// <summary>
-    /// Faithful port of Infdev 20100630's ChunkProviderGenerate: the 5x17x5 noise field
-    /// (initializeNoiseField) with Infdev's exact generator scales/octave composition,
-    /// trilinear-interpolated into a 16x16x128 block column (generateTerrain), then the
-    /// replaceBlocks surface pass (grass/dirt/sand/gravel/bedrock). The noise primitive is
-    /// simplex (user preference) but the frequency/amplitude composition is Infdev's:
-    /// octave i samples at baseScale*2^-i and accumulates noise*2^i, so the LOW-frequency
-    /// octaves dominate. startIndex skips the negligible high-frequency tail.
+    /// Builds the surface terrain for a ground-layer chunk. A low-resolution density field (5x17x5
+    /// samples covering a 16x16x128 block column) is filled with layered simplex noise, then
+    /// trilinearly interpolated into blocks. A continent signal sets the base elevation and a
+    /// relief signal shapes hills/mountains/valleys; a body-noise pair is blended by a vertical
+    /// selector to give the strata organic variation. A surface pass replaces the top materials
+    /// (grass/dirt/sand/gravel/bedrock), then caves, trees and ore features are carved in.
     /// </summary>
-    public sealed class InfdevChunkProvider : IChunkProvider
+    public sealed class TerrainChunkProvider : IChunkProvider
     {
         private readonly int seed;
 
-        /// <summary>Controllable monolith feature (see MonolithSculptor). The classic Infdev
-        /// "glitch" made explicit: tunable frequency/size/height/carve, seed-driven.</summary>
+        /// <summary>Controllable monolith feature (see MonolithSculptor). A tunable tower/column
+        /// feature: frequency/size/height/carve, seed-driven.</summary>
         public MonolithSculptor Monoliths { get; private set; }
 
         /// <summary>Sedimentary quartz veins (see QuartzVeinGenerator): layered underground veins
@@ -26,31 +25,32 @@ namespace CubeApp.World
         /// <summary>Coal ore blobs (see CoalOreGenerator): prefer just under the living layer
         /// (decomposed biomass), rare deep pockets anywhere.</summary>
         public CoalOreGenerator CoalOres { get; private set; }
-        // Infdev's seven octave generators, in the same construction order as the Java:
-        // noiseGen1/2 = 16 octaves (terrain body), noiseGen3 = 8 (upper/lower selector),
-        // noiseGen4/5 = 4 (replaceBlocks biomes/dirt depth), noiseGen6 = 10 (continent),
-        // noiseGen7 = 16 (relief/cliff factor).
-        private readonly InfdevOctaves _gen1;
-        private readonly InfdevOctaves _gen2;
-        private readonly InfdevOctaves _gen3;
-        private readonly InfdevOctaves _gen4;
-        private readonly InfdevOctaves _gen5;
-        private readonly InfdevOctaves _gen6;
-        private readonly InfdevOctaves _gen7;
 
-        public InfdevChunkProvider(int seed = 341873128)
+        // Octave noise layers for each role:
+        //  _bodyA/_bodyB = two terrain-body generators (16 octaves), blended by _upperSelector
+        //  _upperSelector = vertical upper/lower selector (8 octaves)
+        //  _surfaceA/_surfaceB = surface biomes + dirt depth (4 octaves)
+        //  _continent = large-scale continent field, _relief = hills/cliffs factor
+        private readonly NoiseOctaves _bodyA;
+        private readonly NoiseOctaves _bodyB;
+        private readonly NoiseOctaves _upperSelector;
+        private readonly NoiseOctaves _surfaceA;
+        private readonly NoiseOctaves _surfaceB;
+        private readonly NoiseOctaves _continent;
+        private readonly NoiseOctaves _relief;
+
+        public TerrainChunkProvider(int seed = 341873128)
         {
             this.seed = seed;
             var rand = new Random(seed);
-            // startIndex trims the tiny-amplitude high-frequency octaves (2^0..2^7 = 255 of
-            // 65535 total = 0.4% of the signal) for the 16-octave generators.
-            _gen1 = new InfdevOctaves(rand, 8, 8);
-            _gen2 = new InfdevOctaves(rand, 8, 8);
-            _gen3 = new InfdevOctaves(rand, 8, 0);
-            _gen4 = new InfdevOctaves(rand, 4, 0);
-            _gen5 = new InfdevOctaves(rand, 4, 0);
-            _gen6 = new InfdevOctaves(rand, 8, 2);
-            _gen7 = new InfdevOctaves(rand, 8, 8);
+            // startIndex trims the tiny-amplitude high-frequency octaves.
+            _bodyA = new NoiseOctaves(rand, 8, 8);
+            _bodyB = new NoiseOctaves(rand, 8, 8);
+            _upperSelector = new NoiseOctaves(rand, 8, 0);
+            _surfaceA = new NoiseOctaves(rand, 4, 0);
+            _surfaceB = new NoiseOctaves(rand, 4, 0);
+            _continent = new NoiseOctaves(rand, 8, 2);
+            _relief = new NoiseOctaves(rand, 8, 8);
             Monoliths = new MonolithSculptor(seed);
             QuartzVeins = new QuartzVeinGenerator(seed);
             CoalOres = new CoalOreGenerator(seed);
@@ -67,7 +67,7 @@ namespace CubeApp.World
             // The terrain band occupies local Y 0..127 (world -64..63) at the TOP of the ground
             // layer. Sea level is local 64 (world 0). Above the band (world 64..383) is open sky.
             // The DEEP world (-256..-65) is a separate layer generated by DeepChunkProvider.
-            const int terrainBandStart = 0; // local Y where the Infdev band begins (world -64)
+            const int terrainBandStart = 0; // local Y where the terrain band begins (world -64)
             const int seaLevelLocalY = terrainBandStart + 64;
 
             int idBedrock = BlockRegistry.GetId("bedrock");
@@ -78,11 +78,11 @@ namespace CubeApp.World
             int idSand = BlockRegistry.GetId("sand");
             int idGravel = BlockRegistry.GetId("gravel");
 
-            // ---- initializeNoiseField: build the 5 x 17 x 5 density field ----
+            // ---- Build the 5 x 17 x 5 density field ----
             // Field x/z are in 4-block units (5 samples cover the chunk's 16 blocks), field y
-            // in 8-block units (17 samples cover 128). Exact Infdev scales.
+            // in 8-block units (17 samples cover 128).
             const int fxCount = 5, fyCount = 17, fzCount = 5;
-            const double scaleBase = 684.412;
+            const double baseFreq = 684.412;
             double[] field = new double[fxCount * fyCount * fzCount];
 
             for (int fx = 0; fx < fxCount; fx++)
@@ -93,68 +93,67 @@ namespace CubeApp.World
                     double zq = (chunkZ * 4 + fz); // z field coord = worldZ/4
                     int col = (fx * fzCount + fz) * fyCount;
 
-                    // noise6 (continent) scale 1.0, noise7 (relief) scale 100 - both 2D.
-                    double n6 = _gen6.Noise2D(xq, zq);
-                    double n7 = _gen7.Noise2D(xq * 100.0, zq * 100.0);
+                    // Large-scale elevation: continent field + a sharpened relief signal.
+                    double continent = _continent.Noise2D(xq, zq);
+                    double relief = _relief.Noise2D(xq * 100.0, zq * 100.0);
 
-                    // Infdev's continent + cliff/plateau shaping (var16/var20 chain).
-                    double var16 = (n6 + 256.0) / 512.0;
-                    if (var16 > 1.0) var16 = 1.0;
-                    double var20 = n7 / 8000.0;
-                    if (var20 < 0.0) var20 = -var20;
-                    var20 = var20 * 3.0 - 3.0;
-                    if (var20 < 0.0)
+                    double elevation = (continent + 256.0) / 512.0;
+                    if (elevation > 1.0) elevation = 1.0;
+
+                    double reliefShaped = relief / 8000.0;
+                    if (reliefShaped < 0.0) reliefShaped = -reliefShaped;
+                    reliefShaped = reliefShaped * 3.0 - 3.0;
+                    if (reliefShaped < 0.0)
                     {
-                        var20 /= 2.0;
-                        if (var20 < -1.0) var20 = -1.0;
-                        var20 /= 1.4;
-                        var20 /= 2.0;
-                        var16 = 0.0;
+                        reliefShaped /= 2.0;
+                        if (reliefShaped < -1.0) reliefShaped = -1.0;
+                        reliefShaped /= 1.4;
+                        reliefShaped /= 2.0;
+                        elevation = 0.0;
                     }
                     else
                     {
-                        if (var20 > 1.0) var20 = 1.0;
-                        var20 /= 6.0;
+                        if (reliefShaped > 1.0) reliefShaped = 1.0;
+                        reliefShaped /= 6.0;
                     }
-                    var16 += 0.5;
-                    var20 = var20 * fyCount / 16.0;
-                    double var22 = fyCount / 2.0 + var20 * 4.0; // center height in field-y units
+                    elevation += 0.5;
+                    reliefShaped = reliefShaped * fyCount / 16.0;
+                    double centerHeight = fyCount / 2.0 + reliefShaped * 4.0; // surface line in field-y units
 
                     for (int fy = 0; fy < fyCount; fy++)
                     {
                         int idx = col + fy;
                         double yq = fy; // y field coord = worldY/8
 
-                        // noise1/noise2 (terrain body, scale 684.412), noise3 (upper/lower
-                        // selector, scale 684.412/80 in x/z and /160 in y).
-                        double var29 = _gen1.Noise3D(xq * scaleBase, yq * scaleBase, zq * scaleBase) / 512.0;
-                        double var31 = _gen2.Noise3D(xq * scaleBase, yq * scaleBase, zq * scaleBase) / 512.0;
-                        double var33 = (_gen3.Noise3D(xq * (scaleBase / 80.0), yq * (scaleBase / 160.0), zq * (scaleBase / 80.0)) / 10.0 + 1.0) / 2.0;
+                        // Terrain body + vertical selector blend.
+                        double bodyA = _bodyA.Noise3D(xq * baseFreq, yq * baseFreq, zq * baseFreq) / 512.0;
+                        double bodyB = _bodyB.Noise3D(xq * baseFreq, yq * baseFreq, zq * baseFreq) / 512.0;
+                        double selector = (_upperSelector.Noise3D(xq * (baseFreq / 80.0), yq * (baseFreq / 160.0), zq * (baseFreq / 80.0)) / 10.0 + 1.0) / 2.0;
 
-                        double var25;
-                        if (var33 < 0.0) var25 = var29;
-                        else if (var33 > 1.0) var25 = var31;
-                        else var25 = var29 + (var31 - var29) * var33;
+                        double density;
+                        if (selector < 0.0) density = bodyA;
+                        else if (selector > 1.0) density = bodyB;
+                        else density = bodyA + (bodyB - bodyA) * selector;
 
-                        // Height falloff: pushes density solid below the surface line, air above.
-                        double var27 = ((double)fy - var22) * 12.0 / var16;
-                        if (var27 < 0.0) var27 *= 4.0;
-                        var25 -= var27;
+                        // Falloff: push density solid below the surface line, air above.
+                        double falloff = ((double)fy - centerHeight) * 12.0 / elevation;
+                        if (falloff < 0.0) falloff *= 4.0;
+                        density -= falloff;
 
-                        // Top-of-world clamp (force air in the top field rows).
+                        // Force air in the top field rows.
                         if (fy > fyCount - 4)
                         {
-                            double var35 = (double)(fy - (fyCount - 4)) / 3.0;
-                            var25 = var25 * (1.0 - var35) + -10.0 * var35;
+                            double clamp = (double)(fy - (fyCount - 4)) / 3.0;
+                            density = density * (1.0 - clamp) + -10.0 * clamp;
                         }
 
-                        field[idx] = var25;
+                        field[idx] = density;
                     }
                 }
             }
 
             // ---- generateTerrain: trilinear-interpolate the field into blocks ----
-            // The Infdev band occupies local Y terrainBandStart..terrainBandStart+127; above it is
+            // The terrain band occupies local Y terrainBandStart..terrainBandStart+127; above it is
             // open sky. Water below the band's sea level.
             for (int ly = 0; ly < 128; ly++)
             {
@@ -192,7 +191,7 @@ namespace CubeApp.World
                 }
             }
 
-            // ---- replaceBlocks: surface materials ----
+            // ---- Surface materials pass ----
             ReplaceBlocks(chunkX, chunkZ, chunk, idBedrock, idWater, idStone, idGrass, idDirt, idSand, idGravel, terrainBandStart);
 
             // ---- caves and trees ----
@@ -238,7 +237,7 @@ namespace CubeApp.World
             return Lerp(z0, z1, ty);
         }
 
-        // Infdev's replaceBlocks: scans each column top-down, replaces the surface stone with
+        // Surface materials pass: scans each column top-down, replaces the surface stone with
         // grass/dirt (or sand/gravel in their biomes), fills bedrock at the bottom.
         private void ReplaceBlocks(int chunkX, int chunkZ, Chunk chunk,
             int idBedrock, int idWater, int idStone, int idGrass, int idDirt, int idSand, int idGravel,
@@ -258,11 +257,11 @@ namespace CubeApp.World
                     double wx = chunkX * width + x;
                     double wz = chunkZ * width + z;
 
-                    // Sand biome: gen4 at (x/32, z/32, 0) > 0. Gravel biome: gen4 at a rotated
-                    // offset > 3. Dirt depth: gen5 2D octaves /3 + 3.
-                    bool sandy = _gen4.Noise3D(wx * inv32, wz * inv32, 0.0) + rand.NextDouble() * 0.2 > 0.0;
-                    bool gravelly = _gen4.Noise3D(wz * inv32, 109.0134, wx * inv32) + rand.NextDouble() * 0.2 > 3.0;
-                    int dirtDepth = (int)(_gen5.Noise2D(wx * inv32 * 2.0, wz * inv32 * 2.0) / 3.0 + 3.0 + rand.NextDouble() * 0.25);
+                    // Sand biome: surfaceA at (x/32, z/32, 0) > 0. Gravel biome: surfaceA at a
+                    // rotated offset > 3. Dirt depth: surfaceB 2D octaves /3 + 3.
+                    bool sandy = _surfaceA.Noise3D(wx * inv32, wz * inv32, 0.0) + rand.NextDouble() * 0.2 > 0.0;
+                    bool gravelly = _surfaceA.Noise3D(wz * inv32, 109.0134, wx * inv32) + rand.NextDouble() * 0.2 > 3.0;
+                    int dirtDepth = (int)(_surfaceB.Noise2D(wx * inv32 * 2.0, wz * inv32 * 2.0) / 3.0 + 3.0 + rand.NextDouble() * 0.25);
 
                     int depthRemaining = -1; // -1 = haven't found the surface yet
                     int topBlock = idGrass;
@@ -321,43 +320,43 @@ namespace CubeApp.World
             }
         }
 
-        // Infdev-style cave generation: a per-chunk deterministic chance of spawning cave walkers
-        // that carve winding, branching tubes through the stone.
+        // Cave generation: a per-chunk deterministic chance of spawning random-walker tunnels that
+        // carve winding, branching tubes through the stone.
         private void GenerateCaves(int chunkX, int chunkZ, Chunk chunk, int terrainBandStart)
         {
             byte[] blocks = chunk.RawBlocks;
 
-            // Faithful port of Infdev's generateCaves: iterate a 17x17 region of chunk seeds
-            // (var9/var10 from -8..+8) and spawn walkers at the NEIGHBOR chunk's coordinates,
-            // carving into THIS chunk's block array. That way a cave that starts in a neighboring
-            // chunk crosses the border and continues here - without this, every tube dies at the
-            // chunk edge because the walker can only carve the current chunk's blocks.
+            // Iterate a 17x17 region of neighbour-chunk seeds and spawn walkers at the NEIGHBOR
+            // chunk's coordinates, carving into THIS chunk's block array. That way a cave that
+            // starts in a neighbouring chunk crosses the border and continues here - without this,
+            // every tunnel dies at the chunk edge because the walker can only carve the current
+            // chunk's blocks.
             var rand = new Random(seed);
-            long var5 = rand.Next() * 2L + 1L;
-            long var7 = rand.Next() * 2L + 1L;
+            long seedA = rand.Next() * 2L + 1L;
+            long seedB = rand.Next() * 2L + 1L;
 
-            for (int var9 = chunkX - 8; var9 <= chunkX + 8; var9++)
+            for (int nx = chunkX - 8; nx <= chunkX + 8; nx++)
             {
-                for (int var10 = chunkZ - 8; var10 <= chunkZ + 8; var10++)
+                for (int nz = chunkZ - 8; nz <= chunkZ + 8; nz++)
                 {
-                    var rand2 = new Random(unchecked((int)((long)var9 * var5 + (long)var10 * var7 ^ seed)));
+                    var rand2 = new Random(unchecked((int)((long)nx * seedA + (long)nz * seedB ^ seed)));
 
-                    int numCaves = rand2.Next(rand2.Next(rand2.Next(40) + 1) + 1);
-                    if (rand2.Next(15) != 0) numCaves = 0;
+                    int caveCount = rand2.Next(rand2.Next(rand2.Next(40) + 1) + 1);
+                    if (rand2.Next(15) != 0) caveCount = 0;
 
-                    for (int i = 0; i < numCaves; i++)
+                    for (int c = 0; c < caveCount; c++)
                     {
-                        // Walker starts in the NEIGHBOR chunk (var9/var10), so its tube can reach
+                        // Walker starts in the NEIGHBOR chunk (nx/nz), so its tunnel can reach
                         // across the border into this chunk.
-                        double x = var9 * 16 + rand2.Next(16);
-                        // Y is confined to the terrain band (local terrainBandStart..+127). Some
-                        // caves spawn LOW in the band so they can descend through the bedrock floor
-                        // and open a passage down into the deep layer (the deep chunk below mirrors
-                        // these openings via ChunkManager.SyncDeepAccess).
+                        double x = nx * 16 + rand2.Next(16);
+                        // Y is confined to the terrain band. Some caves spawn LOW so they can
+                        // descend through the bedrock floor and open a passage down into the deep
+                        // layer (the deep chunk below mirrors these openings via
+                        // ChunkManager.SyncDeepAccess).
                         double y = (rand2.Next(3) == 0)
                             ? terrainBandStart + rand2.Next(16)      // deep diver: digs toward the floor
                             : terrainBandStart + rand2.Next(rand2.Next(120) + 8);
-                        double z = var10 * 16 + rand2.Next(16);
+                        double z = nz * 16 + rand2.Next(16);
 
                         int nodeCount = 1;
                         if (rand2.Next(4) == 0)
@@ -373,10 +372,9 @@ namespace CubeApp.World
                             float pitch = (float)((rand2.NextDouble() - 0.5) * 2.0 / 8.0);
                             float size = (float)(rand2.NextDouble() * 2.0 + rand2.NextDouble());
 
-                            // Yours truly: deep caves have a small chance to spawn 5x as fat - the
-                            // walker's size drives the tube radius (1.5 + sin(...)*size), so x5 turns
-                            // a ~2-4 wide tunnel into a ~20-wide chamber. Only fires in the lower
-                            // terrain band (below world Y -4) and only on ~1 in 8 nodes.
+                            // Deep caves have a small chance to spawn 5x as fat - the walker's
+                            // size drives the tunnel radius, so x5 turns a ~2-4 wide tube into a
+                            // ~20-wide chamber. Only in the lower terrain band and ~1 in 8 nodes.
                             if (y < terrainBandStart + 60 && rand2.Next(8) == 0)
                             {
                                 size *= 5f;
@@ -490,9 +488,9 @@ namespace CubeApp.World
             }
         }
 
-        // Infdev-style trees: a few per chunk on grass, each a 4-6 tall trunk with a rounded
-        // leaf canopy (top corners cut for the plus shape). Trees that would cross the chunk
-        // edge fail their clearance check and don't spawn.
+        // Trees: a few per chunk on grass, each a 4-6 tall trunk with a rounded leaf canopy (top
+        // corners cut for the plus shape). Trees that would cross the chunk edge fail their
+        // clearance check and don't spawn.
         private void GenerateTrees(int chunkX, int chunkZ, Chunk chunk)
         {
             byte[] blocks = chunk.RawBlocks;
@@ -526,7 +524,7 @@ namespace CubeApp.World
         }
 
         // One tree rooted with its trunk base at (x, baseY, z) - baseY is the first trunk cell,
-        // the ground (grass/dirt) sits at baseY-1. Faithful port of WorldGenTrees.generate.
+        // the ground (grass/dirt) sits at baseY-1.
         private void GenerateTree(byte[] blocks, int x, int baseY, int z, Random rand,
             byte idWood, byte idLeaves, byte idGrass, byte idDirt)
         {
@@ -602,33 +600,33 @@ namespace CubeApp.World
             // Same continent/relief sampling as the terrain; classify by expected land height.
             double xq = worldX / 4.0;
             double zq = worldZ / 4.0;
-            double n6 = _gen6.Noise2D(xq, zq);
-            double n7 = _gen7.Noise2D(xq * 100.0, zq * 100.0);
+            double continent = _continent.Noise2D(xq, zq);
+            double relief = _relief.Noise2D(xq * 100.0, zq * 100.0);
 
-            double var16 = (n6 + 256.0) / 512.0;
-            if (var16 > 1.0) var16 = 1.0;
-            double var20 = n7 / 8000.0;
-            if (var20 < 0.0) var20 = -var20;
-            var20 = var20 * 3.0 - 3.0;
-            if (var20 < 0.0)
+            double elevation = (continent + 256.0) / 512.0;
+            if (elevation > 1.0) elevation = 1.0;
+            double reliefShaped = relief / 8000.0;
+            if (reliefShaped < 0.0) reliefShaped = -reliefShaped;
+            reliefShaped = reliefShaped * 3.0 - 3.0;
+            if (reliefShaped < 0.0)
             {
-                var20 /= 2.0;
-                if (var20 < -1.0) var20 = -1.0;
-                var20 /= 1.4;
-                var20 /= 2.0;
-                var16 = 0.0;
+                reliefShaped /= 2.0;
+                if (reliefShaped < -1.0) reliefShaped = -1.0;
+                reliefShaped /= 1.4;
+                reliefShaped /= 2.0;
+                elevation = 0.0;
             }
             else
             {
-                if (var20 > 1.0) var20 = 1.0;
-                var20 /= 6.0;
+                if (reliefShaped > 1.0) reliefShaped = 1.0;
+                reliefShaped /= 6.0;
             }
-            var16 += 0.5;
-            double centerY = (17.0 / 2.0 + (var20 * 17.0 / 16.0) * 4.0) * 8.0; // block Y of the surface line
+            elevation += 0.5;
+            double centerY = (17.0 / 2.0 + (reliefShaped * 17.0 / 16.0) * 4.0) * 8.0; // block Y of the surface line
 
             if (centerY < 56) return "Ocean";
-            if (var20 > 0.12) return "Mountains";
-            if (var20 > 0.0) return "Hills";
+            if (reliefShaped > 0.12) return "Mountains";
+            if (reliefShaped > 0.0) return "Hills";
             return "Plains";
         }
 

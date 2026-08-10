@@ -3,9 +3,9 @@ using System;
 namespace CubeApp
 {
     /// <summary>
-    /// A single node in a pathfinding grid search. Mirrors 1.12's PathPoint: integer cell coords,
-    /// accumulated path cost, Manhattan estimate, and the back-pointer chain used to rebuild the
-    /// final path. Hashable/equatable by cell so the closed set can be a HashSet.
+    /// A single node in a pathfinding grid search: integer cell coords, accumulated path cost,
+    /// Manhattan estimate, and the back-pointer chain used to rebuild the final path.
+    /// Hashable/equatable by cell so the closed set can be a HashSet.
     /// </summary>
     public sealed class PathPoint
     {
@@ -17,7 +17,7 @@ namespace CubeApp
         public PathPoint? Previous;
         public bool Visited;
         public bool Assigned;
-        /// <summary>Terrain preference penalty (e.g. avoid water/lava); 1.12's costMalus.</summary>
+        /// <summary>Terrain preference penalty (e.g. avoid water/lava).</summary>
         public float CostMalus;
         /// <summary>Step cost of moving onto this node (Manhattan distance + CostMalus).</summary>
         public float Cost;
@@ -42,7 +42,7 @@ namespace CubeApp
 
     /// <summary>
     /// An ordered list of waypoints for an entity to follow. The entity advances along it as it
-    /// reaches each point. Mirrors 1.12's Path with an index-based cursor.
+    /// reaches each point.
     /// </summary>
     public sealed class PathEntity
     {

@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace CubeApp
 {
     /// <summary>
-    /// The engine's analogue of Minecraft's scheduled-tick list. Fluid updates are bucketed per
+    /// The engine's scheduled-tick list. Fluid updates are bucketed per
     /// chunk (duplicates collapse to one entry) and fire at MC's fixed 20 ticks/second, so water
     /// spreads at exactly the same speed as the reference even though the render loop runs free.
     /// After each batch the mesh scheduler is flushed so touched chunks remesh immediately.

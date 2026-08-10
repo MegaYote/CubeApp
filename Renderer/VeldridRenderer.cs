@@ -18,7 +18,7 @@ namespace CubeApp.Renderer
         private ResourceLayout _projViewLayout;
         private ResourceSet _projViewSet;
         private ResourceLayout _textureLayout;
-        // Distance fog (Infdev-style): a per-frame uniform block + resource set bound to the world
+        // Distance fog: a per-frame uniform block + resource set bound to the world
         // pipelines. Linear from fogStart (25% of the far plane) to fogEnd (the far plane).
         private DeviceBuffer _fogBuffer;
         private ResourceLayout _fogLayout;
@@ -75,11 +75,11 @@ namespace CubeApp.Renderer
         private DeviceBuffer _chunkBorderIndexBuffer;
         private float[] _chunkBorderVertexScratch = new float[768]; // grown on demand for larger render distances
 
-        // Infdev sky (RenderGlobal.renderSky): two GIANT fog-blended planes drawn before the world
+        // Sky: two GIANT fog-blended planes drawn before the world
         // with depth-write off. Top plane (glSkyList) at cameraY+16 uses the sky color, bottom plane
         // (glSkyList2) at cameraY-16 uses the darkened color (r*0.2+0.04, g*0.2+0.04, b*0.6+0.1).
-        // Linear fog (start 0, end farPlane*0.8 = Infdev's setupFog(-1)) fades them toward the fog
-        // color at the horizon - that's the whole Infdev sky gradient, no dome or shader magic.
+        // Linear fog (start 0, end farPlane*0.8) fades them toward the fog
+        // color at the horizon - the whole sky gradient, no dome or shader magic.
         private Pipeline _skyPipeline;
         private DeviceBuffer _skyVertexBuffer;
         private DeviceBuffer _skyIndexBuffer;
@@ -89,14 +89,14 @@ namespace CubeApp.Renderer
         private ResourceLayout _skyFogLayout;
         private ResourceSet _skyFogSet;
         private readonly float[] _skyFogParams = new float[20]; // fogColor(4)+fogRange(2)+cameraPos(4)+skyTop(4)+skyBottom(4)
-        // Infdev draws the sky in CAMERA space (the display lists sit at y=16 relative to the eye,
+        // The sky is drawn in CAMERA space (the display lists sit at y=16 relative to the eye,
         // transformed only by the camera rotation + projection). We mirror that: a static
         // camera-space vertex buffer + this rotation-only view-projection, so the sky is
         // structurally locked to the camera and can never drift as the player walks.
         private DeviceBuffer _skyMatrixBuffer;
         private ResourceSet _skyMatrixSet;
 
-        // Infdev sun/moon/stars (RenderGlobal.renderSky): textured quads glued to the sky rotation.
+        // Sun/moon/stars: textured quads glued to the sky rotation.
         private Pipeline _celestialPipeline;
         private DeviceBuffer _celestialVertexBuffer;
         private DeviceBuffer _celestialIndexBuffer;
@@ -109,7 +109,7 @@ namespace CubeApp.Renderer
         private ResourceSet _moonTextureSet;
         private ResourceLayout _celestialTextureLayout;
 
-        // Infdev starfield: a precompiled list of small quads on the unit sphere, drawn with
+        // Starfield: a precompiled list of small quads on the unit sphere, drawn with
         // alpha = getStarBrightness when the sky is dark.
         private Pipeline _starPipeline;
         private DeviceBuffer _starVertexBuffer;
@@ -227,7 +227,7 @@ namespace CubeApp.Renderer
         // instead of towering above the camera.
         private const float PlayerModelScale = 0.9f; // visually correct player/Steve
 
-        // Minecraft-style player model (shares the model pipeline; own texture + buffers).
+        // Voxel player model (shares the model pipeline; own texture + buffers).
         private Texture _playerTexture;
         private TextureView _playerView;
         private Sampler _playerSampler;
@@ -284,9 +284,9 @@ namespace CubeApp.Renderer
         private HudState _hud = HudState.Empty;
         private float _farPlane = 100f;
         private float _nearPlane = 0.1f;
-        // 1.12 fog end: the render distance in blocks (chunkRadius * 16). Terrain is fully fogged
+        // Fog end: the render distance in blocks (chunkRadius * 16). Terrain is fully fogged
         // at this distance; the far plane stays larger so geometry beyond the fog still exists
-        // (it's just invisible), matching 1.12 where fog hides the chunk loading edge.
+        // (it's just invisible), and fog hides the chunk loading edge.
         private float _fogEnd = 100f;
         private float _atlasWidth = 256f;
         private float _atlasHeight = 256f;
@@ -372,7 +372,7 @@ namespace CubeApp.Renderer
         private readonly System.Diagnostics.Stopwatch _particleClock = System.Diagnostics.Stopwatch.StartNew();
         private long _lastParticleTicks;
 
-        // ---- Falling blocks (Minecraft falling sand/gravel) ------------------------------
+        // ---- Falling blocks (gravity-simulated sand/gravel) ------------------------------
         // Real 3D cubes of the block's tiles, drawn with an INSTANCED pipeline: one static cube
         // mesh is uploaded once, and each frame only a tiny per-instance buffer (world pos +
         // tile rect) is updated. For hundreds of falling blocks this uploads ~2.8KB instead of
@@ -397,7 +397,7 @@ namespace CubeApp.Renderer
             new[] { 1f,0f,1f, 1f,0f,0f, 1f,1f,0f, 1f,1f,1f }, // right (+X)
             new[] { 0f,0f,0f, 0f,0f,1f, 0f,1f,1f, 0f,1f,0f }, // left (-X)
         };
-        // Infdev per-face shading multipliers (top 1.0 / bottom 0.5 / E+W 0.6 / N+S 0.8).
+        // Per-face shading multipliers (top 1.0 / bottom 0.5 / E+W 0.6 / N+S 0.8).
         private static readonly float[] FallingFaceShade = new[] { 0.8f, 0.8f, 0.5f, 1.0f, 0.6f, 0.6f };
         private static readonly Point3D[] FallingFaceNormals = new Point3D[]
         {
@@ -966,7 +966,7 @@ namespace CubeApp.Renderer
             }
         }
 
-        // Infdev's fixed per-face light multipliers (RenderBlocks.java): bottom 0.5 / top 1.0 /
+        // Fixed per-face light multipliers: bottom 0.5 / top 1.0 /
         // N+S 0.8 / E+W 0.6. The icon camera shows top (+Y), right (+X) and front-left (-Z).
         private static float FaceIconShade(Point3D normal)
         {
@@ -1030,7 +1030,7 @@ namespace CubeApp.Renderer
 
             // Sample a pixel: interpolate the world position across the triangle, then compute the
             // face-axis UV exactly like the GPU path and nearest-sample the tile.
-            // Icons use STUDIO lighting - the fixed Infdev per-face multiplier (top 1.0, bottom 0.5,
+            // Icons use STUDIO lighting - the fixed per-face multiplier (top 1.0, bottom 0.5,
             // E/W 0.6, N/S 0.8) - NOT the mesher's Shade, which bakes in the tiny chunk's simulated
             // light that attenuates by the block's y position and leaves partial shapes looking dark.
             float shade = FaceIconShade(f.Normal);
@@ -1177,7 +1177,7 @@ namespace CubeApp.Renderer
         }
 
         // Copies one nearest-sampled texel from the terrain atlas into the icon buffer, applying the
-        // Infdev per-face shade multiplier (top 1.0, N+S 0.8, E+W 0.6) so the icon cubes read like
+        // Per-face shade multiplier (top 1.0, N+S 0.8, E+W 0.6) so the icon cubes read like
         // the shaded blocks in the world.
         private void SampleTile(byte[] dst, int di, TextureRect tile, float u, float v, float shade)
         {
@@ -1269,7 +1269,7 @@ void main() {
     // Block alpha (vColor.a) governs opacity - transparent tiles (water) are tinted by their
     // configured alpha; opaque blocks (alpha 1) sample the tile fully.
     outColor = vec4(tex.rgb * vColor.rgb, vColor.a);
-    // Linear distance fog, like Infdev: fully fogged at fogRange.y, clear at fogRange.x.
+    // Linear distance fog: fully fogged at fogRange.y, clear at fogRange.x.
     float dist = length(vWorldPos - cameraPos.xyz);
     float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
     outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);
@@ -1968,7 +1968,7 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                 256 * sizeof(ushort), BufferUsage.IndexBuffer | BufferUsage.Dynamic));
         }
 
-        // Pipeline for the Infdev sky: two huge flat planes (glSkyList at y+16, glSkyList2 at y-16,
+        // Pipeline for the sky: two huge flat planes (glSkyList at y+16, glSkyList2 at y-16,
         // centered on the camera) that get linear fog applied per-fragment - bright sky color
         // overhead, fog color at the horizon, and a darkened indigo below the horizon. Drawn with
         // depth-write OFF before the world so terrain always paints over it.
@@ -1997,7 +1997,7 @@ layout(location=0) out vec4 outColor;
 void main() {
     // Vertical sky gradient in CAMERA space (planes at +-16): the horizon is the fog color so the
     // world fades into it exactly, overhead rises to the bright sky color, and below the horizon
-    // falls to the darker undersky - the classic Infdev/Cubuild gradient. Use the VIEW DIRECTION's
+    // falls to the darker undersky - the classic Cubuild gradient. Use the VIEW DIRECTION's
     // y (normalize(vWorldPos).y), not the plane's constant y: that varies smoothly per-fragment
     // from +1 overhead to 0 at the horizon to -1 below. Vertex colors are unused (that varying
     // misreads on this pipeline).
@@ -2031,7 +2031,7 @@ void main() {
             _skyFogSet = factory.CreateResourceSet(new ResourceSetDescription(_skyFogLayout, _skyFogBuffer));
 
             // The sky matrix reuses the projView layout (mat4) but holds the ROTATION-ONLY view *
-            // projection, so the camera-space sky quads render glued to the eye (Infdev's approach).
+            // projection, so the camera-space sky quads render glued to the eye.
             _skyMatrixBuffer = factory.CreateBuffer(new BufferDescription(64, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
             _skyMatrixSet = factory.CreateResourceSet(new ResourceSetDescription(_projViewLayout, _skyMatrixBuffer));
 
@@ -2058,7 +2058,7 @@ void main() {
             _gd.UpdateBuffer(_skyIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7 });
         }
 
-        // Infdev's sun, moon and stars (RenderGlobal.renderSky). Sun/moon are textured quads drawn
+        // Sun, moon and stars. Sun/moon are textured quads drawn
         // with ADDITIVE blending into the sky's rotation (rotate by celestialAngle around X); stars
         // are a precompiled field of small quads with alpha = getStarBrightness.
         private void CreateCelestialPipelines()
@@ -2090,7 +2090,7 @@ void main() { outColor = texture(uTex, vUV); }";
                 new ResourceLayoutElementDescription("uTexSampler", ResourceKind.Sampler, ShaderStages.Fragment)));
             var celestialPipelineDesc = new GraphicsPipelineDescription()
             {
-                // Alpha-blend the 16x16 sun/moon sprites over the sky (Infdev used additive
+                // Alpha-blend the 16x16 sun/moon sprites over the sky (additive
                 // GL_ONE/GL_ONE; the texture has its own alpha so SingleAlphaBlend reads the same).
                 BlendState = BlendStateDescription.SingleAlphaBlend,
                 DepthStencilState = DepthStencilStateDescription.Disabled,
@@ -2107,7 +2107,7 @@ void main() { outColor = texture(uTex, vUV); }";
                 12 * sizeof(ushort), BufferUsage.IndexBuffer));
             _gd.UpdateBuffer(_celestialIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7 });
 
-            // Load the 16x16 sun/moon textures (classic Infdev sprites).
+            // Load the 16x16 sun/moon textures.
             try
             {
                 byte[]? sunBytes = LoadImageBytes("sun.png");
@@ -2429,7 +2429,7 @@ void main() {
             _gd.UpdateBuffer(_cloudVertexBuffer, 0, verts);
 
             // Scroll + opacity. Opacity rides the night sky dim so clouds darken with the world
-            // (Infdev's getCloudColor = getSkyColor cosine factor).
+            // (cloud color = sky-brightness cosine factor).
             float now = (float)_cloudClock.Elapsed.TotalSeconds;
             _cloudScrollU = (float)Math.IEEERemainder(_cloudScrollU + 0.002f * (now - _lastCloudTime), 1.0);
             _cloudScrollV = (float)Math.IEEERemainder(_cloudScrollV + 0.0007f * (now - _lastCloudTime), 1.0);
@@ -2509,7 +2509,7 @@ void main() {
             //  - a few BIG billowy masses (radius 3-6) that carve out large cloud banks
             //  - medium clusters (radius 2-3) that add density and texture
             //  - small puffs (radius 1-2) that scatter detail between the masses
-            // Each scale walks a wandering path and stamps a hard SQUARE (authentic Infdev
+            // Each scale walks a wandering path and stamps a hard SQUARE
             // clouds were square grid cells, not round puffs), so the result mixes huge square
             // cloud chunks, dense patches and sparse wisps instead of soft blobs.
             void StampSquare(int x, int y, int half)
@@ -2566,10 +2566,10 @@ void main() {
             WalkBlobs(count: 30, minR: 1, maxR: 2, minSteps: 5, maxSteps: 12);
 
             // NO smoothing pass: the square stamps are already cohesive, and smoothing would
-            // round off the hard corners. Infdev clouds are blocky grid cells.
+            // round off the hard corners. Clouds are blocky grid cells.
 
             // Paint each pixel directly (one pixel = one cloud cell). Hard-edged squares: every
-            // on pixel gets the same near-solid alpha - no edge softening (Infdev clouds are
+            // on pixel gets the same near-solid alpha - no edge softening.
             // flat grid squares, not fluffy puffs).
             var rgba = new byte[size * size * 4];
             for (int y = 0; y < rows; y++)
@@ -2614,7 +2614,7 @@ void main() {
         }
 
         // Builds cube geometry for all falling blocks into the scratch buffers and draws them.
-        // Modeled on DrawParticles but with real 3D cube faces (per-face tile + Infdev shading).
+        // Modeled on DrawParticles but with real 3D cube faces (per-face tile + shading).
         // Instanced draw: the static cube mesh is bound once; only the per-instance buffer
         // (worldPos + tileRect per block) is re-uploaded each frame. For n falling blocks that's
         // 7 floats of instance data vs. 312 floats of full geometry - the cave-in-friendly path.
@@ -2984,22 +2984,22 @@ void main() {
             }
         }
 
-        // Pushes 1.12-style distance fog, tuned so NEAR geometry (like cave walls) is completely
+        // Pushes distance fog, tuned so NEAR geometry (like cave walls) is completely
         // clear - the fog only visibly kicks in at distance. Fog color = sky color, dimmed by the
         // celestial angle, so the horizon blends seamlessly. Raising fogStart to 25% of fogEnd
         // keeps close terrain (and cave walls 3-20 blocks away) at ~zero fog - that's why
-        // Minecraft caves feel dark and creepy: the darkness comes from block light, and the fog
+        // Caves feel dark and creepy: the darkness comes from block light, and the fog
         // never brightens near walls.
         private void UpdateFog()
         {
             ComputeNightFactors();
 
             float fogEnd = _fogEnd;
-            // 25% of fogEnd: Infdev's farPlane*0.25 start. Cave walls are within a few blocks, so
+            // 25% of fogEnd: the fog start. Cave walls are within a few blocks, so
             // the fog factor there is ~0.96-1.0 (clear). Fog only ramps up toward the horizon.
             float fogStart = fogEnd * 0.25f;
 
-            // Fog color: Infdev/Cubuild fog color 0xC0D8FF (192,216,255) dimmed by the celestial
+            // Fog color: Cubuild fog color 0xC0D8FF (192,216,255) dimmed by the celestial
             // angle - PALER/whiter than the deep sky blue, so the horizon reads lighter (like MC's
             // fog vs sky). The world fades into this color, so distant terrain becomes hazy-white.
             float fogR = (192f / 255f) * _nightSkyDim;
@@ -3049,7 +3049,7 @@ void main() {
             _skyFogParams[9] = _fogParams[9];
             _skyFogParams[10] = _fogParams[10];
             _skyFogParams[11] = 1f;
-            // Sky gradient, matching Minecraft: OVERHEAD is a bright, saturated sky blue; the
+            // Sky gradient: OVERHEAD is a bright, saturated sky blue; the
             // HORIZON (floats 0-2) is the paler fog color so the world fades into it seamlessly;
             // BELOW the horizon is the darkened undersky. The key difference from the broken
             // version: skyTop is the DEEPER sky color, NOT the fog color - so the sky has a real
@@ -3065,9 +3065,9 @@ void main() {
             _gd.UpdateBuffer(_skyFogBuffer, 0, _skyFogParams);
         }
 
-        // Infdev's celestial-angle based dimming. The world light multiplier follows
-        // calculateSkylightSubtracted (sky light 15 loses up to 11 at midnight); the fog color and
-        // sky gradient use getSkyColor's cosine factor. Faithful to World.java.
+        // Day/night dimming. The world light multiplier follows the night-dim level (0..11, how
+        // much daylight is cut at night); the fog color and sky gradient use the sky-brightness
+        // cosine factor (1 at noon -> 0 at midnight).
         private void ComputeNightFactors()
         {
             long t = _hud.WorldTime % 24000;
@@ -3078,55 +3078,43 @@ void main() {
             float eased = 1f - (float)((Math.Cos(ang * Math.PI) + 1.0) / 2.0);
             ang = raw + (eased - raw) / 3f;
 
-            // getSkyColor cosine factor (1 at noon -> 0 at midnight).
+            // Sky-brightness cosine factor (1 at noon -> 0 at midnight).
             float sky = (float)(Math.Cos(ang * Math.PI * 2.0) * 2.0 + 0.5);
             if (sky < 0f) sky = 0f;
             if (sky > 1f) sky = 1f;
             _nightSkyDim = sky;
 
-            // World light: Infdev subtracts skylightSubtracted (0..11) from sky light at render time
-            // and looks up the brightness TABLE (World.lightBrightnessTable). To reproduce that with
-            // baked mesh light, scale the baked brightness (which assumed full sky light 15) by the
-            // ratio of table[15-subtracted] / table[15]. This keeps the authentic gamma feel instead
-            // of a flat linear dim.
+            // World light: scale the baked brightness (which assumed full daylight 15) by the ratio
+            // of brightness(15 - nightDim) / brightness(15), using the same curve as the mesher.
             float sub = 1f - (float)(Math.Cos(ang * Math.PI * 2.0) * 2.0 + 0.5);
             if (sub < 0f) sub = 0f;
             if (sub > 1f) sub = 1f;
-            int subtracted = (int)(sub * 11f);
-            float tableFull = InfdevBrightness(15);
-            float tableNight = InfdevBrightness(Math.Max(0, 15 - subtracted));
-            _nightDim = tableFull > 1e-5f ? tableNight / tableFull : 0.12f;
+            int dimmed = (int)(sub * 11f);
+            float full = ChunkLighting.Brightness(15);
+            float night = ChunkLighting.Brightness(Math.Max(0, 15 - dimmed));
+            _nightDim = full > 1e-5f ? night / full : 0.12f;
             if (_nightDim < 0.05f) _nightDim = 0.05f;
 
-            // Sky gradient base colors follow Infdev exactly: skyColor * getSkyColor factor, which
-            // reaches 0 at midnight -> the night sky is genuinely black (no floor).
+            // Sky gradient base colors: sky base * sky-brightness factor, which reaches 0 at
+            // midnight -> the night sky is genuinely black (no floor).
             _nightSkyR = (136f / 255f) * sky;
             _nightSkyG = (187f / 255f) * sky;
             _nightSkyB = 1f * sky;
         }
 
-        // Infdev's lightBrightnessTable (World.java static init):
-        //   v = 1 - light/15
-        //   table[light] = (1-v)/(3v+1) * 0.95 + 0.05
-        private static float InfdevBrightness(int light)
-        {
-            float v = 1f - light / 15f;
-            return (1f - v) / (v * 3f + 1f) * 0.95f + 0.05f;
-        }
-
-        // Renders the Infdev sky: two giant planes in CAMERA SPACE - the TOP plane sits 16 blocks
+        // Renders the sky: two giant planes in CAMERA SPACE - the TOP plane sits 16 blocks
         // above the eye, the BOTTOM plane 16 below. The vertical gradient (bright overhead, fog
         // color at the horizon, darkened undersky) is computed PER-FRAGMENT in the shader from
         // vWorldPos.y (the vertex-color varying misreads on this pipeline). The vertices are
         // CAMERA-space (relative to the eye, spanning the far plane in every direction),
         // transformed by a ROTATION-ONLY view-projection, so the sky is structurally locked to the
-        // camera and can never drift as the player walks - exactly how Infdev's display lists work.
+        // camera and can never drift as the player walks.
         private void DrawSky(CommandList cl)
         {
             if (_skyPipeline == null) return;
 
             // Sky fog/gradient params are set once per frame in UpdateFog. Extent large enough to
-            // cover the far plane from any camera yaw (Infdev uses a 64-step grid out to +-384,
+            // cover the far plane from any camera yaw (a 64-step grid out to +-384,
             // we use the same scale).
             float extent = Math.Max(_farPlane * 2f, 768f);
 
@@ -3155,8 +3143,8 @@ void main() {
             cl.SetIndexBuffer(_skyIndexBuffer, IndexFormat.UInt16);
             cl.DrawIndexed(12, 1, 0, 0, 0);
 
-            // Infdev's sun, moon, galaxies and stars, glued to the sky's rotation
-            // (RenderGlobal.renderSky). Order mirrors CubuildC++: stars, galaxies, then sun/moon
+            // Sun, moon, galaxies and stars, glued to the sky's rotation
+            // Order mirrors CubuildC++: stars, galaxies, then sun/moon
             // on top.
             DrawStars(cl);
             DrawGalaxies(cl);
@@ -3175,7 +3163,7 @@ void main() {
             v[o + 6] = 1f;
         }
 
-        // Infdev's sun + moon (RenderGlobal.renderSky): textured quads rotated by the celestial
+        // Sun + moon: textured quads rotated by the celestial
         // angle around X, additive blend, drawn on the same camera-space sky matrix. Sun is 30
         // half-size at y=+100; moon is 20 half-size at y=-100 with its UVs flipped horizontally.
         private void DrawCelestialBodies(CommandList cl)
@@ -3217,7 +3205,7 @@ void main() {
         private static void WriteCelestialQuad(float[] v, int index, float cosA, float sinA,
             float centerY, float size, float u0, float v0, float u1, float v1)
         {
-            // MC 1.12 (RenderGlobal.renderSky): the sun/moon are FIXED horizontal XZ quads at
+            // The sun/moon are FIXED horizontal XZ quads at
             // y=+100 (sun) / y=-100 (moon), and the celestial angle is a modelview rotation about
             // the X axis. Rotating a horizontal quad around X keeps its normal pointing along the
             // camera->body ray, so the quad always faces the camera at radius ~100 - no billboard,
@@ -3244,7 +3232,7 @@ void main() {
             }
         }
 
-        // Infdev's starfield: a field of small quads on the unit sphere (built once), drawn with
+        // Starfield: a field of small quads on the unit sphere (built once), drawn with
         // alpha = getStarBrightness. Rotated by the celestial angle so stars rise/set with the sky.
         private void DrawStars(CommandList cl)
         {
@@ -3277,7 +3265,7 @@ void main() {
                 _starVertexScratch[o] = x;
                 _starVertexScratch[o + 1] = ry;
                 _starVertexScratch[o + 2] = rz;
-                // Alpha rides star brightness (Infdev: glColor4f(brightness,...)).
+                // Alpha rides star brightness.
                 _starVertexScratch[o + 6] = starBrightness;
             }
             _gd.UpdateBuffer(_starVertexBuffer, 0, _starVertexScratch);
@@ -3289,7 +3277,7 @@ void main() {
             cl.DrawIndexed((uint)_starVertexCount, 1, 0, 0, 0);
         }
 
-        // Builds the starfield: 800 quads on the unit sphere (Infdev's starGLCallList density).
+        // Builds the starfield: 800 quads on the unit sphere.
         private void BuildStars()
         {
             var rng = new Random(10842);
@@ -3312,7 +3300,7 @@ void main() {
                 double px = rx * 100.0, py = ry * 100.0, pz = rz * 100.0;
                 double sz = 0.25 + rng.NextDouble() * 0.25;
 
-                // Orientation quads (Infdev's star rotation approach).
+                // Orientation quads (star rotation approach).
                 double a1 = Math.Atan2(rx, rz);
                 double s1 = Math.Sin(a1), c1 = Math.Cos(a1);
                 double a2 = Math.Atan2(Math.Sqrt(rx * rx + rz * rz), ry);
@@ -3423,7 +3411,7 @@ void main() {
         // 1 main galaxy (elongated edge-on spiral near the moon's arc) + 3 random galaxies
         // (face-on/edge-on/tilted variety) spread across the night-sky hemisphere. Unlike the
         // C++ billboard quads, each particle here is a fixed quad tangent to the celestial
-        // sphere at its position (the same Infdev orientation used by the star field), so the
+        // sphere at its position (the same orientation used by the star field), so the
         // whole galaxy stays anchored to the sky and rotates with the celestial angle.
         private void BuildGalaxies()
         {
@@ -3564,7 +3552,7 @@ void main() {
                     float sz = particle.Size * 1.5f * galaxy.SizeMultiplier * GalaxyScale;
                     float alpha = particle.Alpha * 0.6f * galaxy.SizeMultiplier;
 
-                    // Infdev star orientation: a small square around the particle's direction,
+                    // Star orientation: a small square around the particle's direction,
                     // tangent to the sphere. Same math as BuildStars.
                     double a1 = Math.Atan2(pd.X, pd.Z);
                     double s1 = Math.Sin(a1), c1 = Math.Cos(a1);
@@ -3609,7 +3597,7 @@ void main() {
             _gd.UpdateBuffer(_galaxyIndexBuffer, 0, _galaxyIndexScratch);
         }
 
-        // Infdev's getStarBrightness: clamp(1 - (cos(cel*2pi)*2 + 0.75), 0, 1)^2 * 0.5.
+        // Star brightness: clamp(1 - (cos(cel*2pi)*2 + 0.75), 0, 1)^2 * 0.5.
         private float GetStarBrightness()
         {
             float cel = ComputeNightCelestialAngle();
@@ -3830,7 +3818,7 @@ void main() {
 
             var center = _hud.MiningBlockPos + new Vector3(0.5f);
             var def = BlockRegistry.GetById(_hud.MiningBlockId);
-            // Infdev per-face shade (top 1.0 / bottom 0.5 / N+S 0.8 / E+W 0.6), same as the mesher.
+            // Per-face shade (top 1.0 / bottom 0.5 / N+S 0.8 / E+W 0.6), same as the mesher.
             float[] faceShade = { 0.8f, 0.8f, 0.5f, 1.0f, 0.6f, 0.6f };
             // Unit-cube face corners (back/front/bottom/top/right/left), same as FallingCubeFaces.
             float[][] faces =
@@ -5032,7 +5020,7 @@ void main() {
 
         // Poses one player's bones (limb swing / head turn) and bakes them, with the body yaw,
         // hurt-flash tint and death roll, into the shared scratch buffers. Same scheme as WriteDuck
-        // but with Minecraft-style limb animation and no in-air body tilt.
+        // but with voxel-style limb animation and no in-air body tilt.
         private void WritePlayer(in CubeApp.DuckInstance inst, ref int vf, ref int ii, ref ushort baseVertex)
         {
             bool isDead = inst.IsDead;
@@ -5106,7 +5094,7 @@ void main() {
             }
         }
 
-        // Minecraft-style limb swing: opposite arm/leg pairs, head follows the local head yaw.
+        // Limb swing: opposite arm/leg pairs, head follows the local head yaw.
         private static float PlayerBoneAnimDelta(PlayerBoneId id, float swing, float headYawLocal)
         {
             switch (id)
@@ -5176,7 +5164,7 @@ void main() {
             ImGui.End();
         }
 
-        // Tiles the dirt block texture across the screen - the classic Infdev menu background.
+        // Tiles the dirt block texture across the screen - the classic menu background.
         // Uses the BACKGROUND draw list so the ImGui menu windows render on top of it.
         private void DrawDirtBackground(Vector2 screenSize, string blockName = "dirt")
         {
@@ -5256,7 +5244,7 @@ void main() {
 
             if (m.Screen == GameScreen.Title)
             {
-                // Logo sits at the top-center of the screen, like Infdev's main menu.
+                // Logo sits at the top-center of the screen.
                 const float logoW = 224f;
                 const float logoH = 224f;
                 if (_logoImGuiId != IntPtr.Zero)
@@ -5286,7 +5274,7 @@ void main() {
                     ImGui.End();
                 }
 
-                // Buttons hang lower, in the classic Minecraft vertical column, with any saved
+                // Buttons hang lower, in the classic vertical column, with any saved
                 // worlds listed beneath so one click loads a world.
                 int shownWorlds = Math.Min(m.SavedWorlds.Count, 6);
                 float winH = 130f + 60f + (shownWorlds > 0 ? 42f + shownWorlds * 30f : 0f);
@@ -5503,7 +5491,7 @@ void main() {
                 return;
             }
 
-            // Crosshair: classic four-arm + (like Minecraft) - a clean gap in the center, no dot.
+            // Crosshair: classic four-arm + - a clean gap in the center, no dot.
             var center = new Vector2(displaySize.X / 2f, displaySize.Y / 2f);
             uint crosshairColor = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 1f));
             float arm = 6f;   // arm length from the center gap
@@ -5991,7 +5979,7 @@ void main() {
                 // For fluid side walls (AnchorVBottom) the tile is planted at the block bottom:
                 // the surface vertex must sample (1 - wallHeight) down the tile and the bottom
                 // vertex must sample the tile bottom. With vAxis=(0,-1,0) the raw dv measures
-                // from the TOP, so we shift it by (1 - height) to match Infdev's
+                // from the TOP, so we shift it by (1 - height)
                 // ((var51 + (1.0F - var31) * 16.0F) / 256.0F).
                 double anchorVOffset = 0.0;
                 if (hasAxes)
@@ -6195,7 +6183,7 @@ void main() {
             var view = Matrix4x4.CreateLookAt(cameraPos, target, Vector3.UnitY);
             var viewProj = Matrix4x4.Multiply(view, proj);
             // Sky matrix: the view with its TRANSLATION removed (rotation only), so the camera-space
-            // sky planes render locked to the eye. This mirrors Infdev, where the sky display lists
+            // sky planes render locked to the eye.
             // are drawn with the camera transform applied - they follow the player automatically.
             var skyView = view;
             skyView.M41 = 0f;
@@ -6243,7 +6231,7 @@ void main() {
             // closest face inside the clip volume while depth precision at 700 blocks stays healthy
             // (error ~ far^2 / near / 2^24 ~ 0.29 at max range - no distant z-fighting).
             _nearPlane = 0.1f;
-            // 1.12 fog: full fog at the render distance (chunkRadius * 16 blocks), linear from 0.
+            // Fog: full fog at the render distance (chunkRadius * 16 blocks), linear from 0.
             _fogEnd = chunkRadius * ChunkManager.ChunkSize;
         }
 
@@ -6329,7 +6317,7 @@ void main() {
                 p.Lifetime = (float)(0.6 + Random.Shared.NextDouble() * 0.5);
                 p.Size = (float)(0.14 + Random.Shared.NextDouble() * 0.08);
                 // Each particle shows a small random piece of the block tile (a ~4x4 texel crop),
-                // like Minecraft's break particles - not the whole texture.
+                // like break particles - not the whole texture.
                 int pieceW = Math.Max(2, tr.Width / 4);
                 int pieceH = Math.Max(2, tr.Height / 4);
                 int ox = Random.Shared.Next(0, Math.Max(1, tr.Width - pieceW + 1));

@@ -3,9 +3,8 @@ using System;
 namespace CubeApp.World
 {
     /// <summary>
-    /// Classic improved Perlin noise, ported from Infdev's NoiseGeneratorPerlin: a 512-entry
-    /// permutation table with the quintic fade and the classic 16-gradient hash. Used in place
-    /// of the old value noise so the terrain has Infdev's Perlin character.
+    /// Classic improved Perlin noise: a 512-entry permutation table with the quintic fade and the
+    /// classic 16-gradient hash. A standard, widely-used noise primitive.
     /// </summary>
     public sealed class PerlinNoise
     {
@@ -180,19 +179,19 @@ namespace CubeApp.World
     }
 
     /// <summary>
-    /// Infdev's octave composition (NoiseGeneratorOctaves.a + NoiseGeneratorPerlin.a): octave i
-    /// samples at coord * (baseScale / 2^i) and accumulates noise * 2^i - so the LOW-frequency
-    /// octaves dominate (inverted from standard FBM). The caller passes coord already scaled by
-    /// the generator's baseScale; startIndex selects which octave range to use (the dominant
-    /// low-freq tail of Infdev's 10-16 octave generators, so we can skip the inaudible highs).
+    /// Layered octave noise (fractal Brownian motion with a low-frequency-dominant weighting):
+    /// octave i samples at coord / 2^(startIndex+i) and accumulates noise * 2^(startIndex+i), so
+    /// the LOW-frequency octaves dominate. The caller passes coord already scaled by the generator's
+    /// base frequency; startIndex selects which octave range to use, letting callers skip a
+    /// negligible high-frequency tail.
     /// </summary>
-    public sealed class InfdevOctaves
+    public sealed class NoiseOctaves
     {
         private readonly SimplexNoise[] _octaves;
         private readonly double[] _invFreq;
         private readonly double[] _weight;
 
-        public InfdevOctaves(Random rand, int octaveCount, int startIndex)
+        public NoiseOctaves(Random rand, int octaveCount, int startIndex)
         {
             _octaves = new SimplexNoise[octaveCount];
             _invFreq = new double[octaveCount];
@@ -224,9 +223,9 @@ namespace CubeApp.World
         }
 
         /// <summary>Normalized 2D noise: divides the octave accumulation by the total weight sum,
-        /// so the result is approximately -1..1 (like standard FBM). The raw Infdev accumulation
-        /// grows large because low-frequency octaves dominate; callers who want a bounded field
-        /// (veins, features, spawn logic) should use this.</summary>
+        /// so the result is approximately -1..1 (like standard FBM). The raw accumulation grows
+        /// large because low-frequency octaves dominate; callers who want a bounded field (veins,
+        /// features, spawn logic) should use this.</summary>
         public double Noise2DNormalized(double x, double z) => Noise2D(x, z) / _weightSum;
 
         /// <summary>Normalized 3D noise, see <see cref="Noise2DNormalized"/>.</summary>

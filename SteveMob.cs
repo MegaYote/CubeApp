@@ -3,7 +3,7 @@ using System;
 namespace CubeApp
 {
     /// <summary>
-    /// A spawnable NPC that uses the Minecraft-style player model (<see cref="PlayerModel"/>) and
+    /// A spawnable NPC that uses the voxel player model (<see cref="PlayerModel"/>) and
     /// the player skin. Inherits the standard wander/panic AI and physics from
     /// <see cref="MobEntity"/>; player-sized collision box (0.6 x 1.8).
     /// </summary>

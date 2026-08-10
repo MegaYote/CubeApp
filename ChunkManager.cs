@@ -56,7 +56,7 @@ namespace CubeApp
         public ChunkManager(IChunkProvider? deepProvider = null, IChunkProvider? groundProvider = null, IChunkProvider? skyProvider = null)
         {
             chunkProviders[DeepLayer] = deepProvider ?? new DeepChunkProvider();
-            chunkProviders[GroundLayer] = groundProvider ?? new InfdevChunkProvider();
+            chunkProviders[GroundLayer] = groundProvider ?? new TerrainChunkProvider();
             chunkProviders[SkyLayer] = skyProvider ?? new SkyChunkProvider();
         }
 
@@ -337,11 +337,11 @@ namespace CubeApp
         }
 
         /// <summary>
-        /// Cheap light estimate for mob spawning (Infdev EntityMonster.getCanSpawnHere gate).
-        /// Walks up from (x,y,z): if an opaque block is found before the scan limit the cell is in
-        /// shade (cave / under a roof) and reads 0; otherwise it is open sky and reads
-        /// 15 - skylightSubtracted (day = bright, night = dim). Block-light sources (torches) are
-        /// not consulted - matching the spawner's "darkness only" intent.
+        /// Cheap light estimate for mob spawning (the monster darkness gate). Walks up from
+        /// (x,y,z): if an opaque block is found before the scan limit the cell is in shade (cave /
+        /// under a roof) and reads 0; otherwise it is open sky and reads 15 - nightDim (day =
+        /// bright, night = dim). Block-light sources (torches) are not consulted - matching the
+        /// spawner's "darkness only" intent.
         /// </summary>
         public int GetSkyLightEstimate(int x, int y, int z, int skylightSubtracted)
         {

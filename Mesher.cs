@@ -204,7 +204,7 @@ namespace CubeApp
                     // Build the masks comparing slice and slice+1. A is always inside the target
                     // chunk; B only leaves it on the final slice (into +X/+Z neighbour, or open air
                     // above the world for the Y axis). Face light samples the adjacent empty cell the
-                    // face is exposed to, matching classic Minecraft's neighbor sampling.
+                    // face is exposed to.
                     bool lastSlice = slice + 1 >= dimD;
                     if (d == 0)
                     {
@@ -528,7 +528,7 @@ namespace CubeApp
                         {
                             EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0, 0.5, 0, 1, 1, 1);
                         }
-                        else // stairs - facing from metadata, two boxes (Infdev layout)
+                        else // stairs - facing from metadata, two boxes
                         {
                             int meta = chunk.GetMeta(x, y, z);
                             switch (meta)
@@ -874,8 +874,7 @@ namespace CubeApp
                     int bz = (int)Math.Floor(corners[0].Z) - (axisNormal.Z > 0 ? 1 : 0);
                     var blockPos = new Point3D(bx, by, bz);
 
-                    // Directional face shading matching classic Minecraft:
-                    // top 1.0, bottom 0.5, east/west (X) 0.6, north/south (Z) 0.8.
+                    // Directional face shading: top 1.0, bottom 0.5, east/west (X) 0.6, north/south (Z) 0.8.
                     double shade = 0.8;
                     if (axisNormal.Y > 0.5) shade = 1.0;
                     else if (axisNormal.Y < -0.5) shade = 0.5;
