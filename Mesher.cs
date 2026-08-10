@@ -331,6 +331,7 @@ namespace CubeApp
             float alpha = BlockRegistry.Alpha(WaterId);
             var sideTile = new TextureRect(WaterBaseTile.X + BlockRegistry.TileSize, WaterBaseTile.Y, WaterBaseTile.Width, WaterBaseTile.Height);
 
+            // First sweep: every NON-TOP water face (bottoms + walls).
             for (int x = 0; x < width; x++)
             {
                 for (int z = 0; z < depth; z++)
@@ -338,40 +339,56 @@ namespace CubeApp
                     int column = (x * depth + z) * height;
                     for (int y = 0; y < height; y++)
                     {
-                        if (raw[column + y] != WaterId)
-                        {
-                            continue;
-                        }
+                        if (raw[column + y] != WaterId) continue;
 
-                        EmitWaterCellFaces(lookup, lighting, WaterId,
+                        float h00 = GetFluidHeight(lookup, WaterId, chunk.OriginX + x, chunk.OriginY + y, chunk.OriginZ + z);
+                        float h01 = GetFluidHeight(lookup, WaterId, chunk.OriginX + x, chunk.OriginY + y, chunk.OriginZ + z + 1);
+                        float h11 = GetFluidHeight(lookup, WaterId, chunk.OriginX + x + 1, chunk.OriginY + y, chunk.OriginZ + z + 1);
+                        float h10 = GetFluidHeight(lookup, WaterId, chunk.OriginX + x + 1, chunk.OriginY + y, chunk.OriginZ + z);
+                        EmitWaterBottomFace(lookup, lighting, WaterId,
                             chunk.OriginX + x, chunk.OriginY + y, chunk.OriginZ + z,
-                            WaterBaseTile, sideTile, alpha, mesh);
+                            WaterBaseTile, alpha, mesh);
+                        EmitWaterSideFaces(lookup, lighting, WaterId,
+                            chunk.OriginX + x, chunk.OriginY + y, chunk.OriginZ + z,
+                            sideTile, alpha, mesh, h00, h01, h11, h10);
+                    }
+                }
+            }
+            // Second sweep: ALL top faces LAST. Water doesn't write depth, so face draw order is
+            // what decides water-over-water blending; emitting the surface after the walls means
+            // the water surface always blends over exposed lower faces (e.g. air pockets under
+            // the ocean) instead of the far faces painting over the nearer water.
+            for (int x = 0; x < width; x++)
+            {
+                for (int z = 0; z < depth; z++)
+                {
+                    int column = (x * depth + z) * height;
+                    for (int y = 0; y < height; y++)
+                    {
+                        if (raw[column + y] != WaterId) continue;
+
+                        float h00 = GetFluidHeight(lookup, WaterId, chunk.OriginX + x, chunk.OriginY + y, chunk.OriginZ + z);
+                        float h01 = GetFluidHeight(lookup, WaterId, chunk.OriginX + x, chunk.OriginY + y, chunk.OriginZ + z + 1);
+                        float h11 = GetFluidHeight(lookup, WaterId, chunk.OriginX + x + 1, chunk.OriginY + y, chunk.OriginZ + z + 1);
+                        float h10 = GetFluidHeight(lookup, WaterId, chunk.OriginX + x + 1, chunk.OriginY + y, chunk.OriginZ + z);
+                        EmitWaterTopFace(lookup, lighting, WaterId,
+                            chunk.OriginX + x, chunk.OriginY + y, chunk.OriginZ + z,
+                            WaterBaseTile, sideTile, alpha, mesh, h00, h01, h11, h10);
                     }
                 }
             }
         }
 
-        private static void EmitWaterCellFaces(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, int waterId,
-            int wx, int wy, int wz, TextureRect baseTile, TextureRect sideTile, float alpha, List<MeshFace> mesh)
+        // Top face of one water cell (only when the cell above isn't water). Flowing water uses
+        // the side tile, still water the base tile, matching BlockFluid.getBlockTextureFromSideAndMetadata.
+        private static void EmitWaterTopFace(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, int waterId,
+            int wx, int wy, int wz, TextureRect baseTile, TextureRect sideTile, float alpha, List<MeshFace> mesh,
+            float h00, float h01, float h11, float h10)
         {
-            // Corner heights of this cell's top surface (0..1 above block bottom), MC order:
-            // (x,z), (x,z+1), (x+1,z+1), (x+1,z).
-            float h00 = GetFluidHeight(lookup, waterId, wx, wy, wz);
-            float h01 = GetFluidHeight(lookup, waterId, wx, wy, wz + 1);
-            float h11 = GetFluidHeight(lookup, waterId, wx + 1, wy, wz + 1);
-            float h10 = GetFluidHeight(lookup, waterId, wx + 1, wy, wz);
-
-            var blockPos = new Point3D(wx, wy, wz);
-            // ChunkLighting indexes its light array by LOCAL y (0..chunkHeight-1) relative to the
-            // region's layer origin, while wx/wy/wz here are world coordinates - convert via the
-            // region origin (ground -256 or sky 384), not a hardcoded world origin.
-            int ly = wy - lighting.OriginY;
-
-            // Top face (only when the cell above isn't water). Flowing water uses the side tile,
-            // still water the base tile, matching BlockFluid.getBlockTextureFromSideAndMetadata.
             if (GetBlockAt(lookup, wx, wy + 1, wz) != waterId)
             {
                 var topTile = GetFlowVector(lookup, waterId, wx, wy, wz) ? sideTile : baseTile;
+                int ly = wy - lighting.OriginY;
                 int topLight = Math.Max(lighting.GetLight(wx, ly, wz), lighting.GetLight(wx, ly + 1, wz));
                 double brightness = 1.0 * ChunkLighting.Brightness(topLight);
                 mesh.Add(new MeshFace(
@@ -379,25 +396,35 @@ namespace CubeApp
                     new Point3D(wx + 0, wy + h01, wz + 1),
                     new Point3D(wx + 1, wy + h11, wz + 1),
                     new Point3D(wx + 1, wy + h10, wz + 0),
-                    topTile, new Point3D(0, 1, 0), blockPos, (float)brightness, 1, 1, alpha));
+                    topTile, new Point3D(0, 1, 0), new Point3D(wx, wy, wz), (float)brightness, 1, 1, alpha));
             }
+        }
 
-            // Bottom face (only when the cell below isn't water and doesn't occlude).
+        // Bottom face of one water cell (only when the cell below isn't water and doesn't occlude).
+        private static void EmitWaterBottomFace(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, int waterId,
+            int wx, int wy, int wz, TextureRect baseTile, float alpha, List<MeshFace> mesh)
+        {
             int below = GetBlockAt(lookup, wx, wy - 1, wz);
             if (below != waterId && (!BlockRegistry.IsSolid(below) || BlockRegistry.IsTransparent(below)))
             {
+                int ly = wy - lighting.OriginY;
                 double brightness = 0.5 * ChunkLighting.Brightness(lighting.GetLight(wx, ly - 1, wz));
                 mesh.Add(new MeshFace(
                     new Point3D(wx + 0, wy + 0, wz + 0),
                     new Point3D(wx + 1, wy + 0, wz + 0),
                     new Point3D(wx + 1, wy + 0, wz + 1),
                     new Point3D(wx + 0, wy + 0, wz + 1),
-                    baseTile, new Point3D(0, -1, 0), blockPos, (float)brightness, 1, 1, alpha));
+                    baseTile, new Point3D(0, -1, 0), new Point3D(wx, wy, wz), (float)brightness, 1, 1, alpha));
             }
+        }
 
-            // Four side faces. Vertex order matches the greedy pass's FaceVertices table exactly
-            // (bottom pair first, then the top pair) so the walls survive back-face culling;
-            // the top edge follows the two corner heights so the side is sloped too.
+        // Four side faces of one water cell. Vertex order matches the greedy pass's FaceVertices
+        // table exactly (bottom pair first, then the top pair) so the walls survive back-face
+        // culling; the top edge follows the two corner heights so the side is sloped too.
+        private static void EmitWaterSideFaces(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, int waterId,
+            int wx, int wy, int wz, TextureRect sideTile, float alpha, List<MeshFace> mesh,
+            float h00, float h01, float h11, float h10)
+        {
             EmitWaterSide(lookup, lighting, waterId, wx, wy, wz, mesh,
                 new Point3D(0, 0, -1), sideTile, alpha, 0.8, wx, wz - 1,
                 new Point3D(wx + 0, wy + 0, wz + 0),
@@ -423,6 +450,7 @@ namespace CubeApp
                 new Point3D(wx + 1, wy + h10, wz + 0),
                 new Point3D(wx + 1, wy + h11, wz + 1));
         }
+
 
         private static void EmitWaterSide(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, int waterId,
             int wx, int wy, int wz, List<MeshFace> mesh,

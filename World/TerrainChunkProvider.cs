@@ -273,6 +273,10 @@ namespace CubeApp.World
 
             // ---- caves and trees ----
             GenerateCaves(chunkX, chunkZ, chunk, terrainBandStart);
+            // Caves carve through the water that was placed earlier; re-flood any below-sea-level
+            // air so exposed ocean caves are water-filled instead of dry holes that read oddly
+            // through the surface.
+            RefillWaterBelowSeaLevel(chunk, terrainBandStart, idWater, seaLevelLocalY);
             GenerateTrees(chunkX, chunkZ, chunk);
 
             // ---- monoliths (controllable feature; runs after caves so towers stand on ground) ----
@@ -598,6 +602,30 @@ namespace CubeApp.World
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // Re-floods below-sea-level air in the terrain band (local Y < seaLevelLocalY) with water.
+        // Run AFTER cave carving, because caves carve through the water placed by the surface
+        // pass - without this, ocean caves are dry air pockets that render oddly through the
+        // water above. Only touches the terrain band; deeper layers handle their own water.
+        private void RefillWaterBelowSeaLevel(Chunk chunk, int terrainBandStart, int idWater, int seaLevelLocalY)
+        {
+            byte[] blocks = chunk.RawBlocks;
+            const int width = 16;
+            const int height = ChunkManager.ChunkHeight;
+            for (int x = 0; x < width; x++)
+            {
+                for (int z = 0; z < width; z++)
+                {
+                    int col = (x * width + z) * height;
+                    int maxLy = Math.Min(seaLevelLocalY, terrainBandStart + 128);
+                    for (int ly = terrainBandStart; ly < maxLy; ly++)
+                    {
+                        int idx = col + ly;
+                        if (blocks[idx] == 0) blocks[idx] = (byte)idWater;
                     }
                 }
             }
