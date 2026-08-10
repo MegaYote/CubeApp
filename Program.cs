@@ -742,6 +742,7 @@ namespace CubeApp
                             AddRemotePlayersToRender(_entityRenderScratch);
                             gpuRenderer.SetEntities(_entityRenderScratch);
                             gpuRenderer.SetFallingBlocks(World.BlockTicks.Gravity.FallingBlocks);
+                            gpuRenderer.SetItemDrops(World.ItemDropRenderData);
                         }
                         gpuRenderer.ProcessPendingPriorityMeshes();
                         gpuRenderer.SetUiInputSnapshot(snapshot);

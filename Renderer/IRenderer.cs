@@ -16,6 +16,7 @@ namespace CubeApp.Renderer
         void SetHud(HudState hud);
         void SetEntities(System.Collections.Generic.IReadOnlyList<CubeApp.MobRenderData> mobRenderData);
         void SetFallingBlocks(System.Collections.Generic.IReadOnlyList<CubeApp.FallingBlockData> fallingBlocks);
+        void SetItemDrops(System.Collections.Generic.IReadOnlyList<CubeApp.ItemDropRenderData> itemDrops);
         void SetChunkManager(CubeApp.ChunkManager manager);
         void SetWorldSeed(int seed);
         void ToggleGpuCulling();

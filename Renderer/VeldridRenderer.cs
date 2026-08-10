@@ -396,6 +396,17 @@ namespace CubeApp.Renderer
         private Pipeline? _fallingPipeline;
         private const int FallingCubeVerts = 24;  // 6 faces x 4
         private const int FallingCubeIndices = 36;
+
+        // Dropped items reuse the falling-block pipeline with a SMALLER static cube mesh
+        // (scale ~0.3) so survival mining drops read as little collectible blocks.
+        private const float ItemDropScale = 0.3f;
+        private IReadOnlyList<CubeApp.ItemDropRenderData> _itemDrops = Array.Empty<CubeApp.ItemDropRenderData>();
+        private Pipeline? _itemDropPipeline;
+        private DeviceBuffer? _itemDropVertexBuffer;
+        private DeviceBuffer? _itemDropIndexBuffer;
+        private DeviceBuffer? _itemDropInstanceBuffer;
+        private uint _itemDropInstanceCapacity;
+        private float[] _itemDropInstanceScratch = Array.Empty<float>();
         // Cube face geometry (same as Mesher.FaceVertices): back/front/bottom/top/right/left.
         private static readonly float[][] FallingCubeFaces = new float[][]
         {
@@ -1514,6 +1525,57 @@ void main() {
                 Outputs = _sc.Framebuffer.OutputDescription
             });
 
+            // Item drops: same pipeline idea but with a per-instance quaternion so dropped blocks
+            // TUMBLE as they fall. Same vertex layout and resources as the falling pipeline; the
+            // instance layout adds iRot and the vertex shader rotates the corner around the cube
+            // center (half of ItemDropScale = 0.15 baked here).
+            {
+                string itemDropVsCode = @"#version 450
+layout(location=0) in vec3 aCorner;
+layout(location=1) in vec2 aLocalUV;
+layout(location=2) in vec4 aShade;
+layout(location=3) in vec3 iWorldPos;
+layout(location=4) in vec4 iTileRect;
+layout(location=5) in vec4 iRot;
+layout(location=0) out vec2 vLocalUV;
+layout(location=1) out vec4 vTileRect;
+layout(location=2) out vec4 vColor;
+layout(location=3) out vec3 vWorldPos;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() {
+    vec3 local = aCorner - vec3(0.15);
+    vec3 qv = iRot.xyz;
+    vec3 t = 2.0 * cross(qv, local);
+    vec3 rotated = local + iRot.w * t + cross(qv, t);
+    vec3 worldPos = rotated + iWorldPos;
+    vLocalUV = aLocalUV;
+    vTileRect = iTileRect;
+    vColor = aShade;
+    vWorldPos = worldPos;
+    gl_Position = projView * vec4(worldPos, 1.0);
+}";
+                var itemDropVsSpirv = SpirvCompilation.CompileGlslToSpirv(itemDropVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+                var itemDropShaders = factory.CreateFromSpirv(
+                    new ShaderDescription(ShaderStages.Vertex, itemDropVsSpirv.SpirvBytes, "main"),
+                    new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main"));
+                var itemDropInstanceLayout = new VertexLayoutDescription(
+                    new VertexElementDescription("iWorldPos", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                    new VertexElementDescription("iTileRect", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4),
+                    new VertexElementDescription("iRot", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
+                itemDropInstanceLayout.InstanceStepRate = 1;
+                var itemDropShaderSet = new ShaderSetDescription(new[] { fallingVertexLayout, itemDropInstanceLayout }, new[] { itemDropShaders[0], itemDropShaders[1] });
+                _itemDropPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+                {
+                    BlendState = BlendStateDescription.SingleAlphaBlend,
+                    DepthStencilState = new DepthStencilStateDescription(true, true, ComparisonKind.LessEqual),
+                    RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                    PrimitiveTopology = PrimitiveTopology.TriangleList,
+                    ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
+                    ShaderSet = itemDropShaderSet,
+                    Outputs = _sc.Framebuffer.OutputDescription
+                });
+            }
+
             // Static cube mesh (uploaded once): 24 verts (6 faces x 4) + 36 indices.
             // The FaceVertices table's +Z/-Z entries are wound opposite their normals (the greedy
             // pass corrects them); we must apply the SAME flip here or back-face culling culls
@@ -1567,6 +1629,58 @@ void main() {
             }
             _fallingIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)cubeIndices.Length * sizeof(ushort), BufferUsage.IndexBuffer));
             _gd.UpdateBuffer(_fallingIndexBuffer, 0, cubeIndices);
+
+            // Scaled-down cube mesh for dropped items (same layout, same pipeline, SAME winding
+            // correction as the falling cube - otherwise back-face culling eats some faces).
+            {
+                var smallVerts = new float[FallingCubeVerts * (3 + 2 + 4)];
+                int sv = 0;
+                for (int face = 0; face < 6; face++)
+                {
+                    var src = FallingCubeFaces[face];
+                    float shade = FallingFaceShade[face];
+                    const float uvMax = 0.999f;
+                    float[] verts = new float[12];
+                    Array.Copy(src, verts, 12);
+                    var p0 = new Point3D(verts[0], verts[1], verts[2]);
+                    var p1 = new Point3D(verts[3], verts[4], verts[5]);
+                    var p2 = new Point3D(verts[6], verts[7], verts[8]);
+                    var e1 = p1 - p0;
+                    var e2 = p2 - p0;
+                    var cross = new Point3D(e1.Y * e2.Z - e1.Z * e2.Y, e1.Z * e2.X - e1.X * e2.Z, e1.X * e2.Y - e1.Y * e2.X);
+                    var n = FallingFaceNormals[face];
+                    if (cross.X * n.X + cross.Y * n.Y + cross.Z * n.Z < 0)
+                    {
+                        (verts[3], verts[4], verts[5], verts[9], verts[10], verts[11]) =
+                            (verts[9], verts[10], verts[11], verts[3], verts[4], verts[5]);
+                    }
+                    for (int c = 0; c < 4; c++)
+                    {
+                        smallVerts[sv++] = verts[c * 3 + 0] * ItemDropScale;
+                        smallVerts[sv++] = verts[c * 3 + 1] * ItemDropScale;
+                        smallVerts[sv++] = verts[c * 3 + 2] * ItemDropScale;
+                        smallVerts[sv++] = (c == 1 || c == 2) ? uvMax : 0f;
+                        smallVerts[sv++] = (c == 2 || c == 3) ? uvMax : 0f;
+                        smallVerts[sv++] = shade; smallVerts[sv++] = shade; smallVerts[sv++] = shade; smallVerts[sv++] = 1f;
+                    }
+                }
+                _itemDropVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)smallVerts.Length * sizeof(float), BufferUsage.VertexBuffer));
+                _gd.UpdateBuffer(_itemDropVertexBuffer, 0, smallVerts);
+                var smallIndices = new ushort[FallingCubeIndices];
+                int si = 0;
+                for (int face = 0; face < 6; face++)
+                {
+                    int fv = face * 4;
+                    smallIndices[si++] = (ushort)(fv + 0);
+                    smallIndices[si++] = (ushort)(fv + 1);
+                    smallIndices[si++] = (ushort)(fv + 2);
+                    smallIndices[si++] = (ushort)(fv + 0);
+                    smallIndices[si++] = (ushort)(fv + 2);
+                    smallIndices[si++] = (ushort)(fv + 3);
+                }
+                _itemDropIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)smallIndices.Length * sizeof(ushort), BufferUsage.IndexBuffer));
+                _gd.UpdateBuffer(_itemDropIndexBuffer, 0, smallIndices);
+            }
 
             // create texture resource set if atlas loaded
             if (_atlasView != null && _atlasSampler != null)
@@ -2630,6 +2744,13 @@ void main() {
             _fallingBlocks = fallingBlocks ?? Array.Empty<CubeApp.FallingBlockData>();
         }
 
+        /// <summary>Feeds the survival item drops to the renderer (drawn as small cubes using
+        /// the falling-block pipeline so they depth-test against terrain).</summary>
+        public void SetItemDrops(IReadOnlyList<CubeApp.ItemDropRenderData> itemDrops)
+        {
+            _itemDrops = itemDrops ?? Array.Empty<CubeApp.ItemDropRenderData>();
+        }
+
         // Builds cube geometry for all falling blocks into the scratch buffers and draws them.
         // Modeled on DrawParticles but with real 3D cube faces (per-face tile + shading).
         // Instanced draw: the static cube mesh is bound once; only the per-instance buffer
@@ -2682,6 +2803,58 @@ void main() {
                     Math.Max(bytes, 512), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
                 _fallingInstanceCapacity = Math.Max(bytes, 512);
             }
+        }
+
+        // Draws survival item drops as small tumbling cubes (same vertex layout as falling
+        // blocks, but with the scaled mesh + a per-instance quaternion).
+        private void DrawItemDrops(CommandList cl)
+        {
+            int n = _itemDrops.Count;
+            if (n == 0 || _itemDropPipeline == null || _itemDropVertexBuffer == null) return;
+            float atlasW = Math.Max(1f, _atlasWidth);
+            float atlasH = Math.Max(1f, _atlasHeight);
+
+            // 11 floats per instance: worldPos (3) + tileRect (4) + rotation quat (4).
+            int instFloats = n * 11;
+            if (_itemDropInstanceScratch.Length < instFloats) _itemDropInstanceScratch = new float[instFloats];
+            int vf = 0;
+            const float halfScale = ItemDropScale * 0.5f;
+            for (int i = 0; i < n; i++)
+            {
+                var it = _itemDrops[i];
+                var def = BlockRegistry.GetById(it.BlockId);
+                var tr = def.AllTexture ?? default;
+                // Rotate around the cube's CENTER, so pass base + half-scale.
+                _itemDropInstanceScratch[vf++] = it.X + halfScale;
+                _itemDropInstanceScratch[vf++] = it.Y + halfScale;
+                _itemDropInstanceScratch[vf++] = it.Z + halfScale;
+                _itemDropInstanceScratch[vf++] = tr.X / atlasW;
+                _itemDropInstanceScratch[vf++] = tr.Y / atlasH;
+                _itemDropInstanceScratch[vf++] = tr.Width / atlasW;
+                _itemDropInstanceScratch[vf++] = tr.Height / atlasH;
+                _itemDropInstanceScratch[vf++] = it.RotX;
+                _itemDropInstanceScratch[vf++] = it.RotY;
+                _itemDropInstanceScratch[vf++] = it.RotZ;
+                _itemDropInstanceScratch[vf++] = it.RotW;
+            }
+
+            if (_itemDropInstanceBuffer == null || _itemDropInstanceCapacity < (uint)(instFloats * sizeof(float)))
+            {
+                _itemDropInstanceBuffer?.Dispose();
+                _itemDropInstanceBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                    Math.Max((uint)(instFloats * sizeof(float)), 512), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+                _itemDropInstanceCapacity = Math.Max((uint)(instFloats * sizeof(float)), 512);
+            }
+            _gd.UpdateBuffer(_itemDropInstanceBuffer, 0, _itemDropInstanceScratch);
+
+            cl.SetPipeline(_itemDropPipeline);
+            cl.SetGraphicsResourceSet(0, _projViewSet);
+            if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
+            cl.SetGraphicsResourceSet(2, _fogSet);
+            cl.SetVertexBuffer(0, _itemDropVertexBuffer);
+            cl.SetVertexBuffer(1, _itemDropInstanceBuffer);
+            cl.SetIndexBuffer(_itemDropIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed(FallingCubeIndices, (uint)n, 0, 0, 0);
         }
 
         public void SetEntities(IReadOnlyList<CubeApp.MobRenderData> mobRenderData)
@@ -2858,6 +3031,7 @@ void main() {
 
             DrawParticles(cl);
             DrawFallingBlocks(cl);
+            DrawItemDrops(cl);
             DrawDucks(cl);
             DrawPlayers(cl);
             DrawModelMobs(cl);

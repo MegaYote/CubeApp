@@ -83,12 +83,116 @@ namespace CubeApp
         public IReadOnlyDictionary<int, int> Inventory => _inventory;
         public int InventoryCount(int blockId) => _inventory.TryGetValue(blockId, out int c) ? c : 0;
 
+        // ---- dropped items (survival: mined blocks fall to the ground until collected) ----
+        private readonly List<DroppedItem> _droppedItems = new();
+        private readonly List<ItemDropRenderData> _itemDropRenderScratch = new();
+        public IReadOnlyList<DroppedItem> DroppedItems => _droppedItems;
+        /// <summary>Reusable render snapshot of all current drops (no per-frame allocation).</summary>
+        public IReadOnlyList<ItemDropRenderData> ItemDropRenderData
+        {
+            get
+            {
+                _itemDropRenderScratch.Clear();
+                foreach (var d in _droppedItems)
+                {
+                    _itemDropRenderScratch.Add(new ItemDropRenderData(
+                        d.BlockId, (float)d.Position.X, (float)d.Position.Y, (float)d.Position.Z,
+                        d.RotX, d.RotY, d.RotZ, d.RotW));
+                }
+                return _itemDropRenderScratch;
+            }
+        }
+        /// <summary>How long before a drop despawns (seconds).</summary>
+        public const float ItemDropDespawnTime = 60f;
+        /// <summary>Grace period after spawning before the drop can be collected (seconds), so a
+        /// block broken at your feet doesn't snap straight back into your inventory.</summary>
+        public const float ItemDropPickupDelay = 0.5f;
+        /// <summary>How long the magnet pickup flight lasts (seconds) before the drop is forced
+        /// into your inventory. Usually collected earlier on arrival.</summary>
+        public const float PickupFlyDuration = 0.45f;
+
+        /// <summary>Spawns a physical item drop at a world position (survival only).</summary>
+        public void SpawnItemDrop(int blockId, int count, Point3D worldPos)
+        {
+            if (blockId <= 0 || count <= 0) return;
+            if (_droppedItems.Count > 256) _droppedItems.RemoveAt(0); // hard cap
+            var rand = _regenRandom;
+            var drop = new DroppedItem
+            {
+                BlockId = blockId,
+                Count = count,
+                Position = worldPos,
+                Velocity = new Point3D(
+                    (rand.NextDouble() * 4.0 - 2.0) * 0.6,
+                    3.2,
+                    (rand.NextDouble() * 4.0 - 2.0) * 0.6),
+                Age = 0f,
+            };
+            // Random tumble: a random axis and a decent spin rate so it reads physical.
+            drop.SpinAxisX = (float)(rand.NextDouble() * 2.0 - 1.0);
+            drop.SpinAxisY = (float)(rand.NextDouble() * 2.0 - 1.0);
+            drop.SpinAxisZ = (float)(rand.NextDouble() * 2.0 - 1.0);
+            double axLen = Math.Sqrt(drop.SpinAxisX * drop.SpinAxisX + drop.SpinAxisY * drop.SpinAxisY + drop.SpinAxisZ * drop.SpinAxisZ);
+            if (axLen > 0.0001)
+            {
+                drop.SpinAxisX /= (float)axLen;
+                drop.SpinAxisY /= (float)axLen;
+                drop.SpinAxisZ /= (float)axLen;
+            }
+            else
+            {
+                drop.SpinAxisX = 0; drop.SpinAxisY = 1; drop.SpinAxisZ = 0;
+            }
+            drop.SpinSpeed = 5f + (float)rand.NextDouble() * 6f; // 5..11 rad/s
+            _droppedItems.Add(drop);
+        }
+
         /// <summary>Adds blocks to the survival inventory (e.g. a mined block).</summary>
         public bool TryAddToInventory(int blockId, int count = 1)
         {
             if (blockId <= 0 || count <= 0) return false;
             _inventory.TryGetValue(blockId, out int cur);
             _inventory[blockId] = cur + count;
+            return true;
+        }
+
+        /// <summary>
+        /// Collects an item, preferring the first hotbar slot that already holds that block,
+        /// then the first empty hotbar slot; if the whole hotbar is full of OTHER blocks, the
+        /// item goes into the inventory bag instead. If the player currently has nothing
+        /// selected, picking up fills the selected slot so it's usable right away.
+        /// </summary>
+        public bool CollectItem(int blockId, int count = 1)
+        {
+            if (blockId <= 0 || count <= 0) return false;
+            int air = BlockRegistry.AirId;
+
+            // 1) First matching slot (stack onto it).
+            for (int i = 0; i < HotbarSlots; i++)
+            {
+                if (Hotbar[i] == blockId)
+                {
+                    TryAddToInventory(blockId, count);
+                    return true;
+                }
+            }
+            // 2) First empty slot.
+            for (int i = 0; i < HotbarSlots; i++)
+            {
+                if (Hotbar[i] == air)
+                {
+                    Hotbar[i] = blockId;
+                    TryAddToInventory(blockId, count);
+                    if (SelectedBlock <= 0)
+                    {
+                        SelectedBlock = blockId;
+                        SelectedSlot = i;
+                    }
+                    return true;
+                }
+            }
+            // 3) Hotbar is all other blocks: into the bag.
+            TryAddToInventory(blockId, count);
             return true;
         }
 
@@ -426,6 +530,102 @@ namespace CubeApp
         private const float RegenIntervalBase = 8.5f;
         private readonly Random _regenRandom = new();
 
+        // Steps dropped items: gravity, ground settle, player pickup, and despawn. Purely
+        // survival-facing - creative breaks don't even spawn drops.
+        private void StepItemDrops(float dt)
+        {
+            for (int i = _droppedItems.Count - 1; i >= 0; i--)
+            {
+                var d = _droppedItems[i];
+                d.Age += dt;
+                if (d.Age > ItemDropDespawnTime)
+                {
+                    _droppedItems.RemoveAt(i);
+                    continue;
+                }
+
+                // Magnet phase: flying toward the player. Ignores gravity, homes in fast, and
+                // gets collected on arrival - the classic "item flies to you" pickup.
+                if (d.FlyTime > 0f)
+                {
+                    d.FlyTime -= dt;
+                    double feetX = LocalPlayer.Position.X;
+                    double feetY = LocalPlayer.Position.Y - EyeHeight + 0.4;
+                    double feetZ = LocalPlayer.Position.Z;
+                    double hx = feetX - d.Position.X;
+                    double hy = feetY - d.Position.Y;
+                    double hz = feetZ - d.Position.Z;
+                    double dist = Math.Sqrt(hx * hx + hy * hy + hz * hz);
+                    if (dist <= 0.25 || d.FlyTime <= 0f)
+                    {
+                        CollectItem(d.BlockId, d.Count);
+                        _droppedItems.RemoveAt(i);
+                        continue;
+                    }
+                    double speed = Math.Min(18.0, 7.0 + (PickupFlyDuration - d.FlyTime) * 40.0);
+                    d.Velocity = new Point3D(hx / dist * speed, hy / dist * speed, hz / dist * speed);
+                    d.Position += d.Velocity * dt;
+                    d.SpinSpeed = Math.Max(d.SpinSpeed, 14f); // spin up while flying to you
+                    continue;
+                }
+
+                // Pickup trigger: within reach of the player, after the grace period. Instead of
+                // vanishing instantly, the drop starts flying to the player.
+                if (d.Age > ItemDropPickupDelay && !IsCreative)
+                {
+                    double feetX = LocalPlayer.Position.X;
+                    double feetY = LocalPlayer.Position.Y - EyeHeight;
+                    double feetZ = LocalPlayer.Position.Z;
+                    double centerY = d.Position.Y + 0.2;
+                    if (Math.Abs(d.Position.X - feetX) < 1.6
+                        && Math.Abs(d.Position.Z - feetZ) < 1.6
+                        && centerY > feetY - 0.5 && centerY < feetY + 2.0)
+                    {
+                        d.FlyTime = PickupFlyDuration;
+                        continue;
+                    }
+                }
+
+                // Gravity + horizontal drag.
+                d.Velocity = new Point3D(
+                    d.Velocity.X * (float)Math.Pow(0.5, dt * 4.0),
+                    d.Velocity.Y - Gravity * dt,
+                    d.Velocity.Z * (float)Math.Pow(0.5, dt * 4.0));
+                d.Position += d.Velocity * dt;
+
+                // Tumble while airborne: rotate the quaternion around the spin axis, with a
+                // little drag so the spin dies down naturally.
+                if (d.SpinSpeed > 0.01f)
+                {
+                    float angStep = d.SpinSpeed * dt;
+                    float c = (float)Math.Cos(angStep * 0.5);
+                    float s = (float)Math.Sin(angStep * 0.5);
+                    float qx = d.SpinAxisX * s, qy = d.SpinAxisY * s, qz = d.SpinAxisZ * s, qw = c;
+                    float nx = qw * d.RotX + qx * d.RotW + qy * d.RotZ - qz * d.RotY;
+                    float ny = qw * d.RotY - qx * d.RotZ + qy * d.RotW + qz * d.RotX;
+                    float nz = qw * d.RotZ + qx * d.RotY - qy * d.RotX + qz * d.RotW;
+                    float nw = qw * d.RotW - qx * d.RotX - qy * d.RotY - qz * d.RotZ;
+                    d.RotX = nx; d.RotY = ny; d.RotZ = nz; d.RotW = nw;
+                    d.SpinSpeed *= (float)Math.Pow(0.5, dt * 2.0);
+                }
+
+                // Settle on the first solid block below.
+                int bx = (int)Math.Floor(d.Position.X);
+                int by = (int)Math.Floor(d.Position.Y);
+                int bz = (int)Math.Floor(d.Position.Z);
+                if (Chunks.TryGetLoadedBlock(bx, by, bz, out int groundId) && BlockRegistry.IsSolid(groundId))
+                {
+                    d.Position = new Point3D(d.Position.X, by + 1.0, d.Position.Z);
+                    d.Velocity = new Point3D(d.Velocity.X, 0, d.Velocity.Z);
+                    d.SpinSpeed = 0f; // it lands and stops tumbling
+                }
+                else if (d.Position.Y < ChunkManager.GroundOriginY - 10)
+                {
+                    _droppedItems.RemoveAt(i); // fell out of the world
+                }
+            }
+        }
+
         private void StepRegen(float dt)
         {
             var p = LocalPlayer;
@@ -466,6 +666,7 @@ namespace CubeApp
             // Advance the death roll while dead (capped so it doesn't spin forever).
             if (LocalPlayer.Health <= 0)
                 LocalPlayer.DeathTimer = Math.Min(1f, LocalPlayer.DeathTimer + deltaSeconds);
+            StepItemDrops(deltaSeconds);
             BlockTicks?.Tick(deltaSeconds);
             StepPlayer(LocalPlayer, tickInput, deltaSeconds);
             Entities.Update(deltaSeconds, LocalPlayer.Position, true);
@@ -887,8 +1088,12 @@ namespace CubeApp
             removedBlockId = 0;
             if (!Chunks.TryGetLoadedBlock(x, y, z, out removedBlockId)) return false;
             if (!Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId)) return false;
-            // Survival: mining a block adds it to your inventory.
-            if (!IsCreative && removedBlockId > 0) TryAddToInventory(removedBlockId);
+            // Survival: mining a block drops a physical item you have to collect - no teleporting
+            // into the inventory.
+            if (!IsCreative && removedBlockId > 0)
+            {
+                SpawnItemDrop(removedBlockId, 1, new Point3D(x + 0.5, y + 0.5, z + 0.5));
+            }
             BlockTicks?.OnBlockChanged(x, y, z);
             int rLayer = ChunkManager.LayerForWorldY(y);
             var editedChunk = new ChunkCoordinates(rLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
