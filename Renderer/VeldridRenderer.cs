@@ -188,6 +188,14 @@ namespace CubeApp.Renderer
         private readonly float[] _cloudParams = new float[4];
         private readonly System.Diagnostics.Stopwatch _cloudClock = System.Diagnostics.Stopwatch.StartNew();
 
+        // ---- Crosshair (pixel-art, colour-INVERTING) --------------------------------------
+        // Drawn as a tiny 2D pass with a SUBTRACT blend (out = white - background), so it always
+        // inverts whatever is behind it and stays visible on any colour. Drawn before the ImGui
+        // UI pass, so menu windows (inventory, biome, pause, title) naturally paint over it.
+        private Pipeline? _crosshairPipeline;
+        private DeviceBuffer? _crosshairVertexBuffer;
+        private DeviceBuffer? _crosshairIndexBuffer;
+
         // "World from above" ground plane: a giant flat green+water textured plane at the terrain
         // level that only appears when the player climbs high. Drawn with depth disabled BEFORE
         // the world, so real terrain always paints over it - mimics looking down on a distant
@@ -1704,6 +1712,7 @@ void main() {
             CreateCelestialPipelines();
             CreateWorldPlanePipeline(factory);
             CreateCloudPipeline(factory);
+            CreateCrosshairPipeline(factory);
         }
 
         // GPU-assisted frustum culling compute pipeline. The shader reads a per-chunk struct
@@ -2715,6 +2724,97 @@ void main() {
             cl.DrawIndexed(16 * 6, 1, 0, 0, 0);
         }
 
+        // Pixel-art colour-INVERTING crosshair. The blend is SUBTRACT: out = src - dst = white -
+        // background, so the crosshair is always the exact inverse of what's behind it. The
+        // geometry is four 2px-thick rectangles in NDC; integer pixel coords keep the edges crisp.
+        private void CreateCrosshairPipeline(ResourceFactory factory)
+        {
+            string vsCode = @"#version 450
+layout(location=0) in vec2 aPosition;
+void main() { gl_Position = vec4(aPosition, 0.0, 1.0); }";
+            string fsCode = @"#version 450
+layout(location=0) out vec4 outColor;
+void main() { outColor = vec4(1.0); }";
+
+            var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var fsSpirv = SpirvCompilation.CompileGlslToSpirv(fsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var shaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, vsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main"));
+
+            var vertexLayout = new VertexLayoutDescription(
+                new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float2));
+
+            _crosshairPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                // out = src - dst: white minus the background = its exact inverse.
+                BlendState = new BlendStateDescription(RgbaFloat.White, false, new BlendAttachmentDescription(
+                    true,
+                    BlendFactor.One, BlendFactor.One, BlendFunction.Subtract,
+                    BlendFactor.One, BlendFactor.One, BlendFunction.Subtract)),
+                DepthStencilState = DepthStencilStateDescription.Disabled,
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, false, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = Array.Empty<ResourceLayout>(),
+                ShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { shaders[0], shaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
+
+            _crosshairVertexBuffer = factory.CreateBuffer(new BufferDescription(
+                4 * 4 * 2 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            _crosshairIndexBuffer = factory.CreateBuffer(new BufferDescription(
+                4 * 6 * sizeof(ushort), BufferUsage.IndexBuffer));
+            var idx = new ushort[4 * 6];
+            for (int q = 0; q < 4; q++)
+            {
+                int b = q * 4;
+                int o = q * 6;
+                idx[o] = (ushort)b; idx[o + 1] = (ushort)(b + 1); idx[o + 2] = (ushort)(b + 2);
+                idx[o + 3] = (ushort)b; idx[o + 4] = (ushort)(b + 2); idx[o + 5] = (ushort)(b + 3);
+            }
+            _gd.UpdateBuffer(_crosshairIndexBuffer, 0, idx);
+        }
+
+        private void DrawCrosshair(CommandList cl)
+        {
+            if (_crosshairPipeline == null || _crosshairVertexBuffer == null) return;
+            // Only while actually playing, and never behind the inventory/biome menus (they draw
+            // after this pass anyway, but skip it entirely for cleanliness).
+            var menu = _hud.Menu;
+            bool playing = menu == null || menu.Screen == GameScreen.Playing;
+            if (!playing || _hud.InventoryOpen || _hud.BiomeMenuOpen) return;
+
+            float w = _sc.Framebuffer.Width;
+            float h = _sc.Framebuffer.Height;
+            if (w <= 0 || h <= 0) return;
+            float cx = (float)Math.Floor(w * 0.5f);
+            float cy = (float)Math.Floor(h * 0.5f);
+            const float arm = 6f;
+            const float gap = 3f;
+            const float halfT = 1f; // 2px-thick arms
+
+            // Four rectangles in integer screen pixels (classic + shape, clean centre gap).
+            float[] px =
+            {
+                cx - arm - gap, cy - halfT, cx - gap, cy - halfT, cx - gap, cy + halfT, cx - arm - gap, cy + halfT,
+                cx + gap, cy - halfT, cx + arm + gap, cy - halfT, cx + arm + gap, cy + halfT, cx + gap, cy + halfT,
+                cx - halfT, cy - arm - gap, cx + halfT, cy - arm - gap, cx + halfT, cy - gap, cx - halfT, cy - gap,
+                cx - halfT, cy + gap, cx + halfT, cy + gap, cx + halfT, cy + arm + gap, cx - halfT, cy + arm + gap,
+            };
+            float[] ndc = new float[px.Length];
+            for (int i = 0; i < px.Length; i += 2)
+            {
+                ndc[i] = (px[i] / w) * 2f - 1f;
+                ndc[i + 1] = 1f - (px[i + 1] / h) * 2f;
+            }
+            _gd.UpdateBuffer(_crosshairVertexBuffer, 0, ndc);
+
+            cl.SetPipeline(_crosshairPipeline);
+            cl.SetVertexBuffer(0, _crosshairVertexBuffer);
+            cl.SetIndexBuffer(_crosshairIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed(4 * 6, 1, 0, 0, 0);
+        }
+
         public void Resize(int width, int height)
         {
             _sc?.Resize((uint)Math.Max(1, width), (uint)Math.Max(1, height));
@@ -3016,6 +3116,15 @@ void main() {
                     SortPassBackToFront(_glassDrawCommands);
                     DrawWorldPass(cl, _glassDrawCommands, _glassIndirectScratch, _glassPipeline, ref _glassCullData);
                 }
+                // Depth-writing entities (falling blocks, item drops, mobs) draw AFTER the opaque
+                // world so terrain occludes them, but BEFORE the water pass - water doesn't write
+                // depth, so a submerged mob would otherwise paint over the surface. With their
+                // depth written first, the nearer water surface tints them correctly.
+                DrawFallingBlocks(cl);
+                DrawItemDrops(cl);
+                DrawDucks(cl);
+                DrawPlayers(cl);
+                DrawModelMobs(cl);
                 if (_transparentDrawCommands.Count > 0)
                 {
                     SortPassBackToFront(_transparentDrawCommands);
@@ -3037,14 +3146,12 @@ void main() {
             DrawClouds(cl);
 
             DrawParticles(cl);
-            DrawFallingBlocks(cl);
-            DrawItemDrops(cl);
-            DrawDucks(cl);
-            DrawPlayers(cl);
-            DrawModelMobs(cl);
             DrawHighlight(cl);
             DrawShrinkCube(cl);
             DrawChunkBorders(cl);
+
+            // Crosshair draws BEFORE the ImGui UI pass, so menu windows naturally paint over it.
+            DrawCrosshair(cl);
 
             _imguiRenderer.Update(1f / 60f, _uiInputSnapshot ?? NullInputSnapshot.Instance);
             BuildHudUi();
@@ -5796,23 +5903,8 @@ void main() {
                 return;
             }
 
-            // Crosshair: classic four-arm + - a clean gap in the center, no dot.
-            var center = new Vector2(displaySize.X / 2f, displaySize.Y / 2f);
-            uint crosshairColor = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 1f));
-            float arm = 6f;   // arm length from the center gap
-            float gap = 3f;   // empty space around the exact center
-            const float thickness = 1.5f;
-            // Subtle dark outline so the white shows against bright sky/water.
-            uint outlineColor = ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.65f));
-            for (int pass = 0; pass < 2; pass++)
-            {
-                uint c = pass == 0 ? outlineColor : crosshairColor;
-                float w = pass == 0 ? thickness + 1.5f : thickness;
-                drawList.AddLine(new Vector2(center.X - arm - gap - 0.75f, center.Y), new Vector2(center.X - gap + 0.75f, center.Y), c, w);
-                drawList.AddLine(new Vector2(center.X + gap - 0.75f, center.Y), new Vector2(center.X + arm + gap + 0.75f, center.Y), c, w);
-                drawList.AddLine(new Vector2(center.X, center.Y - arm - gap - 0.75f), new Vector2(center.X, center.Y - gap + 0.75f), c, w);
-                drawList.AddLine(new Vector2(center.X, center.Y + gap - 0.75f), new Vector2(center.X, center.Y + arm + gap + 0.75f), c, w);
-            }
+            // Crosshair is drawn in Render() as an invert-blend pass BEFORE the UI (see
+            // DrawCrosshair), so it never paints over menu windows and always inverts the world.
 
             // The targeted block face highlight is drawn as a depth-tested 3D quad in Render(),
             // not here, so that blocks in front of it occlude it correctly.

@@ -725,6 +725,58 @@ namespace CubeApp
         private void UpdatePhysics(float dt, ChunkManager manager)
         {
             ApplyMoveControls(dt);
+
+            // Swimming: in water the mob floats, rides up to the surface, and paddles while
+            // moving - it never walks on water and doesn't sink to the bottom. Ducks are natural
+            // swimmers: they ride high, barely any struggle, and cruise across the water.
+            bool feetInWater = IsWaterAt(manager, Position.X, Position.Y + 0.15, Position.Z);
+            bool bodyInWater = InWater(manager);
+            if (feetInWater || bodyInWater)
+            {
+                bool duck = HasFlap;
+                double waterDrag = Math.Pow(duck ? 0.90 : 0.82, dt * 60);
+                _velX *= waterDrag; _velZ *= waterDrag;
+
+                // Weak water gravity; buoyancy lifts while submerged.
+                _velY -= Gravity * (duck ? 0.12 : 0.25) * dt;
+                if (bodyInWater && _velY < (duck ? 2.5 : 2.0))
+                {
+                    _velY += (duck ? 9.0 : 7.0) * dt;
+                }
+                // Ride until the TORSO clears the surface, then flatten - the mob sits ON the
+                // water instead of bobbing just below the surface.
+                if (!bodyInWater && _velY > 0)
+                {
+                    _velY *= Math.Pow(0.35, dt * 60);
+                    if (_velY > 0.12) _velY = 0.12;
+                }
+                if (_velY < -2.5) _velY = -2.5;
+                if (_velY > 3.2) _velY = 3.2;
+
+                // Ducks paddle with real speed in water (their wings push them along).
+                if (duck)
+                {
+                    float forward = Clamp(_ctrlForward, -1f, 1f);
+                    float strafe = Clamp(_ctrlStrafe, -1f, 1f);
+                    if (Math.Abs(forward) > 0.05f || Math.Abs(strafe) > 0.05f)
+                    {
+                        double sinYaw = Math.Sin(Yaw), cosYaw = Math.Cos(Yaw);
+                        double wishX = sinYaw * forward + cosYaw * strafe;
+                        double wishZ = cosYaw * forward - sinYaw * strafe;
+                        _velX += wishX * 6.0 * dt;
+                        _velZ += wishZ * 6.0 * dt;
+                    }
+                }
+
+                MoveAxis(manager, Axis.X, _velX * dt);
+                MoveAxis(manager, Axis.Z, _velZ * dt);
+                MoveAxis(manager, Axis.Y, _velY * dt);
+
+                _pendingJump = false;
+                OnGround = false;
+                return;
+            }
+
             _velY -= Gravity * dt;
             if (_velY < 0)
             {
@@ -863,7 +915,32 @@ namespace CubeApp
         }
 
         private static bool IsSolid(ChunkManager manager, int x, int y, int z)
-            => manager.TryGetLoadedBlock(x, y, z, out var block) && block != BlockRegistry.AirId;
+            => manager.TryGetLoadedBlock(x, y, z, out var block) && BlockRegistry.IsSolid(block);
+
+        private static int _waterId = -1;
+        private static int WaterId
+        {
+            get
+            {
+                if (_waterId < 0) _waterId = BlockRegistry.GetId("water");
+                return _waterId;
+            }
+        }
+
+        // Body center is submerged -> the mob is in water (feet can wade while the torso is dry).
+        private bool InWater(ChunkManager manager)
+        {
+            int x = (int)Math.Floor(Position.X);
+            int y = (int)Math.Floor(Position.Y + Height * 0.4);
+            int z = (int)Math.Floor(Position.Z);
+            return manager.TryGetLoadedBlock(x, y, z, out var b) && b == WaterId;
+        }
+
+        // True when the block at a world point is water.
+        private bool IsWaterAt(ChunkManager manager, double x, double y, double z)
+        {
+            return manager.TryGetLoadedBlock((int)Math.Floor(x), (int)Math.Floor(y), (int)Math.Floor(z), out var b) && b == WaterId;
+        }
 
         private bool SolidAhead(ChunkManager manager, double distance)
         {
