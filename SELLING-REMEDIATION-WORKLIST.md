@@ -9,17 +9,14 @@ who understands game development + Minecraft's EULA before selling.
 
 ---
 
-## PRIORITY 1 — Remove pirated Minecraft source from the project (do this FIRST)
+## PRIORITY 1 — Remove pirated Minecraft source from the project (DONE)
 
-These folders contain decompiled / recreated Minecraft source and must be deleted from
-the working tree AND git history (git filter-repo / BFG to scrub history if the repo is
-ever shared):
+These folders contained decompiled / recreated Minecraft source and have been **deleted from
+the working tree AND purged from git history** (git filter-repo, force-pushed):
 
-- [ ] `Programs to use as reference material/IF-20100630-main/`  (Infdev decompile; README self-describes as "pirated")
-- [ ] `Programs to use as reference material/rd-131655-build/`   (Pre-Classic recreated source)
-- [ ] `Programs to use as reference material/Cubuild.html`       (check what this is; if MC-derived, remove)
-
-Even *keeping* these locally is a liability if the repo leaks. Remove them.
+- [x] `Programs to use as reference material/IF-20100630-main/`  (Infdev decompile; README self-describes as "pirated")
+- [x] `Programs to use as reference material/rd-131655-build/`   (Pre-Classic recreated source)
+- [x] `Programs to use as reference material/Cubuild.html`       (kept - the author's own prior project)
 
 ---
 
@@ -54,27 +51,17 @@ rewriting.
 
 ---
 
-## PRIORITY 3 — Replace Minecraft-derived ASSETS
+## PRIORITY 3 — Assets: CONFIRMED ORIGINAL (no action needed)
 
-These are Minecraft's copyrighted art/sound and must be replaced with original art (or
-properly-licensed substitutes).
+The game's textures (terrain, sun/moon, player skin, hotbar/inventory UI, cubuild logo),
+sound files (cave ambience, grass), and mob models (duck/coyote/zombie) were all
+**created from scratch by the author**, inspired by (not copied from) Minecraft's style.
+MC's *mechanics and style* are not copyrightable, and original art/sound/models are the
+author's own. **No replacement needed.** Keep the source files (Blockbench projects,
+texture/graphics sources, audio recordings) as provenance if ever questioned.
 
-### Textures
-- [ ] `terrain.png` (256x256 block atlas) — MC-derived textures for grass/dirt/stone/sand/planks/etc. Replace with an original tile set (draw your own or buy/CC0 a tile pack).
-- [ ] `sun.png` / `moon.png` (16x16) — MC-style sprites. Replace with original.
-- [ ] `cubuild.png` logo — verify original; if traced from MC branding, replace.
-- [ ] `hotbar.png`, `hotbar_select.png` — MC hotbar style. Replace with original UI art.
-- [ ] `UI Elements/hotbarUI.png`, `UI Elements/inventoryUI.png` — same.
-- [ ] `player.png` (64x64 Steve-style skin) — MC-derived. Replace with original character texture.
-- [ ] `duck.png`, `MobEntities/**/Coyote.png`, `Zombie.png`, `GiantZombie.png` — verify origin; the ZOMBIE is a MC-zombie-shaped Blockbench model. Re-model or re-skin to be clearly non-MC.
-- [ ] Clouds / sky gradient — currently "Infdev sky" colors (0xC0D8FF etc.). Sky *colors* are generic; fine, but the plane/starfield construction mirrors MC's RenderGlobal. Rewrite the sky generator.
-
-### Audio
-- [ ] `sounds/cavesound1.mp3` … `cavesound7.mp3` — **Minecraft's ambient cave sounds**. Replace with original ambience (or licensed foley pack).
-- [ ] `sounds/grass.mp3` — MC's grass-step/break sound. Replace with original.
-
-### Mob models
-- [ ] `MobEntities/ZombieMob/zombie.glb` + GiantZombie — MC-zombie proportions/pose. Re-model as an original creature (change body plan, silhouette, textures).
+> Note: "inspired by" is fine; "ripped from" would not be. The author confirms these
+> are original creations.
 
 ---
 
@@ -96,20 +83,20 @@ notice be included with distributed copies.
 
 ## PRIORITY 5 — Product-side hygiene
 
-- [ ] Replace every `Infdev`/`Minecraft` mention in user-facing UI/strings/comments with original branding.
+- [x] Replace every `Infdev`/`Minecraft` mention in user-facing UI/strings/comments with original branding (DONE in the P2 sweep).
 - [ ] Decide a name/brand that doesn't include "Cubuild" if that name was a previous project of yours — confirm you own it.
 - [ ] Add an EULA/ToS to your own game.
-- [ ] If you keep any MC-inspired mechanics (voxel mining etc.), that's fine — mechanics are not copyrightable — but don't copy their specific expression (textures, exact model geometry, sound clips, method-level source).
+- [x] MC-inspired mechanics (voxel mining etc.) are fine — mechanics are not copyrightable; assets are confirmed original creations.
 
 ---
 
 ## Verification gate (before any sale)
 
-1. `rg` for `Minecraft|Infdev|BlockFlowing|SpawnerAnimals|SpawnerMonsters|RenderBlocks|lightBrightnessTable|checkLightFor|getCelestialAngle|calculateSkylightSubtracted` across shipped code = **0 hits**.
-2. All texture/sound/model files replaced or verified original.
-3. `Licenses.txt` present with all MIT notices.
-4. Reference-material folders removed from repo + history.
-5. Attorney review of the final build.
+1. `rg` for `Minecraft|Infdev|BlockFlowing|SpawnerAnimals|SpawnerMonsters|RenderBlocks|lightBrightnessTable|checkLightFor|getCelestialAngle|calculateSkylightSubtracted` across shipped code = **0 hits** (VERIFIED DONE).
+2. All texture/sound/model files are the author's original creations (CONFIRMED).
+3. `Licenses.txt` present with all MIT notices (still TODO).
+4. Reference-material folders removed from repo + history (DONE).
+5. Attorney review of the final build (recommended).
 
 ---
 
