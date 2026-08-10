@@ -48,5 +48,7 @@ namespace CubeApp
         Unknown,
         /// <summary>Killed by the debug "O" key (manual damage test).</summary>
         DebugSelf,
+        /// <summary>Landed too hard after a fall (survival fall damage).</summary>
+        Fall,
     }
 }

@@ -109,6 +109,11 @@ namespace CubeApp
         public const float JumpVelocity = 8.0f;
         public const float Gravity = 24.0f;
         public const float MaxFallSpeed = 36.0f;
+        /// <summary>Impact speed (positive downward, units/s) below which a landing is safe.
+        /// With gravity 24, this is ~a 3-block fall.</summary>
+        public const double FallDamageThreshold = 12.0;
+        /// <summary>Hearts lost per unit of impact speed above the threshold.</summary>
+        public const double FallDamageScale = 2.5;
         public const double PlayerHeight = 1.8;
         public const double PlayerRadius = 0.30;
         public const double EyeHeight = 1.62;
@@ -697,7 +702,18 @@ namespace CubeApp
             if (hitZ) p.Velocity = new Point3D(p.Velocity.X, p.Velocity.Y, 0);
             if (hitY)
             {
-                if (p.Velocity.Y <= 0) p.Grounded = true;
+                if (p.Velocity.Y <= 0)
+                {
+                    p.Grounded = true;
+                    // Survival fall damage: impact speed above the threshold hurts (creative is
+                    // immune via DamagePlayer). One heart per ~2.5 speed over the threshold.
+                    double impactSpeed = -p.Velocity.Y;
+                    if (p == LocalPlayer && impactSpeed > FallDamageThreshold)
+                    {
+                        int damage = Math.Max(1, (int)Math.Round((impactSpeed - FallDamageThreshold) / FallDamageScale));
+                        DamagePlayer(damage, DeathCause.Fall);
+                    }
+                }
                 p.Velocity = new Point3D(p.Velocity.X, 0, p.Velocity.Z);
             }
             else p.Grounded = false;

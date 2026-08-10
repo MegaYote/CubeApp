@@ -329,6 +329,13 @@ namespace CubeApp.Renderer
         private float _healthFlashTimer;
         private int _lastHudHealth = 10;
         private const float HealthFlashDuration = 0.25f;
+        // Damage shake: a short decaying POV jitter whenever the player takes damage, so a hit
+        // reads as an "ow". Triggered on health DROP only (regen/gain never shakes).
+        private float _damageShakeTime;
+        private float _damageShakeMagnitude;
+        private float _damageShakeElapsed;
+        private const float DamageShakeDuration = 0.25f;
+        private readonly System.Random _shakeRandom = new();
         private const int HealthbarSpriteSize = 13;
         private const int HealthbarGridPitch = 15;
         // Heartbeat rhythm: "bump, pause, bump bump, pause, bump, pause, bump bump" repeating.
@@ -2600,8 +2607,16 @@ void main() {
             // Any health change (gain OR damage) triggers the outline flash.
             if (hud.PlayerHealth != _lastHudHealth)
             {
+                int diff = hud.PlayerHealth - _lastHudHealth;
                 _lastHudHealth = hud.PlayerHealth;
                 _healthFlashTimer = HealthFlashDuration;
+                // Taking damage: kick the camera with a decaying POV shake; bigger hits shake harder.
+                if (diff < 0)
+                {
+                    _damageShakeTime = DamageShakeDuration;
+                    _damageShakeElapsed = 0f;
+                    _damageShakeMagnitude = Math.Clamp(0.4f + (-diff) * 0.25f, 0f, 1f);
+                }
             }
             // Compute night factors here (before Render) so the clear color, sky, fog, clouds and
             // mobs all use the CURRENT frame's time - no one-frame lag at the clear.
@@ -2722,6 +2737,12 @@ void main() {
 
             // Decay the health-outline flash (1/60s per frame; ImGui is updated at 60Hz).
             if (_healthFlashTimer > 0f) _healthFlashTimer -= 1f / 60f;
+            // Decay the damage shake.
+            if (_damageShakeTime > 0f)
+            {
+                _damageShakeTime -= 1f / 60f;
+                _damageShakeElapsed += 1f / 60f;
+            }
 
             // Process priority uploads (player edits) first - no limit for instant feedback
             while (_pendingPriorityUploads.TryDequeue(out var pu))
@@ -5477,6 +5498,7 @@ void main() {
                 string deathMessage = _hud.DeathCause switch
                 {
                     DeathCause.DebugSelf => "Your heart gave out...",
+                    DeathCause.Fall => "You fell from a high place...",
                     _ => "You died...",
                 };
 
@@ -6280,8 +6302,29 @@ void main() {
             var pitchRad = pitch * (float)Math.PI / 180f;
             var forward = new Vector3((float)(Math.Cos(pitchRad) * Math.Sin(yawRad)), (float)Math.Sin(pitchRad), (float)(Math.Cos(pitchRad) * Math.Cos(yawRad)));
             var cameraPos = new Vector3((float)position.X, (float)position.Y, (float)position.Z);
+            // Damage shake: a small decaying random offset plus a visible roll tilt, so hits read
+            // as an "ow" in the POV. Purely visual - _cameraPosition (culling/collisions) keeps
+            // the real position below.
+            if (_damageShakeTime > 0f)
+            {
+                float t = Math.Clamp(_damageShakeTime / DamageShakeDuration, 0f, 1f);
+                float strength = _damageShakeMagnitude * t * 0.35f;
+                cameraPos += new Vector3(
+                    (float)((_shakeRandom.NextDouble() * 2.0 - 1.0) * strength),
+                    (float)((_shakeRandom.NextDouble() * 2.0 - 1.0) * strength),
+                    (float)((_shakeRandom.NextDouble() * 2.0 - 1.0) * strength));
+            }
             var target = cameraPos + forward;
             var view = Matrix4x4.CreateLookAt(cameraPos, target, Vector3.UnitY);
+            // Minecraft-style hit recoil: the whole view rolls around the camera axis with a
+            // decaying wobble that settles back to level.
+            if (_damageShakeTime > 0f)
+            {
+                float t = Math.Clamp(_damageShakeTime / DamageShakeDuration, 0f, 1f);
+                float rollAmp = _damageShakeMagnitude * t * 0.12f; // ~7 deg max
+                float roll = (float)(Math.Sin(_damageShakeElapsed * 30f) * rollAmp) + rollAmp * 0.5f;
+                view = view * Matrix4x4.CreateRotationZ(roll);
+            }
             var viewProj = Matrix4x4.Multiply(view, proj);
             // Sky matrix: the view with its TRANSLATION removed (rotation only), so the camera-space
             // sky planes render locked to the eye.
