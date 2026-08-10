@@ -49,7 +49,7 @@ namespace CubeApp.World
             byte idStone = (byte)BlockRegistry.GetId("stone");
             byte idDirt = (byte)BlockRegistry.GetId("dirt");
 
-            var rand = new Random(unchecked(chunkX * 341873128 + chunkZ * 132897987 ^ _seed) ^ 0x51ED270B);
+            var rand = new Random(unchecked(chunkX * 401719 + chunkZ * 811543 ^ _seed) ^ 0x51ED270B);
 
             int bandTopLocal = terrainBandStart + 127;
             if (bandTopLocal >= chunkHeight) bandTopLocal = chunkHeight - 1;

@@ -9,6 +9,7 @@ namespace CubeApp
         public bool ToggleMouseCapturePressed { get; }
         public bool ToggleDebugPressed { get; }
         public bool ToggleInventoryPressed { get; }
+        public bool ToggleBiomeMenuPressed { get; }
         public bool CycleRenderDistancePressed { get; }
         public bool SpawnMobPressed { get; }
         public bool SpawnCoyotePressed { get; }
@@ -28,6 +29,7 @@ namespace CubeApp
             bool toggleMouseCapturePressed,
             bool toggleDebugPressed,
             bool toggleInventoryPressed,
+            bool toggleBiomeMenuPressed,
             bool cycleRenderDistancePressed,
             bool spawnMobPressed,
             bool spawnCoyotePressed,
@@ -46,6 +48,7 @@ namespace CubeApp
             ToggleMouseCapturePressed = toggleMouseCapturePressed;
             ToggleDebugPressed = toggleDebugPressed;
             ToggleInventoryPressed = toggleInventoryPressed;
+            ToggleBiomeMenuPressed = toggleBiomeMenuPressed;
             CycleRenderDistancePressed = cycleRenderDistancePressed;
             SpawnMobPressed = spawnMobPressed;
             SpawnCoyotePressed = spawnCoyotePressed;
@@ -117,6 +120,7 @@ namespace CubeApp
         private bool toggleMouseCapturePressed;
         private bool toggleDebugPressed;
         private bool toggleInventoryPressed;
+        private bool toggleBiomeMenuPressed;
         private bool cycleRenderDistancePressed;
         private bool spawnMobPressed;
         private bool spawnCoyotePressed;
@@ -142,6 +146,7 @@ namespace CubeApp
             toggleMouseCapturePressed = false;
             toggleDebugPressed = false;
             toggleInventoryPressed = false;
+            toggleBiomeMenuPressed = false;
             cycleRenderDistancePressed = false;
             spawnMobPressed = false;
             spawnCoyotePressed = false;
@@ -196,6 +201,9 @@ namespace CubeApp
                         break;
                     case Key.E:
                         if (down) toggleInventoryPressed = true;
+                        break;
+                    case Key.B:
+                        if (down) toggleBiomeMenuPressed = true;
                         break;
                     case Key.F:
                         if (down) cycleRenderDistancePressed = true;
@@ -339,6 +347,7 @@ namespace CubeApp
                 toggleMouseCapturePressed,
                 toggleDebugPressed,
                 toggleInventoryPressed,
+                toggleBiomeMenuPressed,
                 cycleRenderDistancePressed,
                 spawnMobPressed,
                 spawnCoyotePressed,
@@ -357,6 +366,7 @@ namespace CubeApp
             toggleMouseCapturePressed = false;
             toggleDebugPressed = false;
             toggleInventoryPressed = false;
+            toggleBiomeMenuPressed = false;
             cycleRenderDistancePressed = false;
             spawnMobPressed = false;
             spawnCoyotePressed = false;

@@ -11,6 +11,7 @@ namespace CubeApp.Renderer
     {
         public bool ShowDebug;
         public bool InventoryOpen;
+        public bool BiomeMenuOpen;
         public bool FlyMode;
         public bool Fullbright;
         /// <summary>Day/night clock (world ticks). Used by the renderer to dim sky + world light.</summary>
@@ -87,6 +88,7 @@ namespace CubeApp.Renderer
         {
             ShowDebug = false,
             InventoryOpen = false,
+            BiomeMenuOpen = false,
             FlyMode = false,
             Fullbright = false,
             Menu = new MenuState(),

@@ -24,6 +24,7 @@ namespace CubeApp.Renderer
         int CountPendingUploads();
         void SetUiInputSnapshot(Veldrid.InputSnapshot snapshot);
         bool TryTakeInventorySelection(out int blockId);
+        bool TryTakeBiomeSelection(out string biomeName);
         void SpawnBlockBreakParticles(int worldX, int worldY, int worldZ, int blockId, int count);
         void ResetWorld();
     }

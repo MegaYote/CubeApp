@@ -23,6 +23,8 @@
     <EmbeddedResource Include="player.png" />
     <!-- Data-driven block definitions (texture tiles, flags, hotbar, map colours). -->
     <EmbeddedResource Include="blocks.json" />
+    <!-- Data-driven biome definitions (temperature/humidity ranges, height, surfaces). -->
+    <EmbeddedResource Include="biomes.json" />
     <!-- Title-screen logo graphic. -->
     <EmbeddedResource Include="cubuild.png" />
     <!-- Healthbar sprite sheet (10 slice-countdown hearts + extras; top-left = full heart). -->

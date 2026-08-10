@@ -236,6 +236,110 @@ namespace CubeApp
             return true;
         }
 
+        /// <summary>
+        /// Teleports the local player to the nearest location of the given biome (from the biome
+        /// teleport menu). Searches outward in expanding rings around the player's current chunk;
+        /// for the first chunk whose biome label matches, it finds a safe surface spot and moves
+        /// the camera there.
+        /// </summary>
+        public void TeleportToNearestBiome(string biomeName)
+        {
+            if (ChunkProvider == null) return;
+
+            int playerChunkX = WorldToChunkCoord(LocalPlayer.Position.X);
+            int playerChunkZ = WorldToChunkCoord(LocalPlayer.Position.Z);
+
+            for (int radius = 0; radius <= 64; radius++)
+            {
+                // Walk the ring at this radius (square ring; inside the ring was checked at a
+                // smaller radius already, so scanning the whole square would re-check a lot).
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    for (int dz = -radius; dz <= radius; dz++)
+                    {
+                        if (radius > 0 && Math.Abs(dx) != radius && Math.Abs(dz) != radius) continue;
+
+                        int wx = (playerChunkX + dx) * ChunkManager.ChunkSize;
+                        int wz = (playerChunkZ + dz) * ChunkManager.ChunkSize;
+                        string biome = ChunkProvider.BiomeNameAt(wx, wz);
+                        if (!string.Equals(biome, biomeName, StringComparison.OrdinalIgnoreCase)) continue;
+
+                        // Found a matching chunk - try to land safely somewhere in it.
+                        if (TryFindSafeSpotInChunk(wx, wz, out var eye))
+                        {
+                            LocalPlayer.Position = eye;
+                            LocalPlayer.Velocity = new Point3D(0, 0, 0);
+                            LocalPlayer.Grounded = true;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Teleports the local player to the Great Pyramid if this world has one (most don't),
+        // otherwise to the first regular pyramid. Pyramids are SOLID brick, so we can't drop them
+        // on the center column - land just outside the base instead so the monument is in view.
+        public void TeleportToPyramid()
+        {
+            if (ChunkProvider == null) return;
+
+            var great = ChunkProvider.Pyramids;
+            if (great != null && great.Exists)
+            {
+                TeleportNear(great.Center.X + great.HalfWidth + 60, great.Center.Z);
+                return;
+            }
+
+            var regulars = ChunkProvider.RegularPyramids?.Pyramids;
+            if (regulars != null && regulars.Count > 0)
+            {
+                var p = regulars[0];
+                TeleportNear(p.CenterX + p.HalfWidth + 40, p.CenterZ);
+            }
+        }
+
+        private void TeleportNear(int worldX, int worldZ)
+        {
+            if (TryFindSafeSpotInChunk(worldX, worldZ, out var eye))
+            {
+                LocalPlayer.Position = eye;
+                LocalPlayer.Velocity = new Point3D(0, 0, 0);
+                LocalPlayer.Grounded = true;
+            }
+        }
+
+        // Finds a safe landing spot in a biome chunk using the terrain generator's cheap surface
+        // estimate (NO full chunk generation - that would stall the main thread for a far-away
+        // biome). Returns the eye position. The player may fall a block or two after landing as the
+        // estimate is slightly imprecise, which is fine.
+        private bool TryFindSafeSpotInChunk(int chunkWorldX, int chunkWorldZ, out Point3D eye)
+        {
+            eye = default;
+
+            // Ocean basins are underwater, so land the player at the WATER SURFACE (sea level)
+            // instead of the basin floor - they shouldn't teleport to the bottom of the sea.
+            if (string.Equals(ChunkProvider.BiomeNameAt(chunkWorldX, chunkWorldZ), "Ocean", StringComparison.OrdinalIgnoreCase))
+            {
+                double px = chunkWorldX + 0.5;
+                double pz = chunkWorldZ + 0.5;
+                // Sea level is at local Y 64 of the terrain band, which maps to world 0.
+                double feetY = 0.0 + 0.01;
+                eye = new Point3D(px, feetY + EyeHeight, pz);
+                return true;
+            }
+
+            int surfaceY = ChunkProvider.EstimateSurfaceHeightAt(chunkWorldX, chunkWorldZ);
+            if (surfaceY < ChunkManager.WorldOriginY) return false;
+
+            double px2 = chunkWorldX + 0.5;
+            double pz2 = chunkWorldZ + 0.5;
+            // Feet just above the surface; eye = feet + EyeHeight.
+            double feetY2 = surfaceY + 0.01;
+            eye = new Point3D(px2, feetY2 + EyeHeight, pz2);
+            return true;
+        }
+
         public void SetSelectedSlot(int slot)
         {
             if (slot < 0 || slot >= HotbarSlots) return;

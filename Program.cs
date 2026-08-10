@@ -82,6 +82,7 @@ namespace CubeApp
         private GameScreen screen = GameScreen.Title;
         private readonly MenuState menu = new();
         private bool inventoryOpen;
+        private bool biomeMenuOpen;
 
         // ---- multiplayer session ----
         private Net.NetHost? _netHost;
@@ -101,6 +102,7 @@ namespace CubeApp
         public Program()
         {
             BlockRegistry.LoadDefault();
+            BiomeRegistry.LoadDefault();
             MobRegistry.DiscoverMobs(AppDomain.CurrentDomain.BaseDirectory);
             RefreshSavedWorlds();
             Sound = new SoundEngine();
@@ -742,6 +744,18 @@ namespace CubeApp
                             inventoryOpen = false;
                             EnableMouseLook();
                         }
+                        while (gpuRenderer.TryTakeBiomeSelection(out string biomeName))
+                        {
+                            if (World != null)
+                            {
+                                if (biomeName == "The Great Pyramid")
+                                    World.TeleportToPyramid();
+                                else
+                                    World.TeleportToNearestBiome(biomeName);
+                            }
+                            biomeMenuOpen = false;
+                            EnableMouseLook();
+                        }
                     }
                     var t5 = stageStopwatch.ElapsedTicks;
                     lastRenderMs = (t5 - t4) * 1000f / Stopwatch.Frequency;
@@ -813,6 +827,12 @@ namespace CubeApp
                 {
                     inventoryOpen = !inventoryOpen;
                     if (inventoryOpen) DisableMouseLook();
+                    else EnableMouseLook();
+                }
+                if (frameInput.ToggleBiomeMenuPressed)
+                {
+                    biomeMenuOpen = !biomeMenuOpen;
+                    if (biomeMenuOpen) DisableMouseLook();
                     else EnableMouseLook();
                 }
             }
@@ -1222,7 +1242,7 @@ namespace CubeApp
             }
             return new HudState
             {
-                ShowDebug = showFps, InventoryOpen = inventoryOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
+                ShowDebug = showFps, InventoryOpen = inventoryOpen, BiomeMenuOpen = biomeMenuOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
                 MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                 FacingText = $"{GetCompassDirection(World.PlayerYaw)} ({GameWorld.NormalizeYaw(World.PlayerYaw):0.0} deg)",
                 SelectedBlockText = $"Selected: {BlockRegistry.GetName(World.SelectedBlock)}",

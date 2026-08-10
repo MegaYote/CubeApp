@@ -346,6 +346,8 @@ namespace CubeApp.Renderer
         // inventory); otherwise ImGui stays inert via NullInputSnapshot.
         private InputSnapshot? _uiInputSnapshot;
         private readonly System.Collections.Concurrent.ConcurrentQueue<int> _inventorySelections = new();
+        // Biome teleport menu selections (biome name string).
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> _biomeSelections = new();
 
         // ---- Block-break particles ---------------------------------------------------
         // Small camera-facing quads textured with the broken block's tile. Simulated on the CPU,
@@ -5164,6 +5166,31 @@ void main() {
             ImGui.End();
         }
 
+        // Biome teleport menu (B key): lists every biome, clicking one queues a teleport request
+        // that Program consumes to find and jump to the nearest location of that biome. The last
+        // entry is special: the Great Pyramid has a fixed once-per-world location.
+        private static readonly string[] BiomeMenuNames = { "Ocean", "Plains", "Hills", "Mountains", "Desert", "The Great Pyramid" };
+
+        private void DrawBiomeMenu(Vector2 displaySize)
+        {
+            float winW = Math.Min(280, displaySize.X - 32);
+            ImGui.SetNextWindowPos(new Vector2((displaySize.X - winW) / 2f, 120), ImGuiCond.Always);
+            ImGui.SetNextWindowSize(new Vector2(winW, 0), ImGuiCond.Always);
+            ImGui.Begin("##biomemenu", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
+                | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse);
+            ImGui.Text("Teleport to nearest biome");
+            ImGui.Separator();
+            foreach (var name in BiomeMenuNames)
+            {
+                if (ImGui.Button(name, new Vector2(winW - 24, 32)))
+                {
+                    _biomeSelections.Enqueue(name);
+                }
+                ImGui.Spacing();
+            }
+            ImGui.End();
+        }
+
         // Tiles the dirt block texture across the screen - the classic menu background.
         // Uses the BACKGROUND draw list so the ImGui menu windows render on top of it.
         private void DrawDirtBackground(Vector2 screenSize, string blockName = "dirt")
@@ -5688,6 +5715,12 @@ void main() {
             if (_hud.InventoryOpen)
             {
                 DrawInventoryWindow(displaySize);
+            }
+
+            // Biome teleport menu (B key).
+            if (_hud.BiomeMenuOpen)
+            {
+                DrawBiomeMenu(displaySize);
             }
 
             // Selected block label
@@ -6278,6 +6311,12 @@ void main() {
         public bool TryTakeInventorySelection(out int blockId)
         {
             return _inventorySelections.TryDequeue(out blockId);
+        }
+
+        /// <summary>Pops one biome name the player clicked in the biome menu, or false.</summary>
+        public bool TryTakeBiomeSelection(out string biomeName)
+        {
+            return _biomeSelections.TryDequeue(out biomeName);
         }
 
         // Drops all chunk geometry when starting a brand new world over the previous one.

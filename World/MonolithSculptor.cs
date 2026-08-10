@@ -47,7 +47,7 @@ namespace CubeApp.World
         public MonolithSculptor(int seed)
         {
             _seed = seed;
-            var rand = new Random(unchecked((int)(seed ^ 0x9E3779B9)));
+            var rand = new Random(unchecked((int)(seed ^ 0x4A7B1C9D)));
             _placement = new NoiseOctaves(rand, 2, 0); // broad 2D placement
             _carve = new NoiseOctaves(rand, 4, 0);     // medium-frequency carve noise
             _shade = new NoiseOctaves(rand, 4, 0);     // radius/height shaping noise

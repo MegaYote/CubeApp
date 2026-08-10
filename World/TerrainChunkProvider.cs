@@ -12,7 +12,11 @@ namespace CubeApp.World
     /// </summary>
     public sealed class TerrainChunkProvider : IChunkProvider
     {
+        // Frequency of the relief noise. Higher = tighter-packed hills/mountains (smaller, more
+        // broken-up regions); lower = broad, sweeping mountain ranges.
+        private const double ReliefFrequency = 130.0;
         private readonly int seed;
+        private readonly BiomeMap _biomeMap;
 
         /// <summary>Controllable monolith feature (see MonolithSculptor). A tunable tower/column
         /// feature: frequency/size/height/carve, seed-driven.</summary>
@@ -26,34 +30,44 @@ namespace CubeApp.World
         /// (decomposed biomass), rare deep pockets anywhere.</summary>
         public CoalOreGenerator CoalOres { get; private set; }
 
+        /// <summary>One colossal solid-brick pyramid per world (see PyramidGenerator). A rare,
+        /// seed-fixed landmark with no purpose but to confuse and mystify.</summary>
+        public PyramidGenerator Pyramids { get; private set; }
+
+        /// <summary>A fixed seed-derived set of small, geometrically-perfect brick pyramids
+        /// (see RegularPyramidGenerator). Each exists exactly once per world.</summary>
+        public RegularPyramidGenerator RegularPyramids { get; private set; }
+
         // Octave noise layers for each role:
         //  _bodyA/_bodyB = two terrain-body generators (16 octaves), blended by _upperSelector
         //  _upperSelector = vertical upper/lower selector (8 octaves)
-        //  _surfaceA/_surfaceB = surface biomes + dirt depth (4 octaves)
+        //  _surfaceA = surface sand/gravel patches
         //  _continent = large-scale continent field, _relief = hills/cliffs factor
         private readonly NoiseOctaves _bodyA;
         private readonly NoiseOctaves _bodyB;
         private readonly NoiseOctaves _upperSelector;
         private readonly NoiseOctaves _surfaceA;
-        private readonly NoiseOctaves _surfaceB;
         private readonly NoiseOctaves _continent;
         private readonly NoiseOctaves _relief;
 
-        public TerrainChunkProvider(int seed = 341873128)
+        public TerrainChunkProvider(int seed = 20260809)
         {
             this.seed = seed;
+            _biomeMap = new BiomeMap(seed);
             var rand = new Random(seed);
-            // startIndex trims the tiny-amplitude high-frequency octaves.
-            _bodyA = new NoiseOctaves(rand, 8, 8);
-            _bodyB = new NoiseOctaves(rand, 8, 8);
-            _upperSelector = new NoiseOctaves(rand, 8, 0);
-            _surfaceA = new NoiseOctaves(rand, 4, 0);
-            _surfaceB = new NoiseOctaves(rand, 4, 0);
-            _continent = new NoiseOctaves(rand, 8, 2);
-            _relief = new NoiseOctaves(rand, 8, 8);
+            // Octave layers: low-frequency-dominant FBM. The octave counts / start indices are
+            // this engine's own tuning (not a copy of any specific generator's recipe).
+            _bodyA = new NoiseOctaves(rand, 9, 7);
+            _bodyB = new NoiseOctaves(rand, 9, 7);
+            _upperSelector = new NoiseOctaves(rand, 7, 1);
+            _surfaceA = new NoiseOctaves(rand, 5, 1);
+            _continent = new NoiseOctaves(rand, 9, 3);
+            _relief = new NoiseOctaves(rand, 7, 9);
             Monoliths = new MonolithSculptor(seed);
             QuartzVeins = new QuartzVeinGenerator(seed);
             CoalOres = new CoalOreGenerator(seed);
+            Pyramids = new PyramidGenerator(seed);
+            RegularPyramids = new RegularPyramidGenerator(seed);
         }
 
         public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeight)
@@ -80,9 +94,10 @@ namespace CubeApp.World
 
             // ---- Build the 5 x 17 x 5 density field ----
             // Field x/z are in 4-block units (5 samples cover the chunk's 16 blocks), field y
-            // in 8-block units (17 samples cover 128).
+            // in 8-block units (17 samples cover 128). All frequency/amplitude constants below
+            // are this engine's own tuning.
             const int fxCount = 5, fyCount = 17, fzCount = 5;
-            const double baseFreq = 684.412;
+            const double baseFreq = 592.0;
             double[] field = new double[fxCount * fyCount * fzCount];
 
             for (int fx = 0; fx < fxCount; fx++)
@@ -95,30 +110,92 @@ namespace CubeApp.World
 
                     // Large-scale elevation: continent field + a sharpened relief signal.
                     double continent = _continent.Noise2D(xq, zq);
-                    double relief = _relief.Noise2D(xq * 100.0, zq * 100.0);
+                    // Relief is normalized to ~[-1,1] so the shaping offset actually produces
+                    // valleys (negative) vs hills (positive) instead of always being dominated.
+                    double relief = _relief.Noise2DNormalized(xq * ReliefFrequency, zq * ReliefFrequency);
 
-                    double elevation = (continent + 256.0) / 512.0;
+                    // Elevation baseline. The continent field is a weighted octave sum with a wide
+                    // range (~+-2000+), so the bias decides where the zero-crossing sits. When the
+                    // continent dips below -(bias*2) the elevation goes NEGATIVE, which inverts the
+                    // falloff and produces a rare floating slab (flat top, hollow underside) - a
+                    // deliberate "bug monolith". Raising the bias pushes that crossing into deeper,
+                    // less common valleys, so those monoliths appear less often.
+                    const double continentBias = 380.0;
+                    double elevation = (continent + continentBias) / 480.0;
                     if (elevation > 1.0) elevation = 1.0;
 
-                    double reliefShaped = relief / 8000.0;
+                    double reliefShaped = relief / 1.0;
                     if (reliefShaped < 0.0) reliefShaped = -reliefShaped;
-                    reliefShaped = reliefShaped * 3.0 - 3.0;
+                    reliefShaped = reliefShaped * 2.6 - 2.6;
                     if (reliefShaped < 0.0)
                     {
-                        reliefShaped /= 2.0;
+                        reliefShaped /= 2.4;
                         if (reliefShaped < -1.0) reliefShaped = -1.0;
-                        reliefShaped /= 1.4;
-                        reliefShaped /= 2.0;
+                        reliefShaped /= 1.7;
+                        reliefShaped /= 2.4;
                         elevation = 0.0;
                     }
                     else
                     {
                         if (reliefShaped > 1.0) reliefShaped = 1.0;
-                        reliefShaped /= 6.0;
+                        reliefShaped /= 5.2;
                     }
                     elevation += 0.5;
                     reliefShaped = reliefShaped * fyCount / 16.0;
-                    double centerHeight = fyCount / 2.0 + reliefShaped * 4.0; // surface line in field-y units
+
+                    // ---- BIOME-DRIVEN SURFACE LINE ----
+                    // The authoritative biome at this column sets the target surface height.
+                    // Field-y units: the terrain band is 16 field-y tall = 128 blocks, and sea
+                    // level sits at field-y 8 (fraction 0.5). baseHeight is a band fraction, so:
+                    //   centerHeight = baseHeight * 16 + relief * (variation * 16)
+                    // Ocean biomes use a low baseHeight (< 0.5) so the surface sits below sea
+                    // level -> water fills. Terrain height and biome label can never desync
+                    // because both come from the same BiomeMap.
+                    var biome = _biomeMap.BiomeAt(xq * 4.0, zq * 4.0);
+                    // ---- SMOOTHED BIOME SURFACE LINE ----
+                    // A raw biome.BaseHeight is a step function: the instant you cross a biome
+                    // border the target surface snaps from ocean-low (~0.28) to land-high (~0.56+),
+                    // which is why every coast became a sheer cliff. To bring back beaches, sample
+                    // the biome map around the column and blend the base heights with a Gaussian
+                    // falloff. Near a shoreline the blend drags the surface down toward sea level
+                    // gradually, so the land slopes down into the water instead of dropping off.
+                    double blendedBase = 0.0;
+                    double blendedVariation = 0.0;
+                    double weightSum = 0.0;
+                    const int blendCells = 4;            // look 4 field cells out (= 16 blocks)
+                    const double blendSigma = 12.0;      // falloff width in world blocks
+                    for (int by = -blendCells; by <= blendCells; by++)
+                    {
+                        for (int bx = -blendCells; bx <= blendCells; bx++)
+                        {
+                            double dx = bx * 4.0; // field cell -> world blocks
+                            double dz = by * 4.0;
+                            double w = Math.Exp(-(dx * dx + dz * dz) / (2.0 * blendSigma * blendSigma));
+                            var b = _biomeMap.BiomeAt(xq * 4.0 + dx, zq * 4.0 + dz);
+                            blendedBase += b.BaseHeight * w;
+                            blendedVariation += b.HeightVariation * w;
+                            weightSum += w;
+                        }
+                    }
+                    blendedBase /= weightSum;
+                    blendedVariation /= weightSum;
+
+                    double centerHeight = blendedBase * 16.0
+                        + reliefShaped * (blendedVariation * 16.0);
+
+                    // ---- BEACH SHELF ----
+                    // Sea level is field-y 8 (world 64). Land biome targets sit only ~1 field-y
+                    // (~8 blocks) above it while ocean floors drop ~28 blocks below, so even a
+                    // smooth blend makes a steep little bank instead of a beach. Compress the
+                    // first few field-y above sea level with an easing curve whose slope is
+                    // exactly zero at the waterline: the shore starts perfectly flat and rises
+                    // gradually inland, giving a wide flat beach.
+                    const double seaLevel = 8.0;
+                    double aboveSea = centerHeight - seaLevel;
+                    if (aboveSea > 0.0)
+                    {
+                        centerHeight = seaLevel + aboveSea * Math.Sqrt(aboveSea / (aboveSea + 0.6));
+                    }
 
                     for (int fy = 0; fy < fyCount; fy++)
                     {
@@ -126,9 +203,9 @@ namespace CubeApp.World
                         double yq = fy; // y field coord = worldY/8
 
                         // Terrain body + vertical selector blend.
-                        double bodyA = _bodyA.Noise3D(xq * baseFreq, yq * baseFreq, zq * baseFreq) / 512.0;
-                        double bodyB = _bodyB.Noise3D(xq * baseFreq, yq * baseFreq, zq * baseFreq) / 512.0;
-                        double selector = (_upperSelector.Noise3D(xq * (baseFreq / 80.0), yq * (baseFreq / 160.0), zq * (baseFreq / 80.0)) / 10.0 + 1.0) / 2.0;
+                        double bodyA = _bodyA.Noise3D(xq * baseFreq, yq * baseFreq, zq * baseFreq) / 480.0;
+                        double bodyB = _bodyB.Noise3D(xq * baseFreq, yq * baseFreq, zq * baseFreq) / 480.0;
+                        double selector = (_upperSelector.Noise3D(xq * (baseFreq / 96.0), yq * (baseFreq / 192.0), zq * (baseFreq / 96.0)) / 11.0 + 1.0) / 2.0;
 
                         double density;
                         if (selector < 0.0) density = bodyA;
@@ -136,15 +213,15 @@ namespace CubeApp.World
                         else density = bodyA + (bodyB - bodyA) * selector;
 
                         // Falloff: push density solid below the surface line, air above.
-                        double falloff = ((double)fy - centerHeight) * 12.0 / elevation;
-                        if (falloff < 0.0) falloff *= 4.0;
+                        double falloff = ((double)fy - centerHeight) * 13.0 / elevation;
+                        if (falloff < 0.0) falloff *= 3.6;
                         density -= falloff;
 
                         // Force air in the top field rows.
                         if (fy > fyCount - 4)
                         {
                             double clamp = (double)(fy - (fyCount - 4)) / 3.0;
-                            density = density * (1.0 - clamp) + -10.0 * clamp;
+                            density = density * (1.0 - clamp) + -9.0 * clamp;
                         }
 
                         field[idx] = density;
@@ -207,6 +284,12 @@ namespace CubeApp.World
             // ---- coal ore (biomass coal just under the living layer, rare deep pockets) ----
             CoalOres.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
 
+            // ---- regular pyramids (once-per-world monuments, geometrically perfect) ----
+            RegularPyramids.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight, EstimateSurfaceHeightAt);
+
+            // ---- the Great Pyramid (runs LAST so its volume is pure solid brick) ----
+            Pyramids.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
+
             chunk.NeedsRemesh = true;
             return chunk;
         }
@@ -247,8 +330,8 @@ namespace CubeApp.World
             const int height = ChunkManager.ChunkHeight; // 448
             const int width = 16;
             const int seaLevel = 64; // relative to the terrain band start (world 0)
-            var rand = new Random(unchecked(chunkX * 341873128 + chunkZ * 132897987 ^ seed));
-            const double inv32 = 1.0 / 32.0;
+            var rand = new Random(unchecked(chunkX * 401719 + chunkZ * 811543 ^ seed));
+            const double surfaceScale = 1.0 / 29.0;
 
             for (int x = 0; x < width; x++)
             {
@@ -257,15 +340,46 @@ namespace CubeApp.World
                     double wx = chunkX * width + x;
                     double wz = chunkZ * width + z;
 
-                    // Sand biome: surfaceA at (x/32, z/32, 0) > 0. Gravel biome: surfaceA at a
-                    // rotated offset > 3. Dirt depth: surfaceB 2D octaves /3 + 3.
-                    bool sandy = _surfaceA.Noise3D(wx * inv32, wz * inv32, 0.0) + rand.NextDouble() * 0.2 > 0.0;
-                    bool gravelly = _surfaceA.Noise3D(wz * inv32, 109.0134, wx * inv32) + rand.NextDouble() * 0.2 > 3.0;
-                    int dirtDepth = (int)(_surfaceB.Noise2D(wx * inv32 * 2.0, wz * inv32 * 2.0) / 3.0 + 3.0 + rand.NextDouble() * 0.25);
+                    // The biome at this column drives the surface materials (surface/fill blocks
+                    // and fill depth come straight from the data-driven biome definition).
+                    var biome = _biomeMap.BiomeAt(wx, wz);
+                    int biomeSurface = BlockRegistry.GetId(biome.SurfaceBlock);
+                    int biomeFill = BlockRegistry.GetId(biome.FillBlock);
+                    int biomeFillDepth = Math.Max(0, biome.FillDepth);
+                    // Optional fill mix: some fill layers turn into this block (e.g. dirt mixed
+                    // into the red clay) so the ground isn't one uniform slab.
+                    int biomeFillMix = string.IsNullOrEmpty(biome.FillMixBlock) ? 0 : BlockRegistry.GetId(biome.FillMixBlock);
+                    float fillMixChance = biome.FillMixChance;
+
+                    // Beach: when this column is near a water biome (ocean), give it a beach 50% of
+                    // the time - so some shores are sandy and some keep their native surface. The
+                    // beach roll also picks between sand and gravel, so there are sandy beaches AND
+                    // gravelly beaches.
+                    bool nearWater = !biome.IsWater && _biomeMap.IsNearWater((int)wx, (int)wz, 5, 2);
+                    bool beach = nearWater && (rand.Next(2) == 0);
+                    if (beach)
+                    {
+                        if (rand.Next(2) == 0)
+                        {
+                            biomeSurface = BlockRegistry.GetId("sand");
+                            biomeFill = BlockRegistry.GetId("sand");
+                        }
+                        else
+                        {
+                            biomeSurface = BlockRegistry.GetId("gravel");
+                            biomeFill = BlockRegistry.GetId("gravel");
+                        }
+                        biomeFillDepth = 3;
+                        biomeFillMix = 0; // beaches are pure sand/gravel, no dirt mix
+                    }
+
+                    // Sand biome: surfaceA at (x/29, z/29, 0) > 0. Gravel biome: surfaceA at a
+                    // rotated offset > 2.8.
+                    bool gravelly = _surfaceA.Noise3D(wz * surfaceScale, 121.037, wx * surfaceScale) + rand.NextDouble() * 0.2 > 2.8;
 
                     int depthRemaining = -1; // -1 = haven't found the surface yet
-                    int topBlock = idGrass;
-                    int fillBlock = idDirt;
+                    int topBlock = biomeSurface;
+                    int fillBlock = biomeFill;
 
                     // Scan the terrain band (band-relative 127..0, actual local terrainBandStart..+127).
                     for (int bandLy = 127; bandLy >= 0; bandLy--)
@@ -285,34 +399,35 @@ namespace CubeApp.World
                         {
                             if (depthRemaining == -1)
                             {
-                                if (dirtDepth <= 0)
+                                if (biomeFillDepth <= 0)
                                 {
                                     topBlock = 0;
                                     fillBlock = idStone;
                                 }
                                 else if (bandLy >= seaLevel - 4 && bandLy <= seaLevel + 1)
                                 {
-                                    topBlock = idGrass;
-                                    fillBlock = idDirt;
-                                    if (gravelly)
+                                    // Biome surface blocks; grass/dirt fallback for land biomes,
+                                    // sand for ocean/desert (from the biome definition).
+                                    topBlock = biomeSurface;
+                                    fillBlock = biomeFill;
+                                    // Extra gravel noise patches only on non-beach shores (a beach is
+                                    // already sand or gravel from the beach roll).
+                                    if (gravelly && !beach && biomeFillDepth <= 3)
                                     {
                                         topBlock = 0;
                                         fillBlock = idGravel;
                                     }
-                                    if (sandy)
-                                    {
-                                        topBlock = idSand;
-                                        fillBlock = idSand;
-                                    }
                                 }
                                 if (bandLy < seaLevel && topBlock == 0) topBlock = idWater;
-                                depthRemaining = dirtDepth;
-                                blocks[idx] = (byte)(bandLy >= seaLevel - 1 ? topBlock : fillBlock);
+                                depthRemaining = biomeFillDepth;
+                                int layerFill = (biomeFillMix != 0 && rand.NextDouble() < fillMixChance) ? biomeFillMix : fillBlock;
+                                blocks[idx] = (byte)(bandLy >= seaLevel - 1 ? topBlock : layerFill);
                             }
                             else if (depthRemaining > 0)
                             {
                                 depthRemaining--;
-                                blocks[idx] = (byte)fillBlock;
+                                int layerFill = (biomeFillMix != 0 && rand.NextDouble() < fillMixChance) ? biomeFillMix : fillBlock;
+                                blocks[idx] = (byte)layerFill;
                             }
                         }
                     }
@@ -341,8 +456,8 @@ namespace CubeApp.World
                 {
                     var rand2 = new Random(unchecked((int)((long)nx * seedA + (long)nz * seedB ^ seed)));
 
-                    int caveCount = rand2.Next(rand2.Next(rand2.Next(40) + 1) + 1);
-                    if (rand2.Next(15) != 0) caveCount = 0;
+                    int caveCount = rand2.Next(rand2.Next(rand2.Next(36) + 1) + 1);
+                    if (rand2.Next(13) != 0) caveCount = 0;
 
                     for (int c = 0; c < caveCount; c++)
                     {
@@ -355,7 +470,7 @@ namespace CubeApp.World
                         // ChunkManager.SyncDeepAccess).
                         double y = (rand2.Next(3) == 0)
                             ? terrainBandStart + rand2.Next(16)      // deep diver: digs toward the floor
-                            : terrainBandStart + rand2.Next(rand2.Next(120) + 8);
+                            : terrainBandStart + rand2.Next(rand2.Next(116) + 8);
                         double z = nz * 16 + rand2.Next(16);
 
                         int nodeCount = 1;
@@ -369,7 +484,7 @@ namespace CubeApp.World
                         for (int n = 0; n < nodeCount; n++)
                         {
                             float yaw = (float)(rand2.NextDouble() * Math.PI * 2.0);
-                            float pitch = (float)((rand2.NextDouble() - 0.5) * 2.0 / 8.0);
+                            float pitch = (float)((rand2.NextDouble() - 0.5) * 2.0 / 7.0);
                             float size = (float)(rand2.NextDouble() * 2.0 + rand2.NextDouble());
 
                             // Deep caves have a small chance to spawn 5x as fat - the walker's
@@ -401,7 +516,7 @@ namespace CubeApp.World
             byte idGrass = (byte)BlockRegistry.GetId("grass");
             byte idDirt = (byte)BlockRegistry.GetId("dirt");
 
-            if (maxLength <= 0) maxLength = 112 - rng.Next(112 / 4);
+            if (maxLength <= 0) maxLength = 104 - rng.Next(104 / 4);
             bool branch = false;
             if (start == -1)
             {
@@ -414,19 +529,19 @@ namespace CubeApp.World
 
             for (int len = start; len < maxLength; len++)
             {
-                double radius = 1.5 + Math.Sin(len * Math.PI / maxLength) * size;
+                double radius = 1.4 + Math.Sin(len * Math.PI / maxLength) * size;
                 double vRadius = radius * scale;
 
                 x += Math.Cos(yaw) * Math.Cos(pitch);
                 y += Math.Sin(pitch);
                 z += Math.Sin(yaw) * Math.Cos(pitch);
 
-                if (rng.Next(6) == 0) pitch *= 0.92f;
-                else pitch *= 0.7f;
+                if (rng.Next(6) == 0) pitch *= 0.9f;
+                else pitch *= 0.66f;
                 pitch += wobblePitch * 0.1f;
                 yaw += wobbleYaw * 0.1f;
-                wobblePitch *= 0.9f;
-                wobbleYaw *= 12f / 16f;
+                wobblePitch *= 0.88f;
+                wobbleYaw *= 11f / 15f;
                 wobblePitch += (float)((rng.NextDouble() - rng.NextDouble()) * rng.NextDouble() * 2.0);
                 wobbleYaw += (float)((rng.NextDouble() - rng.NextDouble()) * rng.NextDouble() * 4.0);
 
@@ -494,20 +609,23 @@ namespace CubeApp.World
         private void GenerateTrees(int chunkX, int chunkZ, Chunk chunk)
         {
             byte[] blocks = chunk.RawBlocks;
-            var rand = new Random(unchecked(chunkX * 341873128 + chunkZ * 132897987 ^ seed) ^ 0x9E3779);
+            var rand = new Random(unchecked(chunkX * 401719 + chunkZ * 811543 ^ seed) ^ 0x51AB7F);
             byte idWood = (byte)BlockRegistry.GetId("log");
             byte idLeaves = (byte)BlockRegistry.GetId("leaves");
             byte idGrass = (byte)BlockRegistry.GetId("grass");
             byte idDirt = (byte)BlockRegistry.GetId("dirt");
+            byte idRedClay = (byte)BlockRegistry.GetId("redclay");
             const int height = ChunkManager.ChunkHeight;
 
-            int treeCount = rand.Next(6);
-            if (rand.Next(10) == 0) treeCount++;
-
-            for (int t = 0; t < treeCount; t++)
+            int treeCount = 0;
+            for (int t = 0; t < 16; t++)
             {
                 int lx = rand.Next(16);
                 int lz = rand.Next(16);
+                var biome = _biomeMap.BiomeAt(chunkX * 16 + lx, chunkZ * 16 + lz);
+                if (biome.TreeDensity <= 0) continue;
+                if (rand.Next(16) >= biome.TreeDensity) continue;
+
                 int surfaceY = -1;
                 for (int y = height - 1; y >= 0; y--)
                 {
@@ -518,15 +636,29 @@ namespace CubeApp.World
                     }
                 }
                 if (surfaceY <= 0) continue;
-                // The trunk starts one block ABOVE the surface block (which must be grass/dirt).
-                GenerateTree(blocks, lx, surfaceY + 1, lz, rand, idWood, idLeaves, idGrass, idDirt);
+                // The trunk starts one block ABOVE the surface block (which must be grass/dirt/redclay).
+                bool isPine = string.Equals(biome.TreeType, "pine", StringComparison.OrdinalIgnoreCase);
+                if (isPine)
+                {
+                    GeneratePineTree(blocks, lx, surfaceY + 1, lz, rand, idWood, idLeaves);
+                }
+                else if (rand.Next(10) == 0)
+                {
+                    // Small chance an oak grows into a big, gnarled old tree.
+                    GenerateBigOakTree(blocks, lx, surfaceY + 1, lz, rand, idWood, idLeaves, idGrass, idDirt, idRedClay);
+                }
+                else
+                {
+                    GenerateTree(blocks, lx, surfaceY + 1, lz, rand, idWood, idLeaves, idGrass, idDirt, idRedClay);
+                }
+                if (++treeCount >= 8) break;
             }
         }
 
         // One tree rooted with its trunk base at (x, baseY, z) - baseY is the first trunk cell,
         // the ground (grass/dirt) sits at baseY-1.
         private void GenerateTree(byte[] blocks, int x, int baseY, int z, Random rand,
-            byte idWood, byte idLeaves, byte idGrass, byte idDirt)
+            byte idWood, byte idLeaves, byte idGrass, byte idDirt, byte idRedClay)
         {
             const int height = ChunkManager.ChunkHeight;
             int trunkHeight = rand.Next(3) + 4;
@@ -550,13 +682,13 @@ namespace CubeApp.World
                 }
             }
 
-            // The ground must be grass or dirt.
+            // The ground must be grass, dirt, or red clay (Paradise foothills).
             if (baseY < 1) return;
             byte ground = blocks[(x * 16 + z) * height + (baseY - 1)];
-            if (ground != idGrass && ground != idDirt) return;
+            if (ground != idGrass && ground != idDirt && ground != idRedClay) return;
 
-            // Shade the ground under the tree with dirt.
-            blocks[(x * 16 + z) * height + (baseY - 1)] = idDirt;
+            // Shade the ground under the tree with dirt (grass only - red clay stays red).
+            if (ground == idGrass) blocks[(x * 16 + z) * height + (baseY - 1)] = idDirt;
 
             // Canopy: radius grows downward; the top row corners are always cut (plus shape),
             // lower-row corners are randomly trimmed.
@@ -595,44 +727,212 @@ namespace CubeApp.World
             }
         }
 
+        // A big, gnarled old oak: a tall trunk with a wide rounded dome canopy plus a few
+        // hanging branch blobs. Grows anywhere a normal oak would (grass, dirt, red clay).
+        private void GenerateBigOakTree(byte[] blocks, int x, int baseY, int z, Random rand,
+            byte idWood, byte idLeaves, byte idGrass, byte idDirt, byte idRedClay)
+        {
+            const int height = ChunkManager.ChunkHeight;
+            int trunkHeight = rand.Next(5) + 7;   // 7..11 - tall and old
+            int topY = baseY + trunkHeight;
+
+            // Clearance: wider canopy footprint near the top.
+            for (int y = baseY; y <= topY + 1 && y < height; y++)
+            {
+                int radius = 1;
+                if (y == baseY) radius = 0;
+                else if (y >= topY - 2) radius = 3;
+                else if (y >= topY - 5) radius = 2;
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    for (int dz = -radius; dz <= radius; dz++)
+                    {
+                        int lx = x + dx;
+                        int lz = z + dz;
+                        if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16 || y < 0 || y >= height) return;
+                        byte b = blocks[(lx * 16 + lz) * height + y];
+                        if (b != 0 && b != idLeaves) return;
+                    }
+                }
+            }
+
+            // The ground must be grass, dirt, or red clay.
+            if (baseY < 1) return;
+            byte ground = blocks[(x * 16 + z) * height + (baseY - 1)];
+            if (ground != idGrass && ground != idDirt && ground != idRedClay) return;
+            if (ground == idGrass) blocks[(x * 16 + z) * height + (baseY - 1)] = idDirt;
+
+            // Trunk.
+            for (int i = 0; i < trunkHeight; i++)
+            {
+                int y = baseY + i;
+                if (y < 0 || y >= height) break;
+                int idx = (x * 16 + z) * height + y;
+                byte b = blocks[idx];
+                if (b == 0 || b == idLeaves) blocks[idx] = idWood;
+            }
+
+            // Wide rounded canopy: lower dome (radius 3), an upper tier (radius 2), and a cap.
+            for (int y = topY - 3; y <= topY + 1 && y < height; y++)
+            {
+                if (y < 0) continue;
+                int dy = y - topY;               // 0 at the top, negative below
+                int radius = dy >= 0 ? 1 : dy == -1 ? 2 : 3;
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    for (int dz = -radius; dz <= radius; dz++)
+                    {
+                        // Round the corners so the dome isn't a square slab.
+                        if (Math.Abs(dx) == radius && Math.Abs(dz) == radius && rand.Next(3) != 0) continue;
+                        int lx = x + dx;
+                        int lz = z + dz;
+                        if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) continue;
+                        int idx = (lx * 16 + lz) * height + y;
+                        byte b = blocks[idx];
+                        if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
+                    }
+                }
+            }
+
+            // Hanging branch blobs: small leaf clusters poking out partway down the trunk
+            // for the classic gnarly silhouette.
+            for (int i = 0; i < 3; i++)
+            {
+                int by = baseY + rand.Next(3, Math.Max(4, trunkHeight - 1));
+                int bdx = (rand.Next(2) == 0 ? -1 : 1) * (2 + rand.Next(2));
+                int bdz = (rand.Next(2) == 0 ? -1 : 1) * (2 + rand.Next(2));
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    for (int dz = -1; dz <= 1; dz++)
+                    {
+                        int lx = x + bdx + dx;
+                        int lz = z + bdz + dz;
+                        if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) continue;
+                        int idx = (lx * 16 + lz) * height + by;
+                        byte b = blocks[idx];
+                        if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
+                    }
+                }
+            }
+        }
+
+        // A conifer for the Paradise foothills: a tall, narrow trunk crowned with a tapered
+        // cone of leaves (rings every other row, shrinking toward the tip). Grows on grass,
+        // dirt, or red clay.
+        private void GeneratePineTree(byte[] blocks, int x, int baseY, int z, Random rand,
+            byte idWood, byte idLeaves)
+        {
+            const int height = ChunkManager.ChunkHeight;
+            int trunkHeight = rand.Next(4) + 6;   // 6..9 - taller than an oak
+
+            // Clearance: trunk column plus the full canopy footprint must be air or leaves.
+            int topY = baseY + trunkHeight;
+            for (int y = baseY; y <= topY && y < height; y++)
+            {
+                int radius = 0;
+                if (y == baseY) radius = 0;
+                else if (y >= topY - 2) radius = 2;
+                else radius = 1;
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    for (int dz = -radius; dz <= radius; dz++)
+                    {
+                        int lx = x + dx;
+                        int lz = z + dz;
+                        if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16 || y < 0 || y >= height) return;
+                        byte b = blocks[(lx * 16 + lz) * height + y];
+                        if (b != 0 && b != idLeaves) return;
+                    }
+                }
+            }
+
+            // The ground must be grass, dirt, or red clay.
+            if (baseY < 1) return;
+            byte ground = blocks[(x * 16 + z) * height + (baseY - 1)];
+            if (ground != (byte)BlockRegistry.GetId("grass")
+                && ground != (byte)BlockRegistry.GetId("dirt")
+                && ground != (byte)BlockRegistry.GetId("redclay")) return;
+
+            // Trunk.
+            for (int i = 0; i < trunkHeight; i++)
+            {
+                int y = baseY + i;
+                if (y < 0 || y >= height) break;
+                int idx = (x * 16 + z) * height + y;
+                byte b = blocks[idx];
+                if (b == 0 || b == idLeaves) blocks[idx] = idWood;
+            }
+
+            // Tapered cone canopy: full rings on the lower rows, narrower near the tip.
+            for (int y = topY; y >= baseY + trunkHeight - 5 && y >= 0; y--)
+            {
+                int belowTop = topY - y;            // 0 at the very top
+                int radius = belowTop == 0 ? 0 : belowTop <= 2 ? 1 : 2;
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    for (int dz = -radius; dz <= radius; dz++)
+                    {
+                        // Trim corners randomly for a ragged, natural silhouette.
+                        if (Math.Abs(dx) == radius && Math.Abs(dz) == radius && rand.Next(3) != 0) continue;
+                        int lx = x + dx;
+                        int lz = z + dz;
+                        if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) continue;
+                        int idx = (lx * 16 + lz) * height + y;
+                        byte b = blocks[idx];
+                        if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
+                    }
+                }
+            }
+        }
+
         public string BiomeNameAt(int worldX, int worldZ)
         {
-            // Same continent/relief sampling as the terrain; classify by expected land height.
-            double xq = worldX / 4.0;
-            double zq = worldZ / 4.0;
-            double continent = _continent.Noise2D(xq, zq);
-            double relief = _relief.Noise2D(xq * 100.0, zq * 100.0);
-
-            double elevation = (continent + 256.0) / 512.0;
-            if (elevation > 1.0) elevation = 1.0;
-            double reliefShaped = relief / 8000.0;
-            if (reliefShaped < 0.0) reliefShaped = -reliefShaped;
-            reliefShaped = reliefShaped * 3.0 - 3.0;
-            if (reliefShaped < 0.0)
-            {
-                reliefShaped /= 2.0;
-                if (reliefShaped < -1.0) reliefShaped = -1.0;
-                reliefShaped /= 1.4;
-                reliefShaped /= 2.0;
-                elevation = 0.0;
-            }
-            else
-            {
-                if (reliefShaped > 1.0) reliefShaped = 1.0;
-                reliefShaped /= 6.0;
-            }
-            elevation += 0.5;
-            double centerY = (17.0 / 2.0 + (reliefShaped * 17.0 / 16.0) * 4.0) * 8.0; // block Y of the surface line
-
-            if (centerY < 56) return "Ocean";
-            if (reliefShaped > 0.12) return "Mountains";
-            if (reliefShaped > 0.0) return "Hills";
-            return "Plains";
+            // Authoritative source: the biome map drives both terrain and label, so they agree.
+            return _biomeMap.BiomeAt(worldX, worldZ).DisplayName;
         }
 
         private static double Lerp(double a, double b, double t)
         {
             return a + (b - a) * t;
+        }
+
+        /// <summary>
+        /// Estimates the surface height (block Y, world coords) at a world column WITHOUT generating
+        /// the chunk - cheap, used for teleport/preview where a fully-generated block scan is too
+        /// slow. Uses the same biome-driven surface math as the density field (base height +
+        /// relief variation). Slightly imprecise (the real surface is a noise-perturbed band around
+        /// this line) but fine for dropping the player in nearby.
+        /// </summary>
+        public int EstimateSurfaceHeightAt(int worldX, int worldZ)
+        {
+            double xq = worldX / 4.0;
+            double zq = worldZ / 4.0;
+            double relief = _relief.Noise2DNormalized(xq * ReliefFrequency, zq * ReliefFrequency);
+
+            // Must match the density field's biome-driven centerHeight exactly.
+            double reliefShaped = relief / 1.0;
+            if (reliefShaped < 0.0) reliefShaped = -reliefShaped;
+            reliefShaped = reliefShaped * 2.6 - 2.6;
+            if (reliefShaped < 0.0)
+            {
+                reliefShaped /= 2.4;
+                if (reliefShaped < -1.0) reliefShaped = -1.0;
+                reliefShaped /= 1.7;
+                reliefShaped /= 2.4;
+            }
+            else
+            {
+                if (reliefShaped > 1.0) reliefShaped = 1.0;
+                reliefShaped /= 5.2;
+            }
+            reliefShaped = reliefShaped * 17.0 / 16.0;
+
+            var biome = _biomeMap.BiomeAt(worldX, worldZ);
+            double centerHeight = biome.BaseHeight * 16.0 + reliefShaped * (biome.HeightVariation * 16.0);
+
+            // Field-y -> block Y: field y = 1 unit per 8 blocks, so block Y = centerHeight * 8.
+            // Terrain band local Y 0 maps to world -64.
+            return ChunkManager.GroundOriginY + (int)Math.Round(centerHeight * 8.0);
         }
     }
 }
