@@ -33,6 +33,11 @@ namespace CubeApp.Renderer
         /// once the player drops inventory picks into slots.</summary>
         public IReadOnlyList<int> Hotbar;
 
+        /// <summary>Which mode the world is in (Creative = sandbox, Survival = resource loop).</summary>
+        public GameMode Mode;
+        /// <summary>Survival inventory (block id -> count). Empty/ignored in creative.</summary>
+        public IReadOnlyDictionary<int, int> Inventory;
+
         /// <summary>Player health 0..10, drives the healthbar heart slice (10 = full heart).</summary>
         public int PlayerHealth;
         /// <summary>How the player last died (for the respawn screen message).</summary>
@@ -104,6 +109,8 @@ namespace CubeApp.Renderer
             WorldSeed = 0,
             BiomeText = string.Empty,
             Hotbar = Array.Empty<int>(),
+            Mode = GameMode.Creative,
+            Inventory = new Dictionary<int, int>(),
             PlayerHealth = 10,
             DeathCause = DeathCause.Unknown,
             HighlightWorldQuad = null,

@@ -72,6 +72,37 @@ namespace CubeApp
         public int SelectedBlock;
         public int[] Hotbar;
 
+        // ---- game mode ----
+        /// <summary>Creative (sandbox) or Survival (resource loop). Creative players fly, can't
+        /// die, and place blocks freely; survival players must mine to collect before placing.</summary>
+        public GameMode Mode { get; set; } = GameMode.Creative;
+        public bool IsCreative => Mode == GameMode.Creative;
+
+        // ---- survival inventory (block id -> count; creative ignores this entirely) ----
+        private readonly Dictionary<int, int> _inventory = new();
+        public IReadOnlyDictionary<int, int> Inventory => _inventory;
+        public int InventoryCount(int blockId) => _inventory.TryGetValue(blockId, out int c) ? c : 0;
+
+        /// <summary>Adds blocks to the survival inventory (e.g. a mined block).</summary>
+        public bool TryAddToInventory(int blockId, int count = 1)
+        {
+            if (blockId <= 0 || count <= 0) return false;
+            _inventory.TryGetValue(blockId, out int cur);
+            _inventory[blockId] = cur + count;
+            return true;
+        }
+
+        /// <summary>Spends blocks from the survival inventory (e.g. placing a block).</summary>
+        public bool TryConsumeFromInventory(int blockId, int count = 1)
+        {
+            if (blockId <= 0 || count <= 0) return false;
+            if (!_inventory.TryGetValue(blockId, out int cur) || cur < count) return false;
+            int remaining = cur - count;
+            if (remaining > 0) _inventory[blockId] = remaining;
+            else _inventory.Remove(blockId);
+            return true;
+        }
+
         // ---- physics constants (shared with render layer for third-person view) ----
         public const float WalkSpeed = 4.317f;
         public const float FlySpeed = 10.8f;
@@ -363,6 +394,8 @@ namespace CubeApp
         /// </summary>
         public void DamagePlayer(int amount, DeathCause cause = DeathCause.Unknown)
         {
+            // Creative players are invulnerable: no mob hits, no falls, no damage.
+            if (IsCreative) return;
             if (amount <= 0) return;
             LocalPlayer.Health = Math.Max(0, LocalPlayer.Health - amount);
             LocalPlayer.TimeSinceDamage = 0f;
@@ -811,6 +844,8 @@ namespace CubeApp
             removedBlockId = 0;
             if (!Chunks.TryGetLoadedBlock(x, y, z, out removedBlockId)) return false;
             if (!Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId)) return false;
+            // Survival: mining a block adds it to your inventory.
+            if (!IsCreative && removedBlockId > 0) TryAddToInventory(removedBlockId);
             BlockTicks?.OnBlockChanged(x, y, z);
             int rLayer = ChunkManager.LayerForWorldY(y);
             var editedChunk = new ChunkCoordinates(rLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
@@ -829,7 +864,15 @@ namespace CubeApp
             var hitPoint = origin + direction * hitDistance;
 
             int blockToPlace = SelectedBlock;
+            int spendId = blockToPlace; // consume the ORIGINAL selected block (slabs can become top variants)
             int meta = 0;
+
+            // Survival: you can only place blocks you actually own.
+            if (!IsCreative)
+            {
+                if (spendId <= 0) return false;
+                if (InventoryCount(spendId) < 1) return false;
+            }
 
             // Can't place INTO a cell a falling block is currently passing through. Otherwise a
             // spam of placements in one column would stack into a moving block / collide mid-air.
@@ -841,7 +884,11 @@ namespace CubeApp
             if (BlockRegistry.IsSlab(blockToPlace) || BlockRegistry.IsSlabTop(blockToPlace))
             {
                 var hit = pickResult.Value.Remove;
-                if (TryMergeSlab(hit.x, hit.y, hit.z, normal, blockToPlace)) return true;
+                if (TryMergeSlab(hit.x, hit.y, hit.z, normal, blockToPlace))
+                {
+                    if (!IsCreative) TryConsumeFromInventory(spendId, 1);
+                    return true;
+                }
 
                 bool placeTop = normal.Y < 0 || (normal.Y == 0 && (hitPoint.Y - place.y) > 0.5);
                 if (BlockRegistry.IsSlab(blockToPlace) && placeTop)
@@ -852,7 +899,11 @@ namespace CubeApp
                 if (Chunks.TryGetLoadedBlockAndMeta(place.x, place.y, place.z, out var oldId, out _)
                     && oldId != BlockRegistry.AirId && !IsReplaceableFluid(oldId))
                 {
-                    if (TryFillSlabCell(place.x, place.y, place.z, blockToPlace)) return true;
+                    if (TryFillSlabCell(place.x, place.y, place.z, blockToPlace))
+                    {
+                        if (!IsCreative) TryConsumeFromInventory(spendId, 1);
+                        return true;
+                    }
                     return false;
                 }
             }
@@ -871,6 +922,7 @@ namespace CubeApp
 
             if (WouldBlockIntersectPlayer(p, place.x, place.y, place.z, blockToPlace, meta)) return false;
             if (!Chunks.TrySetBlock(place.x, place.y, place.z, blockToPlace, meta)) return false;
+            if (!IsCreative) TryConsumeFromInventory(spendId, 1);
             BlockTicks?.OnBlockChanged(place.x, place.y, place.z);
             int placeLayer = ChunkManager.LayerForWorldY(place.y);
             var editedChunk = new ChunkCoordinates(placeLayer, WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));

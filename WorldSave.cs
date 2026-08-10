@@ -29,10 +29,12 @@ namespace CubeApp
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 2;
+        public const int Version = 3;
 
         public string Name = "World 1";
         public int Seed;
+        /// <summary>GameMode int (0 = Creative, 1 = Survival). Older saves default to Creative.</summary>
+        public int Mode = (int)GameMode.Creative;
         public double PlayerX, PlayerY, PlayerZ;
         public float Yaw, Pitch;
         public int SelectedSlot;
@@ -49,6 +51,7 @@ namespace CubeApp
                 w.Write(Version);
                 w.Write(Name);
                 w.Write(Seed);
+                w.Write(Mode);
                 w.Write(PlayerX);
                 w.Write(PlayerY);
                 w.Write(PlayerZ);
@@ -101,6 +104,7 @@ namespace CubeApp
                 var save = new WorldSave();
                 save.Name = reader.ReadString();
                 save.Seed = reader.ReadInt32();
+                if (version >= 3) save.Mode = reader.ReadInt32();
                 save.PlayerX = reader.ReadDouble();
                 save.PlayerY = reader.ReadDouble();
                 save.PlayerZ = reader.ReadDouble();

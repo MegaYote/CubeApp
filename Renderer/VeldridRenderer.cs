@@ -5126,11 +5126,15 @@ void main() {
             }
         }
 
-        // The E-menu inventory: a scrollable grid of every registered block rendered with its
-        // isometric cube icon. Clicks are queued and consumed by Program on the next frame.
+        // The E-menu inventory: a scrollable grid of block icons rendered with their isometric
+        // cube icon. Clicks are queued and consumed by Program on the next frame. Creative shows
+        // every block; survival shows only the blocks the player actually owns, with counts.
         private void DrawInventoryWindow(Vector2 displaySize)
         {
             if (_iconImGuiId == IntPtr.Zero || _blockIconUv == null) return;
+
+            bool survival = _hud.Mode == GameMode.Survival;
+            if (survival && _hud.Inventory == null) return;
 
             float winW = Math.Min(680, displaySize.X - 32);
             float winH = Math.Min(480, displaySize.Y - 64);
@@ -5138,28 +5142,58 @@ void main() {
             ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
             ImGui.Begin("##inventory", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
                 | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse);
-            ImGui.Text("Inventory - click a block to put it in the selected hotbar slot");
+            ImGui.Text(survival
+                ? "Your blocks - click one to put it in the selected hotbar slot"
+                : "Inventory - click a block to put it in the selected hotbar slot");
             ImGui.Separator();
             ImGui.BeginChild("##invgrid", new Vector2(0, -4));
 
             float avail = ImGui.GetContentRegionAvail().X;
             const float cellW = 64f;
             int perRow = Math.Max(1, (int)(avail / cellW));
-            for (int id = 1; id < BlockRegistry.Count; id++)
+
+            if (survival)
             {
-                if (!BlockRegistry.IsInInventory(id)) continue;
-                var uv = _blockIconUv[id];
-                string name = BlockRegistry.GetById(id).DisplayName;
-                ImGui.PushID(id);
-                if (ImGui.ImageButton($"##icon{id}", _iconImGuiId, new Vector2(48, 48),
-                        new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W),
-                        Vector4.Zero, Vector4.One))
+                // Survival: every owned block, sorted by id, with its count.
+                var owned = new List<int>(_hud.Inventory.Keys);
+                owned.Sort();
+                for (int i = 0; i < owned.Count; i++)
                 {
-                    _inventorySelections.Enqueue(id);
+                    int id = owned[i];
+                    var uv = _blockIconUv[id];
+                    string name = BlockRegistry.GetById(id).DisplayName;
+                    ImGui.PushID(id);
+                    if (ImGui.ImageButton($"##icon{id}", _iconImGuiId, new Vector2(48, 48),
+                            new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W),
+                            Vector4.Zero, Vector4.One))
+                    {
+                        _inventorySelections.Enqueue(id);
+                    }
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip(name);
+                    ImGui.SameLine(0, 4);
+                    ImGui.Text(_hud.Inventory[id].ToString());
+                    ImGui.PopID();
+                    if ((i + 1) % perRow != 0) ImGui.SameLine();
                 }
-                if (ImGui.IsItemHovered()) ImGui.SetTooltip(name);
-                ImGui.PopID();
-                if (id % perRow != 0) ImGui.SameLine();
+            }
+            else
+            {
+                for (int id = 1; id < BlockRegistry.Count; id++)
+                {
+                    if (!BlockRegistry.IsInInventory(id)) continue;
+                    var uv = _blockIconUv[id];
+                    string name = BlockRegistry.GetById(id).DisplayName;
+                    ImGui.PushID(id);
+                    if (ImGui.ImageButton($"##icon{id}", _iconImGuiId, new Vector2(48, 48),
+                            new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W),
+                            Vector4.Zero, Vector4.One))
+                    {
+                        _inventorySelections.Enqueue(id);
+                    }
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip(name);
+                    ImGui.PopID();
+                    if (id % perRow != 0) ImGui.SameLine();
+                }
             }
 
             ImGui.EndChild();
@@ -5340,8 +5374,8 @@ void main() {
             }
             else if (m.Screen == GameScreen.CreateWorld)
             {
-                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 150f, size.Y / 2f - 120f), ImGuiCond.Always);
-                ImGui.SetNextWindowSize(new Vector2(300, 240), ImGuiCond.Always);
+                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 150f, size.Y / 2f - 150f), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(300, 300), ImGuiCond.Always);
                 ImGui.Begin("##createworld", windowFlags);
                 ImGui.Text("Create World");
                 ImGui.Spacing();
@@ -5355,6 +5389,17 @@ void main() {
                 m.WorldName = ReadBuffer(_worldNameBuffer);
                 ImGui.InputText("Seed (optional)", _seedBuffer, (uint)_seedBuffer.Length);
                 m.SeedInput = ReadBuffer(_seedBuffer);
+                ImGui.Spacing();
+                ImGui.Text("Mode");
+                if (ImGui.RadioButton("Creative", m.SelectedMode == GameMode.Creative))
+                {
+                    m.SelectedMode = GameMode.Creative;
+                }
+                ImGui.SameLine();
+                if (ImGui.RadioButton("Survival", m.SelectedMode == GameMode.Survival))
+                {
+                    m.SelectedMode = GameMode.Survival;
+                }
                 ImGui.Spacing();
                 if (ImGui.Button("Create World", new Vector2(220, 34)))
                 {
@@ -5553,6 +5598,7 @@ void main() {
             float startX = (displaySize.X - totalWidth) / 2f;
             float hotbarY = displaySize.Y - hotbarHeight - 16f;
 
+            bool survival = _hud.Mode == GameMode.Survival;
             uint textColor = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 1f));
 
             if (_hotbarImGuiId != IntPtr.Zero)
@@ -5637,13 +5683,35 @@ void main() {
                         drawList.AddRectFilled(new Vector2(iconX, iconY), new Vector2(iconX + iconSize2, iconY + iconSize2), iconColor);
                     }
                 }
+
+                // Survival: show how many of that block you own, in the slot corner.
+                if (survival && _hud.Inventory != null)
+                {
+                    int bid = (_hud.Hotbar != null && i < _hud.Hotbar.Count) ? _hud.Hotbar[i] : 0;
+                    if (bid > 0 && _hud.Inventory.TryGetValue(bid, out int count) && count > 0)
+                    {
+                        string countText = count.ToString();
+                        var textSize = ImGui.CalcTextSize(countText);
+                        drawList.AddText(
+                            new Vector2(slotTopLeft.X + slotSize - textSize.X - 3f, slotTopLeft.Y + slotSize - textSize.Y - 2f),
+                            textColor, countText);
+                    }
+                }
             }
+
+            // Mode label above the hotbar so you always know which world you're in.
+            string modeLabel = survival ? "SURVIVAL" : "CREATIVE";
+            uint modeColor = survival
+                ? ImGui.ColorConvertFloat4ToU32(new Vector4(0.9f, 0.35f, 0.35f, 1f))
+                : ImGui.ColorConvertFloat4ToU32(new Vector4(0.35f, 0.8f, 0.45f, 1f));
+            drawList.AddText(new Vector2(startX, hotbarY - 20f), modeColor, modeLabel);
 
             // Healthbar: one heart centered directly above the hotbar. Health 10..1 maps to the ten
             // filled hearts in reading order (top row left->right skipping the blank cell, then
             // middle row left->right); health 0 (death) is the dark r1c5 heart. Each point of
-            // damage removes one slice - the sprite gets progressively darker/emptier.
-            if (_healthbarImGuiId != IntPtr.Zero)
+            // damage removes one slice - the sprite gets progressively darker/emptier. Survival
+            // only: invulnerable creative players don't need a healthbar.
+            if (_healthbarImGuiId != IntPtr.Zero && survival)
             {
                 const float heartScale = 3f;
                 float heartSize = HealthbarSpriteSize * heartScale;

@@ -23,6 +23,8 @@ namespace CubeApp
         public GameScreen Screen = GameScreen.Title;
         public string WorldName = "World 1";
         public string SeedInput = "";
+        /// <summary>The mode chosen on the Create World screen (Creative by default).</summary>
+        public GameMode SelectedMode = GameMode.Creative;
 
         public bool CreateWorldClicked;
         public bool ResumeClicked;

@@ -71,10 +71,12 @@ namespace CubeApp
         // hardness, particles pop every 20%, and the block breaks at progress >= 1.
         private const float BaseBreakTime = 1.5f;    // seconds for hardness 1.0 (C++ BASE_BREAK_TIME)
         private const float BreakParticleInterval = 0.2f; // spawn shards every 20% progress
+        private const float CreativeBreakInterval = 0.2f; // creative: one instant break per 0.2s (~5/s)
         private (int x, int y, int z)? _miningTarget;
         private float _miningProgress;
         private int _miningBlockId;
         private float _miningBlockHardness;
+        private float _creativeBreakCooldown;
         // Camera ray direction captured once when mining starts (the line from the camera THROUGH
         // the mined block to the block behind it). The shrink cube slides along this direction so
         // it clamps toward the block behind the crosshair, not the hit face's normal.
@@ -113,10 +115,19 @@ namespace CubeApp
         // world lifecycle
         // ------------------------------------------------------------------
 
-        private void StartNewWorld(int seed, string name)
+        private void StartNewWorld(int seed, string name, GameMode mode = GameMode.Creative)
         {
             World?.Dispose();
             World = new GameWorld(seed, name, () => gpuRenderer, ChunkRenderRadius, Math.Max(1, Environment.ProcessorCount - 2));
+            World.Mode = mode;
+            // Creative starts flying; survival starts grounded with an empty hotbar (mine to earn).
+            World.FlyMode = mode == GameMode.Creative;
+            if (mode == GameMode.Survival)
+            {
+                for (int i = 0; i < GameWorld.HotbarSlots; i++) World.Hotbar[i] = BlockRegistry.AirId;
+                World.SelectedBlock = BlockRegistry.AirId;
+                World.SelectedSlot = 0;
+            }
             World.ChunkGenerated += OnChunkGenerated;
             World.ChunkUnloaded += OnChunkUnloaded;
             if (gpuRenderer != null)
@@ -341,7 +352,7 @@ namespace CubeApp
         {
             if (menu.CreateWorldClicked)
             {
-                StartNewWorld(ParseSeed(menu.SeedInput), menu.WorldName);
+                StartNewWorld(ParseSeed(menu.SeedInput), menu.WorldName, menu.SelectedMode);
             }
             else if (menu.LoadWorldClicked)
             {
@@ -395,7 +406,7 @@ namespace CubeApp
                 return;
             }
             StopNetworking();
-            StartNewWorld(ParseSeed(menu.SeedInput), menu.WorldName + " (host)");
+            StartNewWorld(ParseSeed(menu.SeedInput), menu.WorldName + " (host)", menu.SelectedMode);
             _netHost = new Net.NetHost(World, port);
             _netHost.Log += msg => System.Console.WriteLine($"[NET] {msg}");
             _netHost.SetLocalPlayerState(World.LocalPlayer);
@@ -577,7 +588,7 @@ namespace CubeApp
         private void LoadWorld(WorldSave save)
         {
             _loadSkipSpawn = true;
-            StartNewWorld(save.Seed, save.Name);
+            StartNewWorld(save.Seed, save.Name, (GameMode)save.Mode);
             foreach (var c in save.Chunks)
             {
                 World.Chunks.ApplySavedChunk(c.Layer, c.X, c.Z, c.Blocks, c.Meta);
@@ -799,7 +810,8 @@ namespace CubeApp
             if (_ignoreInteractFrames > 0) _ignoreInteractFrames--;
             if (screen == GameScreen.Playing && World != null)
             {
-                if (frameInput.ToggleFlyPressed) World.FlyMode = !World.FlyMode;
+                // Flight is a creative privilege.
+                if (frameInput.ToggleFlyPressed && World.IsCreative) World.FlyMode = !World.FlyMode;
                 if (frameInput.AdvanceTimePressed) World.AdvanceTime();
                 if (frameInput.ToggleGpuCullPressed)
                 {
@@ -829,7 +841,8 @@ namespace CubeApp
                     if (inventoryOpen) DisableMouseLook();
                     else EnableMouseLook();
                 }
-                if (frameInput.ToggleBiomeMenuPressed)
+                // Teleport menu is a creative sandbox convenience.
+                if (frameInput.ToggleBiomeMenuPressed && World.IsCreative)
                 {
                     biomeMenuOpen = !biomeMenuOpen;
                     if (biomeMenuOpen) DisableMouseLook();
@@ -839,12 +852,13 @@ namespace CubeApp
             if (frameInput.CycleRenderDistancePressed) CycleRenderDistance();
             if (screen == GameScreen.Playing && World != null)
             {
-                if (frameInput.SpawnMobPressed) World.Entities.SpawnDuck(World.PlayerPosition, World.PlayerYaw);
-                if (frameInput.SpawnCoyotePressed) World.Entities.SpawnCoyote(World.PlayerPosition, World.PlayerYaw);
-                if (frameInput.SpawnStevePressed) World.Entities.SpawnSteve(World.PlayerPosition, World.PlayerYaw);
-                if (frameInput.SpawnZombiePressed) World.Entities.SpawnMobById("zombie", World.PlayerPosition, World.PlayerYaw);
+                // Debug spawn + damage-test keys are creative-only toys.
+                if (frameInput.SpawnMobPressed && World.IsCreative) World.Entities.SpawnDuck(World.PlayerPosition, World.PlayerYaw);
+                if (frameInput.SpawnCoyotePressed && World.IsCreative) World.Entities.SpawnCoyote(World.PlayerPosition, World.PlayerYaw);
+                if (frameInput.SpawnStevePressed && World.IsCreative) World.Entities.SpawnSteve(World.PlayerPosition, World.PlayerYaw);
+                if (frameInput.SpawnZombiePressed && World.IsCreative) World.Entities.SpawnMobById("zombie", World.PlayerPosition, World.PlayerYaw);
                 // O = take 1 point of damage (healthbar slice test).
-                if (frameInput.DamageSelfPressed) World.DamagePlayer(1, DeathCause.DebugSelf);
+                if (frameInput.DamageSelfPressed && World.IsCreative) World.DamagePlayer(1, DeathCause.DebugSelf);
             }
             if (frameInput.ToggleThirdPersonPressed) thirdPersonView = !thirdPersonView;
             if (frameInput.SelectedSlot.HasValue && World != null) World.SetSelectedSlot(frameInput.SelectedSlot.Value);
@@ -914,6 +928,34 @@ namespace CubeApp
 
             if (tickInput.BreakHeld && _ignoreInteractFrames == 0)
             {
+                // Creative: near-instant breaking, but rate-limited so you can actually aim it
+                // (a block every ~0.2s instead of one per frame). Bedrock-like (infinite-hardness)
+                // blocks still can't be broken.
+                if (World.IsCreative)
+                {
+                    if (_creativeBreakCooldown > 0f)
+                    {
+                        _creativeBreakCooldown -= deltaSeconds;
+                        _miningTarget = null;
+                        _miningProgress = 0f;
+                        return;
+                    }
+                    var cpick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
+                    if (cpick.HasValue)
+                    {
+                        var target = cpick.Value.Remove;
+                        if (World.Chunks.TryGetLoadedBlock(target.x, target.y, target.z, out int id)
+                            && !float.IsPositiveInfinity(BlockRegistry.HardnessOf(id)))
+                        {
+                            DeleteBlockAt(target.x, target.y, target.z);
+                        }
+                    }
+                    _creativeBreakCooldown = CreativeBreakInterval;
+                    _miningTarget = null;
+                    _miningProgress = 0f;
+                    return;
+                }
+
                 var pick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
                 if (pick.HasValue)
                 {
@@ -1250,6 +1292,7 @@ namespace CubeApp
                 SelectedSlot = World.SelectedSlot, WorldSeed = World.Seed,
                 BiomeText = World.ChunkProvider?.BiomeNameAt((int)Math.Floor(World.PlayerPosition.X), (int)Math.Floor(World.PlayerPosition.Z)) ?? string.Empty,
                 Hotbar = World.Hotbar, HighlightWorldQuad = highlightQuad,
+                Mode = World.Mode, Inventory = World.Inventory,
                 PlayerHealth = World.LocalPlayer.Health,
                 DeathCause = World.LocalPlayer.DeathCause,
                 PlayerX = World.PlayerPosition.X,
