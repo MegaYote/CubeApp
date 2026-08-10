@@ -76,6 +76,9 @@ namespace CubeApp.Renderer
         /// <summary>0..1 mining progress on the highlighted block (0 = not mining). The renderer
         /// darkens the block-highlight quad as the player mines it, like Cubuild's crack overlay.</summary>
         public float MiningProgress;
+        /// <summary>Remaining seconds of the first-person hand's place-jab animation (set by
+        /// Program when a block placement succeeds).</summary>
+        public float HandPoke;
 
         /// <summary>World position + block id of the block currently being mined (for the
         /// shrinking-block overlay). Only valid while MiningProgress > 0.</summary>

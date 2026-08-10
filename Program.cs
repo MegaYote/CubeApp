@@ -77,6 +77,7 @@ namespace CubeApp
         private int _miningBlockId;
         private float _miningBlockHardness;
         private float _creativeBreakCooldown;
+        private float _handPokeTimer;
         // Camera ray direction captured once when mining starts (the line from the camera THROUGH
         // the mined block to the block behind it). The shrink cube slides along this direction so
         // it clamps toward the block behind the crosshair, not the hit face's normal.
@@ -893,6 +894,7 @@ namespace CubeApp
             if (World == null) return;
             UpdateNetworking(tickInput, deltaSeconds);
             World.StepSimulation(tickInput, deltaSeconds);
+            if (_handPokeTimer > 0f) _handPokeTimer = Math.Max(0f, _handPokeTimer - deltaSeconds);
 
             // Death: when health is fully depleted, stop the sim and show the respawn screen.
             if (World.LocalPlayer.Health <= 0)
@@ -1175,6 +1177,7 @@ namespace CubeApp
             if (World.TryPlaceSelectedBlock(World.LocalPlayer, World.PlayerPosition, World.GetCameraForward()))
             {
                 needsMeshUpdate = true;
+                _handPokeTimer = 0.3f; // first-person hand does a quick jab
             }
         }
 
@@ -1310,6 +1313,7 @@ namespace CubeApp
                 MiningBlockPos = miningBlockPos,
                 MiningBlockId = miningBlockId,
                 MiningBlockNormal = miningBlockNormal,
+                HandPoke = _handPokeTimer,
             };
         }
 

@@ -249,6 +249,25 @@ namespace CubeApp.Renderer
         private DeviceBuffer? _playerVertexBuffer;
         private DeviceBuffer? _playerIndexBuffer;
         private uint _playerVertexCapacity;
+
+        // ---- First-person hand viewmodel ----------------------------------------------
+        // The player's right arm rendered attached to the camera (bottom-right corner) in CAMERA
+        // space with depth testing OFF, so it's always visible like MC's hand. Animates: idle
+        // sway, rhythmic mining chop while breaking, and a quick jab on placement.
+        private Pipeline? _handPipeline;
+        private DeviceBuffer? _handVertexBuffer;
+        private DeviceBuffer? _handIndexBuffer;
+        private DeviceBuffer? _handProjBuffer;
+        private ResourceSet? _handProjSet;
+        private float[] _handMesh = Array.Empty<float>(); // pos3 + uv2 + shade4 per vertex, shoulder at origin
+        private ushort[] _handIndices = Array.Empty<ushort>();
+        private bool _firstPersonCamera;
+        private float _handSwingPhase;
+        private float _handWalkPhase;
+        private float _handWalkAmount;
+        private float _handPunchTime;
+        private float _lastHandTime;
+        private readonly System.Diagnostics.Stopwatch _handClock = System.Diagnostics.Stopwatch.StartNew();
         private uint _playerIndexCapacity;
         private IReadOnlyList<CubeApp.DuckInstance> _playerInstances = Array.Empty<CubeApp.DuckInstance>();
         private float[] _playerVertexScratch = Array.Empty<float>();
@@ -835,6 +854,28 @@ namespace CubeApp.Renderer
             {
                 _playerVertsPerInstance += bone.Vertices.Length;
                 _playerIndicesPerInstance += bone.Indices.Length;
+            }
+
+            // Extract the right arm as the first-person hand mesh (shoulder pivot at the origin).
+            foreach (var bone in _playerBones)
+            {
+                if (bone.Id != PlayerBoneId.RightArm) continue;
+                _handIndices = (ushort[])bone.Indices.Clone();
+                _handMesh = new float[bone.Vertices.Length * 9];
+                int h = 0;
+                foreach (var v in bone.Vertices)
+                {
+                    _handMesh[h++] = v.X - bone.PivotX;
+                    _handMesh[h++] = v.Y - bone.PivotY;
+                    _handMesh[h++] = v.Z - bone.PivotZ;
+                    _handMesh[h++] = v.U;
+                    _handMesh[h++] = v.V;
+                    _handMesh[h++] = v.Shade;
+                    _handMesh[h++] = v.Shade;
+                    _handMesh[h++] = v.Shade;
+                    _handMesh[h++] = 1f;
+                }
+                break;
             }
 
             try
@@ -1878,6 +1919,43 @@ void main() {
 
             _modelPipeline = factory.CreateGraphicsPipeline(pipelineDesc);
 
+            // First-person hand: same model shaders (camera-space positions + player skin), but
+            // depth testing DISABLED so the hand always renders on top of the world, and set 0 is
+            // a dedicated camera-space projection (no view transform - the hand is positioned
+            // relative to the eye each frame on the CPU).
+            string handVsCode = @"#version 450
+layout(location=0) in vec3 aPosition;
+layout(location=1) in vec2 aUV;
+layout(location=2) in vec4 aColor;
+layout(location=0) out vec2 vUV;
+layout(location=1) out vec4 vColor;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() { vUV = aUV; vColor = aColor; gl_Position = projView * vec4(aPosition, 1.0); }";
+            var handVsSpirv = SpirvCompilation.CompileGlslToSpirv(handVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var handShaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, handVsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main"));
+
+            _handPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleOverrideBlend,
+                DepthStencilState = DepthStencilStateDescription.Disabled,
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout },
+                ShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { handShaders[0], handShaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
+
+            _handProjBuffer = factory.CreateBuffer(new BufferDescription(64, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _handProjSet = factory.CreateResourceSet(new ResourceSetDescription(_projViewLayout, _handProjBuffer));
+            // Size from the actual hand mesh (24 verts / 36 indices for the arm cube) - the mesh
+            // is built in LoadPlayerResources which runs before this.
+            _handVertexBuffer = factory.CreateBuffer(new BufferDescription(
+                (uint)Math.Max(_handMesh.Length * sizeof(float), 512), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            _handIndexBuffer = factory.CreateBuffer(new BufferDescription(
+                (uint)Math.Max(_handIndices.Length * sizeof(ushort), 128), BufferUsage.IndexBuffer));
+
             if (_duckView != null && _duckSampler != null)
             {
                 _duckTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _duckView, _duckSampler));
@@ -2775,6 +2853,140 @@ void main() { outColor = vec4(1.0); }";
             _gd.UpdateBuffer(_crosshairIndexBuffer, 0, idx);
         }
 
+        // First-person hand: the player's right arm rendered in CAMERA space with depth off so
+        // it's always visible like MC's hand. The shoulder sits off-screen up-right and the arm
+        // angles down toward the camera, so the HAND lands in the bottom-right quadrant.
+        private void DrawHand(CommandList cl)
+        {
+            if (_handPipeline == null || _handVertexBuffer == null || _handMesh.Length == 0 || _playerTextureSet == null) return;
+            var menu = _hud.Menu;
+            bool playing = menu == null || menu.Screen == GameScreen.Playing;
+            if (!playing || !_firstPersonCamera || _hud.InventoryOpen || _hud.BiomeMenuOpen) return;
+
+            const float handScale = 0.9f;    // arm sized like MC's first-person arm
+            const float sx = 0.45f;          // shoulder (camera space): bottom-right, off-screen
+            const float sy = -0.80f;
+            const float sz = -0.60f;
+            const float basePitch = -0.5f;   // idle: arm tilted forward, fist aimed at the block
+            const float baseYaw = -0.45f;    // idle: arm leans toward the screen center
+
+            // Walk bob: the hand rides the walk cycle like MC (subtle, only when grounded/moving).
+            float walkBob = (float)Math.Abs(Math.Sin(_handWalkPhase)) * 0.05f * Math.Min(1f, _handWalkAmount);
+
+            // Idle: gentle breathing sway.
+            float now = (float)_handClock.Elapsed.TotalSeconds;
+            float idle = 0.03f * (float)Math.Sin(now * 2.0);
+
+            // Discrete swing envelope, MC-style: each jab is 0..1 progress and the sqrt() easing
+            // makes the strike snap out fast then decelerate. Driven by REAL delta time (not a
+            // per-frame constant) so the speed is identical at any framerate. The punch ONLY plays
+            // forward - it punches out, holds, then snaps back to rest and repeats (no reverse
+            // playback), so it reads as a rhythm of strikes.
+            float handDt = now - _lastHandTime;
+            _lastHandTime = now;
+            if (handDt > 0.1f) handDt = 0.1f; // clamp long stalls so a hitch doesn't teleport the arm
+            float s = 0f; // combined strike progress
+            if (_hud.MiningProgress > 0f)
+            {
+                _handPunchTime += handDt;
+                const float cycle = 0.45f;
+                float t = _handPunchTime % cycle;
+                if (t < 0.35f) s = t / 0.35f; // punch OUT, then snap back and repeat instantly
+                else s = 1f;                  // brief hold at full extension (no rest gap)
+            }
+            else
+            {
+                _handPunchTime = 0f;
+            }
+            float pokeS = 0f;
+            if (_hud.HandPoke > 0f)
+            {
+                float t = Math.Clamp(1f - _hud.HandPoke / 0.35f, 0f, 1f);
+                pokeS = (float)Math.Sin(t * Math.PI);
+            }
+            s = Math.Min(1f, s + pokeS);
+
+            // The punch: the fist STRETCHES FORWARD (deep toward the block) and rises toward the
+            // crosshair, with a moderate forward pitch on the arm. Then it swings back to rest.
+            float env = (float)Math.Sin(Math.Sqrt(Math.Max(s, 0f)) * Math.PI);
+            float pitch = basePitch + idle - env * 0.6f;
+            float yaw = baseYaw + env * 0.3f;
+            float roll = env * 0.2f;
+            float tx = -env * 0.08f;  // sweep toward screen center
+            float ty = env * 0.12f + (float)Math.Sin(Math.Sqrt(Math.Max(s, 0f)) * Math.PI * 2.0) * 0.06f;
+            float tz = -env * 0.25f;  // the big forward stretch
+
+            float cp = (float)Math.Cos(pitch), sp = (float)Math.Sin(pitch);
+            float cy = (float)Math.Cos(yaw), syy = (float)Math.Sin(yaw);
+            float cr = (float)Math.Cos(roll), sr = (float)Math.Sin(roll);
+
+            float[] verts = new float[_handMesh.Length];
+            for (int i = 0; i < _handMesh.Length; i += 9)
+            {
+                // Flip the arm so it points UP from the shoulder, then rotate pitch -> yaw -> roll
+                // around the shoulder (origin) for the chop, then place + sweep toward the block.
+                float x = _handMesh[i] * handScale;
+                float y = _handMesh[i + 1] * handScale;
+                float z = _handMesh[i + 2] * handScale;
+                float xf = -x;
+                float yf = -y;
+                float zf = z;
+                float y1 = yf * cp - zf * sp;
+                float z1 = yf * sp + zf * cp;
+                float x2 = xf * cy + z1 * syy;
+                float z2 = -xf * syy + z1 * cy;
+                float x3 = x2 * cr - y1 * sr;
+                float y3 = x2 * sr + y1 * cr;
+                verts[i] = x3 + sx + tx;
+                verts[i + 1] = y3 + sy + walkBob + ty;
+                verts[i + 2] = z2 + sz + tz;
+                verts[i + 3] = _handMesh[i + 3];
+                verts[i + 4] = _handMesh[i + 4];
+                verts[i + 5] = _handMesh[i + 5];
+                verts[i + 6] = _handMesh[i + 6];
+                verts[i + 7] = _handMesh[i + 7];
+                verts[i + 8] = _handMesh[i + 8];
+            }
+            _gd.UpdateBuffer(_handVertexBuffer, 0, verts);
+
+            // The hand renders with depth OFF (it must always draw over the world), so the arm's
+            // six faces need explicit back-to-front ordering - otherwise a hidden face can paint
+            // over a visible one where they overlap on screen and a face looks invisible.
+            float[] faceZ = new float[6];
+            for (int f = 0; f < 6; f++)
+            {
+                float zSum = 0f;
+                for (int k = 0; k < 4; k++)
+                {
+                    zSum += verts[(f * 4 + k) * 9 + 2];
+                }
+                faceZ[f] = zSum / 4f;
+            }
+            int[] order = { 0, 1, 2, 3, 4, 5 };
+            Array.Sort(order, (a, b) => faceZ[a].CompareTo(faceZ[b])); // ascending z: farthest first, nearest last
+            ushort[] sortedIdx = new ushort[_handIndices.Length];
+            for (int f = 0; f < 6; f++)
+            {
+                int src = order[f] * 6;
+                int dst = f * 6;
+                for (int k = 0; k < 6; k++) sortedIdx[dst + k] = _handIndices[src + k];
+            }
+            _gd.UpdateBuffer(_handIndexBuffer, 0, sortedIdx);
+
+            // Camera-space projection: no view transform (hand positioned relative to the eye),
+            // with a close near plane so the hand never clips.
+            float aspect = _sc.Framebuffer.Width / (float)Math.Max(1f, _sc.Framebuffer.Height);
+            var proj = Matrix4x4.CreatePerspectiveFieldOfView((float)(Math.PI / 2.0), aspect, 0.05f, 100f);
+            _gd.UpdateBuffer(_handProjBuffer, 0, ref proj);
+
+            cl.SetPipeline(_handPipeline);
+            cl.SetGraphicsResourceSet(0, _handProjSet);
+            if (_playerTextureSet != null) cl.SetGraphicsResourceSet(1, _playerTextureSet);
+            cl.SetVertexBuffer(0, _handVertexBuffer);
+            cl.SetIndexBuffer(_handIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed((uint)_handIndices.Length, 1, 0, 0, 0);
+        }
+
         private void DrawCrosshair(CommandList cl)
         {
             if (_crosshairPipeline == null || _crosshairVertexBuffer == null) return;
@@ -3150,7 +3362,8 @@ void main() { outColor = vec4(1.0); }";
             DrawShrinkCube(cl);
             DrawChunkBorders(cl);
 
-            // Crosshair draws BEFORE the ImGui UI pass, so menu windows naturally paint over it.
+            // Hand + crosshair draw before the ImGui UI pass, so menu windows cover them.
+            DrawHand(cl);
             DrawCrosshair(cl);
 
             _imguiRenderer.Update(1f / 60f, _uiInputSnapshot ?? NullInputSnapshot.Instance);
@@ -6601,6 +6814,9 @@ void main() { outColor = vec4(1.0); }";
         public void UpdateCamera(CubeApp.Point3D position, float yaw, float pitch,
             float walkPhase = 0f, float walkAmount = 0f, bool firstPerson = false, bool grounded = true)
         {
+            _firstPersonCamera = firstPerson;
+            _handWalkPhase = walkPhase;
+            _handWalkAmount = walkAmount;
             var proj = Matrix4x4.CreatePerspectiveFieldOfView((float)(Math.PI / 2.0), (float)_sc.Framebuffer.Width / _sc.Framebuffer.Height, _nearPlane, _farPlane);
             var yawRad = yaw * (float)Math.PI / 180f;
             var pitchRad = pitch * (float)Math.PI / 180f;
