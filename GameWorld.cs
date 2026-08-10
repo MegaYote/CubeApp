@@ -514,6 +514,8 @@ namespace CubeApp
             LocalPlayer.Health = Math.Max(0, LocalPlayer.Health - amount);
             LocalPlayer.TimeSinceDamage = 0f;
             LocalPlayer.RegenAccumulator = 0f;
+            // Hurt flash + flail on the third-person model (same 0.2s as the duck).
+            LocalPlayer.HurtTimer = Math.Max(LocalPlayer.HurtTimer, 0.2f);
             if (LocalPlayer.Health <= 0)
             {
                 LocalPlayer.DeathCause = cause;
@@ -663,12 +665,25 @@ namespace CubeApp
             WorldTime += advance;
             _worldTimeAccumulator -= advance;
             StepRegen(deltaSeconds);
+            if (LocalPlayer.HurtTimer > 0f)
+                LocalPlayer.HurtTimer = Math.Max(0f, LocalPlayer.HurtTimer - deltaSeconds);
             // Advance the death roll while dead (capped so it doesn't spin forever).
             if (LocalPlayer.Health <= 0)
                 LocalPlayer.DeathTimer = Math.Min(1f, LocalPlayer.DeathTimer + deltaSeconds);
             StepItemDrops(deltaSeconds);
             BlockTicks?.Tick(deltaSeconds);
             StepPlayer(LocalPlayer, tickInput, deltaSeconds);
+            // Third-person body yaw: the body lags the look direction (slowly while idle, faster
+            // while moving/flying) so the head can swivel ahead of the body like a real person.
+            if (LocalPlayer.Health > 0)
+            {
+                float camYaw = LocalPlayer.Yaw * (float)Math.PI / 180f;
+                float bodyYaw = LocalPlayer.BodyYaw;
+                float delta = NormalizeRadians(camYaw - bodyYaw);
+                float turnRate = (LocalPlayer.WalkAmount > 0.05f || LocalPlayer.FlyMode) ? 9f : 3f;
+                float maxStep = turnRate * deltaSeconds;
+                LocalPlayer.BodyYaw = Math.Abs(delta) <= maxStep ? camYaw : bodyYaw + Math.Sign(delta) * maxStep;
+            }
             Entities.Update(deltaSeconds, LocalPlayer.Position, true);
             int chunkX = WorldToChunkCoord(LocalPlayer.Position.X);
             int chunkZ = WorldToChunkCoord(LocalPlayer.Position.Z);
@@ -1442,6 +1457,15 @@ namespace CubeApp
             float result = yaw % 360f;
             if (result < 0f) result += 360f;
             return result;
+        }
+
+        /// <summary>Normalizes an angle in radians to the [-PI, PI] range.</summary>
+        private static float NormalizeRadians(float a)
+        {
+            const float twoPi = (float)(Math.PI * 2.0);
+            while (a > (float)Math.PI) a -= twoPi;
+            while (a < -(float)Math.PI) a += twoPi;
+            return a;
         }
 
         private static bool RayBoxHit(Point3D o, Point3D d,

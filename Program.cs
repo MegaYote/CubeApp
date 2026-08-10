@@ -1503,13 +1503,23 @@ namespace CubeApp
             var w = World;
             var feet = new Point3D(w.PlayerPosition.X, w.PlayerPosition.Y - GameWorld.EyeHeight, w.PlayerPosition.Z);
             float yawRad = w.PlayerYaw * (float)Math.PI / 180f;
+            // Body faces the lagging BodyYaw; the head swivels the difference (clamped so it
+            // doesn't rotate through the neck) - the classic MC third-person head/body split.
+            float bodyYaw = w.LocalPlayer.BodyYaw;
+            float headLocal = yawRad - bodyYaw;
+            while (headLocal > (float)Math.PI) headLocal -= 2f * (float)Math.PI;
+            while (headLocal < -(float)Math.PI) headLocal += 2f * (float)Math.PI;
+            headLocal = Math.Clamp(headLocal, -1.22f, 1.22f); // ~70 deg max swivel
+            // Head pitch follows the camera look (clamped so the neck doesn't bend absurdly).
+            float headPitch = Math.Clamp(w.LocalPlayer.Pitch * (float)Math.PI / 180f, -1.05f, 1.05f);
             bool dead = w.LocalPlayer.Health <= 0;
             return new MobRenderData(
-                "player", feet, yawRad, 0f,
+                "player", feet, bodyYaw, headLocal,
                 w.PlayerWalkPhase, dead ? 0f : w.PlayerWalkAmount, 0f, 0f, 0f,
                 (float)w.PlayerVelocity.Y, w.PlayerGrounded,
                 dead, dead ? Math.Clamp(w.LocalPlayer.DeathTimer / 0.5f, 0f, 1f) : 0f,
-                w.LocalPlayer.DeathRollDir, 0f);
+                w.LocalPlayer.DeathRollDir, dead ? 0f : w.LocalPlayer.HurtTimer,
+                headPitch);
         }
 
         /// <summary>

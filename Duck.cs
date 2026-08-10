@@ -12,6 +12,7 @@ namespace CubeApp
         public readonly Point3D Position;   // feet position (model origin) in world space
         public readonly float Yaw;          // radians, body rotation about +Y
         public readonly float HeadYawLocal; // radians, head yaw relative to body (already clamped)
+        public readonly float HeadPitchLocal; // radians, head pitch relative to body (already clamped)
         public readonly float WalkPhase;    // radians, drives leg/wing swing
         public readonly float WalkAmount;   // 0..1, how briskly it's walking
         public readonly float AnimTime;     // seconds, advances only while moving (GLB walk cycles)
@@ -28,11 +29,13 @@ namespace CubeApp
             Point3D position, float yaw, float headYawLocal,
             float walkPhase, float walkAmount, float animTime, float animBlend, float flapPhase,
             float velocityY, bool onGround,
-            bool isDead, float deathT, float deathRollDir, float hurtTimer)
+            bool isDead, float deathT, float deathRollDir, float hurtTimer,
+            float headPitchLocal = 0f)
         {
             Position = position;
             Yaw = yaw;
             HeadYawLocal = headYawLocal;
+            HeadPitchLocal = headPitchLocal;
             WalkPhase = walkPhase;
             WalkAmount = walkAmount;
             AnimTime = animTime;

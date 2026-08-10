@@ -13,6 +13,9 @@ namespace CubeApp
         public Point3D Velocity;
         public bool Grounded;
         public bool FlyMode;
+        /// <summary>Third-person body facing (radians). Lags the look yaw so the head can swivel
+        /// independently like a real person turning.</summary>
+        public float BodyYaw;
         public float WalkPhase;
         public float WalkAmount;
 
@@ -32,6 +35,9 @@ namespace CubeApp
         /// <summary>Seconds since the player last took damage. Healing waits for the delay, then
         /// restores one heart slice per regen interval.</summary>
         public float TimeSinceDamage;
+        /// <summary>Seconds of remaining hurt flash + flail on the third-person model (red tint,
+        /// small wobble). 0 = not hurt.</summary>
+        public float HurtTimer;
         /// <summary>Accumulator toward the next heart-slice heal.</summary>
         public float RegenAccumulator;
         /// <summary>Seconds until the next heart slice restores (8.5 + random 1..2 fluctuation).</summary>

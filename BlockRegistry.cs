@@ -36,6 +36,8 @@ namespace CubeApp
         private static int[] _lightEmission = Array.Empty<int>();
         private static float[] _alpha = Array.Empty<float>();
         private static float[] _hardness = Array.Empty<float>();
+        private static string[] _toolType = Array.Empty<string>();
+        private static bool[] _toolRequired = Array.Empty<bool>();
         private static uint[] _mapColor = Array.Empty<uint>();
         private static int[] _hotbar = Array.Empty<int>();
         public static bool Loaded { get; private set; }
@@ -68,6 +70,8 @@ namespace CubeApp
             public bool Gravity { get; set; } = false;
             public string? MapColor { get; set; } = "#000000";
             public double Hardness { get; set; } = 0; // 0 => code default
+            public string? ToolType { get; set; } = ""; // "pickaxe"/"axe"/"shovel"/... empty = none
+            public bool ToolRequired { get; set; } = false; // true = needs the tool to drop items
         }
 
         /// <summary>Default survival-mining hardness (Cubuild C++ port). Blocks that share an id
@@ -148,6 +152,8 @@ namespace CubeApp
                     Gravity = dto.Gravity,
                     MapColor = ParseMapColor(dto.MapColor ?? "#000000"),
                     Hardness = dto.Hardness > 0 ? (float)dto.Hardness : DefaultHardness(dto.Id),
+                    ToolType = dto.ToolType ?? "",
+                    ToolRequired = dto.ToolRequired,
                 };
 
                 // air has no faces; everything else must define at least an "all" tile.
@@ -170,6 +176,8 @@ namespace CubeApp
             _transparent = new bool[Count];
             _alpha = new float[Count];
             _hardness = new float[Count];
+            _toolType = new string[Count];
+            _toolRequired = new bool[Count];
             _mapColor = new uint[Count];
             _cross = new bool[Count];
             _cutout = new bool[Count];
@@ -188,6 +196,8 @@ namespace CubeApp
                 _transparent[i] = defs[i].Transparent;
                 _alpha[i] = defs[i].Alpha;
                 _hardness[i] = defs[i].Hardness;
+                _toolType[i] = defs[i].ToolType ?? "";
+                _toolRequired[i] = defs[i].ToolRequired;
                 _mapColor[i] = defs[i].MapColor;
                 _inventory[i] = defs[i].Inventory;
                 _lightEmission[i] = defs[i].LightEmission;
@@ -268,6 +278,10 @@ namespace CubeApp
         public static int LightEmissionOf(int id) => id > 0 && id < Count ? _lightEmission[id] : 0;
         public static float Alpha(int id) => _alpha[id];
         public static float HardnessOf(int id) => id >= 0 && id < Count ? _hardness[id] : 1f;
+        /// <summary>Tool type that mines this block most efficiently ("" = none/any tool).</summary>
+        public static string ToolTypeOf(int id) => id > 0 && id < Count ? _toolType[id] : "";
+        /// <summary>True when the matching tool is required for this block to drop an item.</summary>
+        public static bool ToolRequiredOf(int id) => id > 0 && id < Count && _toolRequired[id];
         public static uint MapColorOf(int id) => _mapColor[id];
         public static TextureRect FaceTexture(int id, Point3D normal) => _defs[id].FaceTexture(normal);
 

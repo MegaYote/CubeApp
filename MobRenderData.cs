@@ -10,6 +10,7 @@ namespace CubeApp
         public readonly Point3D Position;
         public readonly float Yaw;
         public readonly float HeadYawLocal;
+        public readonly float HeadPitchLocal;
         public readonly float WalkPhase;
         public readonly float WalkAmount;
         public readonly float AnimTime;
@@ -37,12 +38,14 @@ namespace CubeApp
             bool isDead,
             float deathT,
             float deathRollDir,
-            float hurtTimer)
+            float hurtTimer,
+            float headPitchLocal = 0f)
         {
             MobType = mobType;
             Position = position;
             Yaw = yaw;
             HeadYawLocal = headYawLocal;
+            HeadPitchLocal = headPitchLocal;
             WalkPhase = walkPhase;
             WalkAmount = walkAmount;
             AnimTime = animTime;

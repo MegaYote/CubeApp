@@ -57,6 +57,20 @@ namespace CubeApp
         /// while, bedrocks are unbreakable.</summary>
         public float Hardness { get; set; } = 1f;
 
+        /// <summary>
+        /// Which tool type mines this block more efficiently (e.g. "pickaxe", "axe", "shovel").
+        /// Empty string = no tool preference (mines at base speed with anything). Configurable per
+        /// block in blocks.json as <c>"toolType": "pickaxe"</c>.
+        /// </summary>
+        public string ToolType { get; set; } = "";
+
+        /// <summary>
+        /// Whether the matching tool is REQUIRED for this block to drop an item when broken.
+        /// False (default) = it always drops; true = breaking without the right tool drops
+        /// nothing. Configurable in blocks.json as <c>"toolRequired": true</c>.
+        /// </summary>
+        public bool ToolRequired { get; set; } = false;
+
         /// <summary>Picks the atlas tile for a given face normal, honouring top/bottom/side overrides.</summary>
         public TextureRect FaceTexture(Point3D normal)
         {
