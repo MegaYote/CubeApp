@@ -1011,39 +1011,28 @@ namespace CubeApp
             int chunkZ = WorldToChunkCoord(LocalPlayer.Position.Z);
             // Request/unload scans cost O(radius^2) + O(loadedChunks); only run them when the
             // player actually enters a new chunk column, the render distance changed, OR the
-            // player crosses a vertical streaming threshold (digging straight down in one column
-            // keeps X/Z constant but must still wake the deep/sky layer streams).
+            // player crosses into a different layer (digging straight down in one column
+            // keeps X/Z constant but must still wake the new layer).
             double py = LocalPlayer.Position.Y;
-            bool crossedDeep = (py < DeepStreamThreshold) != _lastBelowDeep;
-            bool crossedSky = (py > SkyStreamThreshold) != _lastAboveSky;
-            if (_forceChunkStream || chunkX != _lastStreamChunkX || chunkZ != _lastStreamChunkZ || crossedDeep || crossedSky)
+            int playerLayer = ChunkManager.LayerForWorldY((int)py);
+            bool crossedLayer = playerLayer != _lastPlayerLayer;
+            if (_forceChunkStream || chunkX != _lastStreamChunkX || chunkZ != _lastStreamChunkZ || crossedLayer)
             {
                 _forceChunkStream = false;
                 _lastStreamChunkX = chunkX;
                 _lastStreamChunkZ = chunkZ;
-                _lastBelowDeep = py < DeepStreamThreshold;
-                _lastAboveSky = py > SkyStreamThreshold;
-                Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, ChunkManager.GroundLayer);
-                // The deep layer only streams when the player digs down (lazy allocation).
-                if (py < DeepStreamThreshold)
-                {
-                    Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, ChunkManager.DeepLayer);
-                }
-                // The sky layer only streams when the player climbs into the stratosphere.
-                if (py > SkyStreamThreshold)
-                {
-                    Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, ChunkManager.SkyLayer);
-                }
+                _lastPlayerLayer = playerLayer;
+                // Only stream the chunk layer the player is standing in — deep, ground, or sky.
+                // The other two layers sit idle until the player crosses into them, saving CPU
+                // and keeping generation focused on the one layer that matters right now.
+                Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, playerLayer);
                 var unloaded = Chunks.UnloadChunksOutside(chunkX, chunkZ, ChunkRenderRadius);
                 foreach (var uc in unloaded) ChunkUnloaded?.Invoke(uc);
             }
             UpdateHighFill();
         }
 
-        private const double DeepStreamThreshold = 0.0;
-        private const double SkyStreamThreshold = 350.0;
-        private bool _lastBelowDeep;
-        private bool _lastAboveSky;
+        private int _lastPlayerLayer = ChunkManager.GroundLayer;
 
         /// <summary>Day/night clock in world ticks. Full cycle = 24000 ticks.</summary>
         public long WorldTime { get; private set; }
