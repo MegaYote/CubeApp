@@ -1,5 +1,5 @@
 {
-  "hotbar": [ "grass", "dirt", "stone", "cobblestone", "sand", "planks", "log", "leaves", "glass", "bricks" ],
+  "hotbar": [ "grass", "dirt", "stone", "cobblestone", "sand", "planks", "log", "leaves", "glass", "torch" ],
   "blocks": [
     { "id": "air",             "displayName": "Air",             "solid": false, "opaque": false, "transparent": false, "alpha": 1.0,  "mapColor": "#000000" },
     { "id": "grass",           "displayName": "Grass",           "texture": "0,0", "mapColor": "#228B22" },
@@ -127,6 +127,8 @@
     { "id": "red_plastic",     "displayName": "Red Plastic",     "texture": "1,12", "top": "0,12", "bottom": "2,12", "mapColor": "#E03030" },
     { "id": "black_plastic",   "displayName": "Black Plastic",   "texture": "1,13", "top": "0,13", "bottom": "2,13", "mapColor": "#2A2A2A" },
 
-    { "id": "green_mushroom",  "displayName": "Green Mushroom",  "texture": "15,1", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#3A8A3A" }
+    { "id": "green_mushroom",  "displayName": "Green Mushroom",  "texture": "15,1", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#3A8A3A" },
+
+    { "id": "torch",           "displayName": "Torch",           "texture": "12,2", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "lightEmission": 14, "mapColor": "#FFAA00" }
   ]
 }

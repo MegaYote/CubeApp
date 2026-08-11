@@ -203,9 +203,10 @@ namespace CubeApp
                 return false;
             }
 
+            int oldId = chunk[localX, localY, localZ];
             chunk[localX, localY, localZ] = blockId;
             chunk.SetMeta(localX, localY, localZ, (byte)meta);
-            MarkDirty(chunkX, chunkZ, localX, localZ, layer);
+            MarkDirty(chunkX, chunkZ, localX, localZ, layer, blockId, oldId);
             return true;
         }
 
@@ -238,7 +239,7 @@ namespace CubeApp
             return true;
         }
 
-        private void MarkDirty(int chunkX, int chunkZ, int localX, int localZ, int layer)
+        private void MarkDirty(int chunkX, int chunkZ, int localX, int localZ, int layer, int blockId = 0, int oldId = 0)
         {
             if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk))
             {
@@ -249,23 +250,52 @@ namespace CubeApp
 
             chunk.NeedsRemesh = true;
 
-            if (localX == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ), out var left))
-                left.NeedsRemesh = true;
-            if (localX == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ), out var right))
-                right.NeedsRemesh = true;
-            if (localZ == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ - 1), out var back))
-                back.NeedsRemesh = true;
-            if (localZ == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ + 1), out var front))
-                front.NeedsRemesh = true;
+            // Light-emitting blocks (torches, glowstone) spread light across the entire 3×3
+            // lighting region, not just border faces. Always wake neighbours so their LightGrids
+            // get re-baked with the new emission.
+            bool isEmitter = BlockRegistry.LightEmissionOf(blockId) > 0 || BlockRegistry.LightEmissionOf(oldId) > 0;
 
-            if (localX == 0 && localZ == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ - 1), out var diagNW))
-                diagNW.NeedsRemesh = true;
-            if (localX == ChunkSize - 1 && localZ == 0 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ - 1), out var diagNE))
-                diagNE.NeedsRemesh = true;
-            if (localX == 0 && localZ == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ + 1), out var diagSW))
-                diagSW.NeedsRemesh = true;
-            if (localX == ChunkSize - 1 && localZ == ChunkSize - 1 && loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ + 1), out var diagSE))
-                diagSE.NeedsRemesh = true;
+            if (isEmitter || localX == 0)
+            {
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ), out var left))
+                    left.NeedsRemesh = true;
+            }
+            if (isEmitter || localX == ChunkSize - 1)
+            {
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ), out var right))
+                    right.NeedsRemesh = true;
+            }
+            if (isEmitter || localZ == 0)
+            {
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ - 1), out var back))
+                    back.NeedsRemesh = true;
+            }
+            if (isEmitter || localZ == ChunkSize - 1)
+            {
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ + 1), out var front))
+                    front.NeedsRemesh = true;
+            }
+
+            if (isEmitter || (localX == 0 && localZ == 0))
+            {
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ - 1), out var diagNW))
+                    diagNW.NeedsRemesh = true;
+            }
+            if (isEmitter || (localX == ChunkSize - 1 && localZ == 0))
+            {
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ - 1), out var diagNE))
+                    diagNE.NeedsRemesh = true;
+            }
+            if (isEmitter || (localX == 0 && localZ == ChunkSize - 1))
+            {
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ + 1), out var diagSW))
+                    diagSW.NeedsRemesh = true;
+            }
+            if (isEmitter || (localX == ChunkSize - 1 && localZ == ChunkSize - 1))
+            {
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ + 1), out var diagSE))
+                    diagSE.NeedsRemesh = true;
+            }
         }
 
         public bool TryGetLoadedBlock(int worldX, int worldY, int worldZ, out int blockId)
