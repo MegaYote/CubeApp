@@ -71,6 +71,12 @@ namespace CubeApp
         /// </summary>
         public bool ToolRequired { get; set; } = false;
 
+        /// <summary>Whether zombies can path through this block by breaking it.</summary>
+        public bool ZombieCanBreak { get; set; } = false;
+
+        /// <summary>How quickly zombies break through this block (Slow/Medium/Fast).</summary>
+        public ZombieBreakSpeed ZombieBreakSpeed { get; set; } = ZombieBreakSpeed.Medium;
+
         /// <summary>Picks the atlas tile for a given face normal, honouring top/bottom/side overrides.</summary>
         public TextureRect FaceTexture(Point3D normal)
         {
@@ -79,5 +85,13 @@ namespace CubeApp
             if ((Math.Abs(normal.X) > 0.5 || Math.Abs(normal.Z) > 0.5) && SideTexture.HasValue) return SideTexture.Value;
             return AllTexture ?? default;
         }
+    }
+
+    /// <summary>How fast zombies can break through a block.</summary>
+    public enum ZombieBreakSpeed
+    {
+        Slow,
+        Medium,
+        Fast,
     }
 }

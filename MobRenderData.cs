@@ -79,7 +79,8 @@ namespace CubeApp
                 mob.IsDead,
                 mob.DeathT,
                 mob.DeathRollDir,
-                mob.HurtTimer);
+                mob.HurtTimer,
+                mob.HeadPitchLocal);
         }
     }
 }

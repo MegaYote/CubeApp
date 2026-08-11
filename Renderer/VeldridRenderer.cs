@@ -400,6 +400,8 @@ namespace CubeApp.Renderer
         private const double HealthbeatBumpDur = 0.18; // seconds per thump
         private byte[] _worldNameBuffer = new byte[256];
         private byte[] _seedBuffer = new byte[256];
+        private byte[] _renameBuffer = new byte[256];
+        private bool _renameBufferInit;
         private byte[] _hostPortBuffer = new byte[16];
         private byte[] _joinAddressBuffer = new byte[128];
         private bool _menuBuffersInitialized;
@@ -4520,7 +4522,7 @@ void main() { outColor = vec4(1.0); }";
             }
 
             int idx = (localX * chunk.Depth + localZ) * chunk.Height + localY;
-            return ChunkLighting.Brightness(chunk.LightGrid[idx]);
+            return ChunkLighting.MobBrightness(chunk.LightGrid[idx]);
         }
 
         private void DrawShrinkCube(CommandList cl)
@@ -4954,6 +4956,16 @@ void main() { outColor = vec4(1.0); }";
                         case DuckBoneAxis.Y: rx = lx * ca + lz * sa; rz = -lx * sa + lz * ca; break;
                         case DuckBoneAxis.Z: rx = lx * ca - ly * sa; ry = lx * sa + ly * ca; break;
                     }
+                    // Head pitch: rotate around X axis for looking up/down.
+                    // AI gives positive=up, renderer convention is negative=up.
+                    if (bone.Id == DuckBoneId.Head && inst.HeadPitchLocal != 0f)
+                    {
+                        float cp = (float)Math.Cos(-inst.HeadPitchLocal);
+                        float sp = (float)Math.Sin(-inst.HeadPitchLocal);
+                        float pry = ry * cp + rz * sp;
+                        float prz = -ry * sp + rz * cp;
+                        ry = pry; rz = prz;
+                    }
                     float mx = bone.PivotX + rx;
                     float my = bone.PivotY + ry + bob + headExtraBob;
                     float mz = bone.PivotZ + rz;
@@ -4975,9 +4987,9 @@ void main() { outColor = vec4(1.0); }";
             _duckVertexScratch[vf++] = pz + fz;
                     _duckVertexScratch[vf++] = v.U;
                     _duckVertexScratch[vf++] = v.V;
-                    _duckVertexScratch[vf++] = v.Shade * _nightDim * _entityLight;
-                    _duckVertexScratch[vf++] = v.Shade * gbMul * _nightDim * _entityLight;
-                    _duckVertexScratch[vf++] = v.Shade * gbMul * _nightDim * _entityLight;
+                    _duckVertexScratch[vf++] = v.Shade * _entityLight;
+                    _duckVertexScratch[vf++] = v.Shade * gbMul * _entityLight;
+                    _duckVertexScratch[vf++] = v.Shade * gbMul * _entityLight;
                     _duckVertexScratch[vf++] = 1f;
                 }
 
@@ -5707,10 +5719,11 @@ void main() { outColor = vec4(1.0); }";
                     // returns to its neutral stance when it stops (no frozen mid-stride). The mob is
                     // lit by its position (same block-light rules as terrain), multiplied by the
                     // global night dim.
-                    float mobLight = _nightDim * GetMobLight(inst.Position.X, inst.Position.Y, inst.Position.Z);
+                    float mobLight = GetMobLight(inst.Position.X, inst.Position.Y, inst.Position.Z);
                     entry.Model.WriteInstance(entry.VertexScratch, ref vf, entry.IndexScratch, ref ii, ref baseVertex,
                         (float)inst.Position.X, (float)inst.Position.Y, (float)inst.Position.Z, inst.Yaw,
-                        inst.AnimTime, inst.AnimBlend, mobLight, inst.HeadYawLocal, inst.HurtTimer);
+                        inst.AnimTime, inst.AnimBlend, mobLight, inst.HeadYawLocal, inst.HurtTimer, inst.HeadPitchLocal,
+                        inst.IsDead, inst.DeathT, inst.DeathRollDir);
                 }
 
                 EnsureMobBuffers(entry, (uint)(totalVertexFloats * sizeof(float)), (uint)(totalIndices * sizeof(ushort)));
@@ -5836,9 +5849,9 @@ void main() { outColor = vec4(1.0); }";
                     _playerVertexScratch[vf++] = pz + fz;
                     _playerVertexScratch[vf++] = v.U;
                     _playerVertexScratch[vf++] = v.V;
-                    _playerVertexScratch[vf++] = v.Shade * _nightDim * _entityLight;
-                    _playerVertexScratch[vf++] = v.Shade * gbMul * _nightDim * _entityLight;
-                    _playerVertexScratch[vf++] = v.Shade * gbMul * _nightDim * _entityLight;
+                    _playerVertexScratch[vf++] = v.Shade * _entityLight;
+                    _playerVertexScratch[vf++] = v.Shade * gbMul * _entityLight;
+                    _playerVertexScratch[vf++] = v.Shade * gbMul * _entityLight;
                     _playerVertexScratch[vf++] = 1f;
                 }
 
@@ -6293,16 +6306,13 @@ void main() { outColor = vec4(1.0); }";
                     ImGui.End();
                 }
 
-                // Buttons hang lower, in the classic vertical column, with any saved
-                // worlds listed beneath so one click loads a world.
-                int shownWorlds = Math.Min(m.SavedWorlds.Count, 6);
-                float winH = 130f + 60f + (shownWorlds > 0 ? 42f + shownWorlds * 30f : 0f);
+                // Buttons hang lower, in the classic vertical column.
                 ImGui.SetNextWindowPos(new Vector2((size.X - 220f) / 2f, size.Y / 4f + 72f), ImGuiCond.Always);
-                ImGui.SetNextWindowSize(new Vector2(220, winH), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(220, 160), ImGuiCond.Always);
                 ImGui.Begin("##title", windowFlags);
                 if (ImGui.Button("Singleplayer", new Vector2(200, 34)))
                 {
-                    m.Screen = GameScreen.CreateWorld;
+                    m.Screen = GameScreen.WorldSelect;
                     _menuBuffersInitialized = false;
                 }
                 ImGui.Dummy(new Vector2(0, 18));
@@ -6313,21 +6323,6 @@ void main() { outColor = vec4(1.0); }";
                 }
                 ImGui.Dummy(new Vector2(0, 18));
                 if (ImGui.Button("Quit", new Vector2(200, 34))) m.QuitClicked = true;
-                if (shownWorlds > 0)
-                {
-                    ImGui.Dummy(new Vector2(0, 10));
-                    uint dimCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.8f, 0.8f, 0.8f, 1f));
-                    ImGui.TextColored(new Vector4(0.8f, 0.8f, 0.8f, 1f), "Saved Worlds");
-                    ImGui.Dummy(new Vector2(0, 4));
-                    for (int i = 0; i < shownWorlds; i++)
-                    {
-                        if (ImGui.Button(m.SavedWorlds[i], new Vector2(200, 26)))
-                        {
-                            m.SelectedWorldIndex = i;
-                            m.LoadWorldClicked = true;
-                        }
-                    }
-                }
                 ImGui.End();
             }
             else if (m.Screen == GameScreen.CreateWorld)
@@ -6364,8 +6359,105 @@ void main() { outColor = vec4(1.0); }";
                     m.CreateWorldClicked = true;
                 }
                 ImGui.Spacing();
-                if (ImGui.Button("Back", new Vector2(220, 28))) m.Screen = GameScreen.Title;
+                if (ImGui.Button("Back", new Vector2(220, 28))) m.Screen = GameScreen.WorldSelect;
                 ImGui.End();
+            }
+            else if (m.Screen == GameScreen.WorldSelect)
+            {
+                // World list screen: all saved worlds, each with load / rename / delete buttons,
+                // plus a "Create New World" button and a Back arrow to the title.
+                int count = m.SavedWorlds.Count;
+                float rowH = 36f;
+                float winW = 420f;
+                float winH = Math.Max(140f, 60f + count * rowH + 60f);
+                ImGui.SetNextWindowPos(new Vector2((size.X - winW) / 2f, size.Y / 4f + 32f), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
+                ImGui.Begin("##worldselect", windowFlags);
+                ImGui.SetWindowFontScale(1.3f);
+                ImGui.Text("Select World");
+                ImGui.SetWindowFontScale(1f);
+                ImGui.Spacing();
+
+                if (count == 0)
+                {
+                    ImGui.TextColored(new Vector4(0.55f, 0.55f, 0.55f, 1f), "No saved worlds yet.");
+                    ImGui.Spacing();
+                }
+                else
+                {
+                    for (int i = 0; i < count; i++)
+                    {
+                        string worldName = m.SavedWorlds[i];
+                        ImGui.PushID(i);
+                        // World name button — clicking loads the world.
+                        if (ImGui.Button(worldName, new Vector2(260, 28)))
+                        {
+                            m.SelectedWorldIndex = i;
+                            m.LoadWorldClicked = true;
+                        }
+                        ImGui.SameLine();
+                        if (ImGui.Button("Rename", new Vector2(60, 28)))
+                        {
+                            m.RenameWorldIndex = i;
+                            m.RenameTarget = worldName;
+                            m.RenameWorldClicked = false; // not committed yet — wait for the rename popup
+                        }
+                        ImGui.SameLine();
+                        if (ImGui.Button("Delete", new Vector2(60, 28)))
+                        {
+                            m.DeleteWorldIndex = i;
+                            m.DeleteWorldClicked = true;
+                        }
+                        ImGui.PopID();
+                    }
+                    ImGui.Spacing();
+                }
+
+                // Create New World button
+                ImGui.Separator();
+                ImGui.Spacing();
+                if (ImGui.Button("Create New World", new Vector2(200, 32)))
+                {
+                    m.Screen = GameScreen.CreateWorld;
+                    _menuBuffersInitialized = false;
+                }
+                ImGui.SameLine();
+                if (ImGui.Button("Back to Title", new Vector2(140, 32))) m.Screen = GameScreen.Title;
+                ImGui.End();
+
+                // Rename popup (renders as a small modal-style window when a world is being renamed).
+                if (m.RenameWorldIndex >= 0 && m.RenameWorldIndex < count)
+                {
+                    ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 140f, size.Y / 2f - 50f), ImGuiCond.Always);
+                    ImGui.SetNextWindowSize(new Vector2(280, 120), ImGuiCond.Always);
+                    ImGui.Begin("##renameworld", ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse);
+                    ImGui.Text($"Rename '{m.SavedWorlds[m.RenameWorldIndex]}'");
+                    if (!_renameBufferInit)
+                    {
+                        WriteBuffer(_renameBuffer, m.RenameTarget);
+                        _renameBufferInit = true;
+                    }
+                    ImGui.InputText("New name", _renameBuffer, (uint)_renameBuffer.Length);
+                    m.RenameTarget = ReadBuffer(_renameBuffer);
+                    ImGui.Spacing();
+                    if (ImGui.Button("OK", new Vector2(80, 28)))
+                    {
+                        m.RenameWorldClicked = true;
+                        m.RenameWorldIndex = -1;
+                        _renameBufferInit = false;
+                    }
+                    ImGui.SameLine();
+                    if (ImGui.Button("Cancel", new Vector2(80, 28)))
+                    {
+                        m.RenameWorldIndex = -1;
+                        _renameBufferInit = false;
+                    }
+                    ImGui.End();
+                }
+                else
+                {
+                    _renameBufferInit = false;
+                }
             }
             else if (m.Screen == GameScreen.Multiplayer)
             {
@@ -6828,6 +6920,7 @@ void main() { outColor = vec4(1.0); }";
                 Line($"Chunk: {_hud.PlayerChunkX} / {_hud.PlayerChunkZ}");
                 Line($"Upd: {_hud.UpdateMs:0.0} ms");
                 Line($"Mesh: {_hud.MeshMs:0.0} ms");
+                Line($"Entity: {_hud.EntityMs:0.0} ms  ({_hud.EntityCount} mobs)");
                 Line($"Upload: {_hud.UploadMs:0.0} ms");
                 Line($"Render: {_hud.RenderMs:0.0} ms");
                 Line($"Facing: {_hud.FacingText}");

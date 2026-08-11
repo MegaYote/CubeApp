@@ -81,5 +81,13 @@ namespace CubeApp
         /// Wing flap phase for flying mobs (radians).
         /// </summary>
         float FlapPhase { get; }
+
+        /// <summary>
+        /// If the mob is mining a block, returns (x, y, z, blockId, progress 0..1); null otherwise.
+        /// </summary>
+        (int X, int Y, int Z, int BlockId, float Progress)? MiningBlock { get; }
+
+        /// <summary>Head pitch in radians (looking up/down). Clamped to ±1.05 (~60°).</summary>
+        float HeadPitchLocal { get; }
     }
 }

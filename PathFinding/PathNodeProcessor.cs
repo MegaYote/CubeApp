@@ -41,13 +41,33 @@ namespace CubeApp
         /// </summary>
         public bool IsStandable(int x, int y, int z)
         {
-            // Feet cell must be passable.
-            if (IsSolid(x, y, z)) return false;
-            if (IsSolid(x, y + 1, z)) return false;
+            // Check every block the mob's body occupies at this position (not just the center cell).
+            double cx = x + 0.5, cz = z + 0.5;
+            int minX = (int)Math.Floor(cx - _mobWidth * 0.5);
+            int maxX = (int)Math.Floor(cx + _mobWidth * 0.5 - 0.001);
+            int minZ = (int)Math.Floor(cz - _mobWidth * 0.5);
+            int maxZ = (int)Math.Floor(cz + _mobWidth * 0.5 - 0.001);
+            for (int bx = minX; bx <= maxX; bx++)
+            {
+                for (int bz = minZ; bz <= maxZ; bz++)
+                {
+                    // Body cells (feet + headroom) must be passable (or breakable).
+                    for (int by = y; by <= y + 1 && by < y + (int)_mobHeight + 1; by++)
+                    {
+                        if (IsSolid(bx, by, bz)) return false;
+                    }
+                }
+            }
 
-            // Must have ground below (or a step-up target within 1).
+            // Must have at least one solid block below across the footprint to stand on.
             int below = y - 1;
-            if (IsSolid(x, below, z)) return true;
+            for (int bx = minX; bx <= maxX; bx++)
+            {
+                for (int bz = minZ; bz <= maxZ; bz++)
+                {
+                    if (IsSolid(bx, below, bz)) return true;
+                }
+            }
             return false;
         }
 
@@ -56,9 +76,30 @@ namespace CubeApp
             if (y < -300 || y > 1000) return false;
             int id = _manager.GetBlockAt(x, y, z);
             if (id == BlockRegistry.AirId) return false;
-            // Water/glass/leaves/partial shapes don't block walking for pathfinding purposes;
-            // everything opaque and solid does.
-            return BlockRegistry.IsOpaque(id);
+            if (BlockRegistry.IsOpaque(id))
+            {
+                // Breakable blocks are NOT solid for pathfinding — they're passable with a
+                // cost penalty applied by the pathfinder via BlockCostMalus.
+                if (BlockRegistry.ZombieCanBreakOf(id)) return false;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>Cost penalty for pathing through a breakable block. 0 = free, >0 = added cost.</summary>
+        public float BlockCostMalus(int x, int y, int z)
+        {
+            int id = _manager.GetBlockAt(x, y, z);
+            if (id == BlockRegistry.AirId || !BlockRegistry.IsOpaque(id)) return 0f;
+            if (!BlockRegistry.ZombieCanBreakOf(id)) return 0f;
+            var speed = BlockRegistry.ZombieBreakSpeedOf(id);
+            return speed switch
+            {
+                ZombieBreakSpeed.Fast => 3f,
+                ZombieBreakSpeed.Medium => 8f,
+                ZombieBreakSpeed.Slow => 16f,
+                _ => 0f,
+            };
         }
     }
 }

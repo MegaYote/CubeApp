@@ -744,12 +744,21 @@ namespace CubeApp
         /// </summary>
         public void WriteInstance(float[] vertexScratch, ref int vf, ushort[] indexScratch, ref int ii, ref ushort baseVertex,
             float x, float y, float z, float yaw, float animTime = 0f, float animBlend = 1f, float nightDim = 1f,
-            float headYawLocal = 0f, float hurtTimer = 0f)
+            float headYawLocal = 0f, float hurtTimer = 0f, float headPitchLocal = 0f,
+            bool isDead = false, float deathT = 0f, float deathRollDir = 0f)
         {
             float renderYaw = yaw + MathF.PI + YawCorrection;
             float cosY = MathF.Cos(renderYaw);
             float sinY = MathF.Sin(renderYaw);
             animBlend = Math.Clamp(animBlend, 0f, 1f);
+
+            // Death roll: rotate the entire corpse sideways like WriteDuck/WritePlayer.
+            float deathZ = isDead ? deathRollDir * (float)(Math.PI * 0.5) * (float)Math.Pow(deathT, 0.9) : 0f;
+            float cosR = (float)Math.Cos(deathZ), sinR = (float)Math.Sin(deathZ);
+
+            // Head pitch: AI gives positive=up, renderer convention is negative=up.
+            float renderPitch = -headPitchLocal;
+            float cosP = MathF.Cos(renderPitch), sinP = MathF.Sin(renderPitch);
 
             // Universal hurt flash — same formula as WriteDuck / WritePlayer so every mob type
             // (procedural duck, GLB coyote, zombie, future Blockbench models) gets the identical
@@ -813,6 +822,14 @@ namespace CubeApp
                         local.X = part.Pivot.X + hx * cosH + hz * sinH;
                         local.Z = part.Pivot.Z - hx * sinH + hz * cosH;
                     }
+                    // Head pitch: rotation around the part's X axis for looking up/down.
+                    if (isHead && renderPitch != 0f)
+                    {
+                        float hy = local.Y - part.Pivot.Y;
+                        float hz = local.Z - part.Pivot.Z;
+                        local.Y = part.Pivot.Y + hy * cosP + hz * sinP;
+                        local.Z = part.Pivot.Z - hy * sinP + hz * cosP;
+                    }
 
                     // Uniform world scale (ModelScale) grows the whole model about its feet origin.
                     local *= ModelScale;
@@ -820,6 +837,15 @@ namespace CubeApp
                     float fx = local.X * cosY + local.Z * sinY;
                     float fy = local.Y;
                     float fz = -local.X * sinY + local.Z * cosY;
+
+                    // Death roll: rotate around Z axis (sideways tumble).
+                    if (isDead)
+                    {
+                        float dfy = fy * cosR - fz * sinR;
+                        float dfz = fy * sinR + fz * cosR;
+                        fy = dfy; fz = dfz;
+                    }
+
                     int offset = vf;
                     vertexScratch[offset + 0] = x + fx;
                     vertexScratch[offset + 1] = y + fy;

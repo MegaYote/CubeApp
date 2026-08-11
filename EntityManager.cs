@@ -21,6 +21,9 @@ namespace CubeApp
         private MobSpawner? _monsterSpawner;
         private double _spawnAccumulator;
         private double _monsterSpawnAccumulator;
+        private readonly System.Diagnostics.Stopwatch _entityWatch = new();
+        public float LastUpdateMs { get; private set; }
+        public int MobCount => _mobs.Count;
         private const double SpawnIntervalBase = 2.0; // check for spawning roughly every 2s
         // World->skylightSubtracted (0 day .. 11 night) for the monster darkness gate.
         private Func<int>? _skylightSubtractedFn;
@@ -173,6 +176,8 @@ namespace CubeApp
         /// </summary>
         public void Update(float deltaSeconds, Point3D playerPosition, bool enableSpawning = true)
         {
+            _entityWatch.Restart();
+
             // Update all mobs. Every mob derives from MobEntity (Duck, Coyote, SteveMob, generic
             // registry mobs all share one universal AI/physics implementation).
             for (int i = _mobs.Count - 1; i >= 0; i--)
@@ -231,6 +236,12 @@ namespace CubeApp
                 }
             }
 
+            LastUpdateMs = (float)_entityWatch.Elapsed.TotalMilliseconds;
+
+            // Push mobs apart so they don't clump. Same algorithm as MC 1.12: inverse-distance
+            // horizontal repulsion applied to both entities.
+            PushMobsApart(deltaSeconds);
+
             // Natural spawning: attempt multiple passes each tick while under the cap (the
             // interval only gates how often we check, so an empty area fills quickly without
             // hammering every frame).
@@ -270,6 +281,66 @@ namespace CubeApp
             foreach (var mob in _mobs)
             {
                 _mobRenderData.Add(CubeApp.MobRenderData.FromMob(mob));
+            }
+        }
+
+        /// <summary>Collects mining targets from all zombies actively breaking blocks.</summary>
+        public void CollectMiningTargets(System.Collections.Generic.List<CubeApp.Renderer.ZombieMiningTarget> list)
+        {
+            list.Clear();
+            foreach (var mob in _mobs)
+            {
+                var mb = ((IMobRenderable)mob).MiningBlock;
+                if (mb.HasValue)
+                {
+                    list.Add(new CubeApp.Renderer.ZombieMiningTarget
+                    {
+                        X = mb.Value.X, Y = mb.Value.Y, Z = mb.Value.Z,
+                        BlockId = mb.Value.BlockId,
+                        Progress = mb.Value.Progress,
+                    });
+                }
+            }
+        }
+
+        /// <summary>
+        /// MC-style entity repulsion. Pairs of nearby mobs push apart with inverse-distance
+        /// horizontal force so they spread out instead of clumping into one spot.
+        /// </summary>
+        private void PushMobsApart(float dt)
+        {
+            int count = _mobs.Count;
+            if (count < 2) return;
+            double dtScale = dt * 60.0; // normalize to 60fps tick equivalent
+
+            for (int i = 0; i < count; i++)
+            {
+                if (_mobs[i] is not MobEntity a || a.IsDead) continue;
+                double ax = a.Position.X, ay = a.Position.Y, az = a.Position.Z;
+
+                for (int j = i + 1; j < count; j++)
+                {
+                    if (_mobs[j] is not MobEntity b || b.IsDead) continue;
+                    double dx = ax - b.Position.X, dz = az - b.Position.Z;
+                    double dy = ay - b.Position.Y;
+                    double distXZSq = dx * dx + dz * dz;
+                    double minDistXZ = (a.Width * 0.5 + b.Width * 0.5);
+                    double minDistXZSq = minDistXZ * minDistXZ;
+
+                    if (distXZSq < minDistXZSq && distXZSq > 0.0001)
+                    {
+                        // Only push when vertically overlapping too — mobs at different Y levels
+                        // (e.g. one on a platform above) shouldn't repel each other.
+                        double minDistY = (a.Height * 0.5 + b.Height * 0.5);
+                        if (Math.Abs(dy) >= minDistY) continue;
+
+                        double dist = Math.Sqrt(distXZSq);
+                        double invDist = 1.0 / dist;
+                        double push = 3.0 * Math.Min(1.0, invDist) * dtScale;
+                        a.AddVelocity(dx * invDist * push, 0, dz * invDist * push);
+                        b.AddVelocity(-dx * invDist * push, 0, -dz * invDist * push);
+                    }
+                }
             }
         }
 

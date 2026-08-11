@@ -430,5 +430,18 @@ namespace CubeApp
             // Power curve + a small linear knee: brighter near the top, dark near the bottom.
             return t * t * t * 0.55f + t * 0.45f;
         }
+
+        /// <summary>
+        /// Mob/entity brightness: a gentler falloff than the terrain curve so mobs don't go
+        /// pitch-black in moderate shadow, with a small floor so they're dimly visible even in
+        /// total darkness.
+        /// </summary>
+        public static float MobBrightness(int lightLevel)
+        {
+            if (Fullbright) return 1.0f;
+            int clamped = Math.Clamp(lightLevel, 0, MaxLight);
+            float t = clamped / (float)MaxLight;
+            return t * t * 0.42f + t * 0.50f + 0.08f;
+        }
     }
 }

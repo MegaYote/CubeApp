@@ -1,1 +1,1 @@
-﻿{"id":"zombie","displayName":"Zombie","width":0.6,"height":1.95,"maxHealth":20,"speed":2.4,"scale":1.0,"yawCorrection":0.0,"burnsInDaylight":true,"hostile":true,"attackDamage":3,"aggroRange":24.0,"attackRange":1.6,"attackCooldown":1.0}
+﻿{"id":"zombie","displayName":"Zombie","width":0.6,"height":1.95,"maxHealth":10,"speed":2.4,"scale":1.0,"yawCorrection":0.0,"burnsInDaylight":true,"hostile":true,"attackDamage":3,"aggroRange":24.0,"attackRange":1.6,"attackCooldown":1.0}

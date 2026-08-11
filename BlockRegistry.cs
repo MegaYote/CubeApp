@@ -38,6 +38,8 @@ namespace CubeApp
         private static float[] _hardness = Array.Empty<float>();
         private static string[] _toolType = Array.Empty<string>();
         private static bool[] _toolRequired = Array.Empty<bool>();
+        private static bool[] _zombieCanBreak = Array.Empty<bool>();
+        private static ZombieBreakSpeed[] _zombieBreakSpeed = Array.Empty<ZombieBreakSpeed>();
         private static uint[] _mapColor = Array.Empty<uint>();
         private static int[] _hotbar = Array.Empty<int>();
         public static bool Loaded { get; private set; }
@@ -72,6 +74,8 @@ namespace CubeApp
             public double Hardness { get; set; } = 0; // 0 => code default
             public string? ToolType { get; set; } = ""; // "pickaxe"/"axe"/"shovel"/... empty = none
             public bool ToolRequired { get; set; } = false; // true = needs the tool to drop items
+            public bool ZombieCanBreak { get; set; } = false;
+            public string? ZombieBreakSpeed { get; set; } = "Medium"; // Slow / Medium / Fast
         }
 
         /// <summary>Default survival-mining hardness (Cubuild C++ port). Blocks that share an id
@@ -154,6 +158,8 @@ namespace CubeApp
                     Hardness = dto.Hardness > 0 ? (float)dto.Hardness : DefaultHardness(dto.Id),
                     ToolType = dto.ToolType ?? "",
                     ToolRequired = dto.ToolRequired,
+                    ZombieCanBreak = dto.ZombieCanBreak,
+                    ZombieBreakSpeed = ParseZombieBreakSpeed(dto.ZombieBreakSpeed),
                 };
 
                 // air has no faces; everything else must define at least an "all" tile.
@@ -178,6 +184,8 @@ namespace CubeApp
             _hardness = new float[Count];
             _toolType = new string[Count];
             _toolRequired = new bool[Count];
+            _zombieCanBreak = new bool[Count];
+            _zombieBreakSpeed = new ZombieBreakSpeed[Count];
             _mapColor = new uint[Count];
             _cross = new bool[Count];
             _cutout = new bool[Count];
@@ -198,6 +206,8 @@ namespace CubeApp
                 _hardness[i] = defs[i].Hardness;
                 _toolType[i] = defs[i].ToolType ?? "";
                 _toolRequired[i] = defs[i].ToolRequired;
+                _zombieCanBreak[i] = defs[i].ZombieCanBreak;
+                _zombieBreakSpeed[i] = defs[i].ZombieBreakSpeed;
                 _mapColor[i] = defs[i].MapColor;
                 _inventory[i] = defs[i].Inventory;
                 _lightEmission[i] = defs[i].LightEmission;
@@ -282,6 +292,11 @@ namespace CubeApp
         public static string ToolTypeOf(int id) => id > 0 && id < Count ? _toolType[id] : "";
         /// <summary>True when the matching tool is required for this block to drop an item.</summary>
         public static bool ToolRequiredOf(int id) => id > 0 && id < Count && _toolRequired[id];
+
+        public static bool ZombieCanBreakOf(int id) => id > 0 && id < Count && _zombieCanBreak[id];
+
+        public static ZombieBreakSpeed ZombieBreakSpeedOf(int id)
+            => id > 0 && id < Count ? _zombieBreakSpeed[id] : ZombieBreakSpeed.Medium;
         public static uint MapColorOf(int id) => _mapColor[id];
         public static TextureRect FaceTexture(int id, Point3D normal) => _defs[id].FaceTexture(normal);
 
@@ -325,6 +340,14 @@ namespace CubeApp
                 throw new InvalidDataException($"Bad mapColor \"{s}\" (expected #RRGGBB or #RRGGBBAA).");
             }
             return ((uint)a << 24) | ((uint)b << 16) | ((uint)g << 8) | (uint)r;
+        }
+
+        private static ZombieBreakSpeed ParseZombieBreakSpeed(string? s)
+        {
+            if (string.IsNullOrEmpty(s)) return ZombieBreakSpeed.Medium;
+            if (s.StartsWith("F", StringComparison.OrdinalIgnoreCase)) return ZombieBreakSpeed.Fast;
+            if (s.StartsWith("S", StringComparison.OrdinalIgnoreCase)) return ZombieBreakSpeed.Slow;
+            return ZombieBreakSpeed.Medium;
         }
     }
 }

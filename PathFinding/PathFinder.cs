@@ -149,6 +149,9 @@ namespace CubeApp
             if (!_nodeCache.TryGetValue((x, y, z), out node!))
             {
                 node = new PathPoint(x, y, z);
+                // Breakable blocks get a cost penalty so the pathfinder prefers going around,
+                // but CAN route through them as a last resort.
+                node.CostMalus = _processor.BlockCostMalus(x, y, z);
                 _nodeCache[(x, y, z)] = node;
             }
             if (node.Visited) return false;

@@ -6,6 +6,7 @@ namespace CubeApp
     public enum GameScreen
     {
         Title,
+        WorldSelect,
         CreateWorld,
         Multiplayer,
         Loading,
@@ -37,6 +38,13 @@ namespace CubeApp
         /// <summary>Display names of saved worlds (from the saves folder), for the title list.</summary>
         public List<string> SavedWorlds = new();
 
+        // ---- world select screen (rename / delete) ----
+        public bool DeleteWorldClicked;
+        public int DeleteWorldIndex = -1;
+        public bool RenameWorldClicked;
+        public int RenameWorldIndex = -1;
+        public string RenameTarget = "";
+
         // ---- multiplayer screen ----
         public bool HostGameClicked;
         public bool JoinGameClicked;
@@ -65,6 +73,8 @@ namespace CubeApp
             HostGameClicked = false;
             JoinGameClicked = false;
             MultiplayerBackClicked = false;
+            DeleteWorldClicked = false;
+            RenameWorldClicked = false;
         }
     }
 }

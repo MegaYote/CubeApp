@@ -1,7 +1,19 @@
 using System.Numerics;
+using System.Collections.Generic;
 
 namespace CubeApp.Renderer
 {
+    /// <summary>
+    /// A block being mined by a zombie. The renderer draws a shrink-cube overlay for each one,
+    /// identical to the player's mining animation.
+    /// </summary>
+    public struct ZombieMiningTarget
+    {
+        public int X, Y, Z;
+        public int BlockId;
+        public float Progress; // 0..1
+    }
+
     /// <summary>
     /// Plain data describing what the HUD overlay should currently display.
     /// Populated by Program each tick and consumed by VeldridRenderer's ImGui pass.
@@ -24,6 +36,8 @@ namespace CubeApp.Renderer
         public float MeshMs;
         public float UploadMs;
         public float RenderMs;
+        public float EntityMs;     // time spent in entity/mob AI updates
+        public int EntityCount;    // number of active mobs
         public string FacingText;
         public string SelectedBlockText;
         public string RenderDistanceText;
@@ -111,6 +125,8 @@ namespace CubeApp.Renderer
             MeshMs = 0f,
             UploadMs = 0f,
             RenderMs = 0f,
+            EntityMs = 0f,
+            EntityCount = 0,
             FacingText = string.Empty,
             SelectedBlockText = string.Empty,
             RenderDistanceText = string.Empty,
@@ -122,7 +138,7 @@ namespace CubeApp.Renderer
             BagSlots = Array.Empty<InventorySlot>(),
             HotbarCounts = Array.Empty<int>(),
             HeldStack = null,
-            PlayerHealth = 10,
+            PlayerHealth = 20,
             DeathCause = DeathCause.Unknown,
             HighlightWorldQuad = null,
             PlayerChunkX = 0,
@@ -135,5 +151,8 @@ namespace CubeApp.Renderer
             MiningBlockId = 0,
             MiningBlockNormal = new Point3D(0, 0, 0),
         };
+
+        /// <summary>Blocks being mined by zombies this frame — each gets a shrink-cube overlay.</summary>
+        public List<ZombieMiningTarget>? ZombieMiningTargets;
     }
 }

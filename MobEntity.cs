@@ -51,6 +51,8 @@ namespace CubeApp
         protected float DragAir = 0.985f;
         protected float DragVertical = 0.992f;
         protected float StepHeight = 0.45f;
+        protected const double FallDamageThreshold = 3.0;  // first 3 blocks free (MC convention)
+        private double _fallDistance;  // accumulates downward movement while airborne
         protected double GroundProbe = 0.06;
 
         public Point3D Position { get; set; }
@@ -138,6 +140,14 @@ namespace CubeApp
         float IMobRenderable.DeathRollDir => _deathRollDir;
         float IMobRenderable.HurtTimer => _hurtTimer;
 
+        (int, int, int, int, float)? IMobRenderable.MiningBlock =>
+            _isMining && _miningBlockId > 0
+                ? (_miningBlockX, _miningBlockY, _miningBlockZ, _miningBlockId, _miningProgress)
+                : null;
+
+        float IMobRenderable.HeadPitchLocal => _headPitch;
+        private float _headPitch;
+
         protected double _velX, _velY, _velZ;
         protected bool _prevOnGround;
         protected readonly double _homeX, _homeZ;
@@ -175,6 +185,13 @@ namespace CubeApp
         private bool _ctrlJump;
         private bool _pendingJump;
         private float _pendingJumpSpeed;
+
+        // Block-breaking: when a zombie is blocked by a breakable wall it starts mining it.
+        private int _miningBlockX, _miningBlockY, _miningBlockZ;
+        private int _miningBlockId;
+        private float _miningProgress;
+        private float _miningDuration;
+        private bool _isMining;
 
         // Hostile AI (zombies): a chase target position (set by the EntityManager from the nearest
         // human) plus attack timing. Hostiles path toward the target and lunge when in range.
@@ -257,11 +274,15 @@ namespace CubeApp
                 double dz = Position.Z - srcZ;
                 double len = Math.Sqrt(dx * dx + dz * dz);
                 if (len < 1e-6) len = 1;
-                _velX += dx / len * 1.2;
-                _velZ += dz / len * 1.2;
+                // MC-style knockback: horizontal push away from attacker + a small upward lift.
+                _velX += dx / len * 4.5;
+                _velZ += dz / len * 4.5;
+                _velY += 2.5;
             }
 
-            _panicTimer = Math.Max(_panicTimer, PanicDurationMin + (float)Rng() * (PanicDurationMax - PanicDurationMin));
+            // Hostile mobs never flee — they stand their ground and fight back.
+            if (!Hostile)
+                _panicTimer = Math.Max(_panicTimer, PanicDurationMin + (float)Rng() * (PanicDurationMax - PanicDurationMin));
             _panicRetargetTimer = 0f;
             _idleTimer = 0f;
             _afterMoveRestTimer = 0f;
@@ -296,6 +317,38 @@ namespace CubeApp
                 _ctrlForward = 0f; _ctrlStrafe = 0f; _ctrlJump = false;
             }
             return true;
+        }
+
+        /// <summary>Adds velocity for entity-collision pushing (MC-style mob separation).</summary>
+        public void AddVelocity(double vx, double vy, double vz)
+        {
+            _velX += vx; _velY += vy; _velZ += vz;
+        }
+
+        private void CancelMining()
+        {
+            _isMining = false; _miningProgress = 0f; _miningBlockId = 0;
+        }
+
+        private bool UpdateMining(float dt, ChunkManager manager)
+        {
+            if (!_isMining || _miningBlockId <= 0) return false;
+            _miningProgress += dt / _miningDuration;
+            if (_miningProgress >= 1f)
+            {
+                manager.TrySetBlock(_miningBlockX, _miningBlockY, _miningBlockZ, BlockRegistry.AirId, 0);
+                CancelMining();
+                return true;
+            }
+            return false;
+        }
+
+        private void StartMiningBlock(int x, int y, int z, int blockId)
+        {
+            _miningBlockX = x; _miningBlockY = y; _miningBlockZ = z;
+            _miningBlockId = blockId; _miningProgress = 0f; _isMining = true;
+            var speed = BlockRegistry.ZombieBreakSpeedOf(blockId);
+            _miningDuration = speed switch { ZombieBreakSpeed.Fast => 0.5f, ZombieBreakSpeed.Slow => 3.0f, _ => 1.5f };
         }
 
         /// <summary>Whether this mob animates wing flaps (ducks). Default false.</summary>
@@ -417,6 +470,14 @@ namespace CubeApp
             _ctrlForward = 0f; _ctrlStrafe = 0f; _ctrlJump = false;
             if (_dead) { UpdateDead(dt); return; }
 
+            // Tick block-breaking progress and hurt flash — must run regardless of AI branch.
+            if (_isMining) UpdateMining(dt, manager);
+            _hurtTimer = Math.Max(0f, _hurtTimer - dt);
+
+            // Tick timers that matter regardless of which AI branch runs.
+            _hopCooldown = Math.Max(0f, _hopCooldown - dt);
+            _jumpPressCooldown = Math.Max(0f, _jumpPressCooldown - dt);
+
             bool grounded = _prevOnGround || OnGround;
 
             // Hostile chase (zombies): when a human target is in aggro range, re-path toward it via
@@ -426,30 +487,6 @@ namespace CubeApp
             if (_panicTimer <= 0f && Hostile && _chaseTarget.HasValue)
             {
                 if (UpdateChase(dt, manager)) return;
-            }
-
-            // A* path override: when a route is active, steer along waypoints and skip the wander
-            // brain entirely. Panic still takes priority so mobs flee when scared.
-            if (_panicTimer <= 0f && _pathGoalActive)
-            {
-                UpdatePath(dt, manager);
-                if (_path != null && !_path.IsDone)
-                {
-                    // Path steering owns look + movement this frame.
-                    _aiTimer = Math.Max(0f, _aiTimer - dt);
-                    _actionTimer = Math.Max(0f, _actionTimer - dt);
-                    _idleTimer = 0f;
-                    _currentMoveForward = Lerp(_currentMoveForward, _desiredMoveForward, 1f - (float)Math.Exp(-dt * 4.6));
-                    _currentSpeedScale = Lerp(_currentSpeedScale, _desiredSpeedScale, 1f - (float)Math.Exp(-dt * 3.9));
-                    _headYaw = TurnToward(_headYaw, _targetYaw, HeadTurnSpeed * dt);
-                    UpdateBodyYawFromHead(dt, _currentMoveForward > 0.04f);
-                    float pathYawError = WrapAngle(_targetYaw - Yaw);
-                    float pathTurnSlow = Math.Abs(pathYawError) > 1.2f ? 0.22f : (Math.Abs(pathYawError) > 0.75f ? 0.72f : 1.0f);
-                    _ctrlForward = _currentMoveForward * pathTurnSlow;
-                    _ctrlStrafe = _currentMoveForward > 0.04f ? Clamp(pathYawError * 0.14f, -0.18f, 0.18f) : 0f;
-                    return;
-                }
-                _pathGoalActive = false;
             }
 
             _aiTimer = Math.Max(0f, _aiTimer - dt);
@@ -464,8 +501,6 @@ namespace CubeApp
             _panicTimer = Math.Max(0f, _panicTimer - dt);
             _panicRetargetTimer = Math.Max(0f, _panicRetargetTimer - dt);
             _walkPhase += dt * (grounded ? (4.5f + _walkAmount * 4.0f) : 14.0f);
-            // Wing flap: only mobs that actually flap (ducks) advance it; fast when airborne,
-            // lazy waddle-flap when grounded (matches the old Duck behaviour).
             if (HasFlap) _flapPhase += dt * (grounded ? (4.5f + _walkAmount * 4.0f) : 18.0f);
 
             double homeDx = _homeX - Position.X;
@@ -570,59 +605,96 @@ namespace CubeApp
             if (_deathTimer >= _deathDuration) Removed = true;
         }
 
-        // Hostile chase: track the target, re-issue the A* path so the zombie routes AROUND cliffs
-        // and walls, and lunge when in melee range. Returns true only when the chase consumed this
-        // frame's AI (target missing/out of range returns false so the wander brain takes over).
-        // When a path is set the method returns false too - the A* path override then steers along
-        // the route, so the zombie never beelines straight into a drop.
+        // Hostile chase (MC-style): walk toward the player, attack while moving, jump obstacles,
+        // break blocks when stuck. Lightweight — just direct movement, no A* pathfinding.
         private bool UpdateChase(float dt, ChunkManager manager)
         {
             var target = _chaseTarget.Value;
-            double dx = target.X - Position.X;
-            double dz = target.Z - Position.Z;
+            double dx = target.X - Position.X, dz = target.Z - Position.Z;
             double distSq = dx * dx + dz * dz;
-            if (distSq > AggroRange * AggroRange)
-            {
-                ClearPathGoal();
-                return false;
-            }
+            if (distSq > AggroRange * AggroRange) { ClearPathGoal(); return false; }
 
             _attackCooldown = Math.Max(0f, _attackCooldown - dt);
-            _behavior = Behavior.Chase;
+            _behavior = Behavior.Chase; _idleTimer = 0f; _afterMoveRestTimer = 0f;
 
-            // Within melee range: stop, face the target, and swing.
-            if (distSq <= AttackRange * AttackRange)
+            // Face and walk toward the player.
+            float toPlayer = (float)Math.Atan2(dx, dz);
+            _targetYaw = toPlayer;
+            _desiredMoveForward = distSq <= AttackRange * AttackRange ? 0.65f : 0.92f;
+            _desiredSpeedScale = 1.0f;
+            _currentMoveForward = Lerp(_currentMoveForward, _desiredMoveForward, 1f - (float)Math.Exp(-dt * 5.0));
+            _currentSpeedScale = Lerp(_currentSpeedScale, _desiredSpeedScale, 1f - (float)Math.Exp(-dt * 3.9));
+
+            _headYaw = TurnToward(_headYaw, toPlayer, HeadTurnSpeed * 1.4f * dt);
+            // Head pitch: look up/down at the player. Eye height is roughly 80% of body height.
+            // Negative pitch = looking up (matches the renderer convention from player camera).
+            double eyeY = Position.Y + Height * 0.8;
+            double hDist = Math.Sqrt(distSq);
+            float targetPitch = (float)Math.Atan2(target.Y - eyeY, hDist);
+            _headPitch += (targetPitch - _headPitch) * Math.Min(1f, HeadTurnSpeed * 1.4f * dt);
+            _headPitch = Clamp(_headPitch, -1.05f, 1.05f); // ±60° like the player
+            UpdateBodyYawFromHead(dt, _currentMoveForward > 0.04f);
+
+            float yawError = WrapAngle(_targetYaw - Yaw);
+            float turnSlow = Math.Abs(yawError) > 1.2f ? 0.22f : (Math.Abs(yawError) > 0.75f ? 0.72f : 1.0f);
+            _ctrlForward = _currentMoveForward * turnSlow;
+            _ctrlStrafe = _currentMoveForward > 0.04f ? Clamp(yawError * 0.14f, -0.18f, 0.18f) : 0f;
+
+            // Melee attack while pressing into the player.
+            if (distSq <= AttackRange * AttackRange && _attackCooldown <= 0f)
             {
-                ClearPathGoal();
-                _targetYaw = (float)Math.Atan2(dx, dz);
-                _desiredMoveForward = 0f;
-                _desiredSpeedScale = 0.95f;
-                _idleTimer = 0f; _afterMoveRestTimer = 0f;
+                _attackCooldown = AttackCooldown;
+                OnAttack?.Invoke();
+            }
 
-                _currentMoveForward = Lerp(_currentMoveForward, 0f, 1f - (float)Math.Exp(-dt * 4.6));
-                _currentSpeedScale = Lerp(_currentSpeedScale, 0.95f, 1f - (float)Math.Exp(-dt * 3.9));
-                _headYaw = TurnToward(_headYaw, _targetYaw, HeadTurnSpeed * dt);
-                UpdateBodyYawFromHead(dt, false);
-                if (_attackCooldown <= 0f)
+            // Jump over 1-block obstacles.
+            if ((_prevOnGround || OnGround) && _hopCooldown <= 0f && NeedsStepJump(manager, 0.6))
+            {
+                _ctrlJump = true; _pendingJump = true;
+                _pendingJumpSpeed = 7.42f; _hopCooldown = 0.26f;
+            }
+
+            // Break blocks when stuck. Simple tick counter: if the zombie hasn't moved for ~15 ticks,
+            // try to break whatever's in front of it.
+            if ((_prevOnGround || OnGround))
+            {
+                double moved = Math.Abs(Position.X - _lastPathX) + Math.Abs(Position.Z - _lastPathZ);
+                if (moved < 0.02) _pathRecalcTick++;
+                else { _pathRecalcTick = 0; _lastPathX = Position.X; _lastPathZ = Position.Z; }
+
+                if (_pathRecalcTick > 15 && !_isMining)
+                    TryBreakBlockAhead(manager);
+            }
+            else _pathRecalcTick = 0;
+
+            if (_isMining) _ctrlForward = 0f;
+            return true;
+        }
+
+        private double _lastPathX, _lastPathZ;
+        private int _pathRecalcTick;
+
+        private void TryBreakBlockAhead(ChunkManager manager)
+        {
+            double dirX = Math.Sin(Yaw), dirZ = Math.Cos(Yaw);
+            int bx = (int)Math.Floor(Position.X + dirX * (Width * 0.5 + 0.2));
+            int bz = (int)Math.Floor(Position.Z + dirZ * (Width * 0.5 + 0.2));
+            int by = (int)Math.Floor(Position.Y + 0.05);
+            for (int dy = 0; dy < 2; dy++)
+            {
+                if (manager.TryGetLoadedBlock(bx, by + dy, bz, out int bid)
+                    && bid != BlockRegistry.AirId && BlockRegistry.IsSolid(bid)
+                    && BlockRegistry.ZombieCanBreakOf(bid))
                 {
-                    _attackCooldown = AttackCooldown;
-                    OnAttack?.Invoke();
+                    manager.TryGetLoadedBlock(bx, by + dy + 1, bz, out int above1);
+                    manager.TryGetLoadedBlock(bx, by + dy + 2, bz, out int above2);
+                    if (!BlockRegistry.IsSolid(above1) && !BlockRegistry.IsSolid(above2))
+                    {
+                        StartMiningBlock(bx, by + dy, bz, bid);
+                        return;
+                    }
                 }
-                return true;
             }
-
-            // Otherwise chase through the A* pathfinder so the zombie walks AROUND cliffs/walls.
-            // Only re-issue the goal when the target has moved a meaningful amount or the route is
-            // gone, so we don't recompute the A* path every single frame.
-            bool goalMoved = (Math.Abs(target.X - _pathGoalX) > 1.0 || Math.Abs(target.Z - _pathGoalZ) > 1.0);
-            if (_path == null || goalMoved || !_pathGoalActive)
-            {
-                SetPathGoal(target.X, target.Z, 64.0);
-            }
-            _desiredMoveForward = 1f;
-            _desiredSpeedScale = 1.06f;
-            _idleTimer = 0f; _afterMoveRestTimer = 0f;
-            return false;
         }
 
         private void ChooseWanderGoal(bool forceHome)
@@ -793,13 +865,41 @@ namespace CubeApp
                 }
             }
 
+            bool wasAirborne = !OnGround && !_dead;
+            double prevY = Position.Y;
             MoveAxis(manager, Axis.X, _velX * dt);
             MoveAxis(manager, Axis.Z, _velZ * dt);
             MoveAxis(manager, Axis.Y, _velY * dt);
 
+            // Ground probe: catch landings that MoveAxis missed (mob ended just above surface).
             if (!OnGround && _velY <= 0 && IntersectsSolid(manager, Position.X, Position.Y - GroundProbe, Position.Z))
             {
                 OnGround = true; _velY = 0;
+            }
+
+            // MC-style fall damage: accumulated downward distance. Ducks glide so exempt.
+            if (wasAirborne)
+            {
+                double dy = Position.Y - prevY;
+                if (dy < 0) _fallDistance -= dy;
+                if (OnGround && !HasFlap && _fallDistance > FallDamageThreshold)
+                {
+                    int damage = (int)Math.Ceiling(_fallDistance - FallDamageThreshold);
+                    damage = Math.Max(1, damage);
+                    Health = Math.Max(0, Health - damage);
+                    _hurtTimer = Math.Max(_hurtTimer, 0.22f);
+                    if (Health <= 0)
+                    {
+                        _dead = true; _deathTimer = 0f; _behavior = Behavior.Dead;
+                        _deathRollDir = Rng() < 0.5 ? -1f : 1f;
+                        _ctrlForward = 0f; _ctrlStrafe = 0f; _ctrlJump = false;
+                    }
+                }
+                if (OnGround) _fallDistance = 0;
+            }
+            else
+            {
+                _fallDistance = 0;
             }
 
             double hDrag = Math.Pow(OnGround ? DragGround : DragAir, dt * 60);

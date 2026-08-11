@@ -27,6 +27,7 @@ namespace CubeApp
         public World.TerrainChunkProvider ChunkProvider { get; private set; }
         public World.SkyChunkProvider SkyChunkProvider { get; private set; }
         public EntityManager Entities { get; private set; }
+        public float LastEntityMs { get; private set; }
         public MeshScheduler Mesher { get; private set; }
         public BlockTickScheduler BlockTicks { get; private set; }
         private ChunkGenWorker _chunkGenWorker;
@@ -1007,6 +1008,7 @@ namespace CubeApp
                 LocalPlayer.BodyYaw = Math.Abs(delta) <= maxStep ? camYaw : bodyYaw + Math.Sign(delta) * maxStep;
             }
             Entities.Update(deltaSeconds, LocalPlayer.Position, true);
+            LastEntityMs = Entities.LastUpdateMs;
             int chunkX = WorldToChunkCoord(LocalPlayer.Position.X);
             int chunkZ = WorldToChunkCoord(LocalPlayer.Position.Z);
             // Request/unload scans cost O(radius^2) + O(loadedChunks); only run them when the

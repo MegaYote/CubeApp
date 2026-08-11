@@ -35,6 +35,7 @@ namespace CubeApp
         private int frameCount;
         // Reusable per-frame entity render list (avoids one List allocation every frame).
         private readonly List<MobRenderData> _entityRenderScratch = new();
+        private readonly List<CubeApp.Renderer.ZombieMiningTarget> _zombieMiningScratch = new();
 
         // ---- world loading screen ----
         // Staged loader state: pre-generates + meshes a chunk radius around spawn so the player
@@ -50,6 +51,17 @@ namespace CubeApp
         private int _loadPhase;                 // 0 preparing, 1 generating, 2 meshing, 3 finishing
         private float _loadPhaseStart;
         private bool _loadSkipSpawn;            // true when loading a save (position already restored)
+
+        // Deferred world construction: when the player clicks Create/Load, the screen flips to
+        // Loading immediately so the player sees feedback, and the heavy world construction is
+        // deferred to UpdateLoading (which runs later in the same frame). This eliminates the
+        // dead-frame freeze between the click and the first loading-screen paint.
+        private bool _pendingWorldFromSave;
+        private WorldSave? _pendingWorldSave;
+        private int _pendingSeed;
+        private string _pendingName = "";
+        private GameMode _pendingMode;
+        private bool _loadingScreenShown;       // gate: first frame shows "Loading...", second does work
 
         private float lastFps;
         private readonly Stopwatch fpsStopwatch = new();
@@ -179,6 +191,33 @@ namespace CubeApp
         // Advances the world-load staged pipeline. Runs every frame while screen == Loading.
         private void UpdateLoading(float deltaSeconds)
         {
+            // If a world was requested from the menu this frame, paint the loading screen NOW
+            // (so the player sees instant feedback) and defer the heavy construction to the
+            // next frame. This eliminates the dead-frame freeze between click and first paint.
+            if (!string.IsNullOrEmpty(_pendingName))
+            {
+                if (!_loadingScreenShown)
+                {
+                    menu.LoadingPhase = "Loading...";
+                    menu.LoadingPhaseProgress = 0f;
+                    menu.LoadingTotalProgress = 0f;
+                    _loadingScreenShown = true;
+                    return; // next frame does the work, this frame just paints "Loading..."
+                }
+                if (_pendingWorldFromSave && _pendingWorldSave != null)
+                {
+                    LoadWorld(_pendingWorldSave);
+                }
+                else
+                {
+                    StartNewWorld(_pendingSeed, _pendingName, _pendingMode);
+                }
+                _pendingName = "";
+                _pendingWorldSave = null;
+                _loadingScreenShown = false;
+                return; // StartNewWorld / LoadWorld called BeginWorldLoad, normal pipeline resumes next frame
+            }
+
             if (World == null) { FinishLoading(); return; }
             _loadPhaseStart += deltaSeconds;
 
@@ -369,11 +408,44 @@ namespace CubeApp
         {
             if (menu.CreateWorldClicked)
             {
-                StartNewWorld(ParseSeed(menu.SeedInput), menu.WorldName, menu.SelectedMode);
+                // Show the loading screen immediately so the player sees feedback, then defer
+                // the heavy world construction to UpdateLoading (next call in this frame).
+                _pendingSeed = ParseSeed(menu.SeedInput);
+                _pendingName = menu.WorldName;
+                _pendingMode = menu.SelectedMode;
+                _pendingWorldFromSave = false;
+                screen = GameScreen.Loading;
+                menu.Screen = GameScreen.Loading;
+                DisableMouseLook();
             }
             else if (menu.LoadWorldClicked)
             {
-                LoadWorldFromList();
+                int index = menu.SelectedWorldIndex;
+                if (index >= 0 && index < menu.SavedWorlds.Count)
+                {
+                    string name = menu.SavedWorlds[index];
+                    string path = Path.Combine(SavesFolder, SanitizeFileName(name) + ".cubuild");
+                    if (File.Exists(path))
+                    {
+                        var save = WorldSave.Load(path);
+                        if (save != null)
+                        {
+                            _pendingWorldSave = save;
+                            _pendingWorldFromSave = true;
+                            screen = GameScreen.Loading;
+                            menu.Screen = GameScreen.Loading;
+                            DisableMouseLook();
+                        }
+                    }
+                }
+            }
+            else if (menu.DeleteWorldClicked)
+            {
+                DeleteWorld(menu.DeleteWorldIndex);
+            }
+            else if (menu.RenameWorldClicked)
+            {
+                RenameWorld(menu.RenameWorldIndex, menu.RenameTarget);
             }
             else if (menu.HostGameClicked)
             {
@@ -639,6 +711,34 @@ namespace CubeApp
             }
         }
 
+        private void DeleteWorld(int index)
+        {
+            if (index < 0 || index >= menu.SavedWorlds.Count) return;
+            string name = menu.SavedWorlds[index];
+            string path = Path.Combine(SavesFolder, SanitizeFileName(name) + ".cubuild");
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+            RefreshSavedWorlds();
+        }
+
+        private void RenameWorld(int index, string newName)
+        {
+            if (index < 0 || index >= menu.SavedWorlds.Count) return;
+            if (string.IsNullOrWhiteSpace(newName)) return;
+            string oldName = menu.SavedWorlds[index];
+            string oldPath = Path.Combine(SavesFolder, SanitizeFileName(oldName) + ".cubuild");
+            string newPath = Path.Combine(SavesFolder, SanitizeFileName(newName) + ".cubuild");
+            try
+            {
+                if (File.Exists(oldPath) && !string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (File.Exists(newPath)) File.Delete(newPath);
+                    File.Move(oldPath, newPath);
+                }
+            }
+            catch { }
+            RefreshSavedWorlds();
+        }
+
         private static string SavesFolder => System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "saves");
 
         private static string SanitizeFileName(string name)
@@ -747,7 +847,11 @@ namespace CubeApp
                         // screen the renderer MUST operate on Program's real MenuState instance, not
                         // HudState.Empty's detached copy - otherwise button clicks set flags nobody
                         // reads. BuildHud handles the null-world case safely.
-                        gpuRenderer.SetHud(BuildHud());
+                        var hud = BuildHud();
+                        if (World != null)
+                            World.Entities.CollectMiningTargets(_zombieMiningScratch);
+                        hud.ZombieMiningTargets = _zombieMiningScratch;
+                        gpuRenderer.SetHud(hud);
                         if (World != null)
                         {
                             var lp = World.LocalPlayer;
@@ -1380,6 +1484,7 @@ namespace CubeApp
             {
                 ShowDebug = showFps, InventoryOpen = inventoryOpen, BiomeMenuOpen = biomeMenuOpen, HandEditorOpen = handEditorOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
                 MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
+                EntityMs = World.LastEntityMs, EntityCount = World.Entities.MobCount,
                 FacingText = $"{GetCompassDirection(World.PlayerYaw)} ({GameWorld.NormalizeYaw(World.PlayerYaw):0.0} deg)",
                 SelectedBlockText = $"Selected: {BlockRegistry.GetName(World.SelectedBlock)}",
                 RenderDistanceText = $"Render dist: {RenderDistanceName} ({ChunkRenderRadius})",
