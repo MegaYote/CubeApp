@@ -259,8 +259,11 @@ namespace CubeApp.Renderer
         private DeviceBuffer? _handIndexBuffer;
         private DeviceBuffer? _handProjBuffer;
         private ResourceSet? _handProjSet;
+        private Pipeline? _heldBlockPipeline; // no-fog camera-space pipeline for the held block
         private float[] _handMesh = Array.Empty<float>(); // pos3 + uv2 + shade4 per vertex, shoulder at origin
         private ushort[] _handIndices = Array.Empty<ushort>();
+        private DeviceBuffer? _heldBlockBuffer; // instance data for the block held in the hand
+        private readonly float[] _heldBlockScratch = new float[11];
         private bool _firstPersonCamera;
         private float _handSwingPhase;
         private float _handWalkPhase;
@@ -268,6 +271,20 @@ namespace CubeApp.Renderer
         private float _handPunchTime;
         private float _lastHandTime;
         private readonly System.Diagnostics.Stopwatch _handClock = System.Diagnostics.Stopwatch.StartNew();
+
+        // ---- Tunable hand viewmodel params (adjust in-game via the F3 Hand Editor) ----
+        private float _handScale = 1.052f;     // arm scale
+        private float _handSx = 0.854f;        // shoulder anchor X (right)
+        private float _handSy = -1.023f;       // shoulder anchor Y (down)
+        private float _handSz = -0.623f;       // shoulder anchor Z (forward)
+        private float _handBasePitch = -0.678f; // idle arm pitch
+        private float _handBaseYaw = 0.010f;   // idle arm yaw (toward center)
+        // Held-block anchor is INDEPENDENT of the arm pose (camera space), so tuning one never
+        // moves the other; the block still rides the shared punch/bob/sway animation.
+        private float _heldBlockX = 0.648f;
+        private float _heldBlockY = -0.345f;
+        private float _heldBlockZ = -0.412f;
+        private float _heldBlockSize = 0.289f; // held block cube size
         private uint _playerIndexCapacity;
         private IReadOnlyList<CubeApp.DuckInstance> _playerInstances = Array.Empty<CubeApp.DuckInstance>();
         private float[] _playerVertexScratch = Array.Empty<float>();
@@ -377,8 +394,8 @@ namespace CubeApp.Renderer
         private static readonly double[] HealthbeatAmps = { 1.5, 1.5, 1.0, 1.5, 1.5, 1.0 };
         private const double HealthbeatCycle = 2.8;    // seconds for the full pattern
         private const double HealthbeatBumpDur = 0.18; // seconds per thump
-        private byte[] _worldNameBuffer = new byte[64];
-        private byte[] _seedBuffer = new byte[64];
+        private byte[] _worldNameBuffer = new byte[256];
+        private byte[] _seedBuffer = new byte[256];
         private byte[] _hostPortBuffer = new byte[16];
         private byte[] _joinAddressBuffer = new byte[128];
         private bool _menuBuffersInitialized;
@@ -386,6 +403,11 @@ namespace CubeApp.Renderer
         // inventory); otherwise ImGui stays inert via NullInputSnapshot.
         private InputSnapshot? _uiInputSnapshot;
         private readonly System.Collections.Concurrent.ConcurrentQueue<int> _inventorySelections = new();
+        // Survival drag/drop clicks: (kind, target, button). kind: 0=bag stack (target=blockId),
+        // 1=hotbar slot (target=slot), 2=outside window (target unused). button: 0=left, 1=right.
+        private readonly System.Collections.Concurrent.ConcurrentQueue<(int Kind, int Target, int Button)> _inventoryClicks = new();
+        // Hovered unified inventory slot (-1 = none) while the E menu is open, for Q-to-drop.
+        private int _hoveredInventorySlot = -1;
         // Biome teleport menu selections (biome name string).
         private readonly System.Collections.Concurrent.ConcurrentQueue<string> _biomeSelections = new();
 
@@ -1949,12 +1971,79 @@ void main() { vUV = aUV; vColor = aColor; gl_Position = projView * vec4(aPositio
 
             _handProjBuffer = factory.CreateBuffer(new BufferDescription(64, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
             _handProjSet = factory.CreateResourceSet(new ResourceSetDescription(_projViewLayout, _handProjBuffer));
+
+            // Held-block pipeline: camera-space projection + block atlas, NO world fog and no
+            // mining-cell discard. The block sits in front of the eye so it must always render its
+            // true texture - the item-drop pipeline's fog math (world-space) goes garbage on
+            // camera-space coords and could wash the block out to the fog colour.
+            string heldVsCode = @"#version 450
+layout(location=0) in vec3 aCorner;
+layout(location=1) in vec2 aLocalUV;
+layout(location=2) in vec4 aShade;
+layout(location=3) in vec3 iWorldPos;
+layout(location=4) in vec4 iTileRect;
+layout(location=5) in vec4 iRot;
+layout(location=0) out vec2 vLocalUV;
+layout(location=1) out vec4 vTileRect;
+layout(location=2) out vec4 vColor;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() {
+    vec3 local = aCorner - vec3(0.15);
+    vec3 qv = iRot.xyz;
+    vec3 t = 2.0 * cross(qv, local);
+    vec3 rotated = local + iRot.w * t + cross(qv, t);
+    vec3 camPos = rotated + iWorldPos;
+    vLocalUV = aLocalUV;
+    vTileRect = iTileRect;
+    vColor = aShade;
+    gl_Position = projView * vec4(camPos, 1.0);
+}";
+            string heldFsCode = @"#version 450
+layout(location=0) in vec2 vLocalUV;
+layout(location=1) in vec4 vTileRect;
+layout(location=2) in vec4 vColor;
+layout(set=1, binding=0) uniform sampler2D uAtlas;
+layout(location=0) out vec4 outColor;
+void main() {
+    vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
+    vec4 tex = texture(uAtlas, atlasUV);
+    outColor = vec4(tex.rgb * vColor.rgb, vColor.a);
+}";
+            var heldVsSpirv = SpirvCompilation.CompileGlslToSpirv(heldVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var heldFsSpirv = SpirvCompilation.CompileGlslToSpirv(heldFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var heldShaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, heldVsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, heldFsSpirv.SpirvBytes, "main"));
+            var heldCubeLayout = new VertexLayoutDescription(
+                new VertexElementDescription("aCorner", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                new VertexElementDescription("aLocalUV", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float2),
+                new VertexElementDescription("aShade", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
+            var heldInstLayout = new VertexLayoutDescription(
+                new VertexElementDescription("iWorldPos", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                new VertexElementDescription("iTileRect", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4),
+                new VertexElementDescription("iRot", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
+            heldInstLayout.InstanceStepRate = 1;
+            _heldBlockPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleOverrideBlend,
+                DepthStencilState = DepthStencilStateDescription.Disabled,
+                // The held block is a closed cube with correct outward winding, so back-face
+                // culling makes it solid without needing depth (which would conflict with the
+                // world's depth buffer under the camera-space projection).
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout },
+                ShaderSet = new ShaderSetDescription(new[] { heldCubeLayout, heldInstLayout }, new[] { heldShaders[0], heldShaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
+
             // Size from the actual hand mesh (24 verts / 36 indices for the arm cube) - the mesh
             // is built in LoadPlayerResources which runs before this.
             _handVertexBuffer = factory.CreateBuffer(new BufferDescription(
                 (uint)Math.Max(_handMesh.Length * sizeof(float), 512), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
             _handIndexBuffer = factory.CreateBuffer(new BufferDescription(
                 (uint)Math.Max(_handIndices.Length * sizeof(ushort), 128), BufferUsage.IndexBuffer));
+            _heldBlockBuffer = factory.CreateBuffer(new BufferDescription(11 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
 
             if (_duckView != null && _duckSampler != null)
             {
@@ -2863,15 +2952,19 @@ void main() { outColor = vec4(1.0); }";
             bool playing = menu == null || menu.Screen == GameScreen.Playing;
             if (!playing || !_firstPersonCamera || _hud.InventoryOpen || _hud.BiomeMenuOpen) return;
 
-            const float handScale = 0.9f;    // arm sized like MC's first-person arm
-            const float sx = 0.45f;          // shoulder (camera space): bottom-right, off-screen
-            const float sy = -0.80f;
-            const float sz = -0.60f;
-            const float basePitch = -0.5f;   // idle: arm tilted forward, fist aimed at the block
-            const float baseYaw = -0.45f;    // idle: arm leans toward the screen center
+            float handScale = _handScale;   // arm sized like MC's first-person arm
+            float sx = _handSx;             // shoulder (camera space): lower, further right
+            float sy = _handSy;
+            float sz = _handSz;
+            float basePitch = _handBasePitch; // idle: arm tilted forward, fist aimed at the block
+            float baseYaw = _handBaseYaw;     // idle: arm angled toward the screen center (left)
 
-            // Walk bob: the hand rides the walk cycle like MC (subtle, only when grounded/moving).
-            float walkBob = (float)Math.Abs(Math.Sin(_handWalkPhase)) * 0.05f * Math.Min(1f, _handWalkAmount);
+            // Walk bob: the hand rides the SAME wave as the camera (same phase + _bobBlend ease),
+            // but at half amplitude so it's a subtler echo of the POV sway - same direction, same
+            // rhythm, just gentler.
+            float walkAmt = Math.Min(1f, _handWalkAmount);
+            float handBob = (float)Math.Abs(Math.Sin(_handWalkPhase)) * 0.045f * walkAmt * _bobBlend;
+            float handSway = (float)Math.Sin(_handWalkPhase) * 0.025f * walkAmt * _bobBlend;
 
             // Idle: gentle breathing sway.
             float now = (float)_handClock.Elapsed.TotalSeconds;
@@ -2920,8 +3013,30 @@ void main() { outColor = vec4(1.0); }";
             float cy = (float)Math.Cos(yaw), syy = (float)Math.Sin(yaw);
             float cr = (float)Math.Cos(roll), sr = (float)Math.Sin(roll);
 
+            // Holding a hotbar block REPLACES the hand - the block rides the fist and uses the
+            // same swing/punch/bob motion instead of the arm.
+            bool holdingBlock = false;
+            {
+                var hotbar = _hud.Hotbar;
+                if (hotbar != null)
+                {
+                    int sel = _hud.SelectedSlot;
+                    if (sel >= 0 && sel < hotbar.Count)
+                    {
+                        int bid = hotbar[sel];
+                        if (bid > 0 && bid < BlockRegistry.Count
+                            && (BlockRegistry.GetById(bid).AllTexture ?? default).Width > 0)
+                        {
+                            holdingBlock = true;
+                        }
+                    }
+                }
+            }
+
             float[] verts = new float[_handMesh.Length];
-            for (int i = 0; i < _handMesh.Length; i += 9)
+            if (!holdingBlock)
+            {
+                for (int i = 0; i < _handMesh.Length; i += 9)
             {
                 // Flip the arm so it points UP from the shoulder, then rotate pitch -> yaw -> roll
                 // around the shoulder (origin) for the chop, then place + sweep toward the block.
@@ -2937,8 +3052,8 @@ void main() { outColor = vec4(1.0); }";
                 float z2 = -xf * syy + z1 * cy;
                 float x3 = x2 * cr - y1 * sr;
                 float y3 = x2 * sr + y1 * cr;
-                verts[i] = x3 + sx + tx;
-                verts[i + 1] = y3 + sy + walkBob + ty;
+                verts[i] = x3 + sx + tx + handSway;
+                verts[i + 1] = y3 + sy + ty + handBob;
                 verts[i + 2] = z2 + sz + tz;
                 verts[i + 3] = _handMesh[i + 3];
                 verts[i + 4] = _handMesh[i + 4];
@@ -2947,44 +3062,103 @@ void main() { outColor = vec4(1.0); }";
                 verts[i + 7] = _handMesh[i + 7];
                 verts[i + 8] = _handMesh[i + 8];
             }
-            _gd.UpdateBuffer(_handVertexBuffer, 0, verts);
+                _gd.UpdateBuffer(_handVertexBuffer, 0, verts);
+            } // end if (!holdingBlock)
+
+            // The held block has its own anchor (independent of the arm pose) and rides the same
+            // punch/bob/sway motion.
+            float blockX = _heldBlockX + tx + handSway;
+            float blockY = _heldBlockY + ty + handBob;
+            float blockZ = _heldBlockZ + tz;
+
+            // A selected hotbar block replaces the hand and uses the same motion.
+            if (holdingBlock) DrawHeldBlock(cl, blockX, blockY, blockZ);
 
             // The hand renders with depth OFF (it must always draw over the world), so the arm's
             // six faces need explicit back-to-front ordering - otherwise a hidden face can paint
             // over a visible one where they overlap on screen and a face looks invisible.
-            float[] faceZ = new float[6];
-            for (int f = 0; f < 6; f++)
+            if (!holdingBlock)
             {
-                float zSum = 0f;
-                for (int k = 0; k < 4; k++)
+                float[] faceZ = new float[6];
+                for (int f = 0; f < 6; f++)
                 {
-                    zSum += verts[(f * 4 + k) * 9 + 2];
+                    float zSum = 0f;
+                    for (int k = 0; k < 4; k++)
+                    {
+                        zSum += verts[(f * 4 + k) * 9 + 2];
+                    }
+                    faceZ[f] = zSum / 4f;
                 }
-                faceZ[f] = zSum / 4f;
-            }
-            int[] order = { 0, 1, 2, 3, 4, 5 };
-            Array.Sort(order, (a, b) => faceZ[a].CompareTo(faceZ[b])); // ascending z: farthest first, nearest last
-            ushort[] sortedIdx = new ushort[_handIndices.Length];
-            for (int f = 0; f < 6; f++)
-            {
-                int src = order[f] * 6;
-                int dst = f * 6;
-                for (int k = 0; k < 6; k++) sortedIdx[dst + k] = _handIndices[src + k];
-            }
-            _gd.UpdateBuffer(_handIndexBuffer, 0, sortedIdx);
+                int[] order = { 0, 1, 2, 3, 4, 5 };
+                Array.Sort(order, (a, b) => faceZ[a].CompareTo(faceZ[b])); // ascending z: farthest first, nearest last
+                ushort[] sortedIdx = new ushort[_handIndices.Length];
+                for (int f = 0; f < 6; f++)
+                {
+                    int src = order[f] * 6;
+                    int dst = f * 6;
+                    for (int k = 0; k < 6; k++) sortedIdx[dst + k] = _handIndices[src + k];
+                }
+                _gd.UpdateBuffer(_handIndexBuffer, 0, sortedIdx);
 
-            // Camera-space projection: no view transform (hand positioned relative to the eye),
-            // with a close near plane so the hand never clips.
-            float aspect = _sc.Framebuffer.Width / (float)Math.Max(1f, _sc.Framebuffer.Height);
-            var proj = Matrix4x4.CreatePerspectiveFieldOfView((float)(Math.PI / 2.0), aspect, 0.05f, 100f);
-            _gd.UpdateBuffer(_handProjBuffer, 0, ref proj);
+                // Camera-space projection: no view transform (hand positioned relative to the eye),
+                // with a close near plane so the hand never clips.
+                float aspect = _sc.Framebuffer.Width / (float)Math.Max(1f, _sc.Framebuffer.Height);
+                var proj = Matrix4x4.CreatePerspectiveFieldOfView((float)(Math.PI / 2.0), aspect, 0.05f, 100f);
+                _gd.UpdateBuffer(_handProjBuffer, 0, ref proj);
 
-            cl.SetPipeline(_handPipeline);
-            cl.SetGraphicsResourceSet(0, _handProjSet);
-            if (_playerTextureSet != null) cl.SetGraphicsResourceSet(1, _playerTextureSet);
-            cl.SetVertexBuffer(0, _handVertexBuffer);
-            cl.SetIndexBuffer(_handIndexBuffer, IndexFormat.UInt16);
-            cl.DrawIndexed((uint)_handIndices.Length, 1, 0, 0, 0);
+                cl.SetPipeline(_handPipeline);
+                cl.SetGraphicsResourceSet(0, _handProjSet);
+                if (_playerTextureSet != null) cl.SetGraphicsResourceSet(1, _playerTextureSet);
+                cl.SetVertexBuffer(0, _handVertexBuffer);
+                cl.SetIndexBuffer(_handIndexBuffer, IndexFormat.UInt16);
+                cl.DrawIndexed((uint)_handIndices.Length, 1, 0, 0, 0);
+            }
+        }
+
+        // Draws the hotbar-selected block held at the first-person fist: a small cube using the
+        // item-drop pipeline (block atlas) with the camera-space hand projection, so it rides the
+        // arm and punches with it.
+        private void DrawHeldBlock(CommandList cl, float blockX, float blockY, float blockZ)
+        {
+            if (_heldBlockPipeline == null || _heldBlockBuffer == null || _itemDropVertexBuffer == null) return;
+            var hotbar = _hud.Hotbar;
+            if (hotbar == null) return;
+            int selected = _hud.SelectedSlot;
+            if (selected < 0 || selected >= hotbar.Count) return;
+            int bid = hotbar[selected];
+            if (bid <= 0 || bid >= BlockRegistry.Count) return;
+            var tr = BlockRegistry.GetById(bid).AllTexture ?? default;
+            if (tr.Width <= 0) return;
+
+            float atlasW = Math.Max(1f, _atlasWidth);
+            float atlasH = Math.Max(1f, _atlasHeight);
+            float blockSize = _heldBlockSize; // held block reads big up close
+
+            // Block base corner (the cube spans blockSize^3, centered on the given position).
+            _heldBlockScratch[0] = blockX - blockSize * 0.5f;
+            _heldBlockScratch[1] = blockY - blockSize * 0.5f;
+            _heldBlockScratch[2] = blockZ - blockSize * 0.5f;
+            _heldBlockScratch[3] = tr.X / atlasW;
+            _heldBlockScratch[4] = tr.Y / atlasH;
+            _heldBlockScratch[5] = tr.Width / atlasW;
+            _heldBlockScratch[6] = tr.Height / atlasH;
+            // Fixed orientation: a 3/4 view tilted toward the camera (rotate ~-35 deg Y, -20 deg X).
+            float hy = -0.611f, hx = -0.349f;
+            float cyq = (float)Math.Cos(hy * 0.5f), syq = (float)Math.Sin(hy * 0.5f);
+            float cxq = (float)Math.Cos(hx * 0.5f), sxq = (float)Math.Sin(hx * 0.5f);
+            _heldBlockScratch[7] = sxq * cyq;
+            _heldBlockScratch[8] = cxq * syq;
+            _heldBlockScratch[9] = sxq * syq;
+            _heldBlockScratch[10] = cxq * cyq;
+            _gd.UpdateBuffer(_heldBlockBuffer, 0, _heldBlockScratch);
+
+            cl.SetPipeline(_heldBlockPipeline);
+            cl.SetGraphicsResourceSet(0, _handProjSet);   // camera-space projection
+            if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet); // block atlas
+            cl.SetVertexBuffer(0, _itemDropVertexBuffer);
+            cl.SetVertexBuffer(1, _heldBlockBuffer);
+            cl.SetIndexBuffer(_itemDropIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed(FallingCubeIndices, 1, 0, 0, 0);
         }
 
         private void DrawCrosshair(CommandList cl)
@@ -5684,18 +5858,21 @@ void main() { outColor = vec4(1.0); }";
         private void DrawInventoryWindow(Vector2 displaySize)
         {
             if (_iconImGuiId == IntPtr.Zero || _blockIconUv == null) return;
+            _hoveredInventorySlot = -1;
 
             bool survival = _hud.Mode == GameMode.Survival;
-            if (survival && _hud.Inventory == null) return;
+            if (survival && _hud.BagSlots == null) return;
 
             float winW = Math.Min(680, displaySize.X - 32);
-            float winH = Math.Min(480, displaySize.Y - 64);
-            ImGui.SetNextWindowPos(new Vector2((displaySize.X - winW) / 2f, 24), ImGuiCond.Always);
+            float winH = Math.Min(520, displaySize.Y - 64);
+            float winX = (displaySize.X - winW) / 2f;
+            float winY = 24f;
+            ImGui.SetNextWindowPos(new Vector2(winX, winY), ImGuiCond.Always);
             ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
             ImGui.Begin("##inventory", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
                 | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse);
             ImGui.Text(survival
-                ? "Your blocks - click one to put it in the selected hotbar slot"
+                ? "Left: pick/place stacks   Right: half / drop one   Click outside: throw"
                 : "Inventory - click a block to put it in the selected hotbar slot");
             ImGui.Separator();
             ImGui.BeginChild("##invgrid", new Vector2(0, -4));
@@ -5706,26 +5883,31 @@ void main() { outColor = vec4(1.0); }";
 
             if (survival)
             {
-                // Survival: every owned block, sorted by id, with its count.
-                var owned = new List<int>(_hud.Inventory.Keys);
-                owned.Sort();
-                for (int i = 0; i < owned.Count; i++)
+                // Main bag: 4 rows x 10 slots (the C++ E-menu layout). Left click picks up /
+                // places / stacks / swaps; right click picks up half or drops one.
+                for (int row = 0; row < 4; row++)
                 {
-                    int id = owned[i];
-                    var uv = _blockIconUv[id];
-                    string name = BlockRegistry.GetById(id).DisplayName;
-                    ImGui.PushID(id);
-                    if (ImGui.ImageButton($"##icon{id}", _iconImGuiId, new Vector2(48, 48),
-                            new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W),
-                            Vector4.Zero, Vector4.One))
+                    for (int col = 0; col < 10; col++)
                     {
-                        _inventorySelections.Enqueue(id);
+                        int slot = row * 10 + col;
+                        var contents = (_hud.BagSlots != null && slot < _hud.BagSlots.Count)
+                            ? _hud.BagSlots[slot] : default;
+                        DrawInventorySlotCell($"bg{slot}", contents.BlockId, contents.Count, 0, slot);
+                        if (col != 9) ImGui.SameLine(0, 4);
                     }
-                    if (ImGui.IsItemHovered()) ImGui.SetTooltip(name);
-                    ImGui.SameLine(0, 4);
-                    ImGui.Text(_hud.Inventory[id].ToString());
-                    ImGui.PopID();
-                    if ((i + 1) % perRow != 0) ImGui.SameLine();
+                    if (row != 3) ImGui.Dummy(new Vector2(0, 2));
+                }
+
+                // Hotbar row: 10 draggable slots (empty slots show a blank cell).
+                ImGui.Dummy(new Vector2(0, 8));
+                ImGui.Separator();
+                ImGui.Text("Hotbar");
+                for (int i = 0; i < 10; i++)
+                {
+                    int bid = (_hud.Hotbar != null && i < _hud.Hotbar.Count) ? _hud.Hotbar[i] : 0;
+                    int count = (_hud.HotbarCounts != null && i < _hud.HotbarCounts.Count) ? _hud.HotbarCounts[i] : 0;
+                    DrawInventorySlotCell($"hb{i}", bid, count, 1, i);
+                    if (i != 9) ImGui.SameLine(0, 4);
                 }
             }
             else
@@ -5750,6 +5932,75 @@ void main() { outColor = vec4(1.0); }";
 
             ImGui.EndChild();
             ImGui.End();
+
+            if (survival)
+            {
+                // Clicks OUTSIDE the window rect throw items: left = whole stack, right = one.
+                // (Checked against the window rect, not hover flags, so clicks on the hotbar row
+                // inside the window never count as outside.)
+                var mousePos = ImGui.GetMousePos();
+                bool insideWindow = mousePos.X >= winX && mousePos.X <= winX + winW
+                    && mousePos.Y >= winY && mousePos.Y <= winY + winH;
+                if (!insideWindow)
+                {
+                    if (ImGui.IsMouseClicked(ImGuiMouseButton.Left)) _inventoryClicks.Enqueue((2, 0, 0));
+                    if (ImGui.IsMouseClicked(ImGuiMouseButton.Right)) _inventoryClicks.Enqueue((2, 0, 1));
+                }
+
+                // Draw the cursor-held stack floating at the mouse.
+                if (_hud.HeldStack.HasValue)
+                {
+                    int bid = _hud.HeldStack.Value.BlockId;
+                    if (bid > 0 && _blockIconUv != null && bid < _blockIconUv.Length)
+                    {
+                        var uv = _blockIconUv[bid];
+                        var mp = ImGui.GetMousePos();
+                        var drawList = ImGui.GetForegroundDrawList();
+                        drawList.AddImage(_iconImGuiId, mp + new Vector2(-16, -16), mp + new Vector2(16, 16),
+                            new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W));
+                        drawList.AddText(mp + new Vector2(-16, 14), ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 1)),
+                            _hud.HeldStack.Value.Count.ToString());
+                    }
+                }
+            }
+        }
+
+        // One inventory slot cell: a 48px block icon (or a blank cell) with its count, wired to
+        // the drag-click queue. kind: 0=bag, 1=hotbar, 3=quick-move. target: unified slot index
+        // for clicks (bag 0..39, hotbar 40..49).
+        private void DrawInventorySlotCell(string id, int blockId, int count, int kind, int target)
+        {
+            int unified = kind == 1 ? 40 + target : target;
+            bool shift = ImGui.IsKeyDown(ImGuiKey.LeftShift) || ImGui.IsKeyDown(ImGuiKey.RightShift);
+            ImGui.PushID(id);
+            if (blockId > 0 && _blockIconUv != null && blockId < _blockIconUv.Length)
+            {
+                var uv = _blockIconUv[blockId];
+                ImGui.ImageButton($"##{id}", _iconImGuiId, new Vector2(48, 48),
+                    new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W),
+                    Vector4.Zero, Vector4.One);
+                if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && shift) _inventoryClicks.Enqueue((3, unified, 0));
+                else if (ImGui.IsItemClicked(ImGuiMouseButton.Left)) _inventoryClicks.Enqueue((kind, unified, 0));
+                if (ImGui.IsItemClicked(ImGuiMouseButton.Right)) _inventoryClicks.Enqueue((kind, unified, 1));
+                if (ImGui.IsItemHovered())
+                {
+                    _hoveredInventorySlot = unified;
+                    ImGui.SetTooltip(BlockRegistry.GetById(blockId).DisplayName);
+                }
+                ImGui.SameLine(0, 4);
+                ImGui.Text(count.ToString());
+            }
+            else
+            {
+                ImGui.ImageButton($"##{id}", _iconImGuiId, new Vector2(48, 48),
+                    new Vector2(0, 0), new Vector2(1, 1),
+                    new Vector4(0.12f, 0.12f, 0.12f, 1f), new Vector4(0.3f, 0.3f, 0.3f, 1f));
+                if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && shift) _inventoryClicks.Enqueue((3, unified, 0));
+                else if (ImGui.IsItemClicked(ImGuiMouseButton.Left)) _inventoryClicks.Enqueue((kind, unified, 0));
+                if (ImGui.IsItemClicked(ImGuiMouseButton.Right)) _inventoryClicks.Enqueue((kind, unified, 1));
+                if (ImGui.IsItemHovered()) _hoveredInventorySlot = unified;
+            }
+            ImGui.PopID();
         }
 
         // Biome teleport menu (B key): lists every biome, clicking one queues a teleport request
@@ -6058,12 +6309,37 @@ void main() { outColor = vec4(1.0); }";
             Array.Copy(bytes, buffer, n);
         }
 
-        // Reads a null-terminated byte buffer back into a string.
+        // Reads a null-terminated byte buffer back into a string. Never throws - a malformed or
+        // truncated UTF-8 buffer (ImGui can leave partial sequences at the end) falls back to a
+        // lossy decode instead of crashing the game.
         private static string ReadBuffer(byte[] buffer)
         {
-            int end = Array.IndexOf(buffer, (byte)0);
-            if (end < 0) end = buffer.Length;
-            return System.Text.Encoding.UTF8.GetString(buffer, 0, end);
+            try
+            {
+                int end = Array.IndexOf(buffer, (byte)0);
+                if (end < 0) end = buffer.Length;
+                return System.Text.Encoding.UTF8.GetString(buffer, 0, end);
+            }
+            catch
+            {
+                try
+                {
+                    // Lossy ASCII fallback: replace any byte >= 128 with '?'.
+                    int end = Array.IndexOf(buffer, (byte)0);
+                    if (end < 0) end = buffer.Length;
+                    var sb = new System.Text.StringBuilder(end);
+                    for (int i = 0; i < end; i++)
+                    {
+                        byte b = buffer[i];
+                        sb.Append(b < 128 && b > 0 ? (char)b : '?');
+                    }
+                    return sb.ToString();
+                }
+                catch
+                {
+                    return "";
+                }
+            }
         }
 
         // Loading screen: a centered phase label with a per-phase progress bar and a total bar.
@@ -6222,11 +6498,12 @@ void main() { outColor = vec4(1.0); }";
                     }
                 }
 
-                // Survival: show how many of that block you own, in the slot corner.
-                if (survival && _hud.Inventory != null)
+                // Survival: show the per-slot hotbar count in the corner.
+                if (survival && _hud.HotbarCounts != null)
                 {
                     int bid = (_hud.Hotbar != null && i < _hud.Hotbar.Count) ? _hud.Hotbar[i] : 0;
-                    if (bid > 0 && _hud.Inventory.TryGetValue(bid, out int count) && count > 0)
+                    int count = (i < _hud.HotbarCounts.Count) ? _hud.HotbarCounts[i] : 0;
+                    if (bid > 0 && count > 0)
                     {
                         string countText = count.ToString();
                         var textSize = ImGui.CalcTextSize(countText);
@@ -6338,6 +6615,37 @@ void main() { outColor = vec4(1.0); }";
                 uint bg = ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.47f));
                 drawList.AddRectFilled(labelPos - new Vector2(6, 3), labelPos + textSize + new Vector2(6, 3), bg);
                 drawList.AddText(labelPos, textColor, label);
+            }
+
+            // Hand Editor (F8): tune the first-person hand/held-block pose live, then copy the
+            // values line back to the dev. Frees the mouse (Program disables mouse look while
+            // open) so the sliders are draggable.
+            if (_hud.HandEditorOpen)
+            {
+                ImGui.SetNextWindowPos(new Vector2(8, 320), ImGuiCond.FirstUseEver);
+                ImGui.SetNextWindowSize(new Vector2(420, 0), ImGuiCond.FirstUseEver);
+                ImGui.Begin("Hand Editor", ImGuiWindowFlags.NoCollapse);
+                ImGui.Text("Hand (arm pose)");
+                ImGui.SliderFloat("handScale", ref _handScale, 0.4f, 1.4f);
+                ImGui.SliderFloat("sx (right)", ref _handSx, 0.2f, 0.9f);
+                ImGui.SliderFloat("sy (down)", ref _handSy, -1.2f, -0.3f);
+                ImGui.SliderFloat("sz (forward)", ref _handSz, -1.0f, -0.2f);
+                ImGui.SliderFloat("basePitch", ref _handBasePitch, -1.4f, 0.2f);
+                ImGui.SliderFloat("baseYaw", ref _handBaseYaw, -0.9f, 0.9f);
+                ImGui.Separator();
+                ImGui.Text("Held block (own anchor, independent of the arm)");
+                ImGui.SliderFloat("blockX (right)", ref _heldBlockX, 0.2f, 0.9f);
+                ImGui.SliderFloat("blockY (down)", ref _heldBlockY, -0.8f, 0.1f);
+                ImGui.SliderFloat("blockZ (forward)", ref _heldBlockZ, -1.2f, -0.3f);
+                ImGui.SliderFloat("blockSize", ref _heldBlockSize, 0.2f, 0.6f);
+                ImGui.Separator();
+                string copyLine = string.Format(
+                    "handScale={0:0.###}f, sx={1:0.###}f, sy={2:0.###}f, sz={3:0.###}f, basePitch={4:0.###}f, baseYaw={5:0.###}f, heldBlockX={6:0.###}f, heldBlockY={7:0.###}f, heldBlockZ={8:0.###}f, heldBlockSize={9:0.###}f",
+                    _handScale, _handSx, _handSy, _handSz, _handBasePitch, _handBaseYaw,
+                    _heldBlockX, _heldBlockY, _heldBlockZ, _heldBlockSize);
+                ImGui.Text("Copy this:");
+                ImGui.TextWrapped(copyLine);
+                ImGui.End();
             }
 
             // Debug overlay (F3)
@@ -6963,6 +7271,16 @@ void main() { outColor = vec4(1.0); }";
         {
             return _inventorySelections.TryDequeue(out blockId);
         }
+
+        /// <summary>Pops one survival drag/drop click: (kind, target, button).</summary>
+        public bool TryTakeInventoryClick(out (int Kind, int Target, int Button) click)
+        {
+            return _inventoryClicks.TryDequeue(out click);
+        }
+
+        /// <summary>The unified slot index the mouse is hovering in the E menu (-1 = none), for
+        /// Q-to-drop.</summary>
+        public int HoveredInventorySlot => _hoveredInventorySlot;
 
         /// <summary>Pops one biome name the player clicked in the biome menu, or false.</summary>
         public bool TryTakeBiomeSelection(out string biomeName)

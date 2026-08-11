@@ -78,10 +78,29 @@ namespace CubeApp
         public GameMode Mode { get; set; } = GameMode.Creative;
         public bool IsCreative => Mode == GameMode.Creative;
 
-        // ---- survival inventory (block id -> count; creative ignores this entirely) ----
-        private readonly Dictionary<int, int> _inventory = new();
-        public IReadOnlyDictionary<int, int> Inventory => _inventory;
-        public int InventoryCount(int blockId) => _inventory.TryGetValue(blockId, out int c) ? c : 0;
+        // ---- survival inventory (slot-based, ported from Cubuild C++) ----
+        public const int MaxStackSize = 64;
+        private const int BagSlotCount = 40;   // 4 rows x 10, matching the C++ E-menu layout
+        private readonly InventorySlot[] _bagSlots = new InventorySlot[BagSlotCount];
+        /// <summary>Bag slots (index 0..39) for the E-menu grid.</summary>
+        public IReadOnlyList<InventorySlot> BagSlots => _bagSlots;
+        /// <summary>Per-hotbar-slot counts (parallel to <see cref="Hotbar"/> block ids).</summary>
+        public int[] HotbarCounts = new int[HotbarSlots];
+        /// <summary>Total count of a block across the bag and hotbar.</summary>
+        public int InventoryCount(int blockId)
+        {
+            if (blockId <= 0) return 0;
+            int total = 0;
+            for (int i = 0; i < BagSlotCount; i++)
+            {
+                if (_bagSlots[i].BlockId == blockId) total += _bagSlots[i].Count;
+            }
+            for (int i = 0; i < HotbarSlots; i++)
+            {
+                if (Hotbar[i] == blockId) total += HotbarCounts[i];
+            }
+            return total;
+        }
 
         // ---- dropped items (survival: mined blocks fall to the ground until collected) ----
         private readonly List<DroppedItem> _droppedItems = new();
@@ -111,21 +130,32 @@ namespace CubeApp
         /// into your inventory. Usually collected earlier on arrival.</summary>
         public const float PickupFlyDuration = 0.45f;
 
-        /// <summary>Spawns a physical item drop at a world position (survival only).</summary>
-        public void SpawnItemDrop(int blockId, int count, Point3D worldPos)
+        /// <summary>Spawns a physical item drop at a world position (survival only). If
+        /// <paramref name="throwVelocity"/> is given the drop flies that way (thrown items);
+        /// otherwise it gets a small random kick.</summary>
+        public void SpawnItemDrop(int blockId, int count, Point3D worldPos, Point3D? throwVelocity = null)
         {
             if (blockId <= 0 || count <= 0) return;
             if (_droppedItems.Count > 256) _droppedItems.RemoveAt(0); // hard cap
             var rand = _regenRandom;
+            Point3D vel;
+            if (throwVelocity.HasValue)
+            {
+                vel = throwVelocity.Value;
+            }
+            else
+            {
+                vel = new Point3D(
+                    (rand.NextDouble() * 4.0 - 2.0) * 0.6,
+                    3.2,
+                    (rand.NextDouble() * 4.0 - 2.0) * 0.6);
+            }
             var drop = new DroppedItem
             {
                 BlockId = blockId,
                 Count = count,
                 Position = worldPos,
-                Velocity = new Point3D(
-                    (rand.NextDouble() * 4.0 - 2.0) * 0.6,
-                    3.2,
-                    (rand.NextDouble() * 4.0 - 2.0) * 0.6),
+                Velocity = vel,
                 Age = 0f,
             };
             // Random tumble: a random axis and a decent spin rate so it reads physical.
@@ -147,27 +177,62 @@ namespace CubeApp
             _droppedItems.Add(drop);
         }
 
-        /// <summary>Adds blocks to the survival inventory (e.g. a mined block).</summary>
-        public bool TryAddToInventory(int blockId, int count = 1)
+        /// <summary>Adds blocks to the survival inventory (e.g. a mined block), stacking up to
+        /// <see cref="MaxStackSize"/>: hotbar first (matching then empty), then the bag.</summary>
+        public bool TryAddToInventory(int blockId, int count)
         {
             if (blockId <= 0 || count <= 0) return false;
-            _inventory.TryGetValue(blockId, out int cur);
-            _inventory[blockId] = cur + count;
-            return true;
+            int remaining = count;
+            int air = BlockRegistry.AirId;
+
+            for (int i = 0; i < HotbarSlots && remaining > 0; i++)
+            {
+                if (Hotbar[i] == blockId && HotbarCounts[i] < MaxStackSize)
+                {
+                    int add = Math.Min(remaining, MaxStackSize - HotbarCounts[i]);
+                    HotbarCounts[i] += add;
+                    remaining -= add;
+                }
+            }
+            for (int i = 0; i < BagSlotCount && remaining > 0; i++)
+            {
+                if (_bagSlots[i].BlockId == blockId && _bagSlots[i].Count < MaxStackSize)
+                {
+                    int add = Math.Min(remaining, MaxStackSize - _bagSlots[i].Count);
+                    _bagSlots[i].Count += add;
+                    remaining -= add;
+                }
+            }
+            for (int i = 0; i < HotbarSlots && remaining > 0; i++)
+            {
+                if (Hotbar[i] == air)
+                {
+                    int add = Math.Min(remaining, MaxStackSize);
+                    Hotbar[i] = blockId;
+                    HotbarCounts[i] = add;
+                    remaining -= add;
+                }
+            }
+            for (int i = 0; i < BagSlotCount && remaining > 0; i++)
+            {
+                if (_bagSlots[i].IsEmpty)
+                {
+                    int add = Math.Min(remaining, MaxStackSize);
+                    _bagSlots[i] = new InventorySlot { BlockId = blockId, Count = add };
+                    remaining -= add;
+                }
+            }
+            return remaining < count;
         }
 
-        /// <summary>
-        /// Collects an item, preferring the first hotbar slot that already holds that block,
-        /// then the first empty hotbar slot; if the whole hotbar is full of OTHER blocks, the
-        /// item goes into the inventory bag instead. If the player currently has nothing
-        /// selected, picking up fills the selected slot so it's usable right away.
-        /// </summary>
+        /// <summary>Collects an item, preferring the first hotbar slot that already holds that
+        /// block, then the first empty hotbar slot; otherwise it goes into the bag. If the player
+        /// has nothing selected, picking up fills the selected slot so it is usable right away.</summary>
         public bool CollectItem(int blockId, int count = 1)
         {
             if (blockId <= 0 || count <= 0) return false;
             int air = BlockRegistry.AirId;
 
-            // 1) First matching slot (stack onto it).
             for (int i = 0; i < HotbarSlots; i++)
             {
                 if (Hotbar[i] == blockId)
@@ -176,7 +241,6 @@ namespace CubeApp
                     return true;
                 }
             }
-            // 2) First empty slot.
             for (int i = 0; i < HotbarSlots; i++)
             {
                 if (Hotbar[i] == air)
@@ -191,20 +255,273 @@ namespace CubeApp
                     return true;
                 }
             }
-            // 3) Hotbar is all other blocks: into the bag.
             TryAddToInventory(blockId, count);
             return true;
         }
 
-        /// <summary>Spends blocks from the survival inventory (e.g. placing a block).</summary>
+        // ---- inventory cursor (ported drag logic from the C++ E-menu) ----
+        /// <summary>The stack riding the mouse cursor while the inventory is open.</summary>
+        public (int BlockId, int Count)? HeldStack { get; set; }
+
+        // Unified slot access: 0..39 = bag, 40..49 = hotbar.
+        private InventorySlot GetSlot(int slot)
+        {
+            if (slot < BagSlotCount) return _bagSlots[slot];
+            int hi = slot - BagSlotCount;
+            if (hi >= 0 && hi < HotbarSlots)
+            {
+                return new InventorySlot { BlockId = Hotbar[hi], Count = Hotbar[hi] > 0 ? HotbarCounts[hi] : 0 };
+            }
+            return default;
+        }
+
+        private void SetSlot(int slot, InventorySlot contents)
+        {
+            if (slot < BagSlotCount)
+            {
+                _bagSlots[slot] = contents;
+                return;
+            }
+            int hi = slot - BagSlotCount;
+            if (hi < 0 || hi >= HotbarSlots) return;
+            if (contents.IsEmpty)
+            {
+                Hotbar[hi] = BlockRegistry.AirId;
+                HotbarCounts[hi] = 0;
+            }
+            else
+            {
+                Hotbar[hi] = contents.BlockId;
+                HotbarCounts[hi] = contents.Count;
+            }
+        }
+
+        private void ClearSlot(int slot) => SetSlot(slot, default);
+
+        /// <summary>
+        /// The C++ drag interaction on one slot. Left click: empty cursor picks up the whole
+        /// stack; held cursor places / stacks / swaps. Right click: empty cursor picks up half;
+        /// held cursor drops one (same type only).
+        /// </summary>
+        public void CursorClickSlot(int slot, bool rightClick)
+        {
+            if (slot < 0 || slot >= BagSlotCount + HotbarSlots) return;
+            var clicked = GetSlot(slot);
+            var held = HeldStack;
+
+            if (!rightClick)
+            {
+                // Left click.
+                if (held.HasValue)
+                {
+                    int heldId = held.Value.BlockId;
+                    int heldCount = held.Value.Count;
+                    if (clicked.IsEmpty)
+                    {
+                        SetSlot(slot, new InventorySlot { BlockId = heldId, Count = heldCount });
+                        HeldStack = null;
+                    }
+                    else if (clicked.BlockId == heldId && clicked.Count < MaxStackSize)
+                    {
+                        int add = Math.Min(heldCount, MaxStackSize - clicked.Count);
+                        clicked.Count += add;
+                        SetSlot(slot, clicked);
+                        int nc = heldCount - add;
+                        HeldStack = nc > 0 ? (heldId, nc) : null;
+                    }
+                    else
+                    {
+                        // Swap.
+                        SetSlot(slot, new InventorySlot { BlockId = heldId, Count = heldCount });
+                        HeldStack = (clicked.BlockId, clicked.Count);
+                    }
+                }
+                else if (!clicked.IsEmpty)
+                {
+                    HeldStack = (clicked.BlockId, clicked.Count);
+                    ClearSlot(slot);
+                }
+            }
+            else
+            {
+                // Right click.
+                if (held.HasValue)
+                {
+                    int heldId = held.Value.BlockId;
+                    bool canPlace = clicked.IsEmpty
+                        || (clicked.BlockId == heldId && clicked.Count < MaxStackSize);
+                    if (canPlace)
+                    {
+                        if (clicked.IsEmpty)
+                        {
+                            SetSlot(slot, new InventorySlot { BlockId = heldId, Count = 1 });
+                        }
+                        else
+                        {
+                            clicked.Count++;
+                            SetSlot(slot, clicked);
+                        }
+                        int nc = held.Value.Count - 1;
+                        HeldStack = nc > 0 ? (heldId, nc) : null;
+                    }
+                }
+                else if (!clicked.IsEmpty && clicked.Count > 1)
+                {
+                    int half = (clicked.Count + 1) / 2;
+                    HeldStack = (clicked.BlockId, half);
+                    clicked.Count -= half;
+                    SetSlot(slot, clicked);
+                }
+            }
+        }
+
+        // Throw velocity along the player's facing direction (spawned at the feet): fast enough
+        // to clear the magnet pickup range so you don't instantly grab the item back.
+        private Point3D ThrowVelocity(double speed = 5.5, double up = 0.35)
+        {
+            double yawRad = LocalPlayer.Yaw * Math.PI / 180.0;
+            return new Point3D(Math.Sin(yawRad) * speed, up, Math.Cos(yawRad) * speed);
+        }
+
+        /// <summary>Drops items from the cursor into the world as physical drops.</summary>
+        public void DropFromCursor(int count)
+        {
+            var held = HeldStack;
+            if (!held.HasValue || count <= 0) return;
+            int drop = Math.Min(count, held.Value.Count);
+            var throwVel = ThrowVelocity();
+            for (int i = 0; i < drop; i++)
+            {
+                SpawnItemDrop(held.Value.BlockId, 1,
+                    new Point3D(LocalPlayer.Position.X, LocalPlayer.Position.Y, LocalPlayer.Position.Z), throwVel);
+            }
+            int nc = held.Value.Count - drop;
+            if (nc <= 0) HeldStack = null;
+            else HeldStack = (held.Value.BlockId, nc);
+        }
+
+        /// <summary>Shift-click quick move (MC): moves a whole stack between the bag and the
+        /// hotbar, stacking onto same-type slots first then empty ones.</summary>
+        public void QuickMoveSlot(int slot)
+        {
+            if (slot < 0 || slot >= BagSlotCount + HotbarSlots) return;
+            var contents = GetSlot(slot);
+            if (contents.IsEmpty) return;
+            int remaining = contents.Count;
+            int air = BlockRegistry.AirId;
+
+            if (slot < BagSlotCount)
+            {
+                // Bag -> hotbar.
+                for (int i = 0; i < HotbarSlots && remaining > 0; i++)
+                {
+                    if (Hotbar[i] == contents.BlockId && HotbarCounts[i] < MaxStackSize)
+                    {
+                        int add = Math.Min(remaining, MaxStackSize - HotbarCounts[i]);
+                        HotbarCounts[i] += add;
+                        remaining -= add;
+                    }
+                }
+                for (int i = 0; i < HotbarSlots && remaining > 0; i++)
+                {
+                    if (Hotbar[i] == air)
+                    {
+                        int add = Math.Min(remaining, MaxStackSize);
+                        Hotbar[i] = contents.BlockId;
+                        HotbarCounts[i] = add;
+                        remaining -= add;
+                    }
+                }
+            }
+            else
+            {
+                // Hotbar -> bag.
+                for (int i = 0; i < BagSlotCount && remaining > 0; i++)
+                {
+                    if (_bagSlots[i].BlockId == contents.BlockId && _bagSlots[i].Count < MaxStackSize)
+                    {
+                        int add = Math.Min(remaining, MaxStackSize - _bagSlots[i].Count);
+                        _bagSlots[i].Count += add;
+                        remaining -= add;
+                    }
+                }
+                for (int i = 0; i < BagSlotCount && remaining > 0; i++)
+                {
+                    if (_bagSlots[i].IsEmpty)
+                    {
+                        int add = Math.Min(remaining, MaxStackSize);
+                        _bagSlots[i] = new InventorySlot { BlockId = contents.BlockId, Count = add };
+                        remaining -= add;
+                    }
+                }
+            }
+
+            if (remaining <= 0) ClearSlot(slot);
+            else SetSlot(slot, new InventorySlot { BlockId = contents.BlockId, Count = remaining });
+        }
+
+        /// <summary>Q while hovering an inventory slot: throws one item from that slot.</summary>
+        public void DropSlotItem(int slot)
+        {
+            if (slot < 0 || slot >= BagSlotCount + HotbarSlots) return;
+            var contents = GetSlot(slot);
+            if (contents.IsEmpty) return;
+            SpawnItemDrop(contents.BlockId, 1, new Point3D(LocalPlayer.Position.X, LocalPlayer.Position.Y, LocalPlayer.Position.Z), ThrowVelocity());
+            int nc = contents.Count - 1;
+            if (nc <= 0) ClearSlot(slot);
+            else SetSlot(slot, new InventorySlot { BlockId = contents.BlockId, Count = nc });
+        }
+
+        /// <summary>Q: throws one item from the selected hotbar stack into the world.</summary>
+        public void DropSelectedHotbarItem()
+        {
+            int air = BlockRegistry.AirId;
+            int blockId = Hotbar[SelectedSlot];
+            if (blockId == air || HotbarCounts[SelectedSlot] <= 0) return;
+            SpawnItemDrop(blockId, 1, new Point3D(LocalPlayer.Position.X, LocalPlayer.Position.Y, LocalPlayer.Position.Z), ThrowVelocity());
+            HotbarCounts[SelectedSlot]--;
+            if (HotbarCounts[SelectedSlot] <= 0)
+            {
+                Hotbar[SelectedSlot] = air;
+                if (SelectedBlock == blockId) SelectedBlock = air;
+            }
+        }
+
+        /// <summary>Spends blocks from the survival inventory (e.g. placing a block). Prefers the
+        /// selected hotbar stack, then other hotbar stacks, then bag stacks.</summary>
         public bool TryConsumeFromInventory(int blockId, int count = 1)
         {
             if (blockId <= 0 || count <= 0) return false;
-            if (!_inventory.TryGetValue(blockId, out int cur) || cur < count) return false;
-            int remaining = cur - count;
-            if (remaining > 0) _inventory[blockId] = remaining;
-            else _inventory.Remove(blockId);
-            return true;
+            int remaining = count;
+            int air = BlockRegistry.AirId;
+
+            void ConsumeHotbar(int i)
+            {
+                if (remaining <= 0 || i < 0 || i >= HotbarSlots) return;
+                if (Hotbar[i] != blockId || HotbarCounts[i] <= 0) return;
+                int take = Math.Min(remaining, HotbarCounts[i]);
+                HotbarCounts[i] -= take;
+                remaining -= take;
+                if (HotbarCounts[i] <= 0)
+                {
+                    Hotbar[i] = air;
+                    if (SelectedBlock == blockId && SelectedSlot == i) SelectedBlock = air;
+                }
+            }
+
+            ConsumeHotbar(SelectedSlot);
+            for (int i = 0; i < HotbarSlots && remaining > 0; i++) ConsumeHotbar(i);
+            for (int i = 0; i < BagSlotCount && remaining > 0; i++)
+            {
+                if (_bagSlots[i].BlockId == blockId)
+                {
+                    int take = Math.Min(remaining, _bagSlots[i].Count);
+                    _bagSlots[i].Count -= take;
+                    remaining -= take;
+                    if (_bagSlots[i].Count <= 0) _bagSlots[i].Clear();
+                }
+            }
+            return remaining == 0;
         }
 
         // ---- physics constants (shared with render layer for third-person view) ----
@@ -338,14 +655,19 @@ namespace CubeApp
             int sandId = BlockRegistry.GetId("sand");
             var rand = new Random();
 
-            // Try random spots in expanding rings out to ~48 blocks from the origin. A random walk
-            // scatters consecutive attempts instead of clustering in one direction.
-            for (int attempt = 0; attempt < 256; attempt++)
+            // Try random spots in expanding-ish rings out to ~400 blocks from the origin - the
+            // origin itself is often ocean, so land can be farther away. The cheap surface
+            // estimator rejects ocean columns BEFORE generating any chunk, so the wide scan stays
+            // fast.
+            for (int attempt = 0; attempt < 2048; attempt++)
             {
-                int range = 4 + rand.Next(45); // 4..48 blocks from origin
+                int range = 4 + rand.Next(396); // 4..399 blocks from origin
                 double ang = rand.NextDouble() * Math.PI * 2.0;
                 int wx = (int)Math.Round(Math.Cos(ang) * range);
                 int wz = (int)Math.Round(Math.Sin(ang) * range);
+
+                // Cheap reject: below/at sea level = ocean floor, never spawn there.
+                if (ChunkProvider != null && ChunkProvider.EstimateSurfaceHeightAt(wx, wz) < 1) continue;
 
                 // Make sure the chunk exists so the surface scan sees real terrain.
                 Chunks.GetOrCreateChunk(WorldToChunkCoord(wx), WorldToChunkCoord(wz));
@@ -369,7 +691,7 @@ namespace CubeApp
                 return true;
             }
 
-            // Fallback: no grass/sand found near origin - use the old height-hunting search.
+            // Fallback: no grass/sand found in the wide ring - use the old height-hunting search.
             var fallback = FindSafeSpawnPosition();
             if (fallback.HasValue)
             {
@@ -579,8 +901,8 @@ namespace CubeApp
                     double feetY = LocalPlayer.Position.Y - EyeHeight;
                     double feetZ = LocalPlayer.Position.Z;
                     double centerY = d.Position.Y + 0.2;
-                    if (Math.Abs(d.Position.X - feetX) < 1.6
-                        && Math.Abs(d.Position.Z - feetZ) < 1.6
+                    if (Math.Abs(d.Position.X - feetX) < 1.2
+                        && Math.Abs(d.Position.Z - feetZ) < 1.2
                         && centerY > feetY - 0.5 && centerY < feetY + 2.0)
                     {
                         d.FlyTime = PickupFlyDuration;
@@ -1349,7 +1671,9 @@ namespace CubeApp
             int baseX = (int)Math.Floor(LocalPlayer.Position.X);
             int baseZ = (int)Math.Floor(LocalPlayer.Position.Z);
             const int seaLevelWorldY = 0;
-            for (int radius = 0; radius <= 64; radius++)
+            // Search out to ~300 blocks so land is reachable even when the origin sits in a wide
+            // ocean basin.
+            for (int radius = 0; radius <= 300; radius++)
             {
                 int bestY = int.MinValue, bestX = 0, bestZ = 0;
                 for (int dx = -radius; dx <= radius; dx++)
@@ -1539,3 +1863,6 @@ namespace CubeApp
         }
     }
 }
+
+
+

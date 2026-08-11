@@ -85,6 +85,7 @@ namespace CubeApp
         private GameScreen screen = GameScreen.Title;
         private readonly MenuState menu = new();
         private bool inventoryOpen;
+        private bool handEditorOpen;
         private bool biomeMenuOpen;
 
         // ---- multiplayer session ----
@@ -346,7 +347,22 @@ namespace CubeApp
         private static int ParseSeed(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return Random.Shared.Next(0, int.MaxValue);
-            return int.TryParse(text.Trim(), out int seed) ? seed : Random.Shared.Next(0, int.MaxValue);
+            // Any typed string becomes a DETERMINISTIC seed (like Minecraft string seeds), so the
+            // box can accept whatever characters you like. A plain number is used directly.
+            if (int.TryParse(text.Trim(), System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out int n))
+            {
+                return n;
+            }
+            unchecked
+            {
+                int hash = 0;
+                foreach (char c in text)
+                {
+                    hash = hash * 31 + c;
+                }
+                return hash;
+            }
         }
 
         private void ProcessMenuActions()
@@ -756,8 +772,27 @@ namespace CubeApp
                                 World.Hotbar[World.SelectedSlot] = invBlock;
                                 World.SelectedBlock = invBlock;
                             }
-                            inventoryOpen = false;
-                            EnableMouseLook();
+                        }
+                        // Survival drag/drop clicks (cursor stacks).
+                        while (gpuRenderer.TryTakeInventoryClick(out var click))
+                        {
+                            if (World == null || World.IsCreative) continue;
+                            switch (click.Kind)
+                            {
+                                case 0: // bag slot (target = slot index 0..39)
+                                    World.CursorClickSlot(click.Target, click.Button == 1);
+                                    break;
+                                case 1: // hotbar slot (target = unified 40+i)
+                                    World.CursorClickSlot(click.Target, click.Button == 1);
+                                    break;
+                                case 3: // shift-click quick move (target = unified slot index)
+                                    World.QuickMoveSlot(click.Target);
+                                    break;
+                                case 2: // clicked outside the window: throw items
+                                    if (click.Button == 0) World.DropFromCursor(int.MaxValue);
+                                    else World.DropFromCursor(1);
+                                    break;
+                            }
                         }
                         while (gpuRenderer.TryTakeBiomeSelection(out string biomeName))
                         {
@@ -795,17 +830,30 @@ namespace CubeApp
             {
                 if (screen == GameScreen.Playing)
                 {
-                    SaveWorld(); // autosave whenever the pause menu opens
-                    screen = GameScreen.Paused;
-                    menu.Screen = GameScreen.Paused;
-                    DisableMouseLook();
+                    // ESC closes the E-menu / biome menu first; only then does it pause.
+                    if (inventoryOpen || biomeMenuOpen)
+                    {
+                        inventoryOpen = false;
+                        biomeMenuOpen = false;
+                        EnableMouseLook();
+                    }
+                    else
+                    {
+                        SaveWorld(); // autosave whenever the pause menu opens
+                        screen = GameScreen.Paused;
+                        menu.Screen = GameScreen.Paused;
+                        DisableMouseLook();
+                    }
                 }
                 else if (screen == GameScreen.Paused)
                 {
                     ResumeToPlaying();
                 }
             }
-            if (screen == GameScreen.Playing && !mouseLook && (frameInput.BreakBlockPressed || frameInput.PlaceBlockPressed))
+            // Clicking while a menu-style overlay is open must NOT re-capture the mouse - the
+            // E-menu / biome menu are only closed by E/ESC now.
+            if (screen == GameScreen.Playing && !mouseLook && !handEditorOpen && !inventoryOpen && !biomeMenuOpen
+                && (frameInput.BreakBlockPressed || frameInput.PlaceBlockPressed))
             {
                 EnableMouseLook();
                 return;
@@ -852,6 +900,13 @@ namespace CubeApp
                     if (biomeMenuOpen) DisableMouseLook();
                     else EnableMouseLook();
                 }
+                // Hand Editor (F8): frees the mouse so sliders can be dragged without looking around.
+                if (frameInput.ToggleHandEditorPressed)
+                {
+                    handEditorOpen = !handEditorOpen;
+                    if (handEditorOpen) DisableMouseLook();
+                    else EnableMouseLook();
+                }
             }
             if (frameInput.CycleRenderDistancePressed) CycleRenderDistance();
             if (screen == GameScreen.Playing && World != null)
@@ -866,7 +921,35 @@ namespace CubeApp
             }
             if (frameInput.ToggleThirdPersonPressed) thirdPersonView = !thirdPersonView;
             if (frameInput.SelectedSlot.HasValue && World != null) World.SetSelectedSlot(frameInput.SelectedSlot.Value);
-            if (screen == GameScreen.Playing && World != null && _ignoreInteractFrames == 0 && frameInput.BreakBlockPressed)
+            // Q: throw one item - from the hovered inventory slot, else the cursor, else the
+            // selected hotbar stack (MC survival behavior).
+            if (frameInput.DropItemPressed && World != null && screen == GameScreen.Playing)
+            {
+                if (inventoryOpen)
+                {
+                    int hover = gpuRenderer?.HoveredInventorySlot ?? -1;
+                    if (hover >= 0) World.DropSlotItem(hover);
+                    else if (World.HeldStack.HasValue) World.DropFromCursor(1);
+                    else World.DropSelectedHotbarItem();
+                }
+                else
+                {
+                    if (World.HeldStack.HasValue) World.DropFromCursor(1);
+                    else World.DropSelectedHotbarItem();
+                }
+            }
+            // Mouse wheel cycles the hotbar while playing with the mouse captured (when menus are
+            // open the wheel goes to ImGui instead).
+            if (frameInput.HotbarScroll != 0 && World != null
+                && screen == GameScreen.Playing && mouseLook
+                && !inventoryOpen && !biomeMenuOpen && !handEditorOpen)
+            {
+                int slots = GameWorld.HotbarSlots;
+                int next = (World.SelectedSlot + frameInput.HotbarScroll) % slots;
+                if (next < 0) next += slots;
+                World.SetSelectedSlot(next);
+            }
+            if (screen == GameScreen.Playing && mouseLook && World != null && _ignoreInteractFrames == 0 && frameInput.BreakBlockPressed)
             {
                 if (!World.Entities.TryAttackMob(World.PlayerPosition, World.GetCameraForward(), null))
                 {
@@ -874,7 +957,7 @@ namespace CubeApp
                     // primes the target so progress starts immediately this frame.
                 }
             }
-            if (screen == GameScreen.Playing && World != null && _ignoreInteractFrames == 0 && frameInput.PlaceBlockPressed) PlaceSelectedBlock();
+            if (screen == GameScreen.Playing && mouseLook && World != null && _ignoreInteractFrames == 0 && frameInput.PlaceBlockPressed) PlaceSelectedBlock();
         }
 
         private void CycleRenderDistance()
@@ -892,6 +975,11 @@ namespace CubeApp
             // the simulation running - the environment, mobs and time all continue while dead.
             if (screen == GameScreen.Paused || screen != GameScreen.Playing && screen != GameScreen.Dead) return;
             if (World == null) return;
+            // Menu overlays free the mouse; don't move, mine, or place while they're open.
+            if (handEditorOpen || inventoryOpen || biomeMenuOpen)
+            {
+                tickInput = new TickInputState(false, false, false, false, false, false, false, false, false, Vector2.Zero);
+            }
             UpdateNetworking(tickInput, deltaSeconds);
             World.StepSimulation(tickInput, deltaSeconds);
             if (_handPokeTimer > 0f) _handPokeTimer = Math.Max(0f, _handPokeTimer - deltaSeconds);
@@ -1290,7 +1378,7 @@ namespace CubeApp
             }
             return new HudState
             {
-                ShowDebug = showFps, InventoryOpen = inventoryOpen, BiomeMenuOpen = biomeMenuOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
+                ShowDebug = showFps, InventoryOpen = inventoryOpen, BiomeMenuOpen = biomeMenuOpen, HandEditorOpen = handEditorOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
                 MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                 FacingText = $"{GetCompassDirection(World.PlayerYaw)} ({GameWorld.NormalizeYaw(World.PlayerYaw):0.0} deg)",
                 SelectedBlockText = $"Selected: {BlockRegistry.GetName(World.SelectedBlock)}",
@@ -1298,7 +1386,7 @@ namespace CubeApp
                 SelectedSlot = World.SelectedSlot, WorldSeed = World.Seed,
                 BiomeText = World.ChunkProvider?.BiomeNameAt((int)Math.Floor(World.PlayerPosition.X), (int)Math.Floor(World.PlayerPosition.Z)) ?? string.Empty,
                 Hotbar = World.Hotbar, HighlightWorldQuad = highlightQuad,
-                Mode = World.Mode, Inventory = World.Inventory,
+                Mode = World.Mode, BagSlots = World.BagSlots, HotbarCounts = World.HotbarCounts, HeldStack = World.HeldStack,
                 PlayerHealth = World.LocalPlayer.Health,
                 DeathCause = World.LocalPlayer.DeathCause,
                 PlayerX = World.PlayerPosition.X,

@@ -12,6 +12,7 @@ namespace CubeApp.Renderer
         public bool ShowDebug;
         public bool InventoryOpen;
         public bool BiomeMenuOpen;
+        public bool HandEditorOpen;
         public bool FlyMode;
         public bool Fullbright;
         /// <summary>Day/night clock (world ticks). Used by the renderer to dim sky + world light.</summary>
@@ -35,8 +36,12 @@ namespace CubeApp.Renderer
 
         /// <summary>Which mode the world is in (Creative = sandbox, Survival = resource loop).</summary>
         public GameMode Mode;
-        /// <summary>Survival inventory (block id -> count). Empty/ignored in creative.</summary>
-        public IReadOnlyDictionary<int, int> Inventory;
+        /// <summary>Survival bag slots (40-slot grid). Empty/ignored in creative.</summary>
+        public IReadOnlyList<InventorySlot> BagSlots;
+        /// <summary>Per-hotbar-slot counts (parallel to the hotbar block ids).</summary>
+        public IReadOnlyList<int> HotbarCounts;
+        /// <summary>The stack riding the cursor while the inventory is open (survival drag/drop).</summary>
+        public (int BlockId, int Count)? HeldStack;
 
         /// <summary>Player health 0..10, drives the healthbar heart slice (10 = full heart).</summary>
         public int PlayerHealth;
@@ -97,6 +102,7 @@ namespace CubeApp.Renderer
             ShowDebug = false,
             InventoryOpen = false,
             BiomeMenuOpen = false,
+            HandEditorOpen = false,
             FlyMode = false,
             Fullbright = false,
             Menu = new MenuState(),
@@ -113,7 +119,9 @@ namespace CubeApp.Renderer
             BiomeText = string.Empty,
             Hotbar = Array.Empty<int>(),
             Mode = GameMode.Creative,
-            Inventory = new Dictionary<int, int>(),
+            BagSlots = Array.Empty<InventorySlot>(),
+            HotbarCounts = Array.Empty<int>(),
+            HeldStack = null,
             PlayerHealth = 10,
             DeathCause = DeathCause.Unknown,
             HighlightWorldQuad = null,

@@ -10,6 +10,7 @@ namespace CubeApp
         public bool ToggleDebugPressed { get; }
         public bool ToggleInventoryPressed { get; }
         public bool ToggleBiomeMenuPressed { get; }
+        public bool ToggleHandEditorPressed { get; }
         public bool CycleRenderDistancePressed { get; }
         public bool SpawnMobPressed { get; }
         public bool SpawnCoyotePressed { get; }
@@ -23,13 +24,16 @@ namespace CubeApp
         public bool ToggleGpuCullPressed { get; }
         public bool BreakBlockPressed { get; }
         public bool PlaceBlockPressed { get; }
+        public bool DropItemPressed { get; }
         public int? SelectedSlot { get; }
+        public int HotbarScroll { get; }
 
         public FrameInputState(
             bool toggleMouseCapturePressed,
             bool toggleDebugPressed,
             bool toggleInventoryPressed,
             bool toggleBiomeMenuPressed,
+            bool toggleHandEditorPressed,
             bool cycleRenderDistancePressed,
             bool spawnMobPressed,
             bool spawnCoyotePressed,
@@ -43,12 +47,15 @@ namespace CubeApp
             bool toggleGpuCullPressed,
             bool breakBlockPressed,
             bool placeBlockPressed,
-            int? selectedSlot)
+            bool dropItemPressed,
+            int? selectedSlot,
+            int hotbarScroll)
         {
             ToggleMouseCapturePressed = toggleMouseCapturePressed;
             ToggleDebugPressed = toggleDebugPressed;
             ToggleInventoryPressed = toggleInventoryPressed;
             ToggleBiomeMenuPressed = toggleBiomeMenuPressed;
+            ToggleHandEditorPressed = toggleHandEditorPressed;
             CycleRenderDistancePressed = cycleRenderDistancePressed;
             SpawnMobPressed = spawnMobPressed;
             SpawnCoyotePressed = spawnCoyotePressed;
@@ -62,7 +69,9 @@ namespace CubeApp
             ToggleGpuCullPressed = toggleGpuCullPressed;
             BreakBlockPressed = breakBlockPressed;
             PlaceBlockPressed = placeBlockPressed;
+            DropItemPressed = dropItemPressed;
             SelectedSlot = selectedSlot;
+            HotbarScroll = hotbarScroll;
         }
     }
 
@@ -121,6 +130,7 @@ namespace CubeApp
         private bool toggleDebugPressed;
         private bool toggleInventoryPressed;
         private bool toggleBiomeMenuPressed;
+        private bool toggleHandEditorPressed;
         private bool cycleRenderDistancePressed;
         private bool spawnMobPressed;
         private bool spawnCoyotePressed;
@@ -134,9 +144,11 @@ namespace CubeApp
         private bool toggleGpuCullPressed;
         private bool breakBlockPressed;
         private bool placeBlockPressed;
+        private bool dropItemPressed;
         private bool breakHeld;
         private bool placeHeld;
         private int? selectedSlot;
+        private int hotbarScroll;
         private Vector2 lookDeltaAccum;
         private Vector2 lastMousePosition;
         private bool hasLastMousePosition;
@@ -147,6 +159,7 @@ namespace CubeApp
             toggleDebugPressed = false;
             toggleInventoryPressed = false;
             toggleBiomeMenuPressed = false;
+            toggleHandEditorPressed = false;
             cycleRenderDistancePressed = false;
             spawnMobPressed = false;
             spawnCoyotePressed = false;
@@ -205,6 +218,9 @@ namespace CubeApp
                     case Key.B:
                         if (down) toggleBiomeMenuPressed = true;
                         break;
+                    case Key.F8:
+                        if (down) toggleHandEditorPressed = true;
+                        break;
                     case Key.F:
                         if (down) cycleRenderDistancePressed = true;
                         break;
@@ -222,6 +238,9 @@ namespace CubeApp
                         break;
                     case Key.O:
                         if (down) damageSelfPressed = true;
+                        break;
+                    case Key.Q:
+                        if (down) dropItemPressed = true;
                         break;
                     case Key.F5:
                         if (down) toggleThirdPersonPressed = true;
@@ -293,6 +312,11 @@ namespace CubeApp
                 return;
             }
 
+            // Mouse wheel cycles the hotbar (negative = next slot) while the mouse is captured;
+            // when it's freed (menus open) the wheel goes to ImGui instead.
+            double wheel = snapshot.WheelDelta;
+            if (wheel != 0) hotbarScroll -= (int)Math.Round(wheel);
+
             if (TryGetMouseDelta(snapshot, out var delta))
             {
                 lookDeltaAccum += delta * sensitivity;
@@ -348,6 +372,7 @@ namespace CubeApp
                 toggleDebugPressed,
                 toggleInventoryPressed,
                 toggleBiomeMenuPressed,
+                toggleHandEditorPressed,
                 cycleRenderDistancePressed,
                 spawnMobPressed,
                 spawnCoyotePressed,
@@ -361,12 +386,15 @@ namespace CubeApp
                 toggleGpuCullPressed,
                 breakBlockPressed,
                 placeBlockPressed,
-                selectedSlot);
+                dropItemPressed,
+                selectedSlot,
+                hotbarScroll);
 
             toggleMouseCapturePressed = false;
             toggleDebugPressed = false;
             toggleInventoryPressed = false;
             toggleBiomeMenuPressed = false;
+            toggleHandEditorPressed = false;
             cycleRenderDistancePressed = false;
             spawnMobPressed = false;
             spawnCoyotePressed = false;
@@ -380,7 +408,9 @@ namespace CubeApp
             toggleGpuCullPressed = false;
             breakBlockPressed = false;
             placeBlockPressed = false;
+            dropItemPressed = false;
             selectedSlot = null;
+            hotbarScroll = 0;
 
             return result;
         }
@@ -412,3 +442,4 @@ namespace CubeApp
         }
     }
 }
+
