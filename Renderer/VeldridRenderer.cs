@@ -362,6 +362,10 @@ namespace CubeApp.Renderer
         private Texture? _hotbarSelectTexture;
         private TextureView? _hotbarSelectView;
         private IntPtr _hotbarSelectImGuiId;
+        // The original C++ E-menu background (190x111), loaded from inventory.png.
+        private Texture? _inventoryTexture;
+        private TextureView? _inventoryView;
+        private IntPtr _inventoryImGuiId;
         // Healthbar sprite sheet (healthbar.png): 13px hearts on a 15px grid. The top-left sprite
         // (index 0) is the FULL heart - the one shown until the slice-countdown sprites are wired.
         private Texture? _healthbarTexture;
@@ -671,7 +675,31 @@ namespace CubeApp.Renderer
 
             LoadLogo();
             LoadHotbarTextures();
+            LoadInventoryTexture();
             LoadHealthbarTexture();
+        }
+
+        // Loads the original C++ E-menu background (inventory.png) and exposes it to ImGui.
+        private void LoadInventoryTexture()
+        {
+            try
+            {
+                byte[]? bytes = LoadImageBytes("inventory.png");
+                if (bytes == null) return;
+                var image = StbImageSharp.ImageResult.FromMemory(bytes, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                var texDesc = TextureDescription.Texture2D((uint)image.Width, (uint)image.Height, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
+                _inventoryTexture = _gd.ResourceFactory.CreateTexture(texDesc);
+                _gd.UpdateTexture(_inventoryTexture, image.Data, 0, 0, 0, (uint)image.Width, (uint)image.Height, 1, 0, 0);
+                _inventoryView = _gd.ResourceFactory.CreateTextureView(_inventoryTexture);
+                if (_imguiRenderer != null)
+                {
+                    _inventoryImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _inventoryView);
+                }
+            }
+            catch
+            {
+                // ignore; the E-menu falls back to the plain grid
+            }
         }
 
         // Loads the embedded title-screen logo and exposes it to ImGui.
@@ -5682,7 +5710,7 @@ void main() { outColor = vec4(1.0); }";
                     float mobLight = _nightDim * GetMobLight(inst.Position.X, inst.Position.Y, inst.Position.Z);
                     entry.Model.WriteInstance(entry.VertexScratch, ref vf, entry.IndexScratch, ref ii, ref baseVertex,
                         (float)inst.Position.X, (float)inst.Position.Y, (float)inst.Position.Z, inst.Yaw,
-                        inst.AnimTime, inst.AnimBlend, mobLight, inst.HeadYawLocal);
+                        inst.AnimTime, inst.AnimBlend, mobLight, inst.HeadYawLocal, inst.HurtTimer);
                 }
 
                 EnsureMobBuffers(entry, (uint)(totalVertexFloats * sizeof(float)), (uint)(totalIndices * sizeof(ushort)));
@@ -5863,28 +5891,102 @@ void main() { outColor = vec4(1.0); }";
             bool survival = _hud.Mode == GameMode.Survival;
             if (survival && _hud.BagSlots == null) return;
 
-            float winW = Math.Min(680, displaySize.X - 32);
-            float winH = Math.Min(520, displaySize.Y - 64);
+            bool textured = survival && _inventoryImGuiId != IntPtr.Zero;
+            const float uiScale = 3.0f;
+
+            // Saved grid geometry from the textured E-menu branch, used to snap the cursor-held
+            // stack to the same pixel grid as the painted slots.
+            Vector2 snapOrigin = Vector2.Zero;
+            float snapStartX = 0f, snapStartY = 0f, snapStepX = 0f, snapStepY = 0f, snapHotbarY = 0f, snapSlotPx = 0f;
+
+            // Full-screen semi-transparent gray overlay — dims the game world, hotbar, and
+            // healthbar behind the inventory, exactly the way Minecraft does.
+            // Must be on the Foreground draw list so it paints over the HUD (hotbar/health
+            // are also Foreground), but the panel + slots draw later on the same list on top.
+            var fgOverlay = ImGui.GetForegroundDrawList();
+            uint dimCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.10f, 0.10f, 0.10f, 0.65f));
+            fgOverlay.AddRectFilled(Vector2.Zero, displaySize, dimCol);
+
+            float winW, winH;
+            if (textured)
+            {
+                // The original C++ E-menu: 190x111 background + a small header strip. The window
+                // itself is invisible (NoBackground) so only the panel texture shows, floating
+                // over the paused world instead of a black ImGui box.
+                winW = 190f * uiScale;
+                winH = 111f * uiScale + 27f;
+            }
+            else
+            {
+                winW = Math.Min(680, displaySize.X - 32);
+                winH = Math.Min(520, displaySize.Y - 64);
+            }
             float winX = (displaySize.X - winW) / 2f;
-            float winY = 24f;
+            float winY = 20f;
             ImGui.SetNextWindowPos(new Vector2(winX, winY), ImGuiCond.Always);
             ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
-            ImGui.Begin("##inventory", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
-                | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse);
-            ImGui.Text(survival
-                ? "Left: pick/place stacks   Right: half / drop one   Click outside: throw"
-                : "Inventory - click a block to put it in the selected hotbar slot");
-            ImGui.Separator();
-            ImGui.BeginChild("##invgrid", new Vector2(0, -4));
-
-            float avail = ImGui.GetContentRegionAvail().X;
-            const float cellW = 64f;
-            int perRow = Math.Max(1, (int)(avail / cellW));
-
-            if (survival)
+            ImGuiWindowFlags flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
+                | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar;
+            if (textured)
             {
-                // Main bag: 4 rows x 10 slots (the C++ E-menu layout). Left click picks up /
-                // places / stacks / swaps; right click picks up half or drops one.
+                flags |= ImGuiWindowFlags.NoBackground;
+                ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+            }
+            ImGui.Begin("##inventory", flags);
+            ImGui.Text(survival
+                ? "Left: pick/place   Right: half/drop 1   Shift: move   Outside: throw"
+                : "Inventory - click a block to put it in the selected hotbar slot");
+
+            if (textured)
+            {
+                // Draw the original E-menu background and overlay the slots at the exact texture
+                // coordinates from the C++ Inventory.h (SLOT_START_X/Y, SLOT_SIZE, HOTBAR_GAP).
+                // Everything visual goes on the Foreground draw list so it sits on top of the
+                // screen-wide dim overlay; the window layer only carries InvisibleButtons for clicks.
+                float topY = ImGui.GetCursorPosY();
+                var contentScreen = ImGui.GetCursorScreenPos();
+                var fg = ImGui.GetForegroundDrawList();
+                float bgW = 190f * uiScale, bgH = 111f * uiScale;
+                // contentScreen is the cursor AFTER the header text, so its Y already includes
+                // topY - only the 4px gap is left to add.
+                float imgTop = contentScreen.Y + 4f;
+                uint fgTextCol = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 1f));
+                fg.AddImage(_inventoryImGuiId, new Vector2(contentScreen.X, imgTop), new Vector2(contentScreen.X + bgW, imgTop + bgH), Vector2.Zero, Vector2.One);
+
+                float slotPx = 16f * uiScale;
+                float stepX = 18f * uiScale, stepY = 18f * uiScale;
+                float startX = 5f * uiScale, startY = 6f * uiScale;
+                float hotbarY = 88f * uiScale;
+                float yBase = topY + 4f;
+                // The painted slot cells have a 1px dark border on every side — inset the icon
+                // by that border so the block art sits perfectly centered inside the cell opening.
+                float borderPx = 1f * uiScale;
+                snapOrigin = new Vector2(contentScreen.X, contentScreen.Y - topY);
+                snapStartX = startX; snapStartY = startY; snapStepX = stepX; snapStepY = stepY;
+                snapHotbarY = hotbarY; snapSlotPx = slotPx;
+
+                for (int row = 0; row < 4; row++)
+                {
+                    for (int col = 0; col < 10; col++)
+                    {
+                        int slot = row * 10 + col;
+                        var contents = (_hud.BagSlots != null && slot < _hud.BagSlots.Count)
+                            ? _hud.BagSlots[slot] : default;
+                        ImGui.SetCursorPos(new Vector2(startX + col * stepX + borderPx, yBase + startY + row * stepY + borderPx));
+                        DrawInventorySlotCellAt($"bg{slot}", contents.BlockId, contents.Count, 0, slot, slotPx, fg, fgTextCol);
+                    }
+                }
+                for (int i = 0; i < 10; i++)
+                {
+                    int bid = (_hud.Hotbar != null && i < _hud.Hotbar.Count) ? _hud.Hotbar[i] : 0;
+                    int count = (_hud.HotbarCounts != null && i < _hud.HotbarCounts.Count) ? _hud.HotbarCounts[i] : 0;
+                    ImGui.SetCursorPos(new Vector2(startX + i * stepX + borderPx, yBase + hotbarY + borderPx));
+                    DrawInventorySlotCellAt($"hb{i}", bid, count, 1, i, slotPx, fg, fgTextCol);
+                }
+            }
+            else if (survival)
+            {
+                // Fallback grid (no texture): 4 rows x 10 slots.
                 for (int row = 0; row < 4; row++)
                 {
                     for (int col = 0; col < 10; col++)
@@ -5897,8 +5999,6 @@ void main() { outColor = vec4(1.0); }";
                     }
                     if (row != 3) ImGui.Dummy(new Vector2(0, 2));
                 }
-
-                // Hotbar row: 10 draggable slots (empty slots show a blank cell).
                 ImGui.Dummy(new Vector2(0, 8));
                 ImGui.Separator();
                 ImGui.Text("Hotbar");
@@ -5912,6 +6012,7 @@ void main() { outColor = vec4(1.0); }";
             }
             else
             {
+                int perRow = Math.Max(1, (int)(winW / 64f));
                 for (int id = 1; id < BlockRegistry.Count; id++)
                 {
                     if (!BlockRegistry.IsInInventory(id)) continue;
@@ -5930,8 +6031,12 @@ void main() { outColor = vec4(1.0); }";
                 }
             }
 
-            ImGui.EndChild();
             ImGui.End();
+
+            if (textured)
+            {
+                ImGui.PopStyleVar(); // WindowPadding
+            }
 
             if (survival)
             {
@@ -5956,10 +6061,16 @@ void main() { outColor = vec4(1.0); }";
                         var uv = _blockIconUv[bid];
                         var mp = ImGui.GetMousePos();
                         var drawList = ImGui.GetForegroundDrawList();
-                        drawList.AddImage(_iconImGuiId, mp + new Vector2(-16, -16), mp + new Vector2(16, 16),
+
+                        // Follow the cursor freely, same pixel-size as the slot cells (48px),
+                        // so the stack looks like it belongs to the UI even when dragged between slots.
+                        float half = snapSlotPx > 0f ? snapSlotPx * 0.5f : 16f;
+                        drawList.AddImage(_iconImGuiId, mp + new Vector2(-half, -half), mp + new Vector2(half, half),
                             new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W));
-                        drawList.AddText(mp + new Vector2(-16, 14), ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 1)),
-                            _hud.HeldStack.Value.Count.ToString());
+                        int heldCount = _hud.HeldStack.Value.Count;
+                        if (heldCount > 1)
+                            drawList.AddText(mp + new Vector2(half - 16f, half - 17f), ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 1)),
+                                heldCount.ToString());
                     }
                 }
             }
@@ -6000,6 +6111,50 @@ void main() { outColor = vec4(1.0); }";
                 if (ImGui.IsItemClicked(ImGuiMouseButton.Right)) _inventoryClicks.Enqueue((kind, unified, 1));
                 if (ImGui.IsItemHovered()) _hoveredInventorySlot = unified;
             }
+            ImGui.PopID();
+        }
+
+        // Positioned slot cell for the textured E-menu: an invisible click target (window layer)
+        // whose block icon + count are drawn on the Foreground draw list so they sit on top of
+        // the screen-wide dim overlay.
+        private void DrawInventorySlotCellAt(string id, int blockId, int count, int kind, int target, float slotPx, ImDrawListPtr fg, uint fgTextCol)
+        {
+            int unified = kind == 1 ? 40 + target : target;
+            bool shift = ImGui.IsKeyDown(ImGuiKey.LeftShift) || ImGui.IsKeyDown(ImGuiKey.RightShift);
+            ImGui.PushID(id);
+
+            // Always an invisible button — clicks are handled here, visuals are on the
+            // foreground list so they paint over the dim overlay (and the hotbar/health).
+            ImGui.InvisibleButton($"##{id}", new Vector2(slotPx, slotPx));
+            if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && shift) _inventoryClicks.Enqueue((3, unified, 0));
+            else if (ImGui.IsItemClicked(ImGuiMouseButton.Left)) _inventoryClicks.Enqueue((kind, unified, 0));
+            if (ImGui.IsItemClicked(ImGuiMouseButton.Right)) _inventoryClicks.Enqueue((kind, unified, 1));
+            bool hovered = false;
+            if (ImGui.IsItemHovered())
+            {
+                _hoveredInventorySlot = unified;
+                hovered = true;
+                if (blockId > 0)
+                    ImGui.SetTooltip(BlockRegistry.GetById(blockId).DisplayName);
+            }
+
+            // Foreground visuals: a subtle white highlight on hover, then the block icon + count.
+            if (hovered)
+            {
+                uint hoverCol = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 0.22f));
+                fg.AddRectFilled(ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), hoverCol);
+            }
+            if (blockId > 0 && _blockIconUv != null && blockId < _blockIconUv.Length)
+            {
+                var rmin = ImGui.GetItemRectMin();
+                var rmax = ImGui.GetItemRectMax();
+                var uv = _blockIconUv[blockId];
+                fg.AddImage(_iconImGuiId, rmin, rmax,
+                    new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W));
+                if (count > 1)
+                    fg.AddText(rmax - new Vector2(16, 17), fgTextCol, count.ToString());
+            }
+
             ImGui.PopID();
         }
 

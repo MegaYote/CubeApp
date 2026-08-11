@@ -744,12 +744,19 @@ namespace CubeApp
         /// </summary>
         public void WriteInstance(float[] vertexScratch, ref int vf, ushort[] indexScratch, ref int ii, ref ushort baseVertex,
             float x, float y, float z, float yaw, float animTime = 0f, float animBlend = 1f, float nightDim = 1f,
-            float headYawLocal = 0f)
+            float headYawLocal = 0f, float hurtTimer = 0f)
         {
             float renderYaw = yaw + MathF.PI + YawCorrection;
             float cosY = MathF.Cos(renderYaw);
             float sinY = MathF.Sin(renderYaw);
             animBlend = Math.Clamp(animBlend, 0f, 1f);
+
+            // Universal hurt flash — same formula as WriteDuck / WritePlayer so every mob type
+            // (procedural duck, GLB coyote, zombie, future Blockbench models) gets the identical
+            // red-tint treatment.
+            float blink = hurtTimer > 0f ? ((float)Math.Sin(hurtTimer * 95.0f) > 0f ? 1f : 0.72f) : 0f;
+            float flashBlend = hurtTimer > 0f ? Math.Clamp((hurtTimer / 0.20f) * blink, 0f, 1f) : 0f;
+            float gbMul = 1f - 0.82f * flashBlend;
 
             // The head part yaws independently of the body (clamped by the mob's MaxHeadYaw), so
             // the mob can look around / track while walking like the hand-authored duck/player.
@@ -821,8 +828,10 @@ namespace CubeApp
                     vertexScratch[offset + 4] = part.Uvs[i].Y;
                     float shade = part.Shades[i] <= 0f ? 1f : part.Shades[i];
                     shade *= nightDim;
-                    vertexScratch[offset + 5] = shade; vertexScratch[offset + 6] = shade;
-                    vertexScratch[offset + 7] = shade; vertexScratch[offset + 8] = 1f;
+                    vertexScratch[offset + 5] = shade;              // R: full
+                    vertexScratch[offset + 6] = shade * gbMul;      // G: hurt-flash dim
+                    vertexScratch[offset + 7] = shade * gbMul;      // B: hurt-flash dim
+                    vertexScratch[offset + 8] = 1f;
                     vf += 9;
                 }
 
