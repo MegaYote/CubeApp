@@ -23,7 +23,7 @@
       "humidity": { "min": -1.0, "max": -0.15 },
       "water": false,
       "baseHeight": 0.55,
-      "heightVariation": 0.10,
+      "heightVariation": 0.13,
       "surfaceBlock": "sand",
       "fillBlock": "sand",
       "fillDepth": 6,
