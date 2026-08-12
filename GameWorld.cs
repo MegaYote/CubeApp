@@ -567,6 +567,9 @@ namespace CubeApp
             SkyChunkProvider = new World.SkyChunkProvider(seed);
             Chunks = new ChunkManager(new World.DeepChunkProvider(seed), ChunkProvider, SkyChunkProvider);
             Entities = new EntityManager(Chunks);
+            // Hostile mobs (zombies/brutes) damage the player through the same survival damage
+            // path as falls: health loss, hurt flash, regen reset, death cause + roll.
+            Entities.PlayerDamageCallback = DamagePlayer;
             // Monster spawning gates on darkness; give the spawner the time-of-day so
             // zombies flood caves during the day and the surface at night.
             Entities.SetSkylightSource(() => NightDimLevel(0f));

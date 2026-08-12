@@ -56,5 +56,7 @@ namespace CubeApp
         DebugSelf,
         /// <summary>Landed too hard after a fall (survival fall damage).</summary>
         Fall,
+        /// <summary>Killed by a hostile mob (zombie / brute).</summary>
+        Mob,
     }
 }

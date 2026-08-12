@@ -173,6 +173,13 @@ namespace CubeApp
         public void Update(float deltaSeconds) => Update(deltaSeconds, new Point3D(0, 0, 0), false);
 
         /// <summary>
+        /// Set by the owning world so hostile mobs can damage the local player. Receives the
+        /// attack damage and the death cause to record if the hit is lethal. Null = attacks on the
+        /// player are harmless (creative / pre-wiring).
+        /// </summary>
+        public Action<int, DeathCause>? PlayerDamageCallback { get; set; }
+
+        /// <summary>
         /// Advance all mobs by one frame. When <paramref name="playerPosition"/> is supplied,
         /// natural spawning (near the player, 24-32 blocks out) and despawning (far-away mobs)
         /// also run.
@@ -191,8 +198,8 @@ namespace CubeApp
                 {
                     // Hostiles hunt the nearest human: the local player plus any Steve NPCs. The
                     // zombie re-paths toward the target each frame (A* routes around cliffs/walls)
-                    // and its OnAttack damages a Steve when it closes in. The player has no health
-                    // system yet, so attacks on the player just land as a harmless hit.
+                    // and its OnAttack damages a Steve when it closes in - or the local player via
+                    // PlayerDamageCallback (health, hurt flash, regen reset, death cause).
                     if (mobEntity.Hostile)
                     {
                         IMobRenderable? steveTarget = null;
@@ -214,7 +221,7 @@ namespace CubeApp
                         var capturedMob = mobEntity;
                         mobEntity.OnAttack = capturedSteve is MobEntity steve
                             ? () => steve.Damage(capturedMob.AttackDamage, capturedMob.Position.X, capturedMob.Position.Z, true)
-                            : null;
+                            : () => PlayerDamageCallback?.Invoke(capturedMob.AttackDamage, DeathCause.Mob);
                         mobEntity.SetChaseTarget(target);
                     }
                     else

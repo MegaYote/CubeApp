@@ -385,7 +385,7 @@ namespace CubeApp.Renderer
         private float _damageShakeTime;
         private float _damageShakeMagnitude;
         private float _damageShakeElapsed;
-        private const float DamageShakeDuration = 0.25f;
+        private const float DamageShakeDuration = 0.4f;
         private readonly System.Random _shakeRandom = new();
         /// <summary>0..1 head-bob intensity; eases toward the target so landing/jumping doesn't
         /// snap the camera.</summary>
@@ -6528,6 +6528,7 @@ void main() { outColor = vec4(1.0); }";
                 {
                     DeathCause.DebugSelf => "Your heart gave out...",
                     DeathCause.Fall => "You fell from a high place...",
+                    DeathCause.Mob => "A zombie got you...",
                     _ => "You died...",
                 };
 
@@ -7396,27 +7397,32 @@ void main() { outColor = vec4(1.0); }";
                     cameraPos += new Vector3(rightX * sway, bobY, rightZ * sway);
                 }
             }
-            // Damage shake: a small decaying random offset plus a visible roll tilt, so hits read
-            // as an "ow" in the POV. Purely visual - _cameraPosition (culling/collisions) keeps
-            // the real position below.
+            // Damage shake: a decaying random jitter plus a visible roll tilt (and a tiny flinch
+            // back along the view axis), so a hit reads as a real "ow" in the POV. The strength
+            // decays with t^2: a sharp kick at the moment of impact that settles quickly. Purely
+            // visual - _cameraPosition (culling/collisions) keeps the real position below.
             if (_damageShakeTime > 0f)
             {
                 float t = Math.Clamp(_damageShakeTime / DamageShakeDuration, 0f, 1f);
-                float strength = _damageShakeMagnitude * t * 0.35f;
+                float strength = _damageShakeMagnitude * t * t * 0.5f;
                 cameraPos += new Vector3(
                     (float)((_shakeRandom.NextDouble() * 2.0 - 1.0) * strength),
                     (float)((_shakeRandom.NextDouble() * 2.0 - 1.0) * strength),
                     (float)((_shakeRandom.NextDouble() * 2.0 - 1.0) * strength));
+                // Recoil flinch: shove the camera back along the view axis for a frame or two.
+                float flinch = _damageShakeMagnitude * t * t * 0.18f;
+                cameraPos -= forward * flinch;
             }
             var target = cameraPos + forward;
             var view = Matrix4x4.CreateLookAt(cameraPos, target, Vector3.UnitY);
             // Minecraft-style hit recoil: the whole view rolls around the camera axis with a
-            // decaying wobble that settles back to level.
+            // decaying wobble that settles back to level. Bumped the amplitude up (~18 deg peak)
+            // and slowed the wobble so the tilt actually reads on screen.
             if (_damageShakeTime > 0f)
             {
                 float t = Math.Clamp(_damageShakeTime / DamageShakeDuration, 0f, 1f);
-                float rollAmp = _damageShakeMagnitude * t * 0.12f; // ~7 deg max
-                float roll = (float)(Math.Sin(_damageShakeElapsed * 30f) * rollAmp) + rollAmp * 0.5f;
+                float rollAmp = _damageShakeMagnitude * t * t * 0.32f; // ~18 deg max
+                float roll = (float)(Math.Sin(_damageShakeElapsed * 20f) * rollAmp) + rollAmp * 0.5f;
                 view = view * Matrix4x4.CreateRotationZ(roll);
             }
             var viewProj = Matrix4x4.Multiply(view, proj);
