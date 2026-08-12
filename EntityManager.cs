@@ -154,7 +154,10 @@ namespace CubeApp
             {
                 var def = MobRegistry.Get(mobId);
                 if (def == null) return false;
-                mob = new GenericMobEntity(def, position, yaw);
+                // Rare brute variant: 1 in 50 zombies spawn 2x size, half speed, double health.
+                bool brute = string.Equals(def.Id, "zombie", StringComparison.OrdinalIgnoreCase)
+                    && Random.Shared.Next(50) == 0;
+                mob = new GenericMobEntity(def, position, yaw, brute);
             }
 
             // Give every mob the world's day/night source for environmental behaviors (sunburn).
@@ -486,7 +489,8 @@ namespace CubeApp
                     _ => "duck",
                 };
                 int health = mob is MobEntity me2 ? me2.Health : 10;
-                result.Add(new SavedMob { Type = type, X = mob.Position.X, Y = mob.Position.Y, Z = mob.Position.Z, Yaw = mob.Yaw, Health = health });
+                bool brute = mob is GenericMobEntity g2 && g2.IsBrute;
+                result.Add(new SavedMob { Type = type, X = mob.Position.X, Y = mob.Position.Y, Z = mob.Position.Z, Yaw = mob.Yaw, Health = health, Brute = brute });
             }
             return result;
         }
@@ -526,7 +530,7 @@ namespace CubeApp
             {
                 var def = MobRegistry.Get(m.Type);
                 if (def == null) return;
-                var generic = new GenericMobEntity(def, pos, m.Yaw);
+                var generic = new GenericMobEntity(def, pos, m.Yaw, m.Brute);
                 generic.RestoreState(pos, m.Yaw, m.Health);
                 _mobs.Add(generic);
             }
@@ -539,14 +543,24 @@ namespace CubeApp
     /// Generic mob entity that uses MobDefinition properties and loads models from MobRegistry.
     /// This allows any mob to be spawned just by having files in the MobEntities folder.
     /// </summary>
-    public class GenericMobEntity : MobEntity
+    public class GenericMobEntity : MobEntity, IMobRenderable
     {
         private readonly MobDefinition _definition;
         private MobModel? _model;
 
-        public GenericMobEntity(MobDefinition definition, Point3D position, float yaw) : base(position, yaw)
+        /// <summary>True for the rare "brute" variant (1 in 50 zombies): 2x size, half speed,
+        /// double health. The model renders at <see cref="ScaleOverride"/> instead of the
+        /// definition's scale so the visual doubles with the collision box.</summary>
+        public bool IsBrute { get; }
+
+        /// <summary>Model scale override for the brute variant (definition.Scale * 2), applied
+        /// when the model loads. 0 = use the definition's scale.</summary>
+        public float ScaleOverride { get; }
+
+        public GenericMobEntity(MobDefinition definition, Point3D position, float yaw, bool brute = false) : base(position, yaw)
         {
             _definition = definition ?? throw new ArgumentNullException(nameof(definition));
+            IsBrute = brute;
             Width = definition.Width;
             Height = definition.Height;
             MaxHealth = definition.MaxHealth;
@@ -556,6 +570,15 @@ namespace CubeApp
             AggroRange = definition.AggroRange;
             AttackRange = definition.AttackRange;
             AttackCooldown = definition.AttackCooldown;
+            if (brute)
+            {
+                Width *= 2f;
+                Height *= 2f;
+                MaxHealth *= 2;
+                Health = MaxHealth;
+                MaxSpeed *= 0.5f;               // half their current effective speed
+                ScaleOverride = definition.Scale * 2f;
+            }
         }
 
         public string MobId => _definition.Id;
@@ -563,6 +586,11 @@ namespace CubeApp
         // The renderer routes render data to the per-type MobModel entry by this name, so it MUST
         // be the registry id (e.g. "zombie"), not the class name "genericmobentity".
         public override string MobTypeName => _definition.Id;
+
+        // The renderer's shared per-type model is baked at the definition's scale, so the brute's
+        // extra size is expressed as a per-instance multiplier (2x for a brute, 1x otherwise).
+        float IMobRenderable.RenderScale =>
+            ScaleOverride > 0f ? ScaleOverride / (_definition.Scale > 0f ? _definition.Scale : 1f) : 1f;
 
         // Zombie sunburn: in daytime, if the sky is visible above and the brightness is high
         // enough, the zombie periodically catches fire.
@@ -603,7 +631,7 @@ namespace CubeApp
             if (graphicsDevice == null) return false;
             _model = new MobModel(graphicsDevice)
             {
-                ModelScale = _definition.Scale > 0f ? _definition.Scale : 1.0f,
+                ModelScale = ScaleOverride > 0f ? ScaleOverride : (_definition.Scale > 0f ? _definition.Scale : 1.0f),
                 YawCorrection = _definition.YawCorrection,
             };
             _model.Load(_definition.ModelPath, _definition.TexturePath);

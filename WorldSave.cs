@@ -20,6 +20,8 @@ namespace CubeApp
         public double X, Y, Z;
         public float Yaw;
         public int Health = 10;
+        /// <summary>Rare brute variant (1 in 50 zombies): 2x size, half speed, double health.</summary>
+        public bool Brute;
     }
 
     /// <summary>
@@ -29,7 +31,7 @@ namespace CubeApp
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 3;
+        public const int Version = 4;
 
         public string Name = "World 1";
         public int Seed;
@@ -81,6 +83,7 @@ namespace CubeApp
                     w.Write(m.Z);
                     w.Write(m.Yaw);
                     w.Write(m.Health);
+                    w.Write(m.Brute);
                 }
             }
 
@@ -140,6 +143,7 @@ namespace CubeApp
                         Yaw = reader.ReadSingle(),
                         Health = reader.ReadInt32(),
                     };
+                    if (version >= 4) m.Brute = reader.ReadBoolean();
                     save.Mobs.Add(m);
                 }
                 return save;

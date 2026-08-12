@@ -3408,7 +3408,7 @@ void main() { outColor = vec4(1.0); }";
                     md.WalkPhase, md.WalkAmount, md.AnimTime, md.AnimBlend, md.FlapPhase,
                     md.VelocityY, md.OnGround,
                     md.IsDead, md.DeathT, md.DeathRollDir, md.HurtTimer,
-                    md.HeadPitchLocal);
+                    md.HeadPitchLocal, md.RenderScale);
 
                 if (isDuck) { _duckList.Add(inst); continue; }
                 if (isPlayer) { _playerList.Add(inst); continue; }
@@ -5723,7 +5723,7 @@ void main() { outColor = vec4(1.0); }";
                     entry.Model.WriteInstance(entry.VertexScratch, ref vf, entry.IndexScratch, ref ii, ref baseVertex,
                         (float)inst.Position.X, (float)inst.Position.Y, (float)inst.Position.Z, inst.Yaw,
                         inst.AnimTime, inst.AnimBlend, mobLight, inst.HeadYawLocal, inst.HurtTimer, inst.HeadPitchLocal,
-                        inst.IsDead, inst.DeathT, inst.DeathRollDir);
+                        inst.IsDead, inst.DeathT, inst.DeathRollDir, inst.Scale);
                 }
 
                 EnsureMobBuffers(entry, (uint)(totalVertexFloats * sizeof(float)), (uint)(totalIndices * sizeof(ushort)));

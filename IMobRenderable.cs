@@ -89,5 +89,11 @@ namespace CubeApp
 
         /// <summary>Head pitch in radians (looking up/down). Clamped to ±1.05 (~60°).</summary>
         float HeadPitchLocal { get; }
+
+        /// <summary>
+        /// Per-instance model scale multiplier applied on top of the per-type ModelScale baked into
+        /// the shared model (e.g. brute zombies render 2x without a separate model). 1 = normal.
+        /// </summary>
+        float RenderScale { get; }
     }
 }

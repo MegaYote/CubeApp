@@ -745,7 +745,7 @@ namespace CubeApp
         public void WriteInstance(float[] vertexScratch, ref int vf, ushort[] indexScratch, ref int ii, ref ushort baseVertex,
             float x, float y, float z, float yaw, float animTime = 0f, float animBlend = 1f, float nightDim = 1f,
             float headYawLocal = 0f, float hurtTimer = 0f, float headPitchLocal = 0f,
-            bool isDead = false, float deathT = 0f, float deathRollDir = 0f)
+            bool isDead = false, float deathT = 0f, float deathRollDir = 0f, float scale = 1f)
         {
             float renderYaw = yaw + MathF.PI + YawCorrection;
             float cosY = MathF.Cos(renderYaw);
@@ -831,8 +831,10 @@ namespace CubeApp
                         local.Z = part.Pivot.Z - hy * sinP + hz * cosP;
                     }
 
-                    // Uniform world scale (ModelScale) grows the whole model about its feet origin.
-                    local *= ModelScale;
+                    // Uniform world scale grows the whole model about its feet origin. ModelScale is
+                    // the per-type bake (mob config); scale is the per-instance multiplier, so brute
+                    // variants render 2x without a separate model.
+                    local *= ModelScale * scale;
 
                     float fx = local.X * cosY + local.Z * sinY;
                     float fy = local.Y;

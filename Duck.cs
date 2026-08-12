@@ -24,13 +24,14 @@ namespace CubeApp
         public readonly float DeathT;       // 0..1 death animation progress
         public readonly float DeathRollDir; // +1/-1 roll direction on death
         public readonly float HurtTimer;    // seconds of remaining hurt flash
+        public readonly float Scale;        // per-instance model scale (1 = normal)
 
         public DuckInstance(
             Point3D position, float yaw, float headYawLocal,
             float walkPhase, float walkAmount, float animTime, float animBlend, float flapPhase,
             float velocityY, bool onGround,
             bool isDead, float deathT, float deathRollDir, float hurtTimer,
-            float headPitchLocal = 0f)
+            float headPitchLocal = 0f, float scale = 1f)
         {
             Position = position;
             Yaw = yaw;
@@ -47,6 +48,7 @@ namespace CubeApp
             DeathT = deathT;
             DeathRollDir = deathRollDir;
             HurtTimer = hurtTimer;
+            Scale = scale;
         }
     }
 

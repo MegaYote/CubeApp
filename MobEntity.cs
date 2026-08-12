@@ -146,6 +146,7 @@ namespace CubeApp
                 : null;
 
         float IMobRenderable.HeadPitchLocal => _headPitch;
+        float IMobRenderable.RenderScale => 1f;
         private float _headPitch;
 
         protected double _velX, _velY, _velZ;
@@ -492,15 +493,14 @@ namespace CubeApp
             _aiTimer = Math.Max(0f, _aiTimer - dt);
             _actionTimer = Math.Max(0f, _actionTimer - dt);
             _idleTimer = Math.Max(0f, _idleTimer - dt);
-            _hopCooldown = Math.Max(0f, _hopCooldown - dt);
+            // _hopCooldown / _jumpPressCooldown / _hurtTimer ticked in the top block so the
+            // chase branch (which returns early) still drains them - do NOT re-tick here.
             _ledgeTurnCooldown = Math.Max(0f, _ledgeTurnCooldown - dt);
-            _jumpPressCooldown = Math.Max(0f, _jumpPressCooldown - dt);
             _lookRetargetTimer = Math.Max(0f, _lookRetargetTimer - dt);
             _afterMoveRestTimer = Math.Max(0f, _afterMoveRestTimer - dt);
-            _hurtTimer = Math.Max(0f, _hurtTimer - dt);
             _panicTimer = Math.Max(0f, _panicTimer - dt);
             _panicRetargetTimer = Math.Max(0f, _panicRetargetTimer - dt);
-            _walkPhase += dt * (grounded ? (4.5f + _walkAmount * 4.0f) : 14.0f);
+            // _walkPhase advances in ApplyMoveControls (once per frame, all AI branches).
             if (HasFlap) _flapPhase += dt * (grounded ? (4.5f + _walkAmount * 4.0f) : 18.0f);
 
             double homeDx = _homeX - Position.X;

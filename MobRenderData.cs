@@ -22,6 +22,7 @@ namespace CubeApp
         public readonly float DeathT;
         public readonly float DeathRollDir;
         public readonly float HurtTimer;
+        public readonly float RenderScale;
 
         public MobRenderData(
             string mobType,
@@ -39,7 +40,8 @@ namespace CubeApp
             float deathT,
             float deathRollDir,
             float hurtTimer,
-            float headPitchLocal = 0f)
+            float headPitchLocal = 0f,
+            float renderScale = 1f)
         {
             MobType = mobType;
             Position = position;
@@ -57,6 +59,7 @@ namespace CubeApp
             DeathT = deathT;
             DeathRollDir = deathRollDir;
             HurtTimer = hurtTimer;
+            RenderScale = renderScale;
         }
 
         /// <summary>
@@ -80,7 +83,8 @@ namespace CubeApp
                 mob.DeathT,
                 mob.DeathRollDir,
                 mob.HurtTimer,
-                mob.HeadPitchLocal);
+                mob.HeadPitchLocal,
+                mob.RenderScale);
         }
     }
 }
