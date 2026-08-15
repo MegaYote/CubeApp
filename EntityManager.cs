@@ -198,6 +198,11 @@ namespace CubeApp
         {
             _entityWatch.Restart();
 
+            // World-streaming persistence: detach mobs whose chunk just unloaded (they'd otherwise
+            // keep simulating against empty air and fall into the void), and restore mobs saved
+            // for chunks the player just returned to.
+            SyncDetachedMobs(playerPosition);
+
             // Update all mobs. Every mob derives from MobEntity (Duck, Coyote, SteveMob, generic
             // registry mobs all share one universal AI/physics implementation).
             for (int i = _mobs.Count - 1; i >= 0; i--)
@@ -248,9 +253,12 @@ namespace CubeApp
                         continue;
                     }
 
-                    // Despawn: too far away, or idle too long at medium distance.
+                    // Despawn: too far away, or idle too long at medium distance. Instead of
+                    // deleting the mob, snapshot its state so it comes back when the player
+                    // returns to its chunk (world-streaming persistence).
                     if (enableSpawning && ShouldDespawn(mobEntity, playerPosition))
                     {
+                        DetachMob(mobEntity);
                         _mobs.RemoveAt(i);
                     }
                 }
@@ -419,6 +427,19 @@ namespace CubeApp
 
         private readonly Dictionary<IMobRenderable, int> _idleTimeAccum = new();
 
+        // ---- Per-chunk mob persistence (world streaming) ----
+        // Mobs whose chunk is not currently loaded (or that despawned by distance) are detached
+        // here instead of being deleted: state is snapshotted and they come back when the player
+        // returns to their chunk. Keeps them from falling through unloaded terrain and from
+        // permanently vanishing when the player leaves the area.
+        private readonly Dictionary<ChunkCoordinates, List<SavedMob>> _detachedMobs = new();
+        private readonly Queue<ChunkCoordinates> _detachedOrder = new();
+        private const int MaxDetachedMobs = 512;    // bound memory when roaming a large world
+        // Re-activate a saved mob only when the player is genuinely close. Must be BELOW the
+        // distance-despawn band (64-128 blocks) or a mob despawned there would be restored on the
+        // next frame and immediately re-despawned, flickering forever.
+        private const double RestoreRadiusBlocks = 48.0;
+
         public bool TryAttackMob(Point3D cameraPosition, Point3D forward, BlockInteractionSystem.PickBlockResult? blockHit)
         {
             var mob = TryPickMob(cameraPosition, forward, out double mobDistance);
@@ -550,34 +571,126 @@ namespace CubeApp
             _mobRenderData.Clear();
         }
 
-        // Serializes the current mob state for a world save.
+        // Serializes the current mob state for a world save. Includes detached (chunk-unloaded)
+        // mobs so roaming mobs survive a save/quit too.
         public List<SavedMob> SaveMobs()
         {
             var result = new List<SavedMob>();
             foreach (var mob in _mobs)
             {
-                string type = mob switch
-                {
-                    Coyote => "coyote",
-                    SteveMob => "steve",
-                    GenericMobEntity g => g.MobId,
-                    MobEntity me => me.MobTypeName,
-                    _ => "duck",
-                };
-                int health = mob is MobEntity me2 ? me2.Health : 10;
-                bool brute = mob is GenericMobEntity g2 && g2.IsBrute;
-                result.Add(new SavedMob { Type = type, X = mob.Position.X, Y = mob.Position.Y, Z = mob.Position.Z, Yaw = mob.Yaw, Health = health, Brute = brute });
+                result.Add(SnapshotMob(mob));
+            }
+            foreach (var list in _detachedMobs.Values)
+            {
+                result.AddRange(list);
             }
             return result;
+        }
+
+        private static SavedMob SnapshotMob(IMobRenderable mob)
+        {
+            string type = mob switch
+            {
+                Coyote => "coyote",
+                SteveMob => "steve",
+                GenericMobEntity g => g.MobId,
+                MobEntity me => me.MobTypeName,
+                _ => "duck",
+            };
+            int health = mob is MobEntity me2 ? me2.Health : 10;
+            bool brute = mob is GenericMobEntity g2 && g2.IsBrute;
+            return new SavedMob { Type = type, X = mob.Position.X, Y = mob.Position.Y, Z = mob.Position.Z, Yaw = mob.Yaw, Health = health, Brute = brute };
         }
 
         // Restores mobs from a world save.
         public void LoadMobs(IEnumerable<SavedMob> mobs)
         {
             _mobs.Clear();
+            _detachedMobs.Clear();
+            _detachedOrder.Clear();
             foreach (var m in mobs)
             {
                 SpawnSavedMob(m);
+            }
+        }
+
+        // ---- World-streaming mob persistence ----
+
+        // The chunk a world position lives in (layer from Y, column from X/Z).
+        private static ChunkCoordinates ChunkOf(Point3D pos)
+        {
+            int layer = ChunkManager.LayerForWorldY((int)Math.Floor(pos.Y));
+            return new ChunkCoordinates(layer, GameWorld.WorldToChunkCoord(pos.X), GameWorld.WorldToChunkCoord(pos.Z));
+        }
+
+        // Snapshots a mob into the detached pool for its chunk (bounded so roaming a large world
+        // can't grow memory without limit).
+        private void DetachMob(MobEntity mob)
+        {
+            var cc = ChunkOf(mob.Position);
+            if (!_detachedMobs.TryGetValue(cc, out var list))
+            {
+                list = new List<SavedMob>();
+                _detachedMobs[cc] = list;
+                _detachedOrder.Enqueue(cc);
+            }
+            list.Add(SnapshotMob(mob));
+
+            if (_detachedMobs.Count > MaxDetachedMobs)
+            {
+                while (_detachedMobs.Count > MaxDetachedMobs && _detachedOrder.Count > 0)
+                {
+                    _detachedMobs.Remove(_detachedOrder.Dequeue());
+                }
+            }
+        }
+
+        // Runs every frame BEFORE mob physics: detaches mobs standing in unloaded chunks (they'd
+        // fall through the void otherwise) and re-activates saved mobs whose chunk is loaded again
+        // and the player is close enough to simulate.
+        private void SyncDetachedMobs(Point3D playerPosition)
+        {
+            // Detach any active mob whose chunk is no longer loaded.
+            for (int i = _mobs.Count - 1; i >= 0; i--)
+            {
+                if (_mobs[i] is not MobEntity me) continue;
+                if (!_chunkManager.TryGetLoadedChunk(ChunkOf(me.Position), out _))
+                {
+                    DetachMob(me);
+                    _mobs.RemoveAt(i);
+                }
+            }
+
+            // Restore detached mobs for chunks that are loaded again, when within restore range.
+            if (_detachedMobs.Count == 0) return;
+            var loadedKeys = new List<ChunkCoordinates>();
+            foreach (var key in _detachedMobs.Keys)
+            {
+                if (_chunkManager.TryGetLoadedChunk(key, out _)) loadedKeys.Add(key);
+            }
+            foreach (var key in loadedKeys)
+            {
+                var list = _detachedMobs[key];
+                for (int i = list.Count - 1; i >= 0; i--)
+                {
+                    var m = list[i];
+                    double dx = m.X - playerPosition.X;
+                    double dz = m.Z - playerPosition.Z;
+                    if (dx * dx + dz * dz <= RestoreRadiusBlocks * RestoreRadiusBlocks)
+                    {
+                        SpawnSavedMob(m);
+                        list.RemoveAt(i);
+                    }
+                }
+                if (list.Count == 0) _detachedMobs.Remove(key);
+            }
+
+            // The eviction queue can accumulate stale entries as chunks repeatedly load/unload;
+            // rebuild it from the live keys when it grows well past the actual map size.
+            if (_detachedMobs.Count > 0 && _detachedOrder.Count > _detachedMobs.Count * 2)
+            {
+                _detachedOrder.Clear();
+                foreach (var key in _detachedMobs.Keys) _detachedOrder.Enqueue(key);
             }
         }
 
