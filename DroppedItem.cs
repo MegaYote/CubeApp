@@ -1,13 +1,13 @@
 namespace CubeApp
 {
     /// <summary>
-    /// Sim state for one dropped item (a block the player mined in survival that didn't go
+    /// Sim state for one dropped item (a stack the player mined or threw that didn't go
     /// straight into inventory). Falls with gravity, tumbles like a physical object, settles on
     /// the ground, and despawns after a while. The player collects it by walking into it.
     /// </summary>
     public sealed class DroppedItem
     {
-        public int BlockId;
+        public int ItemId;
         public int Count;
         /// <summary>World position of the drop's base (bottom corner).</summary>
         public Point3D Position;

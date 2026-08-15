@@ -30,6 +30,10 @@ namespace CubeApp.World
         /// (decomposed biomass), rare deep pockets anywhere.</summary>
         public CoalOreGenerator CoalOres { get; private set; }
 
+        /// <summary>Occasional underground gravel pockets (see GravelSplotchGenerator): sparse
+        /// buried splotches in the stone, a nice find while digging - never everywhere.</summary>
+        public GravelSplotchGenerator GravelSplotches { get; private set; }
+
         /// <summary>One colossal solid-brick pyramid per world (see PyramidGenerator). A rare,
         /// seed-fixed landmark with no purpose but to confuse and mystify.</summary>
         public PyramidGenerator Pyramids { get; private set; }
@@ -66,6 +70,7 @@ namespace CubeApp.World
             Monoliths = new MonolithSculptor(seed);
             QuartzVeins = new QuartzVeinGenerator(seed);
             CoalOres = new CoalOreGenerator(seed);
+            GravelSplotches = new GravelSplotchGenerator(seed);
             Pyramids = new PyramidGenerator(seed);
             RegularPyramids = new RegularPyramidGenerator(seed);
         }
@@ -271,12 +276,12 @@ namespace CubeApp.World
             // ---- Surface materials pass ----
             ReplaceBlocks(chunkX, chunkZ, chunk, idBedrock, idWater, idStone, idGrass, idDirt, idSand, idGravel, terrainBandStart);
 
-            // ---- caves and trees ----
-            GenerateCaves(chunkX, chunkZ, chunk, terrainBandStart);
-            // Caves carve through the water that was placed earlier; re-flood any below-sea-level
-            // air so exposed ocean caves are water-filled instead of dry holes that read oddly
-            // through the surface.
+            // ---- water first, caves second ----
+            // The oceans are flooded BEFORE carving so the walkers only ever tunnel through
+            // stone: caves below sea level stay DRY (the refill already ran), and the water
+            // body itself is never cut into - no air pockets carved inside the ocean.
             RefillWaterBelowSeaLevel(chunk, terrainBandStart, idWater, seaLevelLocalY);
+            GenerateCaves(chunkX, chunkZ, chunk, terrainBandStart);
             GenerateTrees(chunkX, chunkZ, chunk);
 
             // ---- monoliths (controllable feature; runs after caves so towers stand on ground) ----
@@ -284,6 +289,9 @@ namespace CubeApp.World
 
             // ---- sedimentary quartz veins (follows terrain, like cliff strata) ----
             QuartzVeins.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
+
+            // ---- underground gravel splotches (occasional pockets, easy to stumble on) ----
+            GravelSplotches.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
 
             // ---- coal ore (biomass coal just under the living layer, rare deep pockets) ----
             CoalOres.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
@@ -591,7 +599,7 @@ namespace CubeApp.World
                             {
                                 int idx = (lx * 16 + lz) * height + ly;
                                 byte id = blocks[idx];
-                                if (id == idWater) continue; // don't carve water
+                                if (id == idWater) continue; // never carve the water itself
                                 if (id == 0) continue;        // already air
                                 blocks[idx] = 0;
                                 // If the cave opened through a surface grass block, let the grass
@@ -608,9 +616,9 @@ namespace CubeApp.World
         }
 
         // Re-floods below-sea-level air in the terrain band (local Y < seaLevelLocalY) with water.
-        // Run AFTER cave carving, because caves carve through the water placed by the surface
-        // pass - without this, ocean caves are dry air pockets that render oddly through the
-        // water above. Only touches the terrain band; deeper layers handle their own water.
+        // Runs BEFORE cave carving (see GenerateChunk): the walkers then tunnel only through
+        // stone, so underwater caves stay dry while the ocean body is never carved into.
+        // Only touches the terrain band; deeper layers handle their own water.
         private void RefillWaterBelowSeaLevel(Chunk chunk, int terrainBandStart, int idWater, int seaLevelLocalY)
         {
             byte[] blocks = chunk.RawBlocks;

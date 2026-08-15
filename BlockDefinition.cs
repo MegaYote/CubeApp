@@ -24,6 +24,10 @@ namespace CubeApp
         /// <summary>Optional override for the four horizontal faces. Null falls back to AllTexture.</summary>
         public TextureRect? SideTexture { get; set; }
 
+        /// <summary>Optional items.png atlas tile used when this id renders as a DROPPED item
+        /// (flint, etc). Null = the drop shows AllTexture from the terrain atlas instead.</summary>
+        public TextureRect? ItemTile { get; set; }
+
         /// <summary>Collides with mob/player AABBs. Air and true fluids are non-solid.</summary>
         public bool Solid { get; set; } = true;
         /// <summary>Blocks skylight flood-fill propagation. Non-opaque (water, glass, leaves) lets light through.</summary>
@@ -40,6 +44,9 @@ namespace CubeApp
         /// <summary>Whether the block shows up in the E-menu inventory. Placement-only variants
         /// (like the auto-picked top slabs) set this false.</summary>
         public bool Inventory { get; set; } = true;
+        /// <summary>Whether the player can PLACE this id in the world. Items (flint) and
+        /// placement-only variants set this false so they can't be placed as a block.</summary>
+        public bool Placeable { get; set; } = true;
         /// <summary>Per-pixel translucent (colored glass): the atlas texture's OWN alpha is used for
         /// blending per fragment instead of the block's uniform vColor.a. Regular glass uses the
         /// cutout pipeline (0.5 discard, no blend).</summary>

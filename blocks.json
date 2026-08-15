@@ -11,6 +11,7 @@
     { "id": "planks",          "displayName": "Planks",          "texture": "4,0", "mapColor": "#A07846", "zombieCanBreak": true, "zombieBreakSpeed": "Medium" },
     { "id": "bedrock",         "displayName": "Bedrock",         "texture": "1,1", "mapColor": "#4E4E4E" },
     { "id": "gravel",          "displayName": "Gravel",          "texture": "3,1", "gravity": true, "mapColor": "#848484" },
+    
     { "id": "obsidian",        "displayName": "Obsidian",        "texture": "5,2", "mapColor": "#3C2D5A" },
     { "id": "mossycobblestone","displayName": "Mossy Cobblestone","texture": "4,2", "mapColor": "#5E6C5E" },
     { "id": "water",           "displayName": "Water",           "texture": "12,14", "solid": false, "opaque": false, "transparent": true, "alpha": 0.85, "mapColor": "#3F76E4" },

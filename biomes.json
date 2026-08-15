@@ -19,7 +19,7 @@
     {
       "id": "desert",
       "displayName": "Desert",
-      "temperature": { "min": 0.45, "max": 1.0 },
+      "temperature": { "min": 0.38, "max": 1.0 },
       "humidity": { "min": -1.0, "max": -0.15 },
       "water": false,
       "baseHeight": 0.55,

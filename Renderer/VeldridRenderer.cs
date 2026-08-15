@@ -337,16 +337,43 @@ namespace CubeApp.Renderer
         private float _fogEnd = 100f;
         private float _atlasWidth = 256f;
         private float _atlasHeight = 256f;
+        // Items atlas (items.png): used to texture dropped items that define an "itemTile"
+        // (flint, etc). Same 16px tile grid as the terrain atlas.
+        private Texture? _itemsAtlasTexture;
+        private TextureView? _itemsAtlasView;
+        private ResourceSet? _itemsTextureSet;
         // CPU copy of the atlas pixels (for generating hotbar/inventory block icons) and the
         // icon atlas texture built from them (classic MC-style isometric cubes per block).
         private byte[] _atlasRgba = Array.Empty<byte>();
         private int _atlasPixelsW;
         private int _atlasPixelsH;
+        // Water animation: the atlas carries 4 painted water frames in a row (tiles 12..15,14).
+        // Each rendered frame we crossfade the two current frames into a 64x16 strip and
+        // re-upload that region of the GPU atlas, so world water (and anything sampling the
+        // water tile) slowly shimmers through the cycle - MC-style, but smooth-faded instead
+        // of stepped. Purely visual; the source atlas copy is never mutated.
+        private const int WaterTileX = 12;
+        private const int WaterTileY = 14;
+        private const int WaterFrameCount = 4;
+        private const float WaterCycleSeconds = 8.0f;   // one full 4-frame fade cycle
+        private byte[]? _waterFrames;                    // 4 x 16x16 RGBA frames (pristine copy)
+        private byte[]? _waterStrip;                     // 64x16 RGBA blended strip for upload
+        private readonly System.Diagnostics.Stopwatch _waterClock = new();
         private Texture? _iconAtlasTexture;
         private TextureView? _iconAtlasView;
         private IntPtr _iconImGuiId;
         private const int IconCellSize = 48;
         private Vector4[]? _blockIconUv;
+        // Items atlas pixels + flat 2D icons for genuine items (tools, food, gems). Genuine
+        // items get their items.png tile copied straight into a second icon atlas, so the
+        // hotbar/inventory can show the real flat sprite instead of a block mesh.
+        private byte[] _itemsAtlasRgba = Array.Empty<byte>();
+        private int _itemsAtlasPixelsW;
+        private int _itemsAtlasPixelsH;
+        private Texture? _itemIconAtlasTexture;
+        private TextureView? _itemIconAtlasView;
+        private IntPtr _itemIconImGuiId;
+        private Vector4[]? _itemIconUv;
         // Terrain atlas bound to ImGui for the title/pause menu's dirt background.
         private IntPtr _terrainImGuiId;
         // Title-screen logo graphic (cubuild.png, embedded).
@@ -468,6 +495,12 @@ namespace CubeApp.Renderer
         private DeviceBuffer? _itemDropInstanceBuffer;
         private uint _itemDropInstanceCapacity;
         private float[] _itemDropInstanceScratch = Array.Empty<float>();
+        // Genuine items (2D sprites from items.png) drop as camera-facing flat quads instead of
+        // tumbling cubes; held genuine items render as a camera-space flat sprite on the fist.
+        private Pipeline? _itemDropSpritePipeline;
+        private Pipeline? _heldBlockSpritePipeline;
+        private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + shade(4)
+        private DeviceBuffer? _spriteIndexBuffer;   // 6 indices
         // Cube face geometry (same as Mesher.FaceVertices): back/front/bottom/top/right/left.
         private static readonly float[][] FallingCubeFaces = new float[][]
         {
@@ -533,9 +566,9 @@ namespace CubeApp.Renderer
         // command, tests the 6 frustum planes in parallel, and zeroes InstanceCount for culled
         // chunks. It writes args into a StructuredBufferReadWrite scratch, which is copied into
         // the IndirectBuffer for the draw - no CPU scan, no scratch copy on CPU, no readback.
-        // Default ON: the GPU path removes the per-frame CPU frustum scan of every chunk command
-        // (F7 toggles back to CPU culling for debugging).
-        private bool _gpuCullEnabled = true;
+        // Default OFF: CPU-side frustum culling is the safe baseline across all GPUs (some Intel
+        // drivers produce wrong results from the GPU cull compute shader). F7 toggles GPU culling.
+        private bool _gpuCullEnabled = false;
         private bool _gpuCullSupported;
         private Pipeline _cullPipeline;
         private ResourceLayout _cullDataLayout;   // set 0: frustum planes (uniform)
@@ -632,6 +665,26 @@ namespace CubeApp.Renderer
                     _atlasPixelsH = h;
                     _atlasRgba = (byte[])image.Data.Clone();
 
+                    // Extract the 4 water animation frames (16x16 each) so the per-frame
+                    // crossfade can re-upload just the strip without touching the source copy.
+                    if (w >= 256 && h >= 240)
+                    {
+                        int atlasRowBytes = w * 4;
+                        _waterFrames = new byte[WaterFrameCount * 16 * 16 * 4];
+                        for (int f = 0; f < WaterFrameCount; f++)
+                        {
+                            int srcX = (WaterTileX + f) * 16;
+                            int srcY = WaterTileY * 16;
+                            for (int y = 0; y < 16; y++)
+                            {
+                                Array.Copy(image.Data, (srcY + y) * atlasRowBytes + srcX * 4,
+                                    _waterFrames, (f * 16 + y) * 16 * 4, 16 * 4);
+                            }
+                        }
+                        _waterStrip = new byte[64 * 16 * 4];
+                        _waterClock.Restart();
+                    }
+
                     var texDesc = TextureDescription.Texture2D((uint)w, (uint)h, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
                     _atlasTexture = _gd.ResourceFactory.CreateTexture(texDesc);
                     _gd.UpdateTexture(_atlasTexture, image.Data, 0, 0, 0, (uint)w, (uint)h, 1, 0, 0);
@@ -654,6 +707,29 @@ namespace CubeApp.Renderer
                 // ignore; texture optional
             }
 
+            // Load the items atlas (items.png) the same way - embedded copy first, loose file
+            // fallback. Only needed for item-tile drops (flint); harmless if it's missing.
+            try
+            {
+                byte[]? itemBytes = LoadImageBytes("items.png");
+                if (itemBytes != null)
+                {
+                    var itemImage = StbImageSharp.ImageResult.FromMemory(itemBytes, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                    var itemDesc = TextureDescription.Texture2D((uint)itemImage.Width, (uint)itemImage.Height, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
+                    _itemsAtlasTexture = _gd.ResourceFactory.CreateTexture(itemDesc);
+                    _gd.UpdateTexture(_itemsAtlasTexture, itemImage.Data, 0, 0, 0, (uint)itemImage.Width, (uint)itemImage.Height, 1, 0, 0);
+                    _itemsAtlasView = _gd.ResourceFactory.CreateTextureView(_itemsAtlasTexture);
+                    // Keep the CPU copy + dims: flat 2D item icons are cut from these pixels.
+                    _itemsAtlasRgba = (byte[])itemImage.Data.Clone();
+                    _itemsAtlasPixelsW = itemImage.Width;
+                    _itemsAtlasPixelsH = itemImage.Height;
+                }
+            }
+            catch
+            {
+                // ignore; item drops fall back to terrain tiles
+            }
+
             LoadDuckResources();
             LoadPlayerResources();
             LoadMobResources();
@@ -668,6 +744,8 @@ namespace CubeApp.Renderer
 
             // Build the isometric block-icon atlas (needs the ImGui renderer for its texture binding).
             BuildIconAtlas();
+            // Build the flat item-icon atlas for genuine items (tools, food, gems).
+            BuildItemIconAtlas();
 
             // Bind the terrain atlas to ImGui so the menus can draw the dirt background.
             if (_imguiRenderer != null && _atlasView != null)
@@ -1035,6 +1113,85 @@ namespace CubeApp.Renderer
             {
                 _iconImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _iconAtlasView);
             }
+        }
+
+        // Renders flat 2D icons for GENUINE items (tools, food, gems): each item's items.png
+        // tile is copied into its own icon-atlas cell, then bound to ImGui. Unlike blocks (which
+        // get software-rendered 3D cube icons), items are sprites, exactly like Minecraft.
+        private void BuildItemIconAtlas()
+        {
+            int itemCount = ItemRegistry.Count;
+            if (itemCount <= ItemRegistry.ItemIdBase) return;
+            if (_itemsAtlasRgba.Length == 0) return; // items.png failed to load; item icons fall back
+
+            const int iconSize = 48;
+            const int cols = 12;
+            int count = itemCount - ItemRegistry.ItemIdBase;
+            int rows = Math.Max(1, (int)Math.Ceiling(count / (double)cols));
+            int atlasW = cols * iconSize;
+            int atlasH = rows * iconSize;
+            var iconData = new byte[atlasW * atlasH * 4];
+
+            _itemIconUv = new Vector4[count];
+            int tileStride = _itemsAtlasPixelsW * 4;
+
+            for (int k = 0; k < count; k++)
+            {
+                int itemId = ItemRegistry.ItemIdBase + k;
+                var tile = ItemRegistry.GetTile(itemId, out _);
+                if (tile.Width <= 0) continue;
+                int cellX = (k % cols) * iconSize;
+                int cellY = (k / cols) * iconSize;
+
+                // Nearest-neighbour upscale of the 16x16 tile into the 48x48 cell.
+                for (int y = 0; y < iconSize; y++)
+                {
+                    int sy = Math.Min(_itemsAtlasPixelsH - 1, tile.Y + (y * tile.Height) / iconSize);
+                    for (int x = 0; x < iconSize; x++)
+                    {
+                        int sx = Math.Min(_itemsAtlasPixelsW - 1, tile.X + (x * tile.Width) / iconSize);
+                        int si = sy * tileStride + sx * 4;
+                        int di = ((cellY + y) * atlasW + (cellX + x)) * 4;
+                        iconData[di + 0] = _itemsAtlasRgba[si + 0];
+                        iconData[di + 1] = _itemsAtlasRgba[si + 1];
+                        iconData[di + 2] = _itemsAtlasRgba[si + 2];
+                        iconData[di + 3] = _itemsAtlasRgba[si + 3];
+                    }
+                }
+
+                _itemIconUv[k] = new Vector4(
+                    cellX / (float)atlasW, cellY / (float)atlasH,
+                    iconSize / (float)atlasW, iconSize / (float)atlasH);
+            }
+
+            _itemIconAtlasTexture = _gd.ResourceFactory.CreateTexture(TextureDescription.Texture2D(
+                (uint)atlasW, (uint)atlasH, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled));
+            _gd.UpdateTexture(_itemIconAtlasTexture, iconData, 0, 0, 0, (uint)atlasW, (uint)atlasH, 1, 0, 0);
+            _itemIconAtlasView = _gd.ResourceFactory.CreateTextureView(_itemIconAtlasTexture);
+            if (_imguiRenderer != null)
+            {
+                _itemIconImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _itemIconAtlasView);
+            }
+        }
+
+        // Resolves the ImGui icon (UVs + texture id) for a stack id: blocks use the isometric
+        // cube icon atlas, genuine items use the flat sprite icon atlas.
+        private Vector4 IconUv(int itemId, out IntPtr texId)
+        {
+            texId = _itemIconImGuiId;
+            if (itemId >= 0 && itemId < BlockRegistry.Count && _blockIconUv != null && itemId < _blockIconUv.Length)
+            {
+                texId = _iconImGuiId;
+                return _blockIconUv[itemId];
+            }
+            int rel = itemId - ItemRegistry.ItemIdBase;
+            if (rel >= 0 && _itemIconUv != null && rel < _itemIconUv.Length)
+            {
+                texId = _itemIconImGuiId;
+                return _itemIconUv[rel];
+            }
+            texId = IntPtr.Zero;
+            return default;
         }
 
         // Software-renders a block icon from the REAL mesher output: builds a tiny 16x16x16 chunk
@@ -1683,6 +1840,61 @@ void main() {
                 });
             }
 
+            // Genuine-item DROPS: flat camera-facing sprites (like the hotbar icons) instead of
+            // tumbling cubes. Same instance data as the cube pass (center + tile rect + rotation;
+            // the rotation is ignored). The vertex shader extracts the camera basis from projView
+            // and offsets the quad along right/up so it always faces the camera. Half-size baked:
+            // 0.175 -> 0.35 world units (a hair larger than the 0.3 drop cube, since a flat sprite
+            // reads smaller than a cube).
+            {
+                string spriteVsCode = @"#version 450
+layout(location=0) in vec3 aCorner;
+layout(location=1) in vec2 aLocalUV;
+layout(location=2) in vec4 aShade;
+layout(location=3) in vec3 iWorldPos;
+layout(location=4) in vec4 iTileRect;
+layout(location=5) in vec4 iRot;
+layout(location=0) out vec2 vLocalUV;
+layout(location=1) out vec4 vTileRect;
+layout(location=2) out vec4 vColor;
+layout(location=3) out vec3 vWorldPos;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() {
+    // projView's top 3x3 rows are the camera basis scaled by the projection factors;
+    // normalizing recovers the world-space right/up vectors.
+    vec3 right = normalize(vec3(projView[0][0], projView[1][0], projView[2][0]));
+    vec3 up    = normalize(vec3(projView[0][1], projView[1][1], projView[2][1]));
+    vec3 local = aCorner * 0.175;
+    vec3 worldPos = iWorldPos + right * local.x + up * local.y;
+    vLocalUV = aLocalUV;
+    vTileRect = iTileRect;
+    vColor = aShade;
+    vWorldPos = worldPos;
+    gl_Position = projView * vec4(worldPos, 1.0);
+}";
+                var spriteVsSpirv = SpirvCompilation.CompileGlslToSpirv(spriteVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+                var spriteShaders = factory.CreateFromSpirv(
+                    new ShaderDescription(ShaderStages.Vertex, spriteVsSpirv.SpirvBytes, "main"),
+                    // Cutout fragment shader: transparent texels (alpha < 0.5) are DISCARDED so
+                    // item art with transparency doesn't leak its black RGB, and writes depth.
+                    new ShaderDescription(ShaderStages.Fragment, cutoutFsSpirv.SpirvBytes, "main"));
+                var spriteInstanceLayout = new VertexLayoutDescription(
+                    new VertexElementDescription("iWorldPos", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                    new VertexElementDescription("iTileRect", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4),
+                    new VertexElementDescription("iRot", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
+                spriteInstanceLayout.InstanceStepRate = 1;
+                _itemDropSpritePipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+                {
+                    BlendState = BlendStateDescription.SingleAlphaBlend,
+                    DepthStencilState = new DepthStencilStateDescription(true, true, ComparisonKind.LessEqual),
+                    RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                    PrimitiveTopology = PrimitiveTopology.TriangleList,
+                    ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
+                    ShaderSet = new ShaderSetDescription(new[] { fallingVertexLayout, spriteInstanceLayout }, new[] { spriteShaders[0], spriteShaders[1] }),
+                    Outputs = _sc.Framebuffer.OutputDescription
+                });
+            }
+
             // Static cube mesh (uploaded once): 24 verts (6 faces x 4) + 36 indices.
             // The FaceVertices table's +Z/-Z entries are wound opposite their normals (the greedy
             // pass corrects them); we must apply the SAME flip here or back-face culling culls
@@ -1773,6 +1985,29 @@ void main() {
                 }
                 _itemDropVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)smallVerts.Length * sizeof(float), BufferUsage.VertexBuffer));
                 _gd.UpdateBuffer(_itemDropVertexBuffer, 0, smallVerts);
+
+                // Unit quad (z=0, corners at +/-1) shared by the item-drop sprite and held-sprite
+                // pipelines; each shader bakes its own half-size scale. Same 9-float vertex layout
+                // as the cubes (aCorner + aLocalUV + aShade), full-bright shade so sprites never
+                // pick up cube face shading.
+                var quadVerts = new float[4 * (3 + 2 + 4)];
+                int qv = 0;
+                float[] quadCorners = { -1, -1, 1, -1, 1, 1, -1, 1 };
+                float[] quadUvs = { 0, 1, 1, 1, 1, 0, 0, 0 };
+                for (int c = 0; c < 4; c++)
+                {
+                    quadVerts[qv++] = quadCorners[c * 2 + 0];
+                    quadVerts[qv++] = quadCorners[c * 2 + 1];
+                    quadVerts[qv++] = 0f;
+                    quadVerts[qv++] = quadUvs[c * 2 + 0];
+                    quadVerts[qv++] = quadUvs[c * 2 + 1];
+                    quadVerts[qv++] = 1f; quadVerts[qv++] = 1f; quadVerts[qv++] = 1f; quadVerts[qv++] = 1f;
+                }
+                _spriteVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)quadVerts.Length * sizeof(float), BufferUsage.VertexBuffer));
+                _gd.UpdateBuffer(_spriteVertexBuffer, 0, quadVerts);
+                var quadIndices = new ushort[] { 0, 1, 2, 0, 2, 3 };
+                _spriteIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)quadIndices.Length * sizeof(ushort), BufferUsage.IndexBuffer));
+                _gd.UpdateBuffer(_spriteIndexBuffer, 0, quadIndices);
                 var smallIndices = new ushort[FallingCubeIndices];
                 int si = 0;
                 for (int face = 0; face < 6; face++)
@@ -1793,6 +2028,12 @@ void main() {
             if (_atlasView != null && _atlasSampler != null)
             {
                 _textureSet = factory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _atlasView, _atlasSampler));
+            }
+
+            // Items atlas resource set for item-tile drops (flint, etc).
+            if (_itemsAtlasView != null && _atlasSampler != null)
+            {
+                _itemsTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _itemsAtlasView, _atlasSampler));
             }
 
             // Reuse a single command list across frames instead of allocating one per frame.
@@ -1916,6 +2157,26 @@ void main() {
                 64, 1, 1));
 
             _gpuCullSupported = _gd.Features.ComputeShader && _gd.Features.StructuredBuffer && _gd.Features.DrawIndirect;
+            if (_gpuCullSupported)
+            {
+                // The GPU cull compute pass yields wrong results on some Intel integrated GPUs
+                // (it silently culls every chunk, leaving the world empty while mobs still draw).
+                // Stay on the safe CPU-cull baseline there; NVIDIA/AMD get the faster GPU path.
+                // F7 still toggles either way for debugging.
+                _gpuCullEnabled = !IsIntelGpu(_gd.VendorName);
+            }
+        }
+
+        // Veldrid reports VendorName like "id:00008086" (hex PCI vendor id). 0x8086 = Intel,
+        // 0x10DE = NVIDIA, 0x1002 = AMD.
+        private static bool IsIntelGpu(string vendorName)
+        {
+            if (string.IsNullOrEmpty(vendorName)) return false;
+            int idPos = vendorName.IndexOf("id:", StringComparison.OrdinalIgnoreCase);
+            if (idPos < 0) return false;
+            string hex = vendorName.Substring(idPos + 3).Trim();
+            if (hex.Length > 8) hex = hex.Substring(hex.Length - 8);
+            return uint.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out uint id) && id == 0x8086;
         }
 
         // Pipeline for textured entity models (the duck). Vertices are supplied in world space each
@@ -2066,6 +2327,63 @@ void main() {
                 ShaderSet = new ShaderSetDescription(new[] { heldCubeLayout, heldInstLayout }, new[] { heldShaders[0], heldShaders[1] }),
                 Outputs = _sc.Framebuffer.OutputDescription
             });
+
+            // Held genuine items: a flat camera-space sprite riding the fist (screen-aligned,
+            // like the hotbar icon), instead of the tilted cube. Same 11-float instance data
+            // (center + tile rect + rotation; rotation unused). Half-size baked: 0.22 -> 0.44
+            // world units, so the flat sprite reads about as big as the 0.289 held cube.
+            {
+                string heldSpriteVsCode = @"#version 450
+layout(location=0) in vec3 aCorner;
+layout(location=1) in vec2 aLocalUV;
+layout(location=2) in vec4 aShade;
+layout(location=3) in vec3 iWorldPos;
+layout(location=4) in vec4 iTileRect;
+layout(location=5) in vec4 iRot;
+layout(location=0) out vec2 vLocalUV;
+layout(location=1) out vec4 vTileRect;
+layout(location=2) out vec4 vColor;
+layout(set=0, binding=0) uniform ProjectionView { mat4 proj; };
+void main() {
+    // Camera space is already axis-aligned with the camera: offset the quad in xy only.
+    vec3 local = aCorner * 0.22;
+    vec3 camPos = iWorldPos + vec3(local.xy, 0.0);
+    vLocalUV = aLocalUV;
+    vTileRect = iTileRect;
+    vColor = aShade;
+    gl_Position = proj * vec4(camPos, 1.0);
+}";
+                var heldSpriteVsSpirv = SpirvCompilation.CompileGlslToSpirv(heldSpriteVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+                // Held sprites must also cut out transparent texels (alpha < 0.5) - otherwise the
+                // transparent art pixels render as black over the world.
+                string heldSpriteFsCode = @"#version 450
+layout(location=0) in vec2 vLocalUV;
+layout(location=1) in vec4 vTileRect;
+layout(location=2) in vec4 vColor;
+layout(set=1, binding=0) uniform sampler2D uAtlas;
+layout(location=0) out vec4 outColor;
+void main() {
+    vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
+    vec4 tex = texture(uAtlas, atlasUV);
+    if (tex.a < 0.5) discard;
+    outColor = vec4(tex.rgb * vColor.rgb, 1.0);
+}";
+                var heldSpriteFsSpirv = SpirvCompilation.CompileGlslToSpirv(heldSpriteFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+                var heldSpriteShaders = factory.CreateFromSpirv(
+                    new ShaderDescription(ShaderStages.Vertex, heldSpriteVsSpirv.SpirvBytes, "main"),
+                    new ShaderDescription(ShaderStages.Fragment, heldSpriteFsSpirv.SpirvBytes, "main"));
+                _heldBlockSpritePipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+                {
+                    BlendState = BlendStateDescription.SingleOverrideBlend,
+                    DepthStencilState = DepthStencilStateDescription.Disabled,
+                    // Closed quad with correct outward winding, cull off so it never vanishes.
+                    RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                    PrimitiveTopology = PrimitiveTopology.TriangleList,
+                    ResourceLayouts = new[] { _projViewLayout, _textureLayout },
+                    ShaderSet = new ShaderSetDescription(new[] { heldCubeLayout, heldInstLayout }, new[] { heldSpriteShaders[0], heldSpriteShaders[1] }),
+                    Outputs = _sc.Framebuffer.OutputDescription
+                });
+            }
 
             // Size from the actual hand mesh (24 verts / 36 indices for the arm cube) - the mesh
             // is built in LoadPlayerResources which runs before this.
@@ -3043,8 +3361,8 @@ void main() { outColor = vec4(1.0); }";
             float cy = (float)Math.Cos(yaw), syy = (float)Math.Sin(yaw);
             float cr = (float)Math.Cos(roll), sr = (float)Math.Sin(roll);
 
-            // Holding a hotbar block REPLACES the hand - the block rides the fist and uses the
-            // same swing/punch/bob motion instead of the arm.
+            // Holding a hotbar item REPLACES the hand - the item rides the fist and uses the same
+            // swing/punch/bob motion instead of the arm (blocks AND genuine items like tools).
             bool holdingBlock = false;
             {
                 var hotbar = _hud.Hotbar;
@@ -3054,8 +3372,8 @@ void main() { outColor = vec4(1.0); }";
                     if (sel >= 0 && sel < hotbar.Count)
                     {
                         int bid = hotbar[sel];
-                        if (bid > 0 && bid < BlockRegistry.Count
-                            && (BlockRegistry.GetById(bid).AllTexture ?? default).Width > 0)
+                        var tile = ItemRegistry.GetTile(bid, out _);
+                        if (bid > 0 && tile.Width > 0)
                         {
                             holdingBlock = true;
                         }
@@ -3145,9 +3463,9 @@ void main() { outColor = vec4(1.0); }";
             }
         }
 
-        // Draws the hotbar-selected block held at the first-person fist: a small cube using the
-        // item-drop pipeline (block atlas) with the camera-space hand projection, so it rides the
-        // arm and punches with it.
+        // Draws the hotbar-selected ITEM held at the first-person fist: a small cube using the
+        // item-drop pipeline (block atlas OR items atlas for genuine items) with the camera-space
+        // hand projection, so it rides the arm and punches with it.
         private void DrawHeldBlock(CommandList cl, float blockX, float blockY, float blockZ)
         {
             if (_heldBlockPipeline == null || _heldBlockBuffer == null || _itemDropVertexBuffer == null) return;
@@ -3156,13 +3474,40 @@ void main() { outColor = vec4(1.0); }";
             int selected = _hud.SelectedSlot;
             if (selected < 0 || selected >= hotbar.Count) return;
             int bid = hotbar[selected];
-            if (bid <= 0 || bid >= BlockRegistry.Count) return;
-            var tr = BlockRegistry.GetById(bid).AllTexture ?? default;
+            if (bid <= 0) return;
+            var tr = ItemRegistry.GetTile(bid, out bool fromItems);
             if (tr.Width <= 0) return;
+            if (fromItems && _itemsTextureSet == null) return; // items atlas missing
 
-            float atlasW = Math.Max(1f, _atlasWidth);
-            float atlasH = Math.Max(1f, _atlasHeight);
+            float atlasW = Math.Max(1f, fromItems ? _itemsAtlasPixelsW : _atlasWidth);
+            float atlasH = Math.Max(1f, fromItems ? _itemsAtlasPixelsH : _atlasHeight);
             float blockSize = _heldBlockSize; // held block reads big up close
+
+            // Genuine items render as a flat camera-space sprite (screen-aligned, like the hotbar
+            // icon) instead of the tilted cube; blocks keep the cube.
+            if (fromItems)
+            {
+                if (_heldBlockSpritePipeline == null || _spriteVertexBuffer == null || _spriteIndexBuffer == null) return;
+                // iWorldPos is the sprite CENTER (camera space); the shader offsets the quad.
+                _heldBlockScratch[0] = blockX;
+                _heldBlockScratch[1] = blockY;
+                _heldBlockScratch[2] = blockZ;
+                _heldBlockScratch[3] = tr.X / atlasW;
+                _heldBlockScratch[4] = tr.Y / atlasH;
+                _heldBlockScratch[5] = tr.Width / atlasW;
+                _heldBlockScratch[6] = tr.Height / atlasH;
+                _heldBlockScratch[7] = 0f; _heldBlockScratch[8] = 0f; _heldBlockScratch[9] = 0f; _heldBlockScratch[10] = 1f;
+                _gd.UpdateBuffer(_heldBlockBuffer, 0, _heldBlockScratch);
+
+                cl.SetPipeline(_heldBlockSpritePipeline);
+                cl.SetGraphicsResourceSet(0, _handProjSet);   // camera-space projection
+                if (_itemsTextureSet != null) cl.SetGraphicsResourceSet(1, _itemsTextureSet); // items atlas
+                cl.SetVertexBuffer(0, _spriteVertexBuffer);
+                cl.SetVertexBuffer(1, _heldBlockBuffer);
+                cl.SetIndexBuffer(_spriteIndexBuffer, IndexFormat.UInt16);
+                cl.DrawIndexed(6, 1, 0, 0, 0);
+                return;
+            }
 
             // Block base corner (the cube spans blockSize^3, centered on the given position).
             _heldBlockScratch[0] = blockX - blockSize * 0.5f;
@@ -3184,7 +3529,8 @@ void main() { outColor = vec4(1.0); }";
 
             cl.SetPipeline(_heldBlockPipeline);
             cl.SetGraphicsResourceSet(0, _handProjSet);   // camera-space projection
-            if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet); // block atlas
+            if (fromItems) cl.SetGraphicsResourceSet(1, _itemsTextureSet); // items atlas
+            else if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet); // block atlas
             cl.SetVertexBuffer(0, _itemDropVertexBuffer);
             cl.SetVertexBuffer(1, _heldBlockBuffer);
             cl.SetIndexBuffer(_itemDropIndexBuffer, IndexFormat.UInt16);
@@ -3328,55 +3674,77 @@ void main() { outColor = vec4(1.0); }";
         }
 
         // Draws survival item drops as small tumbling cubes (same vertex layout as falling
-        // blocks, but with the scaled mesh + a per-instance quaternion).
+        // blocks, but with the scaled mesh + a per-instance quaternion). Genuine items (flint,
+        // tools, food) draw their flat sprite from the items atlas; block items from terrain.
         private void DrawItemDrops(CommandList cl)
         {
             int n = _itemDrops.Count;
             if (n == 0 || _itemDropPipeline == null || _itemDropVertexBuffer == null) return;
-            float atlasW = Math.Max(1f, _atlasWidth);
-            float atlasH = Math.Max(1f, _atlasHeight);
 
-            // 11 floats per instance: worldPos (3) + tileRect (4) + rotation quat (4).
-            int instFloats = n * 11;
-            if (_itemDropInstanceScratch.Length < instFloats) _itemDropInstanceScratch = new float[instFloats];
-            int vf = 0;
-            const float halfScale = ItemDropScale * 0.5f;
-            for (int i = 0; i < n; i++)
+            // Two passes: 0 = block drops (tumbling cubes), 1 = genuine item drops (flat
+            // camera-facing sprites from items.png, like the hotbar icons).
+            for (int pass = 0; pass < 2; pass++)
             {
-                var it = _itemDrops[i];
-                var def = BlockRegistry.GetById(it.BlockId);
-                var tr = def.AllTexture ?? default;
-                // Rotate around the cube's CENTER, so pass base + half-scale.
-                _itemDropInstanceScratch[vf++] = it.X + halfScale;
-                _itemDropInstanceScratch[vf++] = it.Y + halfScale;
-                _itemDropInstanceScratch[vf++] = it.Z + halfScale;
-                _itemDropInstanceScratch[vf++] = tr.X / atlasW;
-                _itemDropInstanceScratch[vf++] = tr.Y / atlasH;
-                _itemDropInstanceScratch[vf++] = tr.Width / atlasW;
-                _itemDropInstanceScratch[vf++] = tr.Height / atlasH;
-                _itemDropInstanceScratch[vf++] = it.RotX;
-                _itemDropInstanceScratch[vf++] = it.RotY;
-                _itemDropInstanceScratch[vf++] = it.RotZ;
-                _itemDropInstanceScratch[vf++] = it.RotW;
-            }
+                int passCount = 0;
+                for (int i = 0; i < n; i++)
+                {
+                    ItemRegistry.GetTile(_itemDrops[i].ItemId, out bool fromItems);
+                    if ((pass == 0 && fromItems) || (pass == 1 && !fromItems)) continue;
+                    passCount++;
+                }
+                if (passCount == 0) continue;
+                if (pass == 1 && (_itemsTextureSet == null || _itemDropSpritePipeline == null)) continue; // items atlas missing
 
-            if (_itemDropInstanceBuffer == null || _itemDropInstanceCapacity < (uint)(instFloats * sizeof(float)))
-            {
-                _itemDropInstanceBuffer?.Dispose();
-                _itemDropInstanceBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
-                    Math.Max((uint)(instFloats * sizeof(float)), 512), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
-                _itemDropInstanceCapacity = Math.Max((uint)(instFloats * sizeof(float)), 512);
-            }
-            _gd.UpdateBuffer(_itemDropInstanceBuffer, 0, _itemDropInstanceScratch);
+                float atlasW = Math.Max(1f, pass == 1 ? _itemsAtlasPixelsW : _atlasWidth);
+                float atlasH = Math.Max(1f, pass == 1 ? _itemsAtlasPixelsH : _atlasHeight);
 
-            cl.SetPipeline(_itemDropPipeline);
-            cl.SetGraphicsResourceSet(0, _projViewSet);
-            if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
-            cl.SetGraphicsResourceSet(2, _fogSet);
-            cl.SetVertexBuffer(0, _itemDropVertexBuffer);
-            cl.SetVertexBuffer(1, _itemDropInstanceBuffer);
-            cl.SetIndexBuffer(_itemDropIndexBuffer, IndexFormat.UInt16);
-            cl.DrawIndexed(FallingCubeIndices, (uint)n, 0, 0, 0);
+                // 11 floats per instance: worldPos (3) + tileRect (4) + rotation quat (4).
+                int instFloats = passCount * 11;
+                if (_itemDropInstanceScratch.Length < instFloats) _itemDropInstanceScratch = new float[instFloats];
+                int vf = 0;
+                const float halfScale = ItemDropScale * 0.5f;
+                for (int i = 0; i < n; i++)
+                {
+                    var it = _itemDrops[i];
+                    var tr = ItemRegistry.GetTile(it.ItemId, out bool fromItems);
+                    if ((pass == 0 && fromItems) || (pass == 1 && !fromItems)) continue;
+                    // Rotate around the cube's CENTER, so pass base + half-scale.
+                    _itemDropInstanceScratch[vf++] = it.X + halfScale;
+                    _itemDropInstanceScratch[vf++] = it.Y + halfScale;
+                    _itemDropInstanceScratch[vf++] = it.Z + halfScale;
+                    _itemDropInstanceScratch[vf++] = tr.X / atlasW;
+                    _itemDropInstanceScratch[vf++] = tr.Y / atlasH;
+                    _itemDropInstanceScratch[vf++] = tr.Width / atlasW;
+                    _itemDropInstanceScratch[vf++] = tr.Height / atlasH;
+                    _itemDropInstanceScratch[vf++] = it.RotX;
+                    _itemDropInstanceScratch[vf++] = it.RotY;
+                    _itemDropInstanceScratch[vf++] = it.RotZ;
+                    _itemDropInstanceScratch[vf++] = it.RotW;
+                }
+
+                if (_itemDropInstanceBuffer == null || _itemDropInstanceCapacity < (uint)(instFloats * sizeof(float)))
+                {
+                    _itemDropInstanceBuffer?.Dispose();
+                    _itemDropInstanceBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                        Math.Max((uint)(instFloats * sizeof(float)), 512), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+                    _itemDropInstanceCapacity = Math.Max((uint)(instFloats * sizeof(float)), 512);
+                }
+                _gd.UpdateBuffer(_itemDropInstanceBuffer, 0, _itemDropInstanceScratch);
+
+                cl.SetPipeline(pass == 1 ? _itemDropSpritePipeline : _itemDropPipeline);
+                cl.SetGraphicsResourceSet(0, _projViewSet);
+                if (pass == 1)
+                {
+                    if (_itemsTextureSet != null) cl.SetGraphicsResourceSet(1, _itemsTextureSet);
+                    else continue;
+                }
+                else if (_textureSet != null) cl.SetGraphicsResourceSet(1, _textureSet);
+                cl.SetGraphicsResourceSet(2, _fogSet);
+                cl.SetVertexBuffer(0, pass == 1 ? _spriteVertexBuffer : _itemDropVertexBuffer);
+                cl.SetVertexBuffer(1, _itemDropInstanceBuffer);
+                cl.SetIndexBuffer(pass == 1 ? _spriteIndexBuffer : _itemDropIndexBuffer, IndexFormat.UInt16);
+                cl.DrawIndexed(pass == 1 ? 6u : FallingCubeIndices, (uint)passCount, 0, 0, 0);
+            }
         }
 
         public void SetEntities(IReadOnlyList<CubeApp.MobRenderData> mobRenderData)
@@ -5986,7 +6354,7 @@ void main() { outColor = vec4(1.0); }";
                         var contents = (_hud.BagSlots != null && slot < _hud.BagSlots.Count)
                             ? _hud.BagSlots[slot] : default;
                         ImGui.SetCursorPos(new Vector2(startX + col * stepX + borderPx, yBase + startY + row * stepY + borderPx));
-                        DrawInventorySlotCellAt($"bg{slot}", contents.BlockId, contents.Count, 0, slot, slotPx, fg, fgTextCol);
+                        DrawInventorySlotCellAt($"bg{slot}", contents.ItemId, contents.Count, 0, slot, slotPx, fg, fgTextCol);
                     }
                 }
                 for (int i = 0; i < 10; i++)
@@ -6007,7 +6375,7 @@ void main() { outColor = vec4(1.0); }";
                         int slot = row * 10 + col;
                         var contents = (_hud.BagSlots != null && slot < _hud.BagSlots.Count)
                             ? _hud.BagSlots[slot] : default;
-                        DrawInventorySlotCell($"bg{slot}", contents.BlockId, contents.Count, 0, slot);
+                        DrawInventorySlotCell($"bg{slot}", contents.ItemId, contents.Count, 0, slot);
                         if (col != 9) ImGui.SameLine(0, 4);
                     }
                     if (row != 3) ImGui.Dummy(new Vector2(0, 2));
@@ -6026,6 +6394,7 @@ void main() { outColor = vec4(1.0); }";
             else
             {
                 int perRow = Math.Max(1, (int)(winW / 64f));
+                // Blocks (isometric cube icons)...
                 for (int id = 1; id < BlockRegistry.Count; id++)
                 {
                     if (!BlockRegistry.IsInInventory(id)) continue;
@@ -6033,6 +6402,24 @@ void main() { outColor = vec4(1.0); }";
                     string name = BlockRegistry.GetById(id).DisplayName;
                     ImGui.PushID(id);
                     if (ImGui.ImageButton($"##icon{id}", _iconImGuiId, new Vector2(48, 48),
+                            new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W),
+                            Vector4.Zero, Vector4.One))
+                    {
+                        _inventorySelections.Enqueue(id);
+                    }
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip(name);
+                    ImGui.PopID();
+                    if (id % perRow != 0) ImGui.SameLine();
+                }
+                // ...then genuine items (flat sprites from the items atlas).
+                for (int id = ItemRegistry.ItemIdBase; id < ItemRegistry.Count; id++)
+                {
+                    if (!ItemRegistry.IsInInventory(id)) continue;
+                    var uv = IconUv(id, out IntPtr iconTex);
+                    if (iconTex == IntPtr.Zero) continue;
+                    string name = ItemRegistry.Get(id).DisplayName;
+                    ImGui.PushID(id);
+                    if (ImGui.ImageButton($"##itemicon{id}", iconTex, new Vector2(48, 48),
                             new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W),
                             Vector4.Zero, Vector4.One))
                     {
@@ -6068,18 +6455,18 @@ void main() { outColor = vec4(1.0); }";
                 // Draw the cursor-held stack floating at the mouse.
                 if (_hud.HeldStack.HasValue)
                 {
-                    int bid = _hud.HeldStack.Value.BlockId;
-                    if (bid > 0 && _blockIconUv != null && bid < _blockIconUv.Length)
+                    int bid = _hud.HeldStack.Value.ItemId;
+                    var heldUv = IconUv(bid, out IntPtr heldTex);
+                    if (heldTex != IntPtr.Zero)
                     {
-                        var uv = _blockIconUv[bid];
                         var mp = ImGui.GetMousePos();
                         var drawList = ImGui.GetForegroundDrawList();
 
                         // Follow the cursor freely, same pixel-size as the slot cells (48px),
                         // so the stack looks like it belongs to the UI even when dragged between slots.
                         float half = snapSlotPx > 0f ? snapSlotPx * 0.5f : 16f;
-                        drawList.AddImage(_iconImGuiId, mp + new Vector2(-half, -half), mp + new Vector2(half, half),
-                            new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W));
+                        drawList.AddImage(heldTex, mp + new Vector2(-half, -half), mp + new Vector2(half, half),
+                            new Vector2(heldUv.X, heldUv.Y), new Vector2(heldUv.X + heldUv.Z, heldUv.Y + heldUv.W));
                         int heldCount = _hud.HeldStack.Value.Count;
                         if (heldCount > 1)
                             drawList.AddText(mp + new Vector2(half - 16f, half - 17f), ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 1)),
@@ -6089,18 +6476,18 @@ void main() { outColor = vec4(1.0); }";
             }
         }
 
-        // One inventory slot cell: a 48px block icon (or a blank cell) with its count, wired to
+        // One inventory slot cell: a 48px item icon (or a blank cell) with its count, wired to
         // the drag-click queue. kind: 0=bag, 1=hotbar, 3=quick-move. target: unified slot index
         // for clicks (bag 0..39, hotbar 40..49).
-        private void DrawInventorySlotCell(string id, int blockId, int count, int kind, int target)
+        private void DrawInventorySlotCell(string id, int itemId, int count, int kind, int target)
         {
             int unified = kind == 1 ? 40 + target : target;
             bool shift = ImGui.IsKeyDown(ImGuiKey.LeftShift) || ImGui.IsKeyDown(ImGuiKey.RightShift);
             ImGui.PushID(id);
-            if (blockId > 0 && _blockIconUv != null && blockId < _blockIconUv.Length)
+            var uv = IconUv(itemId, out IntPtr iconTex);
+            if (iconTex != IntPtr.Zero)
             {
-                var uv = _blockIconUv[blockId];
-                ImGui.ImageButton($"##{id}", _iconImGuiId, new Vector2(48, 48),
+                ImGui.ImageButton($"##{id}", iconTex, new Vector2(48, 48),
                     new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W),
                     Vector4.Zero, Vector4.One);
                 if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && shift) _inventoryClicks.Enqueue((3, unified, 0));
@@ -6109,10 +6496,14 @@ void main() { outColor = vec4(1.0); }";
                 if (ImGui.IsItemHovered())
                 {
                     _hoveredInventorySlot = unified;
-                    ImGui.SetTooltip(BlockRegistry.GetById(blockId).DisplayName);
+                    ImGui.SetTooltip(ItemRegistry.Get(itemId).DisplayName);
                 }
-                ImGui.SameLine(0, 4);
-                ImGui.Text(count.ToString());
+                // Non-stackable items (tools) don't show a count, like Minecraft.
+                if (ItemRegistry.StackSizeOf(itemId) > 1)
+                {
+                    ImGui.SameLine(0, 4);
+                    ImGui.Text(count.ToString());
+                }
             }
             else
             {
@@ -6128,9 +6519,9 @@ void main() { outColor = vec4(1.0); }";
         }
 
         // Positioned slot cell for the textured E-menu: an invisible click target (window layer)
-        // whose block icon + count are drawn on the Foreground draw list so they sit on top of
+        // whose item icon + count are drawn on the Foreground draw list so they sit on top of
         // the screen-wide dim overlay.
-        private void DrawInventorySlotCellAt(string id, int blockId, int count, int kind, int target, float slotPx, ImDrawListPtr fg, uint fgTextCol)
+        private void DrawInventorySlotCellAt(string id, int itemId, int count, int kind, int target, float slotPx, ImDrawListPtr fg, uint fgTextCol)
         {
             int unified = kind == 1 ? 40 + target : target;
             bool shift = ImGui.IsKeyDown(ImGuiKey.LeftShift) || ImGui.IsKeyDown(ImGuiKey.RightShift);
@@ -6147,24 +6538,25 @@ void main() { outColor = vec4(1.0); }";
             {
                 _hoveredInventorySlot = unified;
                 hovered = true;
-                if (blockId > 0)
-                    ImGui.SetTooltip(BlockRegistry.GetById(blockId).DisplayName);
+                if (itemId > 0)
+                    ImGui.SetTooltip(ItemRegistry.Get(itemId).DisplayName);
             }
 
-            // Foreground visuals: a subtle white highlight on hover, then the block icon + count.
+            // Foreground visuals: a subtle white highlight on hover, then the item icon + count.
             if (hovered)
             {
                 uint hoverCol = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 0.22f));
                 fg.AddRectFilled(ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), hoverCol);
             }
-            if (blockId > 0 && _blockIconUv != null && blockId < _blockIconUv.Length)
+            var cellUv = IconUv(itemId, out IntPtr cellTex);
+            if (cellTex != IntPtr.Zero)
             {
                 var rmin = ImGui.GetItemRectMin();
                 var rmax = ImGui.GetItemRectMax();
-                var uv = _blockIconUv[blockId];
-                fg.AddImage(_iconImGuiId, rmin, rmax,
-                    new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W));
-                if (count > 1)
+                fg.AddImage(cellTex, rmin, rmax,
+                    new Vector2(cellUv.X, cellUv.Y), new Vector2(cellUv.X + cellUv.Z, cellUv.Y + cellUv.W));
+                // Tools (stack size 1) don't show a count, like Minecraft.
+                if (count > 1 && ItemRegistry.StackSizeOf(itemId) > 1)
                     fg.AddText(rmax - new Vector2(16, 17), fgTextCol, count.ToString());
             }
 
@@ -6721,24 +7113,24 @@ void main() { outColor = vec4(1.0); }";
                 if (_hud.Hotbar != null && i < _hud.Hotbar.Count)
                 {
                     int bid = _hud.Hotbar[i];
-                    if (bid > 0 && _iconImGuiId != IntPtr.Zero && _blockIconUv != null && bid < _blockIconUv.Length)
+                    var hotUv = IconUv(bid, out IntPtr hotTex);
+                    if (bid > 0 && hotTex != IntPtr.Zero)
                     {
-                        var uv = _blockIconUv[bid];
-                        // The selected block grows along with its highlight ring so the active slot
+                        // The selected item grows along with its highlight ring so the active slot
                         // reads as one bigger, emphasized cube.
                         float iconSize2 = isSelected ? slotSize * 1.16f : slotSize - iconInset * 2f;
                         float iconX = isSelected ? slotTopLeft.X + (slotSize - iconSize2) * 0.5f : slotTopLeft.X + iconInset;
                         float iconY = isSelected ? slotTopLeft.Y + (slotSize - iconSize2) * 0.5f + iconDrop : slotTopLeft.Y + iconInset + iconDrop;
                         drawList.AddImage(
-                            _iconImGuiId,
+                            hotTex,
                             new Vector2(iconX, iconY),
                             new Vector2(iconX + iconSize2, iconY + iconSize2),
-                            new Vector2(uv.X, uv.Y),
-                            new Vector2(uv.X + uv.Z, uv.Y + uv.W));
+                            new Vector2(hotUv.X, hotUv.Y),
+                            new Vector2(hotUv.X + hotUv.Z, hotUv.Y + hotUv.W));
                     }
                     else
                     {
-                        uint iconColor = bid > 0 ? BlockRegistry.MapColorOf(bid) : 0;
+                        uint iconColor = bid > 0 ? ItemRegistry.MapColorOf(bid) : 0;
                         float iconSize2 = isSelected ? slotSize * 1.16f : slotSize - iconInset * 2f;
                         float iconX = isSelected ? slotTopLeft.X + (slotSize - iconSize2) * 0.5f : slotTopLeft.X + iconInset;
                         float iconY = isSelected ? slotTopLeft.Y + (slotSize - iconSize2) * 0.5f + iconDrop : slotTopLeft.Y + iconInset + iconDrop;
@@ -6746,12 +7138,13 @@ void main() { outColor = vec4(1.0); }";
                     }
                 }
 
-                // Survival: show the per-slot hotbar count in the corner.
+                // Survival: show the per-slot hotbar count in the corner (stackable items only -
+                // tools carry no count number, like Minecraft).
                 if (survival && _hud.HotbarCounts != null)
                 {
                     int bid = (_hud.Hotbar != null && i < _hud.Hotbar.Count) ? _hud.Hotbar[i] : 0;
                     int count = (i < _hud.HotbarCounts.Count) ? _hud.HotbarCounts[i] : 0;
-                    if (bid > 0 && count > 0)
+                    if (bid > 0 && count > 0 && ItemRegistry.StackSizeOf(bid) > 1)
                     {
                         string countText = count.ToString();
                         var textSize = ImGui.CalcTextSize(countText);
@@ -7442,6 +7835,7 @@ void main() { outColor = vec4(1.0); }";
             _cameraPosition = position;
             _viewProjection = viewProj;
             _gd.UpdateBuffer(_projViewBuffer, 0, ref viewProj);
+            UpdateWaterAnimation();
             if (_skyMatrixBuffer != null)
                 _gd.UpdateBuffer(_skyMatrixBuffer, 0, ref skyViewProj);
             if (_cloudMatrixBuffer != null)
@@ -7451,6 +7845,53 @@ void main() { outColor = vec4(1.0); }";
                 var wideProj = Matrix4x4.CreatePerspectiveFieldOfView((float)(Math.PI / 2.0), (float)_sc.Framebuffer.Width / _sc.Framebuffer.Height, 1.0f, _cloudFarPlane);
                 var wideVP = Matrix4x4.Multiply(view, wideProj);
                 _gd.UpdateBuffer(_cloudMatrixBuffer, 0, ref wideVP);
+            }
+        }
+
+        /// <summary>Crossfades the two current water frames into the atlas strip and re-uploads the
+        /// 64x16 region. Runs once per rendered frame while the atlas exists; the upload is 4KB so
+        /// the per-frame cost is negligible.</summary>
+        private void UpdateWaterAnimation()
+        {
+            if (_waterFrames == null || _waterStrip == null || _atlasTexture == null) return;
+
+            double elapsed = _waterClock.Elapsed.TotalSeconds;
+            double phase = (elapsed / WaterCycleSeconds) * WaterFrameCount; // 0..4 looping
+            int frameA = (int)Math.Floor(phase) % WaterFrameCount;
+            int frameB = (frameA + 1) % WaterFrameCount;
+            float fade = (float)(phase - Math.Floor(phase));
+
+            // Blend frame A -> B. Still water (tile 12) and flowing water (tile 13, the mesher's
+            // side/flow tile) share the animation, so the crossfade lands in BOTH columns 0 and
+            // 1 of the strip (tiles 14-15 stay pristine). Writing into frameA's column instead
+            // made the tile go stale for most of the cycle and snap back at the wrap.
+            for (int y = 0; y < 16; y++)
+            {
+                for (int x = 0; x < 16; x++)
+                {
+                    int pixel = y * 16 + x;
+                    int srcABase = (frameA * 256 + pixel) * 4;
+                    int srcBBase = (frameB * 256 + pixel) * 4;
+                    for (int c = 0; c < 4; c++)
+                    {
+                        int a = _waterFrames[srcABase + c];
+                        int b = _waterFrames[srcBBase + c];
+                        byte v = (byte)(a + (b - a) * fade);
+                        _waterStrip[(y * 64 + x) * 4 + c] = v;          // tile 12 - still water
+                        _waterStrip[(y * 64 + 16 + x) * 4 + c] = v;     // tile 13 - flowing water
+                    }
+                }
+            }
+
+            var handle = System.Runtime.InteropServices.GCHandle.Alloc(_waterStrip, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try
+            {
+                _gd.UpdateTexture(_atlasTexture, handle.AddrOfPinnedObject(), (uint)_waterStrip.Length,
+                    (uint)(WaterTileX * 16), (uint)(WaterTileY * 16), 0, 64, 16, 1, 0, 0);
+            }
+            finally
+            {
+                handle.Free();
             }
         }
 

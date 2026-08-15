@@ -21,7 +21,7 @@ namespace CubeApp
     /// </summary>
     public sealed class GrassSpreadSimulation
     {
-        private const int TickDelay = 4;
+        private const int TickDelay = 1024;
 
         private readonly ChunkManager _manager;
         private readonly BlockTickScheduler _tickScheduler;

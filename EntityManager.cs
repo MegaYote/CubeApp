@@ -179,6 +179,16 @@ namespace CubeApp
         /// </summary>
         public Action<int, DeathCause>? PlayerDamageCallback { get; set; }
 
+        // ---- player body for mob separation ----
+        /// <summary>Player AABB center (world space, not the eye) used for player-mob repulsion; the world sets it each tick.</summary>
+        public Point3D PlayerBodyCenter;
+        /// <summary>Player XZ half-extent (radius) for repulsion.</summary>
+        public double PlayerHalfWidth = 0.30;
+        /// <summary>Player vertical half-extent for repulsion.</summary>
+        public double PlayerHalfHeight = 0.90;
+        /// <summary>Receives the player's XZ push velocity from mob separation (mobs shove the player back).</summary>
+        public Action<Point3D>? PlayerPushCallback { get; set; }
+
         /// <summary>
         /// Advance all mobs by one frame. When <paramref name="playerPosition"/> is supplied,
         /// natural spawning (near the player, 24-32 blocks out) and despawning (far-away mobs)
@@ -320,7 +330,7 @@ namespace CubeApp
         private void PushMobsApart(float dt)
         {
             int count = _mobs.Count;
-            if (count < 2) return;
+            if (count == 0) return;
             double dtScale = dt * 60.0; // normalize to 60fps tick equivalent
 
             for (int i = 0; i < count; i++)
@@ -349,6 +359,31 @@ namespace CubeApp
                         double push = 3.0 * Math.Min(1.0, invDist) * dtScale;
                         a.AddVelocity(dx * invDist * push, 0, dz * invDist * push);
                         b.AddVelocity(-dx * invDist * push, 0, -dz * invDist * push);
+                    }
+                }
+
+                // The local player participates in separation like a heavy mob: mobs touching
+                // the player's AABB get pushed away, and the player receives a lighter shove back
+                // (MC-style mass ratio ~2:1 - the player is heavier than most mobs).
+                if (PlayerPushCallback != null)
+                {
+                    double pdx = ax - PlayerBodyCenter.X, pdz = az - PlayerBodyCenter.Z;
+                    double pdy = ay - PlayerBodyCenter.Y;
+                    double pMinXZ = a.Width * 0.5 + PlayerHalfWidth;
+                    double pDistXZSq = pdx * pdx + pdz * pdz;
+
+                    if (pDistXZSq < pMinXZ * pMinXZ && pDistXZSq > 0.0001)
+                    {
+                        double pMinY = a.Height * 0.5 + PlayerHalfHeight;
+                        if (Math.Abs(pdy) < pMinY)
+                        {
+                            double pDist = Math.Sqrt(pDistXZSq);
+                            double pInv = 1.0 / pDist;
+                            double pPush = 3.0 * Math.Min(1.0, pInv) * dtScale;
+                            a.AddVelocity(pdx * pInv * pPush, 0, pdz * pInv * pPush);
+                            PlayerPushCallback.Invoke(new Point3D(
+                                -pdx * pInv * pPush * 0.5, 0, -pdz * pInv * pPush * 0.5));
+                        }
                     }
                 }
             }
@@ -436,6 +471,40 @@ namespace CubeApp
             }
 
             return best;
+        }
+
+        /// <summary>
+        /// Tests the ray against every living mob AABB and returns the nearest hit distance.
+        /// Used by the block-pick ray so a mob's hitbox stops the ray: the player can never
+        /// break or place through a living mob (no more accidental wall-damage while fighting).
+        /// AABB math matches TryPickMob exactly (Position.Y = feet).
+        /// </summary>
+        public bool TryRaycastMobs(Point3D origin, Point3D direction, double maxDistance, out double hitDistance)
+        {
+            hitDistance = double.PositiveInfinity;
+            var dir = direction.Normalized();
+
+            foreach (var mob in _mobs)
+            {
+                if (mob.IsDead) continue;
+                if (mob is not MobEntity mobEntity) continue;
+
+                float half = mobEntity.Width * 0.5f;
+                double minX = mob.Position.X - half;
+                double maxX = mob.Position.X + half;
+                double minY = mob.Position.Y;
+                double maxY = mob.Position.Y + mobEntity.Height;
+                double minZ = mob.Position.Z - half;
+                double maxZ = mob.Position.Z + half;
+
+                if (RayBox(origin, dir, minX, minY, minZ, maxX, maxY, maxZ, out double t)
+                    && t <= maxDistance && t < hitDistance)
+                {
+                    hitDistance = t;
+                }
+            }
+
+            return hitDistance <= maxDistance;
         }
 
         private static bool RayBox(

@@ -55,7 +55,7 @@ namespace CubeApp.Renderer
         /// <summary>Per-hotbar-slot counts (parallel to the hotbar block ids).</summary>
         public IReadOnlyList<int> HotbarCounts;
         /// <summary>The stack riding the cursor while the inventory is open (survival drag/drop).</summary>
-        public (int BlockId, int Count)? HeldStack;
+        public (int ItemId, int Count)? HeldStack;
 
         /// <summary>Player health 0..10, drives the healthbar heart slice (10 = full heart).</summary>
         public int PlayerHealth;

@@ -32,6 +32,7 @@ namespace CubeApp
         private static bool[] _slabTop = Array.Empty<bool>();
         private static bool[] _stair = Array.Empty<bool>();
         private static bool[] _inventory = Array.Empty<bool>();
+        private static bool[] _placeable = Array.Empty<bool>();
         private static bool[] _gravity = Array.Empty<bool>();
         private static int[] _lightEmission = Array.Empty<int>();
         private static float[] _alpha = Array.Empty<float>();
@@ -61,12 +62,14 @@ namespace CubeApp
             public string? Top { get; set; }
             public string? Bottom { get; set; }
             public string? Side { get; set; }
+            public string? ItemTile { get; set; }
             public bool Solid { get; set; } = true;
             public bool Opaque { get; set; } = true;
             public bool Transparent { get; set; } = false;
             public double Alpha { get; set; } = 1.0;
             public string? Shape { get; set; }
             public bool Inventory { get; set; } = true;
+            public bool Placeable { get; set; } = true;
             public bool Translucent { get; set; } = false;
             public int LightEmission { get; set; } = 0;
             public bool Gravity { get; set; } = false;
@@ -151,6 +154,7 @@ namespace CubeApp
                     Alpha = (float)dto.Alpha,
                     Shape = dto.Shape ?? "",
                     Inventory = dto.Inventory,
+                    Placeable = dto.Placeable,
                     Translucent = dto.Translucent,
                     LightEmission = dto.LightEmission,
                     Gravity = dto.Gravity,
@@ -169,6 +173,7 @@ namespace CubeApp
                     if (dto.Top != null) def.TopTexture = ParseTile(dto.Top);
                     if (dto.Bottom != null) def.BottomTexture = ParseTile(dto.Bottom);
                     if (dto.Side != null) def.SideTexture = ParseTile(dto.Side);
+                    if (dto.ItemTile != null) def.ItemTile = ParseTile(dto.ItemTile);
                 }
 
                 defs[i] = def;
@@ -195,6 +200,7 @@ namespace CubeApp
             _slabTop = new bool[Count];
             _stair = new bool[Count];
             _inventory = new bool[Count];
+            _placeable = new bool[Count];
             _gravity = new bool[Count];
             _lightEmission = new int[Count];
             for (int i = 0; i < Count; i++)
@@ -210,6 +216,7 @@ namespace CubeApp
                 _zombieBreakSpeed[i] = defs[i].ZombieBreakSpeed;
                 _mapColor[i] = defs[i].MapColor;
                 _inventory[i] = defs[i].Inventory;
+                _placeable[i] = defs[i].Placeable;
                 _lightEmission[i] = defs[i].LightEmission;
                 _cross[i] = string.Equals(defs[i].Shape, "cross", StringComparison.OrdinalIgnoreCase);
                 _cutout[i] = _cross[i] || string.Equals(defs[i].Shape, "cutout", StringComparison.OrdinalIgnoreCase);
@@ -284,6 +291,7 @@ namespace CubeApp
         public static bool IsStair(int id) => id > 0 && id < Count && _stair[id];
         public static bool IsPartialShape(int id) => id > 0 && id < Count && (_slab[id] || _slabTop[id] || _stair[id]);
         public static bool IsInInventory(int id) => id >= 0 && id < Count && _inventory[id];
+        public static bool IsPlaceable(int id) => id > 0 && id < Count && _placeable[id];
         public static bool IsGravity(int id) => id > 0 && id < Count && _gravity[id];
         public static int LightEmissionOf(int id) => id > 0 && id < Count ? _lightEmission[id] : 0;
         public static float Alpha(int id) => _alpha[id];

@@ -6,23 +6,28 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- OpenAL (Silk.NET) uses pointer-based calls for device/source handles. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <!-- Produce a single, self-contained .exe (runtime + native libs baked in). -->
-    <PublishSingleFile>true</PublishSingleFile>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Self-contained with all DLLs and native libraries -->
     <SelfContained>true</SelfContained>
+    <PublishSingleFile>false</PublishSingleFile>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- Include native libraries -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <!-- Copy content files to output for runtime loading -->
     <CopyOutputDirectoryItemsToPublishDirectoryStyle>PreserveNewest</CopyOutputDirectoryItemsToPublishDirectoryStyle>
   </PropertyGroup>
   <ItemGroup>
     <!-- Bake the texture atlas into the assembly so no loose files need to ship. -->
     <EmbeddedResource Include="terrain.png" />
+    <!-- Items atlas (flint drop icon, etc). -->
+    <EmbeddedResource Include="items.png" />
     <!-- Bake the duck test-mob texture in as well. -->
     <EmbeddedResource Include="duck.png" />
     <!-- Player skin for the Minecraft-style player model. -->
     <EmbeddedResource Include="player.png" />
     <!-- Data-driven block definitions (texture tiles, flags, hotbar, map colours). -->
     <EmbeddedResource Include="blocks.json" />
+    <!-- Data-driven item definitions (tools, food, gemstones; items.png atlas tiles). -->
+    <EmbeddedResource Include="items.json" />
     <!-- Data-driven biome definitions (temperature/humidity ranges, height, surfaces). -->
     <EmbeddedResource Include="biomes.json" />
     <!-- Title-screen logo graphic. -->
@@ -49,6 +54,17 @@
   <ItemGroup>
     <!-- Copy GLB models to output -->
     <None Include="MobEntities\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Exclude the leftover renderer experiment and adapter folders from this project's compilation. -->
+    <Compile Remove="renderer_test\**\*" />
+    <Compile Remove="adapter\**\*" />
+    <EmbeddedResource Remove="renderer_test\**\*" />
+    <EmbeddedResource Remove="adapter\**\*" />
+    <None Remove="renderer_test\**\*" />
+    <None Remove="adapter\**\*" />
+    <Page Remove="renderer_test\**\*" />
+    <Page Remove="adapter\**\*" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />

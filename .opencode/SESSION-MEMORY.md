@@ -238,6 +238,70 @@ Part of the survival-mode vision (user's design: wood rots, dirt/sand/gravel hav
 - Verified: 38/64 test chunks have ≥1 fall-through point (2487 total columns). Orphan deep-top holes (deep cave ceiling w/o ground opening) are natural deep-cave ceilings (bedrock above), not leaks.
 - **Design note**: this is the intended progression — dig into a ground cave that bottoms out below the bedrock line, drop down into the nightmare layer.
 
+## 🎒 ITEM SYSTEM — data-driven, MC unified stack model (8/13, user-verified "perfect they show up")
+- **User request**: Minecraft-style items (tools/food/gems) with a SEPARATE item atlas (items.png, 256x256, 16px tiles; magenta 124,0,125 = empty tiles). Blocks auto-seed as items (id == block id, 0..118 — 119 blocks); genuine items get ids from `ItemIdBase = BlockRegistry.Count` (flint=119, stick=120, axe=121, pick=122, shovel=123, spear=124, persimmon=125).
+- **`ItemDefinition.cs` + `ItemRegistry.cs`** (new): items.json data-driven like blocks.json (embedded resource). Fields: Id, NumericId, DisplayName, Category, ItemTile, StackSize, PlacedBlock, InInventory, ToolType/ToolLevel/Durability, FoodValue, MapColor. `LoadDefault()` MUST run AFTER `BlockRegistry.LoadDefault()` (wired in Program.cs ~line 120).
+- **Name collision rule**: item id matching a BLOCK id merges/redefines that block's auto-seeded item in place (keeps numeric id + PlacedBlock so saves stay compatible; used for `sap` = block id 26). Genuine duplicates still throw.
+- **items.json (user-confirmed real atlas coords)**: flint(11,2 gemstone), stick(0,0 misc), flint_axe(1,0 tool axe lvl2 dur60), flint_pickaxe(2,0), flint_shovel(3,0), flint_spear(4,0 dur80 no toolType), persimmon(0,2 food foodValue 4 heals to max 10), sap(10,2 misc — MERGED onto sap block). Atlas picker app: `C:\Users\jimza\AppData\Local\Temp\opencode\atlaspicker\AtlasPicker_Items.ps1`.
+- **Gameplay**: TryAddToInventory per-item stack caps; TryPlaceSelectedBlock resolves item→block via `ItemRegistry.ResolveBlockId` (-1 = non-placeable, confirmed intended); TryEatSelectedFood (right-click); DamageSelectedTool = STUB (TODO — durability data wired, damage not applied).
+- **Renderer**: BuildItemIconAtlas (48px flat sprites, nearest upscale, row 0 = image top), IconUv(itemId, out texId) block-icon vs item-icon resolve, item-aware hotbar/inventory/creative menu (counts hidden when stackSize==1), food/eat dispatch in Program.
+- **CRITICAL GOTCHA (bit us once)**: `publish\` folder is a SNAPSHOT — `dotnet build` does NOT update it. The game ran from publish with a stale 8/12 build → "no items in the menu" confusion. ALWAYS copy CubeApp.exe/.dll/.deps.json/.runtimeconfig.json from `bin\Release\net9.0-windows\win-x64\` into `publish\` after building (OpenAL32.dll was manually copied earlier; PublishSingleFile is broken — directory publish only).
+
+## 🖼️ ITEM SPRITES in hand + on the ground (8/13, user-verified, then fixed flip + black-alpha)
+- Held genuine items (fromItems) render as a **flat camera-space quad** on the fist (screen-aligned like the hotbar icon) instead of the tilted cube; block drops KEEP tumbling cubes; genuine item drops render as **camera-facing billboard quads**.
+- **`_itemDropSpritePipeline`**: billboard VS extracts camera basis from projView rows (`right = normalize(vec3(projView[0][0], projView[1][0], projView[2][0]))`, up from `[0][1][1][1][2][1]`), offsets quad by right/up × baked half-size 0.175 (0.35 world units — slightly bigger than 0.3 cube). Uses CUTOUT fragment shader (alpha<0.5 discard + depth write) — transparent pixels must DISCARD or their black RGB leaks. Depth on, cull None.
+- **`_heldBlockSpritePipeline`**: camera-space VS offsets quad in xy only (camera space is already camera-aligned), half-size 0.22 (0.44 units), custom discard FS, SingleOverrideBlend, depth disabled (matches held-cube pipeline). Uses `_handProjSet` (set0) + `_itemsTextureSet` (set1), instance = _heldBlockBuffer (11 floats: center pos + tile rect + unused quat).
+- Shared `_spriteVertexBuffer` = unit quad (±1, z=0, 9-float layout, full-bright shade 1), `_spriteIndexBuffer` 6 indices. **UVs must be {0,1, 1,1, 1,0, 0,0}** (bottom corner samples image bottom — Veldrid v=0 is image top; without the flip sprites render upside down).
+- DrawItemDrops: pass 0 = block cubes (`_itemDropPipeline`), pass 1 = item sprites (`_itemDropSpritePipeline`), same instance buffer (center + rect + rot; sprite VS ignores rot). DrawHeldBlock branches on `fromItems` before the cube scratch fill.
+
+## 🧍 PLAYER-BODY MOB SEPARATION (8/13, user-verified "perfect save it")
+- **User request**: player model joins the MC-style mob repulsion so players can push mobs around.
+- `EntityManager.PushMobsApart` extended: player AABB participates like a heavy mob. New fields: `PlayerBodyCenter` (world center, NOT eye), `PlayerHalfWidth` (0.30 = PlayerRadius), `PlayerHalfHeight` (0.90 = 1.8/2), `PlayerPushCallback` (receives XZ push velocity).
+- GameWorld wires it: `PlayerBodyCenter = (eye.X, eye.Y - EyeHeight + PlayerHeight*0.5, eye.Z)` set every tick before `Entities.Update`; callback adds vel to `LocalPlayer.Velocity` (decays via walk friction; skipped when dead or FlyMode). Mob gets FULL push force (3.0 × min(1, 1/dist) × dtScale), player gets 0.5× (MC mass ratio ~2:1).
+- `count < 2` early-return REMOVED (player push must work with a single mob); mob-mob inner loop naturally no-ops then.
+
+## 🧱 MOB HITBOX BLOCKS THE BLOCK-RAY (8/13, user-verified, saved)
+- **User request**: attacking a mob let the break-ray pass through it and break the wall behind (house damage while fighting). Mob hitboxes must stop the ray.
+- `EntityManager.TryRaycastMobs(origin, direction, maxDistance, out hitDistance)` — public nearest-hit raycast over all living mob AABBs (exact same box math as `TryPickMob`: half = Width*0.5, minY = Position.Y feet, maxY = +Height; shares `RayBox` slab test; returns false when nothing within maxDistance).
+- `GameWorld.TryPickBlock` now consumes the ray at the mob: (1) block face hit with `mobDist <= t` → return null; (2) loop-top `distance > mobDist` → return null (mob strictly before the cell). Origin-inside-mob (mob standing on player's head) does NOT lock controls — the distance check only triggers on real cell progress.
+- Single choke point — mining, placement, block highlight AND attack gating all route through TryPickBlock, so every interaction is mob-aware for free. Dead mobs (`IsDead`) skipped.
+- `BlockInteractionSystem.cs` is DEAD CODE (its PickBlockResult type is referenced by EntityManager.TryAttackMob's signature, but the class itself is never instantiated — GameWorld has the live TryPickBlock copy).
+
+## 💧 WATER ANIMATION (8/13, user-approved after 2 rounds of tuning)
+- **User request**: "give water its proper animations... existing textures for that which it should just slowly fade through in a cycle, like minecraft."
+- **Found the frames**: terrain.png tiles (12..15,14) are 4 painted water frames (pixel-compared, all genuinely differ ~10-16% of bytes). blocks.json water = tile (12,14); the mesher's water SIDE/flow tile = (13,14) (`WaterBaseTile.X + TileSize` in Mesher.EmitWaterFaces). Only water references those tiles — safe to animate.
+- **Implementation (CPU crossfade — NO shader/mesher changes)**: VeldridRenderer extracts the 4 frames from `_atlasRgba` into `_waterFrames` at init (guarded w>=256 && h>=240); per frame `UpdateWaterAnimation()` (called from UpdateCamera) blends frameA→frameB into a 64x16 `_waterStrip` and re-uploads ONLY that region via pinned GCHandle `_gd.UpdateTexture` (byte[] overload does NOT exist in this Veldrid — must use IntPtr). Blend written to BOTH column 0 (tile 12, still) AND column 1 (tile 13, flowing) — tiles 14-15 stay pristine.
+- **BUG 1 (fix critical)**: originally the blend was written into frameA's column → the sampled tile (column 0) went STALE for 3/4 of the cycle then SNAPPED at the wrap (user: "it cycles smoothly, but too quickly. and when the cycle is over, it snaps back to the start roughly"). Always write the blend into the SAMPLED column(s).
+- **Speed**: `WaterCycleSeconds = 8.0f` (was 2.4 → user said too fast; 8s = ~2s per frame fade). One constant to tune.
+- `_waterClock` Stopwatch drives phase; real-time even at low fps.
+
+## ⏪ FLOWING-WATER SCROLL — TRIED, REVERTED BY USER (8/13)
+- **User request**: "whatever direction water is flowing in, the texture should scroll in that direction repeatedly" → then immediately "undo that change".
+- Implementation was COMPLETE and built clean before revert (docs in case user asks again): Mesher `GetFlowDirCode` (0=+X,1=-X,2=+Z,3=-Z,4=falling-down via meta>=8; dominant-axis of GetFlowVector's decay math) + `FlowEncodedTile` packs dir into the tile WIDTH byte (17..21; 16=still no-scroll); main FS (fsCode, transparent pass) extended `ProjectionView` UBO with `vec4 uWater` (time, speed 0.4 tiles/s, atlasW, atlasH), decodes the width byte, scrolls via `fract(fract(vLocalUV) * tileSize + dir * speed * time) + rect.xy`; `_projViewLayout` stages Vertex|Fragment; `_projViewBuffer` 64→80; UpdateCamera writes vec4 at byte offset 64.
+- **Reverted state**: ALL of it removed — Mesher back to original GetFlowVector bool + plain sideTile; renderer back to 64-byte buffer, Vertex-only layout, original fsCode, no scroll const/uniform. The 8s crossfade shimmer was KEPT.
+
+## 🪨 GRAVEL SPLOTCHES (8/14, built + published — NOT yet user-verified)
+- **User request**: "occasionally underground there should be gravel" — sparse but "easy to find".
+- `World/GravelSplotchGenerator.cs` (new): 2 attempts/chunk, `ChancePerAttempt = 0.35` (~1 splotch per 1.5 chunks), depth 4–40 below surface, short line blobs radius ~1.5–2.5, replaces ONLY stone/dirt. Gravel has `"gravity": true` in blocks.json (falls when disturbed — cave-ins wait to happen).
+- Wired into `TerrainChunkProvider.GenerateChunk` AFTER QuartzVeins, BEFORE CoalOres (~line 294).
+- CAVEAT (standard): existing explored chunks are SAVED — new gravel only in fresh territory.
+
+## 🕳️ CAVE FLOODING FIX — flood BEFORE carve, carver skips water (8/14, user-directed, final)
+- **User request**: "all my caves are flooded with water. caves should generate after water/oceans/anything involving water".
+- Root cause: `RefillWaterBelowSeaLevel` ran AFTER `GenerateCaves` (old intentional design: re-flood the carved tubes so ocean caves don't read as dry holes through the surface). Every below-sea-level cave got drowned as the final gen step.
+- Fix: `RefillWaterBelowSeaLevel` moved BEFORE `GenerateCaves` in TerrainChunkProvider.GenerateChunk.
+- **ITERATION (user corrected me)**: first version also removed the carver's water skip (`if (id == idWater) continue;`) → dry caves BUT air pockets cut into the ocean body itself. User: "caves carve through water, creating air pockets. they dont need to be doing that" → RESTORED the water skip + removed now-unused idWater local. FINAL: oceans flood first, caves tunnel stone only → caves below sea level stay DRY, the water body is never carved. Comments updated in both spots (GenerateChunk + RefillWaterBelowSeaLevel).
+- Old saved chunks keep their flooded caves — new territory only.
+
+## 🌊 OCEAN "AIR POCKET" RENDER ARTIFACT — UNRESOLVED, ALL ATTEMPTS REVERTED (8/14)
+- **Report**: standing in an ocean chunk, looking into ADJACENT ocean chunks: the expected dry caves under the seabed ("air pockets") render as if ON TOP of the water — the exposed stone faces inside the pocket appear untinted/in front of the water. NEVER occurs in the chunk the player is currently in.
+- **Attempt 1 — Mesher.cs occlusion heightmap**: `columnTop` scan counted any non-air block incl. WATER → ocean chunk TopSolidY = water surface → horizon test treated near water as a ridge, culling far ocean chunks from a submerged camera. Fixed by skipping `IsTransparent` blocks (water/glass) → user: still broken.
+- **Attempt 2 — VeldridRenderer.cs**: added `CameraIsUnderwater()` and disabled `IsHeightmapOccluded` while the camera is in a water block (horizon test is meaningless submerged) → user: "undo your changes" → REVERTED.
+- **CURRENT STATE: occlusion code 100% ORIGINAL** (Mesher counts non-air blocks; no underwater check). Built + republished clean.
+- **Ruled out so far** (don't re-walk these): per-chunk culling can't split a chunk's opaque from its water (same cull math per pass, GPU shader == CPU math); `SyncPassCommand` callers DO set `_gpuCullDataDirty`; transparent pipeline = depth-test-on/write-off, cull None, drawn after opaque+cutout+glass.
+- **Open suspects for next time**: (1) `SortPassBackToFront` shares ONE gate (`_lastSortChunkX/Z/_lastSortCount`) between the GLASS and WATER passes — the water sort is skipped when its count matches the glass count, keeping a stale order; (2) water bottom-face quads at cave mouths (EmitWaterBottomFace, alpha 0.85, dark-lit) + water top faces drawn AFTER walls within a chunk — blend order vs camera chunk; (3) heightmap occlusion with seabed TopSolidY when the camera is BELOW the seabed line (deep dive) culls ALL distant ocean chunks → sky shows through the water.
+- **PROCESS NOTE**: this model CANNOT read images (screenshot attempt failed: "model does not support image input"). Do NOT burn cycles guessing — ask the user FIRST: exact position (surface vs deep), F7 toggle result (HUD line "Cull: GPU/CPU"), and whether the artifact follows the cave or the chunk border.
+
 
 
 

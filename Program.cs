@@ -118,6 +118,7 @@ namespace CubeApp
         public Program()
         {
             BlockRegistry.LoadDefault();
+            ItemRegistry.LoadDefault(); // seeds blocks as items + loads items.json
             BiomeRegistry.LoadDefault();
             MobRegistry.DiscoverMobs(AppDomain.CurrentDomain.BaseDirectory);
             RefreshSavedWorlds();
@@ -758,12 +759,52 @@ namespace CubeApp
                 debug: false, swapchainDepthFormat: PixelFormat.D24_UNorm_S8_UInt,
                 syncToVerticalBlank: false, resourceBindingModel: ResourceBindingModel.Improved,
                 preferDepthRangeZeroToOne: true, preferStandardClipSpaceYDirection: true);
-            VeldridStartup.CreateWindowAndGraphicsDevice(windowCreateInfo, graphicsDeviceOptions,
-                GraphicsBackend.Direct3D11, out var createdWindow, out var createdGraphicsDevice);
-            window = createdWindow;
-            graphicsDevice = createdGraphicsDevice;
-            baseTitle = window.Title;
-            InitializeGpuRenderer(createdGraphicsDevice, createdGraphicsDevice.MainSwapchain);
+
+            // Try graphics backends in order of preference: Direct3D11 first (best driver support
+            // and matching behavior), then OpenGL, then Vulkan. This automatically selects the best
+            // available backend for the current hardware.
+            GraphicsBackend? selectedBackend = null;
+            GraphicsDevice? gd = null;
+            window = null;
+
+            var backendsToTry = new[]
+            {
+                GraphicsBackend.Direct3D11,
+                GraphicsBackend.OpenGL,
+                GraphicsBackend.Vulkan
+            };
+
+            foreach (var backend in backendsToTry)
+            {
+                try
+                {
+                    VeldridStartup.CreateWindowAndGraphicsDevice(windowCreateInfo, graphicsDeviceOptions,
+                        backend, out var createdWindow, out var createdGraphicsDevice);
+
+                    window = createdWindow;
+                    gd = createdGraphicsDevice;
+                    selectedBackend = backend;
+                    break;
+                }
+                catch (Exception)
+                {
+                    // Try next backend
+                    window?.Close();
+                }
+            }
+
+            if (gd == null)
+            {
+                throw new Exception("No supported graphics backend found on this system");
+            }
+
+            if (window != null)
+            {
+                window.Title = selectedBackend.ToString();
+                baseTitle = window.Title;
+            }
+            graphicsDevice = gd;
+            InitializeGpuRenderer(graphicsDevice, graphicsDevice.MainSwapchain);
             RunMainLoop();
         }
 
@@ -871,7 +912,7 @@ namespace CubeApp
 
                         while (gpuRenderer.TryTakeInventorySelection(out int invBlock))
                         {
-                            if (World != null && invBlock > 0 && invBlock < BlockRegistry.Count)
+                            if (World != null && invBlock > 0 && invBlock < ItemRegistry.Count)
                             {
                                 World.Hotbar[World.SelectedSlot] = invBlock;
                                 World.SelectedBlock = invBlock;
@@ -1366,6 +1407,13 @@ namespace CubeApp
         private void PlaceSelectedBlock()
         {
             if (World == null) return;
+            // Right-click use dispatch: food is eaten (heals), items with a block behavior place,
+            // everything else (tools, gems) does nothing yet.
+            if (World.TryEatSelectedFood())
+            {
+                _handPokeTimer = 0.3f; // first-person hand does a quick jab
+                return;
+            }
             if (World.TryPlaceSelectedBlock(World.LocalPlayer, World.PlayerPosition, World.GetCameraForward()))
             {
                 needsMeshUpdate = true;
@@ -1486,7 +1534,7 @@ namespace CubeApp
                 MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                 EntityMs = World.LastEntityMs, EntityCount = World.Entities.MobCount,
                 FacingText = $"{GetCompassDirection(World.PlayerYaw)} ({GameWorld.NormalizeYaw(World.PlayerYaw):0.0} deg)",
-                SelectedBlockText = $"Selected: {BlockRegistry.GetName(World.SelectedBlock)}",
+                SelectedBlockText = $"Selected: {ItemRegistry.GetName(World.SelectedBlock)}",
                 RenderDistanceText = $"Render dist: {RenderDistanceName} ({ChunkRenderRadius})",
                 SelectedSlot = World.SelectedSlot, WorldSeed = World.Seed,
                 BiomeText = World.ChunkProvider?.BiomeNameAt((int)Math.Floor(World.PlayerPosition.X), (int)Math.Floor(World.PlayerPosition.Z)) ?? string.Empty,
