@@ -19,6 +19,8 @@ namespace CubeApp.Renderer
         void SetItemDrops(System.Collections.Generic.IReadOnlyList<CubeApp.ItemDropRenderData> itemDrops);
         void SetChunkManager(CubeApp.ChunkManager manager);
         void SetWorldSeed(int seed);
+        void SetCullingMode(CubeApp.CullingMode mode);
+        CubeApp.CullingMode GetCullingMode();
         void ToggleGpuCulling();
         void MeshChunkImmediate(CubeApp.ChunkCoordinates coords);
         void ProcessPendingPriorityMeshes();

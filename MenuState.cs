@@ -13,6 +13,16 @@ namespace CubeApp
         Playing,
         Paused,
         Dead,
+        Settings,
+    }
+
+    /// <summary>Which frustum-culling path the renderer uses. Auto resolves by GPU vendor
+    /// (CPU on Intel integrated, GPU on NVIDIA/AMD); the explicit modes force one side.</summary>
+    public enum CullingMode
+    {
+        Auto = 0,
+        Cpu = 1,
+        Gpu = 2,
     }
 
     /// <summary>
@@ -61,6 +71,26 @@ namespace CubeApp
         /// <summary>Fraction (0..1) of the entire load.</summary>
         public float LoadingTotalProgress;
 
+        // ---- settings screen ----
+        /// <summary>True while the settings screen is open (rendered by the ImGui pass).</summary>
+        public bool SettingsOpen;
+        /// <summary>Clicked "Back" on the settings screen - return to where we came from.</summary>
+        public bool SettingsBackClicked;
+        /// <summary>The screen to return to after closing settings (Title or Paused).</summary>
+        public GameScreen SettingsReturnTo = GameScreen.Title;
+        /// <summary>Culling mode the player chose (Auto/Cpu/Gpu). Applied via the renderer.</summary>
+        public CullingMode SelectedCullingMode = CullingMode.Auto;
+        /// <summary>Set when the culling mode radio changed; Program applies it to the renderer.</summary>
+        public bool CullingModeChanged;
+        /// <summary>Render distance index the player chose (0=Far,1=Normal,2=Short,3=Tiny).</summary>
+        public int SelectedRenderDistance = 0;
+        /// <summary>Set when the render distance radio changed; Program applies it.</summary>
+        public bool RenderDistanceChanged;
+        /// <summary>Mouse sensitivity (0.05..2.0); applied to the input pipeline.</summary>
+        public float SelectedMouseSensitivity = 0.5f;
+        /// <summary>Set when the sensitivity slider changed.</summary>
+        public bool MouseSensitivityChanged;
+
         public void ResetFlags()
         {
             CreateWorldClicked = false;
@@ -75,6 +105,10 @@ namespace CubeApp
             MultiplayerBackClicked = false;
             DeleteWorldClicked = false;
             RenameWorldClicked = false;
+            SettingsBackClicked = false;
+            CullingModeChanged = false;
+            RenderDistanceChanged = false;
+            MouseSensitivityChanged = false;
         }
     }
 }

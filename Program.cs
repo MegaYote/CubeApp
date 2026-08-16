@@ -70,7 +70,7 @@ namespace CubeApp
         private float lastUploadMs;
         private float lastRenderMs;
         private readonly Stopwatch stageStopwatch = new();
-        private const float MouseSensitivity = 0.5f;
+        private float MouseSensitivity = 0.5f;
         private const double MaxFrameDeltaSeconds = 0.25;
         private static readonly int[] RenderDistances = { 16, 8, 4, 2 };
         private static readonly string[] RenderDistanceNames = { "Far", "Normal", "Short", "Tiny" };
@@ -95,6 +95,7 @@ namespace CubeApp
         // it clamps toward the block behind the crosshair, not the hit face's normal.
         private Point3D _miningSlideDir;
         private GameScreen screen = GameScreen.Title;
+        private bool _settingsWasOpen;
         private readonly MenuState menu = new();
         private bool inventoryOpen;
         private bool handEditorOpen;
@@ -407,6 +408,16 @@ namespace CubeApp
 
         private void ProcessMenuActions()
         {
+            // When the Settings screen opens (or reopens), seed the radio/slider values from the
+            // current live state so they display what is actually active.
+            if (menu.Screen == GameScreen.Settings && !_settingsWasOpen)
+            {
+                menu.SelectedCullingMode = gpuRenderer?.GetCullingMode() ?? menu.SelectedCullingMode;
+                menu.SelectedRenderDistance = renderDistanceIndex;
+                menu.SelectedMouseSensitivity = MouseSensitivity;
+            }
+            _settingsWasOpen = menu.Screen == GameScreen.Settings;
+
             if (menu.CreateWorldClicked)
             {
                 // Show the loading screen immediately so the player sees feedback, then defer
@@ -481,6 +492,36 @@ namespace CubeApp
             {
                 SaveWorld();
                 window?.Close();
+            }
+            else if (menu.SettingsBackClicked)
+            {
+                // Leave settings: return to the screen we came from (Title or Paused).
+                menu.Screen = menu.SettingsReturnTo;
+                menu.SettingsOpen = false;
+            }
+            if (menu.CullingModeChanged)
+            {
+                gpuRenderer?.SetCullingMode(menu.SelectedCullingMode);
+                _forceChunkStream = true;
+                if (World != null)
+                {
+                    foreach (var c in World.Chunks.GetLoadedChunks())
+                    {
+                        c.NeedsRemesh = true;
+                    }
+                }
+            }
+            if (menu.RenderDistanceChanged)
+            {
+                renderDistanceIndex = Math.Clamp(menu.SelectedRenderDistance, 0, RenderDistances.Length - 1);
+                gpuRenderer?.SetRenderDistance(ChunkRenderRadius);
+                needsMeshUpdate = true;
+                _forceChunkStream = true;
+                if (World != null) World.ChunkRenderRadius = ChunkRenderRadius;
+            }
+            if (menu.MouseSensitivityChanged)
+            {
+                MouseSensitivity = Math.Clamp(menu.SelectedMouseSensitivity, 0.05f, 2.0f);
             }
             menu.ResetFlags();
         }
@@ -989,6 +1030,12 @@ namespace CubeApp
                         menu.Screen = GameScreen.Paused;
                         DisableMouseLook();
                     }
+                }
+                else if (menu.Screen == GameScreen.Settings)
+                {
+                    // ESC from settings behaves like clicking Back.
+                    menu.Screen = menu.SettingsReturnTo;
+                    menu.SettingsOpen = false;
                 }
                 else if (screen == GameScreen.Paused)
                 {

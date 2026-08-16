@@ -562,12 +562,14 @@ namespace CubeApp.Renderer
         private IndirectDrawIndexedArguments[] _transparentIndirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
         private bool _drawCommandsDirty = true;
 
-        // GPU-assisted frustum culling (F7 toggle): a compute pass reads each chunk's AABB + draw
+        // GPU-assisted frustum culling: a compute pass reads each chunk's AABB + draw
         // command, tests the 6 frustum planes in parallel, and zeroes InstanceCount for culled
         // chunks. It writes args into a StructuredBufferReadWrite scratch, which is copied into
         // the IndirectBuffer for the draw - no CPU scan, no scratch copy on CPU, no readback.
-        // Default OFF: CPU-side frustum culling is the safe baseline across all GPUs (some Intel
-        // drivers produce wrong results from the GPU cull compute shader). F7 toggles GPU culling.
+        // The player picks the mode in Settings (Auto/Cpu/Gpu); Auto defaults to CPU-side
+        // frustum culling as the safe baseline across all GPUs (some Intel drivers produce wrong
+        // results from the GPU cull compute shader) and only enables GPU on NVIDIA/AMD.
+        private CullingMode _cullMode = CullingMode.Auto;
         private bool _gpuCullEnabled = false;
         private bool _gpuCullSupported;
         private Pipeline _cullPipeline;
@@ -2157,26 +2159,58 @@ void main() {
                 64, 1, 1));
 
             _gpuCullSupported = _gd.Features.ComputeShader && _gd.Features.StructuredBuffer && _gd.Features.DrawIndirect;
-            if (_gpuCullSupported)
-            {
-                // The GPU cull compute pass yields wrong results on some Intel integrated GPUs
-                // (it silently culls every chunk, leaving the world empty while mobs still draw).
-                // Stay on the safe CPU-cull baseline there; NVIDIA/AMD get the faster GPU path.
-                // F7 still toggles either way for debugging.
-                _gpuCullEnabled = !IsIntelGpu(_gd.VendorName);
-            }
+            ApplyCullingMode();
         }
 
-        // Veldrid reports VendorName like "id:00008086" (hex PCI vendor id). 0x8086 = Intel,
-        // 0x10DE = NVIDIA, 0x1002 = AMD.
+        // Resolves the player-chosen culling mode into the effective _gpuCullEnabled flag and
+        // invalidates every cached cull-data buffer so the next frame rebuilds them under the
+        // new mode. No-op guard: Auto with no compute support stays CPU-side.
+        private void ApplyCullingMode()
+        {
+            if (!_gpuCullSupported)
+            {
+                _gpuCullEnabled = false;
+                return;
+            }
+            _gpuCullEnabled = _cullMode switch
+            {
+                CullingMode.Gpu => true,
+                CullingMode.Cpu => false,
+                _ => !IsIntelGpu(_gd.VendorName),
+            };
+            _gpuCullDataDirty = true;
+            _opaqueCullData = Array.Empty<uint>();
+            _cutoutCullData = Array.Empty<uint>();
+            _glassCullData = Array.Empty<uint>();
+            _transparentCullData = Array.Empty<uint>();
+        }
+
+        // Settings-menu API: player picks Auto / CPU / GPU.
+        public void SetCullingMode(CullingMode mode)
+        {
+            if (_cullMode == mode) return;
+            _cullMode = mode;
+            ApplyCullingMode();
+        }
+
+        public CullingMode GetCullingMode() => _cullMode;
+
+        // Veldrid reports VendorName like "id:00008086" (hex PCI vendor id) on D3D11, and the GL
+        // vendor string ("Intel", "NVIDIA Corporation", ...) on OpenGL. 0x8086 = Intel, 0x10DE =
+        // NVIDIA, 0x1002 = AMD. Both formats are checked so Auto still disables GPU culling on
+        // Intel hardware even when the game falls back to the OpenGL backend.
         private static bool IsIntelGpu(string vendorName)
         {
             if (string.IsNullOrEmpty(vendorName)) return false;
             int idPos = vendorName.IndexOf("id:", StringComparison.OrdinalIgnoreCase);
-            if (idPos < 0) return false;
-            string hex = vendorName.Substring(idPos + 3).Trim();
-            if (hex.Length > 8) hex = hex.Substring(hex.Length - 8);
-            return uint.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out uint id) && id == 0x8086;
+            if (idPos >= 0)
+            {
+                string hex = vendorName.Substring(idPos + 3).Trim();
+                if (hex.Length > 8) hex = hex.Substring(hex.Length - 8);
+                return uint.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out uint id) && id == 0x8086;
+            }
+            // OpenGL backend: vendor string contains the Intel name.
+            return vendorName.Contains("intel", StringComparison.OrdinalIgnoreCase);
         }
 
         // Pipeline for textured entity models (the duck). Vertices are supplied in world space each
@@ -5607,18 +5641,14 @@ void main() { outColor = vec4(1.0); }";
             _indirectCapacityCommands = newCap;
         }
 
-        // F7 toggle between CPU-side and GPU-side frustum culling. No-op if the device lacks
-        // compute/structured-buffer/indirect support (D3D11 always has them). Invalidates all
-        // cached cull data so the next GPU-culled frame refills it from the rebuilt commands.
+        // F7 debug cycle: CPU -> GPU -> CPU (explicit modes, bypassing Auto). No-op if the
+        // device lacks compute/structured-buffer/indirect support (D3D11 always has them).
+        // Invalidates all cached cull data so the next frame refills it from the rebuilt commands.
         public void ToggleGpuCulling()
         {
             if (!_gpuCullSupported) return;
-            _gpuCullEnabled = !_gpuCullEnabled;
-            _gpuCullDataDirty = true;
-            _opaqueCullData = Array.Empty<uint>();
-            _cutoutCullData = Array.Empty<uint>();
-            _glassCullData = Array.Empty<uint>();
-            _transparentCullData = Array.Empty<uint>();
+            _cullMode = _gpuCullEnabled ? CullingMode.Cpu : CullingMode.Gpu;
+            ApplyCullingMode();
         }
 
         // Grows the cull-data and args-output buffers so they hold at least `commands` entries.
@@ -6700,7 +6730,7 @@ void main() { outColor = vec4(1.0); }";
 
                 // Buttons hang lower, in the classic vertical column.
                 ImGui.SetNextWindowPos(new Vector2((size.X - 220f) / 2f, size.Y / 4f + 72f), ImGuiCond.Always);
-                ImGui.SetNextWindowSize(new Vector2(220, 160), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(220, 250), ImGuiCond.Always);
                 ImGui.Begin("##title", windowFlags);
                 if (ImGui.Button("Singleplayer", new Vector2(200, 34)))
                 {
@@ -6711,6 +6741,15 @@ void main() { outColor = vec4(1.0); }";
                 if (ImGui.Button("Multiplayer", new Vector2(200, 34)))
                 {
                     m.Screen = GameScreen.Multiplayer;
+                    _menuBuffersInitialized = false;
+                }
+                ImGui.Dummy(new Vector2(0, 18));
+                if (ImGui.Button("Settings", new Vector2(200, 34)))
+                {
+                    m.Screen = GameScreen.Settings;
+                    m.SettingsReturnTo = GameScreen.Title;
+                    m.SettingsOpen = true;
+                    m.SelectedCullingMode = GetCullingMode();
                     _menuBuffersInitialized = false;
                 }
                 ImGui.Dummy(new Vector2(0, 18));
@@ -6893,8 +6932,8 @@ void main() { outColor = vec4(1.0); }";
             }
             else if (m.Screen == GameScreen.Paused)
             {
-                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 120f, size.Y / 2f - 110f), ImGuiCond.Always);
-                ImGui.SetNextWindowSize(new Vector2(240, 220), ImGuiCond.Always);
+                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 120f, size.Y / 2f - 150f), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(240, 260), ImGuiCond.Always);
                 ImGui.Begin("##paused", windowFlags);
                 ImGui.SetWindowFontScale(1.6f);
                 ImGui.TextColored(new Vector4(1f, 1f, 1f, 1f), "Paused");
@@ -6904,6 +6943,15 @@ void main() { outColor = vec4(1.0); }";
                 if (ImGui.Button("Resume", new Vector2(200, 32))) m.ResumeClicked = true;
                 ImGui.Spacing();
                 if (ImGui.Button("Open to LAN", new Vector2(200, 32))) m.OpenToLanClicked = true;
+                ImGui.Spacing();
+                if (ImGui.Button("Settings", new Vector2(200, 32)))
+                {
+                    m.Screen = GameScreen.Settings;
+                    m.SettingsReturnTo = GameScreen.Paused;
+                    m.SettingsOpen = true;
+                    m.SelectedCullingMode = GetCullingMode();
+                    _menuBuffersInitialized = false;
+                }
                 ImGui.Spacing();
                 if (ImGui.Button("Quit to Title", new Vector2(200, 32))) m.QuitToTitleClicked = true;
                 if (!string.IsNullOrEmpty(_hud.NetStatus))
@@ -6935,6 +6983,76 @@ void main() { outColor = vec4(1.0); }";
                 ImGui.Spacing();
                 ImGui.Spacing();
                 if (ImGui.Button("Respawn", new Vector2(200, 34))) m.RespawnClicked = true;
+                ImGui.End();
+            }
+            else if (m.Screen == GameScreen.Settings)
+            {
+                // Settings screen: culling mode (player choice), render distance, and mouse
+                // sensitivity. Changes set flags on the MenuState; Program applies them next tick.
+                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 190f, size.Y / 2f - 230f), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(380, 460), ImGuiCond.Always);
+                ImGui.Begin("##settings", windowFlags);
+                ImGui.SetWindowFontScale(1.6f);
+                ImGui.TextColored(new Vector4(1f, 1f, 1f, 1f), "Settings");
+                ImGui.SetWindowFontScale(1f);
+                ImGui.Spacing();
+                ImGui.Spacing();
+
+                // ---- Frustum culling mode ----
+                ImGui.TextColored(new Vector4(0.85f, 0.85f, 0.85f, 1f), "Frustum Culling");
+                ImGui.Spacing();
+                if (ImGui.RadioButton("Auto (recommended)", m.SelectedCullingMode == CullingMode.Auto))
+                {
+                    m.SelectedCullingMode = CullingMode.Auto;
+                    m.CullingModeChanged = true;
+                }
+                if (ImGui.RadioButton("CPU (most compatible)", m.SelectedCullingMode == CullingMode.Cpu))
+                {
+                    m.SelectedCullingMode = CullingMode.Cpu;
+                    m.CullingModeChanged = true;
+                }
+                if (ImGui.RadioButton("GPU (fastest, needs support)", m.SelectedCullingMode == CullingMode.Gpu))
+                {
+                    m.SelectedCullingMode = CullingMode.Gpu;
+                    m.CullingModeChanged = true;
+                }
+                ImGui.Spacing();
+                if (!_gpuCullSupported)
+                {
+                    ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "GPU culling not supported on this device");
+                }
+                ImGui.Spacing();
+                ImGui.Separator();
+                ImGui.Spacing();
+
+                // ---- Render distance ----
+                ImGui.TextColored(new Vector4(0.85f, 0.85f, 0.85f, 1f), "Render Distance");
+                ImGui.Spacing();
+                string[] rdNames = { "Far (16)", "Normal (8)", "Short (4)", "Tiny (2)" };
+                for (int i = 0; i < rdNames.Length; i++)
+                {
+                    if (ImGui.RadioButton(rdNames[i], m.SelectedRenderDistance == i))
+                    {
+                        m.SelectedRenderDistance = i;
+                        m.RenderDistanceChanged = true;
+                    }
+                }
+                ImGui.Spacing();
+                ImGui.Separator();
+                ImGui.Spacing();
+
+                // ---- Mouse sensitivity ----
+                ImGui.TextColored(new Vector4(0.85f, 0.85f, 0.85f, 1f), $"Mouse Sensitivity ({m.SelectedMouseSensitivity:0.00})");
+                float sens = m.SelectedMouseSensitivity;
+                if (ImGui.SliderFloat("##sensitivity", ref sens, 0.05f, 2.0f, "%.2f"))
+                {
+                    m.SelectedMouseSensitivity = sens;
+                    m.MouseSensitivityChanged = true;
+                }
+
+                ImGui.Spacing();
+                ImGui.Spacing();
+                if (ImGui.Button("Back", new Vector2(200, 34))) m.SettingsBackClicked = true;
                 ImGui.End();
             }
         }
