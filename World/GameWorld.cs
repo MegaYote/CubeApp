@@ -1058,7 +1058,7 @@ namespace CubeApp
                 LocalPlayer.Position.X,
                 LocalPlayer.Position.Y - EyeHeight + PlayerHeight * 0.5,
                 LocalPlayer.Position.Z);
-            Entities.Update(deltaSeconds, LocalPlayer.Position, true);
+            Entities.Update(deltaSeconds, LocalPlayer.Position, true, LocalPlayer.Health > 0);
             LastEntityMs = Entities.LastUpdateMs;
             int chunkX = WorldToChunkCoord(LocalPlayer.Position.X);
             int chunkZ = WorldToChunkCoord(LocalPlayer.Position.Z);

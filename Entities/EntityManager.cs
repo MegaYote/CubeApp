@@ -170,7 +170,7 @@ namespace CubeApp
             return false;
         }
 
-        public void Update(float deltaSeconds) => Update(deltaSeconds, new Point3D(0, 0, 0), false);
+        public void Update(float deltaSeconds) => Update(deltaSeconds, new Point3D(0, 0, 0), false, true);
 
         /// <summary>
         /// Set by the owning world so hostile mobs can damage the local player. Receives the
@@ -192,9 +192,10 @@ namespace CubeApp
         /// <summary>
         /// Advance all mobs by one frame. When <paramref name="playerPosition"/> is supplied,
         /// natural spawning (near the player, 24-32 blocks out) and despawning (far-away mobs)
-        /// also run.
+        /// also run. <paramref name="playerAlive"/> tells hostile mobs whether the player is a
+        /// valid chase target (dead players are ignored until respawn).
         /// </summary>
-        public void Update(float deltaSeconds, Point3D playerPosition, bool enableSpawning = true)
+        public void Update(float deltaSeconds, Point3D playerPosition, bool enableSpawning = true, bool playerAlive = true)
         {
             _entityWatch.Restart();
 
@@ -214,12 +215,13 @@ namespace CubeApp
                     // Hostiles hunt the nearest human: the local player plus any Steve NPCs. The
                     // zombie re-paths toward the target each frame (A* routes around cliffs/walls)
                     // and its OnAttack damages a Steve when it closes in - or the local player via
-                    // PlayerDamageCallback (health, hurt flash, regen reset, death cause).
+                    // PlayerDamageCallback (health, hurt flash, regen reset, death cause). A DEAD
+                    // player is not a target: zombies lose interest and wander off until respawn.
                     if (mobEntity.Hostile)
                     {
                         IMobRenderable? steveTarget = null;
                         Point3D target = playerPosition;
-                        double bestSq = DistSq(mobEntity.Position, playerPosition);
+                        double bestSq = playerAlive ? DistSq(mobEntity.Position, playerPosition) : double.MaxValue;
                         for (int h = 0; h < _mobs.Count; h++)
                         {
                             if (h == i) continue;
@@ -232,12 +234,21 @@ namespace CubeApp
                             }
                         }
 
-                        var capturedSteve = steveTarget;
-                        var capturedMob = mobEntity;
-                        mobEntity.OnAttack = capturedSteve is MobEntity steve
-                            ? () => steve.Damage(capturedMob.AttackDamage, capturedMob.Position.X, capturedMob.Position.Z, true)
-                            : () => PlayerDamageCallback?.Invoke(capturedMob.AttackDamage, DeathCause.Mob);
-                        mobEntity.SetChaseTarget(target);
+                        if (!playerAlive && steveTarget == null)
+                        {
+                            // No living target: drop the chase (also clears the A* route).
+                            mobEntity.OnAttack = null;
+                            mobEntity.SetChaseTarget(null);
+                        }
+                        else
+                        {
+                            var capturedSteve = steveTarget;
+                            var capturedMob = mobEntity;
+                            mobEntity.OnAttack = capturedSteve is MobEntity steve
+                                ? () => steve.Damage(capturedMob.AttackDamage, capturedMob.Position.X, capturedMob.Position.Z, true)
+                                : () => PlayerDamageCallback?.Invoke(capturedMob.AttackDamage, DeathCause.Mob);
+                            mobEntity.SetChaseTarget(target);
+                        }
                     }
                     else
                     {

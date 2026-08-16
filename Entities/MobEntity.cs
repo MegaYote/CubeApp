@@ -394,7 +394,13 @@ namespace CubeApp
         {
             if (_path == null)
             {
-                // No route yet: compute one to the stored goal.
+                // No route yet: compute one to the stored goal. The cooldown gates retries so a
+                // genuinely unreachable goal doesn't re-run a full A* search every frame.
+                if (_pathRecalcCooldown > 0)
+                {
+                    _pathRecalcCooldown--;
+                    return;
+                }
                 _pathFinder ??= new PathFinder(new PathNodeProcessor(manager, Width, Height));
                 _path = _pathFinder.FindPath(Position.X, Position.Y, Position.Z, _pathGoalX, Position.Y, _pathGoalZ, 64.0f);
                 if (_path == null)
@@ -606,7 +612,8 @@ namespace CubeApp
         }
 
         // Hostile chase (MC-style): walk toward the player, attack while moving, jump obstacles,
-        // break blocks when stuck. Lightweight — just direct movement, no A* pathfinding.
+        // break blocks when stuck. Routes via A* when the target is far enough that walls/cliffs
+        // matter, then falls back to direct beeline in melee range or when no route exists.
         private bool UpdateChase(float dt, ChunkManager manager)
         {
             var target = _chaseTarget.Value;
@@ -617,15 +624,73 @@ namespace CubeApp
             _attackCooldown = Math.Max(0f, _attackCooldown - dt);
             _behavior = Behavior.Chase; _idleTimer = 0f; _afterMoveRestTimer = 0f;
 
-            // Face and walk toward the player.
+            bool inAttackRange = distSq <= AttackRange * AttackRange;
+
+            // Melee: drop any route and press straight in for the attack.
+            if (inAttackRange)
+            {
+                ClearPathGoal();
+            }
+            else
+            {
+                // Keep the A* goal locked to the player's feet. UpdatePath recomputes the route
+                // when the target outruns the path end (>3 blocks) or every 20 ticks, and steers
+                // toward the next waypoint (setting _targetYaw + _desiredMoveForward).
+                _pathGoalX = target.X;
+                _pathGoalZ = target.Z;
+                UpdatePath(dt, manager);
+            }
+
+            bool hasRoute = _path != null && !_path.IsDone;
             float toPlayer = (float)Math.Atan2(dx, dz);
-            _targetYaw = toPlayer;
-            _desiredMoveForward = distSq <= AttackRange * AttackRange ? 0.65f : 0.92f;
-            _desiredSpeedScale = 1.0f;
+
+            // Face and walk toward the player; when a route is active the A* waypoint already
+            // set _targetYaw/_desiredMoveForward so we keep the route's heading.
+            if (!hasRoute)
+            {
+                _targetYaw = toPlayer;
+                _desiredMoveForward = inAttackRange ? 0.65f : 0.92f;
+                _desiredSpeedScale = 1.0f;
+
+                // Cliff safety: never beeline straight off an edge (no lemming behavior). When a
+                // drop lies directly ahead, steer along the rim instead — the A* retries will find
+                // a way around/down. The timer commits to one side briefly so the mob doesn't
+                // jitter back and forth at the edge.
+                if ((_prevOnGround || OnGround) && DangerousDropAhead(manager, 0.82))
+                {
+                    if (_cliffSteerTimer <= 0f)
+                    {
+                        float leftYaw = toPlayer + (float)Math.PI * 0.5f;
+                        float rightYaw = toPlayer - (float)Math.PI * 0.5f;
+                        bool leftSafe = !DangerousDropInDir(manager, leftYaw, 0.82);
+                        bool rightSafe = !DangerousDropInDir(manager, rightYaw, 0.82);
+                        if (leftSafe || rightSafe)
+                        {
+                            _cliffSteerYaw = leftSafe && rightSafe
+                                ? (Rng() < 0.5f ? leftYaw : rightYaw)
+                                : (leftSafe ? leftYaw : rightYaw);
+                            _cliffSteerTimer = 0.6f;
+                        }
+                        else
+                        {
+                            // Pillar/spike: no safe step in any direction — hold position.
+                            _cliffSteerYaw = toPlayer;
+                            _cliffSteerTimer = 0.3f;
+                            _desiredMoveForward = 0f;
+                        }
+                    }
+                    if (_cliffSteerTimer > 0f)
+                    {
+                        _targetYaw = _cliffSteerYaw;
+                        if (_desiredMoveForward > 0.05f) _desiredMoveForward = 0.5f;
+                    }
+                }
+            }
+            _cliffSteerTimer = Math.Max(0f, _cliffSteerTimer - dt);
             _currentMoveForward = Lerp(_currentMoveForward, _desiredMoveForward, 1f - (float)Math.Exp(-dt * 5.0));
             _currentSpeedScale = Lerp(_currentSpeedScale, _desiredSpeedScale, 1f - (float)Math.Exp(-dt * 3.9));
 
-            _headYaw = TurnToward(_headYaw, toPlayer, HeadTurnSpeed * 1.4f * dt);
+            _headYaw = TurnToward(_headYaw, hasRoute ? _targetYaw : toPlayer, HeadTurnSpeed * 1.4f * dt);
             // Head pitch: look up/down at the player. Eye height is roughly 80% of body height.
             // Negative pitch = looking up (matches the renderer convention from player camera).
             double eyeY = Position.Y + Height * 0.8;
@@ -673,6 +738,8 @@ namespace CubeApp
 
         private double _lastPathX, _lastPathZ;
         private int _pathRecalcTick;
+        private float _cliffSteerTimer;
+        private float _cliffSteerYaw;
 
         private void TryBreakBlockAhead(ChunkManager manager)
         {
@@ -1061,8 +1128,13 @@ namespace CubeApp
         }
 
         private bool DangerousDropAhead(ChunkManager manager, double distance)
+            => DangerousDropInDir(manager, Yaw, distance);
+
+        // True when walking <distance> blocks along the given yaw would step off a ledge
+        // (ground more than ~1 block below the feet, or no ground found within 24 below).
+        private bool DangerousDropInDir(ChunkManager manager, float yaw, double distance)
         {
-            double dirX = Math.Sin(Yaw), dirZ = Math.Cos(Yaw);
+            double dirX = Math.Sin(yaw), dirZ = Math.Cos(yaw);
             int probeX = (int)Math.Floor(Position.X + dirX * distance);
             int probeZ = (int)Math.Floor(Position.Z + dirZ * distance);
             int baseY = (int)Math.Floor(Position.Y + 0.05);
