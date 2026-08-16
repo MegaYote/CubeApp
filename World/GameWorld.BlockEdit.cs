@@ -1,0 +1,290 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Numerics;
+
+namespace CubeApp
+{
+    public sealed partial class GameWorld : IDisposable
+    {
+        public bool TryBreakBlock(PlayerState p, Point3D origin, Point3D direction, out int removedBlockId, out (int x, int y, int z) removedPos)
+        {
+            removedBlockId = 0;
+            removedPos = default;
+            var pickResult = TryPickBlock(origin, direction);
+            if (!pickResult.HasValue) return false;
+            var remove = pickResult.Value.Remove;
+            if (TryBreakBlockAt(remove.x, remove.y, remove.z, out removedBlockId))
+            {
+                if (!IsCreative) DamageSelectedTool(removedBlockId);
+                removedPos = remove;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>Breaks the block at an exact world position (used by the mining system).
+        /// Returns true if a block was removed, with its previous id for particle spawning.</summary>
+        public bool TryBreakBlockAt(int x, int y, int z, out int removedBlockId)
+        {
+            removedBlockId = 0;
+            if (!Chunks.TryGetLoadedBlock(x, y, z, out removedBlockId)) return false;
+            if (!Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId)) return false;
+            // Survival: mining a block drops a physical item you have to collect - no teleporting
+            // into the inventory. Leaves drop nothing yet; gravel drops flint instead.
+            int dropId = removedBlockId;
+            if (dropId == _idLeaves) dropId = 0;
+            else if (dropId == _idGravel) dropId = _idFlint;
+            if (!IsCreative && dropId > 0)
+            {
+                SpawnItemDrop(dropId, 1, new Point3D(x + 0.5, y + 0.5, z + 0.5));
+            }
+            BlockTicks?.OnBlockChanged(x, y, z);
+            int rLayer = ChunkManager.LayerForWorldY(y);
+            var editedChunk = new ChunkCoordinates(rLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
+            Mesher.RequestImmediateRemesh(editedChunk);
+            BlockEdited?.Invoke(x, y, z, 0, 0);
+            return true;
+        }
+
+        /// <summary>Places the currently selected item at the targeted face. Items without a
+        /// block behavior (tools, food, gems) can't place - those are handled by
+        /// <see cref="TryEatSelectedFood"/> and future item-use hooks. Returns true if placed.</summary>
+        public bool TryPlaceSelectedBlock(PlayerState p, Point3D origin, Point3D direction)
+        {
+            var pickResult = TryPickBlock(origin, direction, out double hitDistance);
+            if (!pickResult.HasValue) return false;
+            var place = pickResult.Value.Place;
+            var normal = pickResult.Value.Normal;
+            var hitPoint = origin + direction * hitDistance;
+
+            // The hotbar holds ITEM ids now; resolve to the block this item places (-1 = not a
+            // block item, e.g. tools/food/gemstones - nothing to place).
+            int blockToPlace = ItemRegistry.ResolveBlockId(SelectedBlock);
+            if (blockToPlace < 0) return false;
+            int spendId = SelectedBlock; // consume the ORIGINAL selected item id (slabs can become top variants)
+            int meta = 0;
+
+            // Survival: you can only place blocks you actually own.
+            if (!IsCreative)
+            {
+                if (spendId <= 0) return false;
+                if (InventoryCount(spendId) < 1) return false;
+            }
+
+            // Can't place INTO a cell a falling block is currently passing through. Otherwise a
+            // spam of placements in one column would stack into a moving block / collide mid-air.
+            if (BlockTicks != null && BlockTicks.IsCellOccupiedByFalling(place.x, place.y, place.z))
+            {
+                return false;
+            }
+
+            if (BlockRegistry.IsSlab(blockToPlace) || BlockRegistry.IsSlabTop(blockToPlace))
+            {
+                var hit = pickResult.Value.Remove;
+                if (TryMergeSlab(hit.x, hit.y, hit.z, normal, blockToPlace))
+                {
+                    if (!IsCreative) TryConsumeFromInventory(spendId, 1);
+                    return true;
+                }
+
+                bool placeTop = normal.Y < 0 || (normal.Y == 0 && (hitPoint.Y - place.y) > 0.5);
+                if (BlockRegistry.IsSlab(blockToPlace) && placeTop)
+                {
+                    blockToPlace = SlabTopIdFor(blockToPlace);
+                }
+
+                if (Chunks.TryGetLoadedBlockAndMeta(place.x, place.y, place.z, out var oldId, out _)
+                    && oldId != BlockRegistry.AirId && !IsReplaceableFluid(oldId))
+                {
+                    if (TryFillSlabCell(place.x, place.y, place.z, blockToPlace))
+                    {
+                        if (!IsCreative) TryConsumeFromInventory(spendId, 1);
+                        return true;
+                    }
+                    return false;
+                }
+            }
+            else if (BlockRegistry.IsStair(blockToPlace))
+            {
+                meta = StairFacingMeta(p);
+            }
+            else
+            {
+                if (Chunks.TryGetLoadedBlockAndMeta(place.x, place.y, place.z, out var occupied, out _)
+                    && occupied != BlockRegistry.AirId && !IsReplaceableFluid(occupied))
+                {
+                    return false;
+                }
+            }
+
+            if (WouldBlockIntersectPlayer(p, place.x, place.y, place.z, blockToPlace, meta)) return false;
+            if (!Chunks.TrySetBlock(place.x, place.y, place.z, blockToPlace, meta)) return false;
+            if (!IsCreative) TryConsumeFromInventory(spendId, 1);
+            BlockTicks?.OnBlockChanged(place.x, place.y, place.z);
+            int placeLayer = ChunkManager.LayerForWorldY(place.y);
+            var editedChunk = new ChunkCoordinates(placeLayer, WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));
+            Mesher.RequestImmediateRemesh(editedChunk);
+            BlockEdited?.Invoke(place.x, place.y, place.z, blockToPlace, meta);
+            return true;
+        }
+
+        /// <summary>Applies a block edit from the network (host authority). Same side effects as a
+        /// local edit: sets the block, wakes fluids, remeshes, fires BlockEdited.</summary>
+        public bool ApplyBlockEdit(int x, int y, int z, int blockId, int meta)
+        {
+            // Same "wait for it to fall" rule on the authoritative path (host applying a client's
+            // edit): never place into a cell a falling block is passing through.
+            if (BlockTicks != null && BlockTicks.IsCellOccupiedByFalling(x, y, z)) return false;
+            if (!Chunks.TrySetBlockLoadedOnly(x, y, z, blockId, meta)) return false;
+            BlockTicks?.OnBlockChanged(x, y, z);
+            int ebLayer = ChunkManager.LayerForWorldY(y);
+            var editedChunk = new ChunkCoordinates(ebLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
+            Mesher.RequestImmediateRemesh(editedChunk);
+            BlockEdited?.Invoke(x, y, z, blockId, meta);
+            return true;
+        }
+
+        private bool TryMergeSlab(int x, int y, int z, Point3D normal, int heldBlock)
+        {
+            if (!Chunks.TryGetLoadedBlockAndMeta(x, y, z, out var hitId, out _)) return false;
+            if (!BlockRegistry.IsSlab(hitId) && !BlockRegistry.IsSlabTop(hitId)) return false;
+            if (SlabMaterialOf(hitId) != SlabMaterialOf(heldBlock)) return false;
+            if (!((BlockRegistry.IsSlab(hitId) && normal.Y > 0) || (BlockRegistry.IsSlabTop(hitId) && normal.Y < 0))) return false;
+
+            int fullId = BlockRegistry.GetId(SlabMaterialOf(hitId));
+            if (!Chunks.TrySetBlock(x, y, z, fullId, 0)) return false;
+            BlockTicks?.OnBlockChanged(x, y, z);
+            int msLayer = ChunkManager.LayerForWorldY(y);
+            Mesher.RequestImmediateRemesh(new ChunkCoordinates(msLayer, WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            BlockEdited?.Invoke(x, y, z, fullId, 0);
+            return true;
+        }
+
+        private bool TryFillSlabCell(int x, int y, int z, int placingId)
+        {
+            if (!Chunks.TryGetLoadedBlockAndMeta(x, y, z, out var oldId, out _)) return false;
+            if (!BlockRegistry.IsSlab(oldId) && !BlockRegistry.IsSlabTop(oldId)) return false;
+            if (SlabMaterialOf(oldId) != SlabMaterialOf(placingId)) return false;
+            bool oldTop = BlockRegistry.IsSlabTop(oldId);
+            bool newTop = BlockRegistry.IsSlabTop(placingId);
+            if (oldTop == newTop) return false;
+
+            int fullId = BlockRegistry.GetId(SlabMaterialOf(oldId));
+            if (!Chunks.TrySetBlock(x, y, z, fullId, 0)) return false;
+            BlockTicks?.OnBlockChanged(x, y, z);
+            int fsLayer = ChunkManager.LayerForWorldY(y);
+            Mesher.RequestImmediateRemesh(new ChunkCoordinates(fsLayer, WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            BlockEdited?.Invoke(x, y, z, fullId, 0);
+            return true;
+        }
+
+        private static bool IsReplaceableFluid(int id) => id == BlockRegistry.GetId("water");
+
+        private static string SlabMaterialOf(int id)
+        {
+            string name = BlockRegistry.GetName(id);
+            return name.EndsWith("_slab_top", StringComparison.Ordinal)
+                ? name[..^"_slab_top".Length]
+                : name.EndsWith("_slab", StringComparison.Ordinal) ? name[..^"_slab".Length] : name;
+        }
+
+        private static int SlabTopIdFor(int slabId)
+            => BlockRegistry.GetId(SlabMaterialOf(slabId) + "_slab_top");
+
+        private int StairFacingMeta(PlayerState p)
+        {
+            float yawRad = p.Yaw * (float)Math.PI / 180f;
+            double dirX = Math.Sin(yawRad);
+            double dirZ = Math.Cos(yawRad);
+            if (Math.Abs(dirX) > Math.Abs(dirZ))
+                return dirX > 0 ? 0 : 1;
+            return dirZ > 0 ? 2 : 3;
+        }
+
+        private bool WouldBlockIntersectPlayer(PlayerState p, int x, int y, int z, int blockId, int meta)
+        {
+            double minX = p.Position.X - PlayerRadius;
+            double maxX = p.Position.X + PlayerRadius;
+            double minY = p.Position.Y - EyeHeight;
+            double maxY = minY + PlayerHeight;
+            double minZ = p.Position.Z - PlayerRadius;
+            double maxZ = p.Position.Z + PlayerRadius;
+            return BoxesOverlapPlayer(GetBlockCollisionBoxes(blockId, meta), x, y, z, minX, maxX, minY, maxY, minZ, maxZ);
+        }
+
+        // ------------------------------------------------------------------
+        // ray picking (ported from Program.cs)
+        // ------------------------------------------------------------------
+
+        public PickBlockResult? TryPickBlock(Point3D origin, Point3D direction) => TryPickBlock(origin, direction, out _);
+
+        public PickBlockResult? TryPickBlock(Point3D origin, Point3D direction, out double hitDistance)
+        {
+            hitDistance = double.PositiveInfinity;
+            direction = direction.Normalized();
+            int blockX = (int)Math.Floor(origin.X);
+            int blockY = (int)Math.Floor(origin.Y);
+            int blockZ = (int)Math.Floor(origin.Z);
+            var stepX = Math.Sign(direction.X);
+            var stepY = Math.Sign(direction.Y);
+            var stepZ = Math.Sign(direction.Z);
+            var tDeltaX = stepX != 0 ? Math.Abs(1.0 / direction.X) : double.PositiveInfinity;
+            var tDeltaY = stepY != 0 ? Math.Abs(1.0 / direction.Y) : double.PositiveInfinity;
+            var tDeltaZ = stepZ != 0 ? Math.Abs(1.0 / direction.Z) : double.PositiveInfinity;
+            var tMaxX = stepX > 0 ? (blockX + 1.0 - origin.X) * tDeltaX : (origin.X - blockX) * tDeltaX;
+            var tMaxY = stepY > 0 ? (blockY + 1.0 - origin.Y) * tDeltaY : (origin.Y - blockY) * tDeltaY;
+            var tMaxZ = stepZ > 0 ? (blockZ + 1.0 - origin.Z) * tDeltaZ : (origin.Z - blockZ) * tDeltaZ;
+            int currentX = blockX, currentY = blockY, currentZ = blockZ;
+            var maxDistance = BlockReach;
+            // A living mob's hitbox consumes the ray: blocks behind it are unreachable, so
+            // fighting a mob can never accidentally break the wall behind it.
+            bool mobInFront = Entities.TryRaycastMobs(origin, direction, maxDistance, out double mobDist);
+            var distance = 0.0;
+            for (int iteration = 0; iteration < 400 && distance <= maxDistance; iteration++)
+            {
+                // The mob sits strictly before this cell - everything beyond is behind it.
+                if (mobInFront && distance > mobDist) return null;
+
+                if (Chunks.TryGetLoadedBlockAndMeta(currentX, currentY, currentZ, out var block, out var meta)
+                    && block != BlockRegistry.AirId
+                    && block != BlockRegistry.GetId("water"))
+                {
+                    double cellExit = Math.Min(tMaxX, Math.Min(tMaxY, tMaxZ));
+                    var boxes = GetBlockCollisionBoxes(block, meta);
+                    foreach (var b in boxes)
+                    {
+                        if (RayBoxHit(origin, direction,
+                                currentX + b.minX, currentY + b.minY, currentZ + b.minZ,
+                                currentX + b.maxX, currentY + b.maxY, currentZ + b.maxZ,
+                                distance - 1e-9, cellExit + 1e-9, out double t, out var n))
+                        {
+                            hitDistance = Math.Max(0.0, t);
+                            // Mob closer than (or overlapping) the block face blocks the pick.
+                            if (mobInFront && mobDist <= t) return null;
+                            var face = ComputeFaceRect(currentX, currentY, currentZ, b, n);
+                            var place = ((int)Math.Floor(currentX + n.X + 0.5), (int)Math.Floor(currentY + n.Y + 0.5), (int)Math.Floor(currentZ + n.Z + 0.5));
+                            return new PickBlockResult((currentX, currentY, currentZ), place, n, face);
+                        }
+                    }
+                }
+
+                if (tMaxX < tMaxY)
+                {
+                    if (tMaxX < tMaxZ) { currentX += stepX; distance = tMaxX; tMaxX += tDeltaX; }
+                    else { currentZ += stepZ; distance = tMaxZ; tMaxZ += tDeltaZ; }
+                }
+                else
+                {
+                    if (tMaxY < tMaxZ) { currentY += stepY; distance = tMaxY; tMaxY += tDeltaY; }
+                    else { currentZ += stepZ; distance = tMaxZ; tMaxZ += tDeltaZ; }
+                }
+            }
+            return null;
+        }
+
+        // ------------------------------------------------------------------
+        // spawn / deep-fill
+        // ------------------------------------------------------------------
+
+    }
+}
