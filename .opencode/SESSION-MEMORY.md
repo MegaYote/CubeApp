@@ -1,5 +1,15 @@
 # Session Memory — CubeApp
 
+## 📁 PROJECT STRUCTURE REORGANIZED (8/15, committed — ALL root .cs moved into folders)
+- **Every root .cs file now lives in a folder** (namespace stays `CubeApp` — NO code changes needed, no `using` edits). git mv preserved history (git sees R renames, not A/D).
+- Layout: `Blocks/` (BlockDefinition, BlockRegistry, BlockInteractionSystem, BlockTickScheduler), `Core/` (Point3D, TextureRect, GameMode, RenderDistanceController), `Entities/` (EntityManager, Mob*, Duck*, SteveMob, IMobRenderable, DroppedItem), `Input/` (InputManager, InputProcessor), `Items/` (ItemDefinition, ItemRegistry, InventorySlot, ItemDropRenderData), `Meshing/` (Mesher, MeshFace, MeshScheduler, MeshWorker, IMeshQueue, Lighting), `Player/` (PlayerController, PlayerModel, PlayerState), `Simulation/` (FluidSimulation, GravitySimulation, FallingBlockData, GrassSpreadSimulation), `UI/` (HudBuilder, MenuState), `World/` (Chunk, ChunkManager, ChunkGenWorker, ChunkTypes, BiomeMap, BiomeRegistry, GameWorld, WorldSave + existing terrain providers), `Audio/` (SoundEngine), `Net/`, `PathFinding/`, `Renderer/`, `Engine/`, `MobEntities/`.
+- **Assets moved**: textures → `Assets/Textures/` (terrain.png, items.png, duck.png, player.png, cubuild.png, healthbar.png, hotbar.png, hotbar_select.png, inventory.png, sun.png, moon.png, hotbarUI.png, inventoryUI.png), data → `Assets/Data/` (blocks.json, items.json, biomes.json), sounds → `Assets/Sounds/*.mp3` (FLATTENED — no nested sounds/ subfolder).
+- **Docs moved** to `Docs/` (DYNAMIC_BACKEND_SWITCHING.md/.txt, SELLING-REMEDIATION-WORKLIST.md, TERRAIN-NOISE-REFERENCE.md); reference html now `Reference/Cubuild.html` (spaces folder removed).
+- **Deleted**: `adapter/` + `renderer_test/` experiment folders (were already excluded from build since commit 491bdd9) — pure dead weight.
+- **csproj updated**: all EmbeddedResource paths point into Assets/ (builds clean, 0 errors). Loaders are ALL `EndsWith(filename)` so new resource names (`CubeApp.Assets.Textures.terrain.png`) match fine.
+- **SoundEngine fix**: `RegisterAllEmbedded` previously stripped `.sounds.` case-sensitively — now takes the last dot-segment (file name) so sounds work from ANY folder. Do NOT regress this.
+- `.log` files now written to/collected in `Logs/` folder (still gitignored via `*.log`).
+
 ## Project
 C# `net9.0-windows` WinExe (self-contained), Veldrid 4.9.0 (D3D11), SPIR-V, ImGui, StbImageSharp, Nullable enabled.
 Build: `dotnet build CubeApp.csproj -c Debug --nologo -v minimal` → 0 errors, ~38 pre-existing CS8618 warnings.

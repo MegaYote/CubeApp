@@ -17,54 +17,43 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- Bake the texture atlas into the assembly so no loose files need to ship. -->
-    <EmbeddedResource Include="terrain.png" />
+    <EmbeddedResource Include="Assets\Textures\terrain.png" />
     <!-- Items atlas (flint drop icon, etc). -->
-    <EmbeddedResource Include="items.png" />
+    <EmbeddedResource Include="Assets\Textures\items.png" />
     <!-- Bake the duck test-mob texture in as well. -->
-    <EmbeddedResource Include="duck.png" />
+    <EmbeddedResource Include="Assets\Textures\duck.png" />
     <!-- Player skin for the Minecraft-style player model. -->
-    <EmbeddedResource Include="player.png" />
+    <EmbeddedResource Include="Assets\Textures\player.png" />
     <!-- Data-driven block definitions (texture tiles, flags, hotbar, map colours). -->
-    <EmbeddedResource Include="blocks.json" />
+    <EmbeddedResource Include="Assets\Data\blocks.json" />
     <!-- Data-driven item definitions (tools, food, gemstones; items.png atlas tiles). -->
-    <EmbeddedResource Include="items.json" />
+    <EmbeddedResource Include="Assets\Data\items.json" />
     <!-- Data-driven biome definitions (temperature/humidity ranges, height, surfaces). -->
-    <EmbeddedResource Include="biomes.json" />
+    <EmbeddedResource Include="Assets\Data\biomes.json" />
     <!-- Title-screen logo graphic. -->
-    <EmbeddedResource Include="cubuild.png" />
+    <EmbeddedResource Include="Assets\Textures\cubuild.png" />
     <!-- Healthbar sprite sheet (10 slice-countdown hearts + extras; top-left = full heart). -->
-    <EmbeddedResource Include="healthbar.png" />
+    <EmbeddedResource Include="Assets\Textures\healthbar.png" />
     <!-- Hotbar frame (169x16, 10 slots) + selected-slot highlight (18x18), from Cubuild.html. -->
-    <EmbeddedResource Include="hotbar.png" />
-    <EmbeddedResource Include="inventory.png" />
-    <EmbeddedResource Include="hotbar_select.png" />
+    <EmbeddedResource Include="Assets\Textures\hotbar.png" />
+    <EmbeddedResource Include="Assets\Textures\inventory.png" />
+    <EmbeddedResource Include="Assets\Textures\hotbar_select.png" />
     <!-- Infdev-style sun/moon sprites for the celestial sky quads. -->
-    <EmbeddedResource Include="sun.png" />
-    <EmbeddedResource Include="moon.png" />
+    <EmbeddedResource Include="Assets\Textures\sun.png" />
+    <EmbeddedResource Include="Assets\Textures\moon.png" />
     <!-- Game sound effects (decoded to PCM once at startup, played from memory). -->
-    <EmbeddedResource Include="sounds\grass.mp3" />
-    <EmbeddedResource Include="sounds\cavesound1.mp3" />
-    <EmbeddedResource Include="sounds\cavesound2.mp3" />
-    <EmbeddedResource Include="sounds\cavesound3.mp3" />
-    <EmbeddedResource Include="sounds\cavesound4.mp3" />
-    <EmbeddedResource Include="sounds\cavesound5.mp3" />
-    <EmbeddedResource Include="sounds\cavesound6.mp3" />
-    <EmbeddedResource Include="sounds\cavesound7.mp3" />
+    <EmbeddedResource Include="Assets\Sounds\grass.mp3" />
+    <EmbeddedResource Include="Assets\Sounds\cavesound1.mp3" />
+    <EmbeddedResource Include="Assets\Sounds\cavesound2.mp3" />
+    <EmbeddedResource Include="Assets\Sounds\cavesound3.mp3" />
+    <EmbeddedResource Include="Assets\Sounds\cavesound4.mp3" />
+    <EmbeddedResource Include="Assets\Sounds\cavesound5.mp3" />
+    <EmbeddedResource Include="Assets\Sounds\cavesound6.mp3" />
+    <EmbeddedResource Include="Assets\Sounds\cavesound7.mp3" />
   </ItemGroup>
   <ItemGroup>
     <!-- Copy GLB models to output -->
     <None Include="MobEntities\**\*" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-  <ItemGroup>
-    <!-- Exclude the leftover renderer experiment and adapter folders from this project's compilation. -->
-    <Compile Remove="renderer_test\**\*" />
-    <Compile Remove="adapter\**\*" />
-    <EmbeddedResource Remove="renderer_test\**\*" />
-    <EmbeddedResource Remove="adapter\**\*" />
-    <None Remove="renderer_test\**\*" />
-    <None Remove="adapter\**\*" />
-    <Page Remove="renderer_test\**\*" />
-    <Page Remove="adapter\**\*" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />

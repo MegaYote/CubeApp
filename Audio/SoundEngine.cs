@@ -205,7 +205,7 @@ namespace CubeApp
         }
 
         /// <summary>Auto-registers every embedded sound file (by filename) from the assembly.
-        /// Drop-in ready: add a file to sounds/, add an EmbeddedResource line, done.</summary>
+        /// Drop-in ready: add a file to Assets/Sounds/, add an EmbeddedResource line, done.</summary>
         public void RegisterAllEmbedded()
         {
             var asm = typeof(SoundEngine).Assembly;
@@ -217,11 +217,11 @@ namespace CubeApp
                     continue;
                 }
 
-                string simple = resource;
-                int idx = simple.LastIndexOf(".sounds.", StringComparison.Ordinal);
-                if (idx >= 0) simple = simple.Substring(idx + ".sounds.".Length);
-                int dot = simple.LastIndexOf('.');
-                string soundName = dot > 0 ? simple.Substring(0, dot) : simple;
+                // Embedded resource names use dots for the folder path (e.g. "CubeApp.Assets.Sounds.sounds.grass.mp3").
+                // The sound name is the FILE NAME without extension, regardless of which folder it lives in.
+                string[] parts = resource.Split('.');
+                if (parts.Length < 2) continue;
+                string soundName = parts[parts.Length - 2]; // last segment before the extension
                 if (string.IsNullOrWhiteSpace(soundName)) continue;
 
                 using var stream = asm.GetManifestResourceStream(resource);
