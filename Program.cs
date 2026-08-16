@@ -71,6 +71,8 @@ namespace CubeApp
         private float lastRenderMs;
         private readonly Stopwatch stageStopwatch = new();
         private float MouseSensitivity = 0.5f;
+        private float ResolutionScale = 1f;
+        private bool PixelatedUpscale;
         private const double MaxFrameDeltaSeconds = 0.25;
         private static readonly int[] RenderDistances = { 16, 8, 4, 2 };
         private static readonly string[] RenderDistanceNames = { "Far", "Normal", "Short", "Tiny" };

@@ -582,6 +582,56 @@ void main() {
             CreateWorldPlanePipeline(factory);
             CreateCloudPipeline(factory);
             CreateCrosshairPipeline(factory);
+            CreateBlitPipeline(factory);
+        }
+
+        // Fullscreen blit used by resolution scale < 1: samples the offscreen world texture and
+        // writes it across the swapchain. A vertex-less triangle (no vertex buffer; gl_VertexIndex
+        // positions the corners) keeps this to a single Draw(3) with no per-frame CPU geometry.
+        private void CreateBlitPipeline(Veldrid.ResourceFactory factory)
+        {
+            string blitVsCode = @"#version 450
+layout(location=0) out vec2 vUV;
+void main() {
+    // Triangle corner from vertex index: (0,0) (2,0) (0,2) -> NDC (-1,-1) (3,-1) (-1,3).
+    vec2 pos = vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2));
+    vUV = vec2(pos.x, 1.0 - pos.y);
+    gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+}";
+            string blitFsCode = @"#version 450
+layout(location=0) in vec2 vUV;
+layout(set=0, binding=0) uniform sampler2D uScene;
+layout(location=0) out vec4 outColor;
+void main() {
+    outColor = texture(uScene, vUV);
+}";
+            var vsSpirv = SpirvCompilation.CompileGlslToSpirv(blitVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var fsSpirv = SpirvCompilation.CompileGlslToSpirv(blitFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var shaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, vsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main"));
+
+            _blitLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
+                new ResourceLayoutElementDescription("uScene", ResourceKind.TextureReadOnly, ShaderStages.Fragment),
+                new ResourceLayoutElementDescription("uSceneSampler", ResourceKind.Sampler, ShaderStages.Fragment)));
+            // Smooth = linear upscale (blurry); Blocky = nearest (chunky pixels). Both are kept
+            // alive and the resource set picks the active one when scale targets are built.
+            _blitSamplerLinear = factory.CreateSampler(SamplerDescription.Linear);
+            _blitSamplerNearest = factory.CreateSampler(SamplerDescription.Point);
+
+            // No vertex buffer: the shader generates its own triangle, so an EMPTY vertex layout
+            // array is required (Veldrid rejects a null/omitted ShaderSet).
+            var shaderSet = new ShaderSetDescription(Array.Empty<VertexLayoutDescription>(), new[] { shaders[0], shaders[1] });
+            _blitPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleDisabled,
+                DepthStencilState = DepthStencilStateDescription.Disabled,
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, false, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _blitLayout },
+                ShaderSet = shaderSet,
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
         }
 
         // GPU-assisted frustum culling compute pipeline. The shader reads a per-chunk struct

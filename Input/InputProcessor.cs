@@ -22,6 +22,7 @@ namespace CubeApp
         public bool ToggleFullbrightPressed { get; }
         public bool AdvanceTimePressed { get; }
         public bool ToggleGpuCullPressed { get; }
+        public bool ToggleFullscreenPressed { get; }
         public bool BreakBlockPressed { get; }
         public bool PlaceBlockPressed { get; }
         public bool DropItemPressed { get; }
@@ -45,6 +46,7 @@ namespace CubeApp
             bool toggleFullbrightPressed,
             bool advanceTimePressed,
             bool toggleGpuCullPressed,
+            bool toggleFullscreenPressed,
             bool breakBlockPressed,
             bool placeBlockPressed,
             bool dropItemPressed,
@@ -67,6 +69,7 @@ namespace CubeApp
             ToggleFullbrightPressed = toggleFullbrightPressed;
             AdvanceTimePressed = advanceTimePressed;
             ToggleGpuCullPressed = toggleGpuCullPressed;
+            ToggleFullscreenPressed = toggleFullscreenPressed;
             BreakBlockPressed = breakBlockPressed;
             PlaceBlockPressed = placeBlockPressed;
             DropItemPressed = dropItemPressed;
@@ -142,6 +145,7 @@ namespace CubeApp
         private bool toggleFullbrightPressed;
         private bool advanceTimePressed;
         private bool toggleGpuCullPressed;
+        private bool toggleFullscreenPressed;
         private bool breakBlockPressed;
         private bool placeBlockPressed;
         private bool dropItemPressed;
@@ -169,6 +173,7 @@ namespace CubeApp
             toggleThirdPersonPressed = false;
             toggleFlyPressed = false;
             toggleFullbrightPressed = false;
+            toggleFullscreenPressed = false;
             breakBlockPressed = false;
             placeBlockPressed = false;
             selectedSlot = null;
@@ -253,6 +258,13 @@ namespace CubeApp
                         break;
                     case Key.F7:
                         if (down) toggleGpuCullPressed = true;
+                        break;
+                    case Key.F11:
+                        if (down) toggleFullscreenPressed = true;
+                        break;
+                    case Key.Enter:
+                        // Alt+Enter toggles fullscreen (standard games convention).
+                        if (down && keyEvent.Modifiers.HasFlag(ModifierKeys.Alt)) toggleFullscreenPressed = true;
                         break;
                     case Key.F2:
                         if (down) toggleFlyPressed = true;
@@ -384,6 +396,7 @@ namespace CubeApp
                 toggleFullbrightPressed,
                 advanceTimePressed,
                 toggleGpuCullPressed,
+                toggleFullscreenPressed,
                 breakBlockPressed,
                 placeBlockPressed,
                 dropItemPressed,
@@ -406,6 +419,7 @@ namespace CubeApp
             toggleFullbrightPressed = false;
             advanceTimePressed = false;
             toggleGpuCullPressed = false;
+            toggleFullscreenPressed = false;
             breakBlockPressed = false;
             placeBlockPressed = false;
             dropItemPressed = false;

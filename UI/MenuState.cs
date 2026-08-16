@@ -90,6 +90,16 @@ namespace CubeApp
         public float SelectedMouseSensitivity = 0.5f;
         /// <summary>Set when the sensitivity slider changed.</summary>
         public bool MouseSensitivityChanged;
+        /// <summary>Internal render resolution as a fraction of the window (1.0, 0.75, 0.5, 0.25).
+        /// Lower = fewer pixels shaded = faster on weak GPUs (iGPUs share system RAM).</summary>
+        public float SelectedResolutionScale = 1f;
+        /// <summary>Set when the resolution scale radio changed; Program applies it.</summary>
+        public bool ResolutionScaleChanged;
+        /// <summary>When true, low-res upscale uses NEAREST filtering (chunky blocky pixels).
+        /// When false, linear filtering smooths the upscale.</summary>
+        public bool SelectedPixelatedUpscale;
+        /// <summary>Set when the low-res filter radio changed; Program applies it.</summary>
+        public bool PixelFilterChanged;
 
         public void ResetFlags()
         {
@@ -109,6 +119,8 @@ namespace CubeApp
             CullingModeChanged = false;
             RenderDistanceChanged = false;
             MouseSensitivityChanged = false;
+            ResolutionScaleChanged = false;
+            PixelFilterChanged = false;
         }
     }
 }

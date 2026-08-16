@@ -14,6 +14,24 @@ namespace CubeApp.Renderer
         private GraphicsDevice _gd;
         private Swapchain _sc;
 
+        // ---- resolution scale (low-end GPUs) ----
+        // When < 1, the world renders into an offscreen framebuffer at fraction*swapchain size
+        // and is upscaled to the swapchain with a fullscreen blit. The ImGui UI (and crosshair)
+        // draw at native resolution so menus stay crisp. Big pixel-count savings for iGPUs.
+        private float _resolutionScale = 1f;
+        private bool _pixelatedUpscale;
+        private Texture _scaleColorTexture;
+        private TextureView _scaleColorView;
+        private Texture _scaleDepthTexture;
+        private Framebuffer _scaleFramebuffer;
+        private Pipeline _blitPipeline;
+        private ResourceLayout _blitLayout;
+        private ResourceSet _blitResourceSet;
+        // Two blit samplers: linear (smooth upscale) and point/nearest (chunky blocky pixels).
+        // Only the active one is bound to the resource set; switching just rebuilds the set.
+        private Sampler _blitSamplerLinear;
+        private Sampler _blitSamplerNearest;
+
         private DeviceBuffer _projViewBuffer;
         private ResourceLayout _projViewLayout;
         private ResourceSet _projViewSet;
@@ -738,6 +756,10 @@ namespace CubeApp.Renderer
             CreatePipeline();
             CreateCullComputePipeline();
 
+            // Resolution scale: create the offscreen target only when the player lowers the scale
+            // (default 1 = render straight to the swapchain, zero extra cost).
+            RecreateScaleTargets();
+
             _imguiRenderer = new ImGuiRenderer(
                 _gd,
                 _sc.Framebuffer.OutputDescription,
@@ -833,6 +855,15 @@ namespace CubeApp.Renderer
             _worldPlaneMatrixSet?.Dispose();
             _commandList?.Dispose();
             _imguiRenderer?.Dispose();
+            _scaleColorTexture?.Dispose();
+            _scaleColorView?.Dispose();
+            _scaleDepthTexture?.Dispose();
+            _scaleFramebuffer?.Dispose();
+            _blitResourceSet?.Dispose();
+            _blitPipeline?.Dispose();
+            _blitLayout?.Dispose();
+            _blitSamplerLinear?.Dispose();
+            _blitSamplerNearest?.Dispose();
             _highlightVertexBuffer?.Dispose();
             _highlightIndexBuffer?.Dispose();
             _highlightPipeline?.Dispose();

@@ -56,6 +56,7 @@ namespace CubeApp
                 return;
             }
             if (frameInput.ToggleDebugPressed) showFps = !showFps;
+            if (frameInput.ToggleFullscreenPressed) ToggleFullscreen();
             if (_ignoreInteractFrames > 0) _ignoreInteractFrames--;
             if (screen == GameScreen.Playing && World != null)
             {
@@ -164,6 +165,16 @@ namespace CubeApp
             needsMeshUpdate = true;
             _forceChunkStream = true;
             if (World != null) World.ChunkRenderRadius = ChunkRenderRadius;
+        }
+
+        // F11 / Alt+Enter: toggle between windowed and borderless fullscreen. Borderless is used
+        // instead of exclusive FullScreen so alt-tabbing stays reliable on weak office iGPUs.
+        private void ToggleFullscreen()
+        {
+            if (window == null) return;
+            window.WindowState = window.WindowState == WindowState.BorderlessFullScreen
+                ? WindowState.Normal
+                : WindowState.BorderlessFullScreen;
         }
 
     }

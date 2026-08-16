@@ -704,8 +704,8 @@ namespace CubeApp.Renderer
             {
                 // Settings screen: culling mode (player choice), render distance, and mouse
                 // sensitivity. Changes set flags on the MenuState; Program applies them next tick.
-                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 190f, size.Y / 2f - 230f), ImGuiCond.Always);
-                ImGui.SetNextWindowSize(new Vector2(380, 460), ImGuiCond.Always);
+                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 190f, size.Y / 2f - 290f), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(380, 580), ImGuiCond.Always);
                 ImGui.Begin("##settings", windowFlags);
                 ImGui.SetWindowFontScale(1.6f);
                 ImGui.TextColored(new Vector4(1f, 1f, 1f, 1f), "Settings");
@@ -751,6 +751,43 @@ namespace CubeApp.Renderer
                         m.SelectedRenderDistance = i;
                         m.RenderDistanceChanged = true;
                     }
+                }
+                ImGui.Spacing();
+                ImGui.Separator();
+                ImGui.Spacing();
+
+                // ---- Resolution scale ----
+                ImGui.TextColored(new Vector4(0.85f, 0.85f, 0.85f, 1f), "Resolution Scale");
+                ImGui.Spacing();
+                string[] rsNames = { "100%", "75%", "50%", "25%" };
+                float[] rsValues = { 1f, 0.75f, 0.5f, 0.25f };
+                for (int i = 0; i < rsNames.Length; i++)
+                {
+                    if (ImGui.RadioButton(rsNames[i], Math.Abs(m.SelectedResolutionScale - rsValues[i]) < 0.01f))
+                    {
+                        m.SelectedResolutionScale = rsValues[i];
+                        m.ResolutionScaleChanged = true;
+                    }
+                }
+                ImGui.Spacing();
+                ImGui.TextColored(new Vector4(0.7f, 0.7f, 0.7f, 1f),
+                    "Lower = faster on weak GPUs");
+                ImGui.Spacing();
+                ImGui.Separator();
+                ImGui.Spacing();
+
+                // ---- Low-res filter (only matters when scale < 100%) ----
+                ImGui.TextColored(new Vector4(0.85f, 0.85f, 0.85f, 1f), "Low-Res Filter");
+                ImGui.Spacing();
+                if (ImGui.RadioButton("Smooth", !m.SelectedPixelatedUpscale))
+                {
+                    m.SelectedPixelatedUpscale = false;
+                    m.PixelFilterChanged = true;
+                }
+                if (ImGui.RadioButton("Blocky", m.SelectedPixelatedUpscale))
+                {
+                    m.SelectedPixelatedUpscale = true;
+                    m.PixelFilterChanged = true;
                 }
                 ImGui.Spacing();
                 ImGui.Separator();

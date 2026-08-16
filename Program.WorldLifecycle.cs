@@ -299,6 +299,8 @@ namespace CubeApp
                 menu.SelectedCullingMode = gpuRenderer?.GetCullingMode() ?? menu.SelectedCullingMode;
                 menu.SelectedRenderDistance = renderDistanceIndex;
                 menu.SelectedMouseSensitivity = MouseSensitivity;
+                menu.SelectedResolutionScale = ResolutionScale;
+                menu.SelectedPixelatedUpscale = PixelatedUpscale;
             }
             _settingsWasOpen = menu.Screen == GameScreen.Settings;
 
@@ -406,6 +408,16 @@ namespace CubeApp
             if (menu.MouseSensitivityChanged)
             {
                 MouseSensitivity = Math.Clamp(menu.SelectedMouseSensitivity, 0.05f, 2.0f);
+            }
+            if (menu.ResolutionScaleChanged)
+            {
+                ResolutionScale = Math.Clamp(menu.SelectedResolutionScale, 0.25f, 1f);
+                gpuRenderer?.SetResolutionScale(ResolutionScale);
+            }
+            if (menu.PixelFilterChanged)
+            {
+                PixelatedUpscale = menu.SelectedPixelatedUpscale;
+                gpuRenderer?.SetPixelatedUpscale(PixelatedUpscale);
             }
             menu.ResetFlags();
         }

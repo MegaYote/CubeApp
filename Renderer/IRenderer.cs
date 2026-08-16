@@ -13,6 +13,8 @@ namespace CubeApp.Renderer
         CubeApp.Point3D? CameraPosition { get; }
         System.Numerics.Matrix4x4? ViewProjection { get; }
         void SetRenderDistance(int chunkRadius);
+        void SetResolutionScale(float scale);
+        void SetPixelatedUpscale(bool pixelated);
         void SetHud(HudState hud);
         void SetEntities(System.Collections.Generic.IReadOnlyList<CubeApp.MobRenderData> mobRenderData);
         void SetFallingBlocks(System.Collections.Generic.IReadOnlyList<CubeApp.FallingBlockData> fallingBlocks);

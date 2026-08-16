@@ -13,6 +13,73 @@ namespace CubeApp.Renderer
         {
             _sc?.Resize((uint)Math.Max(1, width), (uint)Math.Max(1, height));
             _imguiRenderer?.WindowResized(Math.Max(1, width), Math.Max(1, height));
+            RecreateScaleTargets();
+        }
+
+        public void SetResolutionScale(float scale)
+        {
+            scale = Math.Clamp(scale, 0.25f, 1f);
+            if (Math.Abs(scale - _resolutionScale) < 0.001f) return;
+            _resolutionScale = scale;
+            RecreateScaleTargets();
+        }
+
+        public void SetPixelatedUpscale(bool pixelated)
+        {
+            if (_pixelatedUpscale == pixelated) return;
+            _pixelatedUpscale = pixelated;
+            // Only the resource set binds the sampler, so just rebuild it with the new filter.
+            RebuildBlitResourceSet();
+        }
+
+        private void RebuildBlitResourceSet()
+        {
+            if (_blitResourceSet != null) { _blitResourceSet.Dispose(); _blitResourceSet = null; }
+            if (_blitLayout == null || _scaleColorView == null || _gd == null) return;
+            var sampler = _pixelatedUpscale ? _blitSamplerNearest : _blitSamplerLinear;
+            if (sampler != null)
+            {
+                _blitResourceSet = _gd.ResourceFactory.CreateResourceSet(
+                    new ResourceSetDescription(_blitLayout, _scaleColorView, sampler));
+            }
+        }
+
+        // (Re)creates the offscreen render target used when resolution scale < 1. At full scale
+        // the renderer draws straight to the swapchain (zero overhead). Formats must match the
+        // swapchain exactly so the existing world pipelines remain valid for the offscreen pass.
+        private void RecreateScaleTargets()
+        {
+            if (_scaleColorTexture != null) { _scaleColorTexture.Dispose(); _scaleColorTexture = null; }
+            if (_scaleColorView != null) { _scaleColorView.Dispose(); _scaleColorView = null; }
+            if (_scaleDepthTexture != null) { _scaleDepthTexture.Dispose(); _scaleDepthTexture = null; }
+            if (_scaleFramebuffer != null) { _scaleFramebuffer.Dispose(); _scaleFramebuffer = null; }
+            if (_blitResourceSet != null) { _blitResourceSet.Dispose(); _blitResourceSet = null; }
+
+            if (_resolutionScale >= 0.999f || _sc == null || _gd == null) return;
+
+            uint w = Math.Max(1u, (uint)(_sc.Framebuffer.Width * _resolutionScale));
+            uint h = Math.Max(1u, (uint)(_sc.Framebuffer.Height * _resolutionScale));
+            var colorFmt = _sc.Framebuffer.OutputDescription.ColorAttachments[0].Format;
+            var depthFmt = _sc.Framebuffer.OutputDescription.DepthAttachment.Value.Format;
+
+            _scaleColorTexture = _gd.ResourceFactory.CreateTexture(TextureDescription.Texture2D(
+                w, h, 1, 1, colorFmt, TextureUsage.RenderTarget | TextureUsage.Sampled));
+            _scaleColorView = _gd.ResourceFactory.CreateTextureView(_scaleColorTexture);
+            _scaleDepthTexture = _gd.ResourceFactory.CreateTexture(TextureDescription.Texture2D(
+                w, h, 1, 1, depthFmt, TextureUsage.DepthStencil));
+            _scaleFramebuffer = _gd.ResourceFactory.CreateFramebuffer(new FramebufferDescription(
+                _scaleDepthTexture, _scaleColorTexture));
+            RebuildBlitResourceSet();
+        }
+
+        // Draws the scaled world texture across the whole swapchain. Sampled with linear filtering
+        // so the upscale looks smooth rather than blocky.
+        private void BlitScaled(CommandList cl)
+        {
+            if (_blitPipeline == null || _blitResourceSet == null) return;
+            cl.SetPipeline(_blitPipeline);
+            cl.SetGraphicsResourceSet(0, _blitResourceSet);
+            cl.Draw(3); // fullscreen triangle (no vertex buffer)
         }
 
         public void SetHud(HudState hud)
@@ -261,7 +328,14 @@ namespace CubeApp.Renderer
 
             var cl = _commandList;
             cl.Begin();
-            cl.SetFramebuffer(_sc.Framebuffer);
+
+            // Resolution scale: when active, the world renders into an offscreen framebuffer at
+            // scale*window and is upscaled to the swapchain afterwards; UI (crosshair, ImGui)
+            // still draws at native res so menus stay crisp. At full scale this is a no-op and
+            // everything draws straight to the swapchain as before.
+            bool scaled = _scaleFramebuffer != null;
+            cl.SetFramebuffer(scaled ? _scaleFramebuffer : _sc.Framebuffer);
+            cl.SetFullViewport(0);
             // Clear to the FOG color (0xC0D8FF dimmed by the celestial angle) - the same color the
             // sky horizon fades to and the world fog fades into. The sky planes sit at +-16 blocks,
             // so at eye level there's a gap between them where only the clear color shows; it must
@@ -277,6 +351,9 @@ namespace CubeApp.Renderer
             // nothing visible until loading finishes.
             if (_hud.Menu != null && _hud.Menu.Screen == GameScreen.Loading)
             {
+                // Loading is UI-only: draw at native resolution regardless of world scale.
+                cl.SetFramebuffer(_sc.Framebuffer);
+                cl.SetFullViewport(0);
                 cl.ClearColorTarget(0, new RgbaFloat(0.12f, 0.12f, 0.14f, 1f));
                 _imguiRenderer.Update(1f / 60f, _uiInputSnapshot ?? NullInputSnapshot.Instance);
                 BuildHudUi();
@@ -366,8 +443,16 @@ namespace CubeApp.Renderer
             DrawShrinkCube(cl);
             DrawChunkBorders(cl);
 
-            // Hand + crosshair draw before the ImGui UI pass, so menu windows cover them.
+            // Hand is world-space, drawn in the scaled pass. Crosshair + UI are overlay-space,
+            // drawn at native resolution AFTER the blit so they stay crisp.
             DrawHand(cl);
+
+            if (scaled)
+            {
+                cl.SetFramebuffer(_sc.Framebuffer);
+                cl.SetFullViewport(0);
+                BlitScaled(cl);
+            }
             DrawCrosshair(cl);
 
             _imguiRenderer.Update(1f / 60f, _uiInputSnapshot ?? NullInputSnapshot.Instance);
