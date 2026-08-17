@@ -463,7 +463,14 @@ namespace CubeApp
                 return;
             }
 
-            double brightness = shade * ChunkLighting.Brightness(lighting.GetLight(neighborX, wy - lighting.OriginY, neighborZ));
+            // Sample the BRIGHTER of the water cell and the neighbor cell. At a cave mouth or
+            // cliff the neighbor is air - lit only by whatever leaked through the water column -
+            // so sampling only the neighbor made the wall render pitch black (invisible), letting
+            // the cave walls behind show through untinted ("air pocket" artifact). The top face
+            // already uses max(self, above); this keeps side walls consistent with it.
+            int ly = wy - lighting.OriginY;
+            int sideLight = Math.Max(lighting.GetLight(wx, ly, wz), lighting.GetLight(neighborX, ly, neighborZ));
+            double brightness = shade * ChunkLighting.Brightness(sideLight);
             var blockPos = new Point3D(wx, wy, wz);
             mesh.Add(new MeshFace(
                 p0, p1, p2, p3,

@@ -9,19 +9,19 @@ namespace CubeApp.Renderer
 {
     public sealed partial class VeldridRenderer : IRenderer, IDisposable
     {
-        private void SortPassBackToFront(System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands)
+        private void SortPassBackToFront(int passId, System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands)
         {
             if (!_cameraPosition.HasValue) return;
             var cam = _cameraPosition.Value;
             int camChunkX = (int)Math.Floor(cam.X / (double)ChunkManager.ChunkSize);
             int camChunkZ = (int)Math.Floor(cam.Z / (double)ChunkManager.ChunkSize);
-            if (camChunkX == _lastSortChunkX && camChunkZ == _lastSortChunkZ && commands.Count == _lastSortCount)
+            if (camChunkX == _lastSortChunkX[passId] && camChunkZ == _lastSortChunkZ[passId] && commands.Count == _lastSortCount[passId])
             {
                 return; // nothing changed: keep the existing order
             }
-            _lastSortChunkX = camChunkX;
-            _lastSortChunkZ = camChunkZ;
-            _lastSortCount = commands.Count;
+            _lastSortChunkX[passId] = camChunkX;
+            _lastSortChunkZ[passId] = camChunkZ;
+            _lastSortCount[passId] = commands.Count;
 
             commands.Sort((a, b) => ChunkCenterDistSq(b.Coord, cam).CompareTo(ChunkCenterDistSq(a.Coord, cam))); // far first
         }

@@ -340,9 +340,16 @@ namespace CubeApp.Renderer
         // sort only needs re-running when the camera crosses a chunk boundary - within a chunk the
         // distance order of far-to-near chunks doesn't change enough to matter, and skipping the
         // O(n log n) sort every frame is a real win (FPS roadmap #2).
-        private int _lastSortChunkX = int.MinValue;
-        private int _lastSortChunkZ = int.MinValue;
-        private int _lastSortCount = -1;
+        // NOTE: the cache is PER-PASS (indexed by pass id). The glass, water and glass-tint passes
+        // each sort their own command lists; sharing one cache keyed only on (camChunk, count)
+        // made the water pass skip its sort whenever its chunk count matched the glass pass's,
+        // leaving the water list in a stale draw order (far water painting over near water).
+        private static readonly int SortPassGlass = 0;
+        private static readonly int SortPassWater = 1;
+        private static readonly int SortPassGlassTint = 2;
+        private readonly int[] _lastSortChunkX = { int.MinValue, int.MinValue, int.MinValue };
+        private readonly int[] _lastSortChunkZ = { int.MinValue, int.MinValue, int.MinValue };
+        private readonly int[] _lastSortCount = { -1, -1, -1 };
 
         private CommandList _commandList;
         private ImGuiRenderer _imguiRenderer;

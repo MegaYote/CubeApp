@@ -14,7 +14,7 @@
     
     { "id": "obsidian",        "displayName": "Obsidian",        "texture": "5,2", "mapColor": "#3C2D5A" },
     { "id": "mossycobblestone","displayName": "Mossy Cobblestone","texture": "4,2", "mapColor": "#5E6C5E" },
-    { "id": "water",           "displayName": "Water",           "texture": "12,14", "solid": false, "opaque": false, "transparent": true, "alpha": 0.85, "mapColor": "#3F76E4" },
+    { "id": "water",           "displayName": "Water",           "texture": "12,14", "solid": false, "opaque": false, "transparent": true, "alpha": 0.75, "mapColor": "#3F76E4" },
 
     { "id": "bricks",          "displayName": "Bricks",          "texture": "8,4", "mapColor": "#964640" },
     { "id": "log",             "displayName": "Log",             "texture": "4,1", "top": "5,1", "bottom": "5,1", "mapColor": "#6B4A28", "zombieCanBreak": true, "zombieBreakSpeed": "Medium" },

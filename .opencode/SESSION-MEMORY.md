@@ -324,6 +324,13 @@ Part of the survival-mode vision (user's design: wood rots, dirt/sand/gravel hav
 - **Open suspects for next time**: (1) `SortPassBackToFront` shares ONE gate (`_lastSortChunkX/Z/_lastSortCount`) between the GLASS and WATER passes — the water sort is skipped when its count matches the glass count, keeping a stale order; (2) water bottom-face quads at cave mouths (EmitWaterBottomFace, alpha 0.85, dark-lit) + water top faces drawn AFTER walls within a chunk — blend order vs camera chunk; (3) heightmap occlusion with seabed TopSolidY when the camera is BELOW the seabed line (deep dive) culls ALL distant ocean chunks → sky shows through the water.
 - **PROCESS NOTE**: this model CANNOT read images (screenshot attempt failed: "model does not support image input"). Do NOT burn cycles guessing — ask the user FIRST: exact position (surface vs deep), F7 toggle result (HUD line "Cull: GPU/CPU"), and whether the artifact follows the cave or the chunk border.
 
+## 🌊 OCEAN AIR-POCKET FIXED — water side faces (8/16, user-verified "perfect")
+- **Root causes found and fixed (both were real)**:
+  1. **Shared sort gate** (`SortPassBackToFront`): ONE cache (`_lastSortChunkX/Z/_lastSortCount`) was shared between the glass (:409), water (:423), and glass-tint (:430) passes — when the water list's count matched the glass list's, water SKIPPED its sort and drew in a stale order (far water painting over near water). Fixed: per-pass caches — `SortPassBackToFront(int passId, ...)` + `SortPassGlass/Water/GlassTint` ids + `int[]` cache arrays (VeldridRenderer.cs, Particles.cs, Render.cs).
+  2. **Side-face light sampling** (`Mesher.EmitWaterSide`): brightness sampled ONLY the neighbor cell (`lighting.GetLight(neighborX, ly, neighborZ)`) — at a cave mouth that's the dark cave air → wall rendered pure black (Brightness(0)=0, no floor) with alpha 0.85 → INVISIBLE water wall → untinted cave stone showed through = the air-pocket artifact. Fixed: `Math.Max(light at water cell, light at neighbor)` — same rule the top face already uses.
+- **Water alpha 0.85 → 0.75** (blocks.json, user request "a little clearer, ONLY a little"). User-verified the whole set: "perfect".
+- **User pushed 2 commits online earlier (8/16, pulled + built + verified running)**: `0e64a2d` keyboard fix (poll `SDL_GetKeyboardState` for WASD/Space/Shift via P/Invoke; SDL2.dll already loaded in-process by Veldrid.SDL2 so safe; scancodes verified W26/S22/A4/D7/Space44/LShift225; note: holding Space now = hold-to-jump) and `8b15bc2` cross-block support (no cross-on-cross placement, `BreakUnsupportedCross` cascade, wired into TryBreakBlock + network ApplyBlockEdit; parity gap: any non-air non-cross block incl. water/leaves/glass counts as support).
+
 
 
 

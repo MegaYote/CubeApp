@@ -406,7 +406,7 @@ namespace CubeApp.Renderer
                 }
                 if (_glassDrawCommands.Count > 0)
                 {
-                    SortPassBackToFront(_glassDrawCommands);
+                    SortPassBackToFront(SortPassGlass, _glassDrawCommands);
                     DrawWorldPass(cl, _glassDrawCommands, _glassIndirectScratch, _glassPipeline, ref _glassCullData);
                 }
                 // Depth-writing entities (falling blocks, item drops, mobs) draw AFTER the opaque
@@ -420,14 +420,14 @@ namespace CubeApp.Renderer
                 DrawModelMobs(cl);
                 if (_transparentDrawCommands.Count > 0)
                 {
-                    SortPassBackToFront(_transparentDrawCommands);
+                    SortPassBackToFront(SortPassWater, _transparentDrawCommands);
                     DrawWorldPass(cl, _transparentDrawCommands, _transparentIndirectScratch, _transparentPipeline, ref _transparentCullData);
                 }
                 // Translucent tint (colored glass) draws AFTER water so its semi-transparent pixels
                 // paint over the water/terrain behind it without depth-blocking anything.
                 if (_glassDrawCommands.Count > 0)
                 {
-                    SortPassBackToFront(_glassDrawCommands);
+                    SortPassBackToFront(SortPassGlassTint, _glassDrawCommands);
                     DrawWorldPass(cl, _glassDrawCommands, _glassIndirectScratch, _translucentPipeline, ref _glassCullData);
                 }
                 // All passes have now had a chance to refill their cull data this frame.
