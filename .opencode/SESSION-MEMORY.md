@@ -1,5 +1,12 @@
 # Session Memory — Cubuild
 
+## CRAFTING MENU FINISHING TOUCHES (8/17, committed)
+- **E-menu texture under the panel**: the crafting menu's inventory section (bag 4x10 + hotbar) now draws the SAME `inventory.png` texture as the E-menu, placed directly below the crafting art (window 190 design px wide; art centered at offset (190-111)/2; texture at y = 49*3+24; slots at E-menu coords: bag (5+18c, 6+18r), hotbar (5+18i, 88), 1px border inset, kind 0/1 clicks via `DrawInventorySlotCellAt`). Plain grey-cell fallback if `_inventoryImGuiId` is zero.
+- **Input blocking**: crafting menu now zeroes tick input in `StepSimulation` (`handEditorOpen || inventoryOpen || craftingOpen || biomeMenuOpen`) and is excluded from the mouse re-capture guard in Program.Input.cs (~line 53) — no movement/mining/placing while it's open.
+- **Recipes**: log→planks REMOVED from recipes.json. Remaining: planks×2→stick×4, planks×4→workbench, flint+stick→flint_spear, cobble×2→cobble_slab×4, sand×2→sand_slab×4.
+- **Stone fist drop**: stone mined with empty hand (`SelectedBlock <= 0`) drops gravel 1-in-10 else nothing; with any tool drops stone normally (`_idStone` added in GameWorld.Inventory.cs).
+- **E-menu centered**: DrawInventoryWindow winY `20f` → `Math.Max(30f, (displaySize.Y - winH)/2)` — matches crafting menu centering.
+
 ## SAVE FORMAT v5: FULL MINECRAFT-STYLE STATE (8/17, committed)
 - **WorldSave.cs Version 4→5** (magic "CUBW", binary + deflate). Old v4 saves still load (v5 fields default: bag empty, health 10, time 0).
 - **Newly persisted**: full 40-slot E-menu bag (`InventorySlot[40]` itemId+count pairs), cursor `HeldStack` (has + itemId + count), `PlayerHealth` (0..10), `WorldTime` (day/night ticks, restore via `World.SetWorldTime`). All read/written between hotbar and chunks; load gated on `version >= 5`.
