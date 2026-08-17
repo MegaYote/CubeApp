@@ -1,4 +1,32 @@
 {
+  // ============================================================================
+  // items.json — genuine items (tools, food, gemstones...).
+  //
+  // Every BLOCK is automatically also an item (same id, terrain atlas icon,
+  // places itself, 64 stack). This file only needs entries for things that are
+  // NOT blocks. Items share one numeric id space with blocks: block items use
+  // 0..(block count-1), genuine items are appended after.
+  //
+  // FIELDS (all optional except "id" and "itemTile"):
+  //   id            unique lowercase id
+  //   displayName   name shown in menus (defaults to id)
+  //   category      "tool" | "food" | "misc" | "gemstone" (groups the E menu)
+  //   itemTile      "col,row" tile from items.png (REQUIRED for new items)
+  //   stackSize     max per stack (64 typical; tools = 1)
+  //   placedBlock   block id this item places when used (default: none)
+  //   toolType      "pickaxe" | "axe" | "shovel" — mines matching blocks faster
+  //   toolLevel     1..3 mining tier
+  //   durability    uses before the tool breaks (tools only)
+  //   foodValue     hunger restored when eaten (food only)
+  //   mapColor      "#RRGGBB" menu/swatch color
+  //
+  // REDEFINING A BLOCK ITEM: an entry whose "id" matches a BLOCK id overrides
+  // that block's item (icon/name/category) in place — it keeps its numeric id
+  // and still places the block. Example: "sap" below swaps the sap block's
+  // terrain icon for a dedicated items.png tile. The "itemTile" field is
+  // REQUIRED for block redefinitions too.
+  // ============================================================================
+
   "items": [
     { "id": "flint",            "displayName": "Flint",            "category": "gemstone", "itemTile": "11,2", "stackSize": 64, "mapColor": "#6E6E6E" },
     { "id": "stick",            "displayName": "Stick",            "category": "misc",     "itemTile": "0,0",  "stackSize": 64, "mapColor": "#8A5A2B" },
@@ -7,6 +35,9 @@
     { "id": "flint_shovel",     "displayName": "Flint Shovel",     "category": "tool",     "itemTile": "3,0",  "stackSize": 1,  "toolType": "shovel",   "toolLevel": 2, "durability": 60, "mapColor": "#8A8A8A" },
     { "id": "flint_spear",      "displayName": "Flint Spear",      "category": "tool",     "itemTile": "4,0",  "stackSize": 1,  "durability": 80, "mapColor": "#8A8A8A" },
     { "id": "persimmon",        "displayName": "Persimmon",        "category": "food",     "itemTile": "0,2",  "stackSize": 64, "foodValue": 4, "mapColor": "#D2691E" },
+
+    // "sap" is a BLOCK (see blocks.json); this entry only gives its dropped
+    // item a dedicated icon from items.png.
     { "id": "sap",              "displayName": "Sap",              "category": "misc",     "itemTile": "10,2", "stackSize": 64, "mapColor": "#442200" }
   ]
 }

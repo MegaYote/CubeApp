@@ -91,7 +91,14 @@ namespace CubeApp
             byte[]? bytes = LoadResourceBytes("items.json");
             if (bytes != null)
             {
-                var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                // items.json is hand-edited: allow // and /* */ comments + trailing commas
+                // so entries stay friendly to edit by hand.
+                var opts = new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    ReadCommentHandling = JsonCommentHandling.Skip,
+                    AllowTrailingCommas = true,
+                };
                 var file = JsonSerializer.Deserialize<ItemsFile>(System.Text.Encoding.UTF8.GetString(bytes), opts);
                 if (file != null)
                 {

@@ -63,22 +63,26 @@ namespace CubeApp
             public string? Bottom { get; set; }
             public string? Side { get; set; }
             public string? ItemTile { get; set; }
-            public bool Solid { get; set; } = true;
-            public bool Opaque { get; set; } = true;
-            public bool Transparent { get; set; } = false;
-            public double Alpha { get; set; } = 1.0;
+            // Nullable on purpose: when a field is omitted the value comes from smart
+            // per-shape defaults (see ApplyShapeDefaults), so entries can stay tiny.
+            // An explicitly written value ALWAYS wins over the shape default.
+            public bool? Solid { get; set; }
+            public bool? Opaque { get; set; }
+            public bool? Transparent { get; set; }
+            public double? Alpha { get; set; }
             public string? Shape { get; set; }
-            public bool Inventory { get; set; } = true;
+            public bool? Inventory { get; set; }
             public bool Placeable { get; set; } = true;
-            public bool Translucent { get; set; } = false;
+            public bool? Translucent { get; set; }
             public int LightEmission { get; set; } = 0;
             public bool Gravity { get; set; } = false;
-            public string? MapColor { get; set; } = "#000000";
+            public string? MapColor { get; set; }
             public double Hardness { get; set; } = 0; // 0 => code default
             public string? ToolType { get; set; } = ""; // "pickaxe"/"axe"/"shovel"/... empty = none
             public bool ToolRequired { get; set; } = false; // true = needs the tool to drop items
             public bool ZombieCanBreak { get; set; } = false;
             public string? ZombieBreakSpeed { get; set; } = "Medium"; // Slow / Medium / Fast
+            public string? Base { get; set; } // inherit texture/top/bottom/side/colour from another block id
         }
 
         /// <summary>Default survival-mining hardness (Cubuild C++ port). Blocks that share an id
@@ -117,11 +121,63 @@ namespace CubeApp
             };
         }
 
+        /// <summary>
+        /// Fills omitted fields from the entry's "shape" so common blocks stay one line:
+        /// cross plants just say <c>{"id": "sapling", "texture": "15,0", "shape": "cross"}</c>.
+        /// Fields written explicitly in the JSON always win over these defaults.
+        /// </summary>
+        private static void ApplyShapeDefaults(BlockDefDto dto)
+        {
+            string shape = dto.Shape ?? "";
+            bool isCross = string.Equals(shape, "cross", StringComparison.OrdinalIgnoreCase);
+            bool isCutout = string.Equals(shape, "cutout", StringComparison.OrdinalIgnoreCase);
+            bool isGlass = string.Equals(shape, "glass", StringComparison.OrdinalIgnoreCase);
+            bool isPartial = string.Equals(shape, "slab", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(shape, "slab_top", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(shape, "stairs", StringComparison.OrdinalIgnoreCase);
+
+            dto.Solid ??= !isCross;                                    // cross plants don't collide
+            dto.Opaque ??= !(isCross || isCutout || isGlass || isPartial); // anything see-through lets light pass
+            dto.Transparent ??= isCross || isCutout || isGlass;        // hide internal faces between like blocks
+            dto.Alpha ??= isCross ? 0.95 : 1.0;                        // cross atlas tiles have baked-in background
+            dto.Translucent ??= false;
+            dto.Inventory ??= !string.Equals(shape, "slab_top", StringComparison.OrdinalIgnoreCase); // _top halves are placement-only
+        }
+
+        /// <summary>Recursively copies tiles + map colour from a "base" block so variants like
+        /// slabs/stairs inherit their material. Chain-safe (base of base), cycle-checked.</summary>
+        private static void ResolveBase(BlockDefinition def, Dictionary<string, string?> baseOf, HashSet<string> seen)
+        {
+            if (!baseOf.TryGetValue(def.Id, out var baseId) || baseId == null) return;
+            if (!seen.Add(def.Id))
+                throw new InvalidDataException($"Circular \"base\" chain involving \"{def.Id}\".");
+            if (!_byName.TryGetValue(baseId, out var baseDef))
+                throw new InvalidDataException($"Block \"{def.Id}\" references unknown base \"{baseId}\".");
+
+            // The base inherits FIRST so a grandchild gets the deepest material's tiles.
+            ResolveBase(baseDef, baseOf, seen);
+
+            def.AllTexture ??= baseDef.AllTexture;
+            def.TopTexture ??= baseDef.TopTexture;
+            def.BottomTexture ??= baseDef.BottomTexture;
+            def.SideTexture ??= baseDef.SideTexture;
+            def.ItemTile ??= baseDef.ItemTile;
+            if (def.MapColor == 0xFF000000u) def.MapColor = baseDef.MapColor; // unset (default black) => inherit
+        }
+
         /// <summary>Loads the catalogue from a JSON string. Throws on the first malformed block
         /// (unknown tile reference, missing air, duplicate id) so bad data fails loudly at startup.</summary>
         public static void LoadFromJson(string json)
         {
-            var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var opts = new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                // blocks.json is hand-edited: allow // and /* */ comments (docs, examples,
+                // section headers) and trailing commas so a new entry can be pasted after the
+                // last one without fixing up the comma. Both are simply skipped by the parser.
+                ReadCommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+            };
             var file = JsonSerializer.Deserialize<BlocksFile>(json, opts)
                 ?? throw new InvalidDataException("blocks.json is empty or malformed.");
 
@@ -134,6 +190,7 @@ namespace CubeApp
 
             var defs = new BlockDefinition[file.Blocks.Count];
             _byName = new Dictionary<string, BlockDefinition>(file.Blocks.Count, StringComparer.OrdinalIgnoreCase);
+            var baseOf = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
 
             for (int i = 0; i < file.Blocks.Count; i++)
             {
@@ -143,22 +200,24 @@ namespace CubeApp
                 if (_byName.ContainsKey(dto.Id))
                     throw new InvalidDataException($"Duplicate block id \"{dto.Id}\".");
 
+                ApplyShapeDefaults(dto); // fill omitted fields from the entry's "shape"
+
                 var def = new BlockDefinition
                 {
                     Id = dto.Id,
                     NumericId = i,
                     DisplayName = dto.DisplayName ?? dto.Id,
-                    Solid = dto.Solid,
-                    Opaque = dto.Opaque,
-                    Transparent = dto.Transparent,
-                    Alpha = (float)dto.Alpha,
+                    Solid = dto.Solid ?? true,
+                    Opaque = dto.Opaque ?? true,
+                    Transparent = dto.Transparent ?? false,
+                    Alpha = (float)(dto.Alpha ?? 1.0),
                     Shape = dto.Shape ?? "",
-                    Inventory = dto.Inventory,
+                    Inventory = dto.Inventory ?? true,
                     Placeable = dto.Placeable,
-                    Translucent = dto.Translucent,
+                    Translucent = dto.Translucent ?? false,
                     LightEmission = dto.LightEmission,
                     Gravity = dto.Gravity,
-                    MapColor = ParseMapColor(dto.MapColor ?? "#000000"),
+                    MapColor = dto.MapColor != null ? ParseMapColor(dto.MapColor) : 0xFF000000u,
                     Hardness = dto.Hardness > 0 ? (float)dto.Hardness : DefaultHardness(dto.Id),
                     ToolType = dto.ToolType ?? "",
                     ToolRequired = dto.ToolRequired,
@@ -166,18 +225,28 @@ namespace CubeApp
                     ZombieBreakSpeed = ParseZombieBreakSpeed(dto.ZombieBreakSpeed),
                 };
 
-                // air has no faces; everything else must define at least an "all" tile.
-                if (i != 0)
-                {
-                    def.AllTexture = dto.Texture != null ? ParseTile(dto.Texture) : throw new InvalidDataException($"Block \"{dto.Id}\" has no texture.");
-                    if (dto.Top != null) def.TopTexture = ParseTile(dto.Top);
-                    if (dto.Bottom != null) def.BottomTexture = ParseTile(dto.Bottom);
-                    if (dto.Side != null) def.SideTexture = ParseTile(dto.Side);
-                    if (dto.ItemTile != null) def.ItemTile = ParseTile(dto.ItemTile);
-                }
+                // Tiles are parsed here when present; entries with only a "base" get their
+                // tiles filled in the resolution pass below, so the "no texture" check for
+                // non-air blocks happens after that.
+                if (dto.Texture != null) def.AllTexture = ParseTile(dto.Texture);
+                if (dto.Top != null) def.TopTexture = ParseTile(dto.Top);
+                if (dto.Bottom != null) def.BottomTexture = ParseTile(dto.Bottom);
+                if (dto.Side != null) def.SideTexture = ParseTile(dto.Side);
+                if (dto.ItemTile != null) def.ItemTile = ParseTile(dto.ItemTile);
 
+                if (dto.Base != null) baseOf[dto.Id] = dto.Base;
                 defs[i] = def;
                 _byName[dto.Id] = def;
+            }
+
+            // Second pass: resolve "base" inheritance (tiles + map colour), deepest first.
+            foreach (var def in defs)
+                ResolveBase(def, baseOf, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+            for (int i = 1; i < defs.Length; i++)
+            {
+                if (defs[i].AllTexture == null)
+                    throw new InvalidDataException($"Block \"{defs[i].Id}\" has no texture (add \"texture\": \"col,row\", or inherit one via \"base\").");
             }
 
             _defs = defs;

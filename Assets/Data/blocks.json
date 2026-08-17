@@ -1,7 +1,62 @@
 {
+  // ============================================================================
+  // blocks.json — every block in the game. Hand-edited; comments (// and /* */)
+  // and trailing commas are allowed anywhere.
+  //
+  // A block has a stable string "id" (used by code, biomes, drops...) AND a
+  // numeric id = its POSITION in this list (0 = air, stored in world saves).
+  // -> NEVER reorder or remove entries from the middle of the list.
+  // -> New blocks go at the END. air must stay entry #0.
+  //
+  // FIELDS (all optional except "id" and "texture"/"base"):
+  //   id              unique lowercase id, e.g. "stone"
+  //   displayName     name shown in menus (defaults to id)
+  //   texture         main atlas tile "col,row" from terrain.png (16x16 grid)
+  //   top/bottom/side optional per-face tiles; omitted faces use "texture"
+  //   itemTile        optional "col,row" from items.png used when this id
+  //                   appears as a dropped/menu item (rare; see items.json)
+  //   shape           "" (full cube) | "cross" (plant) | "cutout" (leaves) |
+  //                   "glass" | "slab" | "slab_top" (top half) | "stairs"
+  //   solid           collides with the player (default: true, false for cross)
+  //   opaque          blocks skylight (default: true, false for see-through)
+  //   transparent     hides faces between two of the same block (water|water)
+  //   alpha           0..1 opacity tint for the tile (cross defaults 0.95)
+  //   translucent     true = per-pixel alpha blending (colored glass)
+  //   inventory       shows in the E menu (default true; _top halves default false)
+  //   placeable       can be placed in the world (default true)
+  //   gravity         falls when unsupported (sand, gravel, redclay)
+  //   lightEmission   0..15 block light (torches = 14)
+  //   mapColor        "#RRGGBB" minimap/swatch color (default #000000)
+  //   hardness        seconds-ish mining time; 0 = built-in default by id family
+  //                   (stone 4, dirt 0.5, wood 2, ore 3...); omit for sensible
+  //   toolType        "pickaxe" | "axe" | "shovel" | "" (no tool preference)
+  //   toolRequired    true = block only drops items when mined with the right tool
+  //   zombieCanBreak  true = zombies can smash through it
+  //   zombieBreakSpeed "Slow" | "Medium" | "Fast"
+  //   base            inherit texture/top/bottom/side/mapColor from another
+  //                   block id (great for slab/stairs variants of a material)
+  //
+  // SHAPE DEFAULTS (only applied when the field is OMITTED):
+  //   cross   -> solid=false, opaque=false, transparent=true, alpha=0.95
+  //   cutout  -> opaque=false, transparent=true
+  //   glass   -> opaque=false, transparent=true
+  //   slab/_top/stairs -> opaque=false;  _top also -> inventory=false
+  //
+  // EXAMPLES:
+  //   // a plain new solid block:
+  //   { "id": "myblock", "texture": "5,8" },
+  //   // a new plant:
+  //   { "id": "myflower", "texture": "6,8", "shape": "cross" },
+  //   // a new glass pane / stairs for an existing material:
+  //   { "id": "stone_pane", "base": "stone", "shape": "slab" },
+  // ============================================================================
+
   "hotbar": [ "grass", "dirt", "stone", "cobblestone", "sand", "planks", "log", "leaves", "glass", "torch" ],
+
   "blocks": [
-    { "id": "air",             "displayName": "Air",             "solid": false, "opaque": false, "transparent": false, "alpha": 1.0,  "mapColor": "#000000" },
+
+    // ----- special + core terrain -------------------------------------------
+    { "id": "air",             "displayName": "Air",             "solid": false, "opaque": false, "transparent": false, "alpha": 1.0, "mapColor": "#000000" },
     { "id": "grass",           "displayName": "Grass",           "texture": "0,0", "mapColor": "#228B22" },
     { "id": "grass_spreading", "displayName": "Grass (Spreading)", "texture": "2,0", "top": "0,0", "bottom": "2,0", "side": "3,0", "inventory": false, "mapColor": "#228B22" },
     { "id": "dirt",            "displayName": "Dirt",            "texture": "2,0", "gravity": true, "mapColor": "#8B4513", "zombieCanBreak": true, "zombieBreakSpeed": "Fast" },
@@ -11,15 +66,18 @@
     { "id": "planks",          "displayName": "Planks",          "texture": "4,0", "mapColor": "#A07846", "zombieCanBreak": true, "zombieBreakSpeed": "Medium" },
     { "id": "bedrock",         "displayName": "Bedrock",         "texture": "1,1", "mapColor": "#4E4E4E" },
     { "id": "gravel",          "displayName": "Gravel",          "texture": "3,1", "gravity": true, "mapColor": "#848484" },
-    
+
     { "id": "obsidian",        "displayName": "Obsidian",        "texture": "5,2", "mapColor": "#3C2D5A" },
     { "id": "mossycobblestone","displayName": "Mossy Cobblestone","texture": "4,2", "mapColor": "#5E6C5E" },
+    // water: a fluid, not a cube — the solid/opaque/transparent/alpha trio is
+    // what makes it behave like a see-through, non-blocking liquid.
     { "id": "water",           "displayName": "Water",           "texture": "12,14", "solid": false, "opaque": false, "transparent": true, "alpha": 0.75, "mapColor": "#3F76E4" },
 
+    // ----- building materials ------------------------------------------------
     { "id": "bricks",          "displayName": "Bricks",          "texture": "8,4", "mapColor": "#964640" },
     { "id": "log",             "displayName": "Log",             "texture": "4,1", "top": "5,1", "bottom": "5,1", "mapColor": "#6B4A28", "zombieCanBreak": true, "zombieBreakSpeed": "Medium" },
-    { "id": "leaves",          "displayName": "Leaves",          "texture": "4,3", "shape": "cutout", "opaque": false, "transparent": true, "mapColor": "#3A7A1F", "zombieCanBreak": true, "zombieBreakSpeed": "Fast" },
-    { "id": "glass",           "displayName": "Glass",           "texture": "0,5", "shape": "glass", "opaque": false, "transparent": true, "mapColor": "#C8C8C8", "zombieCanBreak": true, "zombieBreakSpeed": "Medium" },
+    { "id": "leaves",          "displayName": "Leaves",          "texture": "4,3", "shape": "cutout", "mapColor": "#3A7A1F", "zombieCanBreak": true, "zombieBreakSpeed": "Fast" },
+    { "id": "glass",           "displayName": "Glass",           "texture": "0,5", "shape": "glass", "mapColor": "#C8C8C8", "zombieCanBreak": true, "zombieBreakSpeed": "Medium" },
     { "id": "bomb",            "displayName": "Bomb",            "texture": "8,0", "top": "9,0", "mapColor": "#333333" },
     { "id": "full_grass",      "displayName": "Full Grass",      "texture": "0,0", "mapColor": "#228B22" },
     { "id": "sponge",          "displayName": "Sponge",          "texture": "3,3", "mapColor": "#C8B54A" },
@@ -42,34 +100,37 @@
     { "id": "diamond",         "displayName": "Diamond Block",   "texture": "8,2", "top": "8,1", "bottom": "8,3", "mapColor": "#66E8E0" },
     { "id": "bookshelf",       "displayName": "Bookshelf",       "texture": "3,2", "top": "4,0", "bottom": "4,0", "mapColor": "#8A6B45" },
 
-    { "id": "sapling",         "displayName": "Sapling",         "texture": "15,0", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#3A7A1F" },
-    { "id": "red_flower",      "displayName": "Red Flower",      "texture": "12,0", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#D22B2B" },
-    { "id": "yellow_flower",   "displayName": "Yellow Flower",   "texture": "13,0", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#FFD700" },
-    { "id": "blue_flower",     "displayName": "Blue Flower",     "texture": "14,0", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#4169E1" },
-    { "id": "red_mushroom",    "displayName": "Red Mushroom",    "texture": "12,1", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#B22C2C" },
-    { "id": "white_mushroom",  "displayName": "White Mushroom",  "texture": "13,1", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#E8E8E8" },
-    { "id": "poison_mushroom", "displayName": "Poison Mushroom", "texture": "14,1", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#B22C2C" },
-    { "id": "spikes",          "displayName": "Spikes",          "texture": "15,2", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.9, "mapColor": "#808080" },
+    // ----- plants (shape "cross" fills solid/opaque/transparent/alpha for you) --
+    { "id": "sapling",         "displayName": "Sapling",         "texture": "15,0", "shape": "cross", "mapColor": "#3A7A1F" },
+    { "id": "red_flower",      "displayName": "Red Flower",      "texture": "12,0", "shape": "cross", "mapColor": "#D22B2B" },
+    { "id": "yellow_flower",   "displayName": "Yellow Flower",   "texture": "13,0", "shape": "cross", "mapColor": "#FFD700" },
+    { "id": "blue_flower",     "displayName": "Blue Flower",     "texture": "14,0", "shape": "cross", "mapColor": "#4169E1" },
+    { "id": "red_mushroom",    "displayName": "Red Mushroom",    "texture": "12,1", "shape": "cross", "mapColor": "#B22C2C" },
+    { "id": "white_mushroom",  "displayName": "White Mushroom",  "texture": "13,1", "shape": "cross", "mapColor": "#E8E8E8" },
+    { "id": "poison_mushroom", "displayName": "Poison Mushroom", "texture": "14,1", "shape": "cross", "mapColor": "#B22C2C" },
+    { "id": "spikes",          "displayName": "Spikes",          "texture": "15,2", "shape": "cross", "alpha": 0.9, "mapColor": "#808080" },
 
-    { "id": "stone_slab",      "displayName": "Stone Slab",      "texture": "1,0", "shape": "slab", "solid": true, "opaque": false, "mapColor": "#808080" },
-    { "id": "stone_slab_top",  "displayName": "Stone Slab (Top)","texture": "1,0", "shape": "slab_top", "solid": true, "opaque": false, "inventory": false, "mapColor": "#808080" },
-    { "id": "stone_stairs",    "displayName": "Stone Stairs",    "texture": "1,0", "shape": "stairs", "solid": true, "opaque": false, "mapColor": "#808080" },
-    { "id": "planks_slab",     "displayName": "Planks Slab",     "texture": "4,0", "shape": "slab", "solid": true, "opaque": false, "mapColor": "#A07846" },
-    { "id": "planks_slab_top", "displayName": "Planks Slab (Top)","texture": "4,0", "shape": "slab_top", "solid": true, "opaque": false, "inventory": false, "mapColor": "#A07846" },
-    { "id": "planks_stairs",   "displayName": "Planks Stairs",   "texture": "4,0", "shape": "stairs", "solid": true, "opaque": false, "mapColor": "#A07846" },
-    { "id": "cobblestone_slab",      "displayName": "Cobblestone Slab",      "texture": "0,1", "shape": "slab", "solid": true, "opaque": false, "mapColor": "#707070" },
-    { "id": "cobblestone_slab_top",  "displayName": "Cobblestone Slab (Top)","texture": "0,1", "shape": "slab_top", "solid": true, "opaque": false, "inventory": false, "mapColor": "#707070" },
-    { "id": "cobblestone_stairs",    "displayName": "Cobblestone Stairs",    "texture": "0,1", "shape": "stairs", "solid": true, "opaque": false, "mapColor": "#707070" },
-    { "id": "sand_slab",       "displayName": "Sand Slab",       "texture": "2,1", "shape": "slab", "solid": true, "opaque": false, "mapColor": "#D2C48C" },
-    { "id": "sand_slab_top",   "displayName": "Sand Slab (Top)", "texture": "2,1", "shape": "slab_top", "solid": true, "opaque": false, "inventory": false, "mapColor": "#D2C48C" },
-    { "id": "sand_stairs",     "displayName": "Sand Stairs",     "texture": "2,1", "shape": "stairs", "solid": true, "opaque": false, "mapColor": "#D2C48C" },
-    { "id": "dirt_slab",       "displayName": "Dirt Slab",       "texture": "2,0", "shape": "slab", "solid": true, "opaque": false, "mapColor": "#8B4513" },
-    { "id": "dirt_slab_top",   "displayName": "Dirt Slab (Top)", "texture": "2,0", "shape": "slab_top", "solid": true, "opaque": false, "inventory": false, "mapColor": "#8B4513" },
-    { "id": "dirt_stairs",     "displayName": "Dirt Stairs",     "texture": "2,0", "shape": "stairs", "solid": true, "opaque": false, "mapColor": "#8B4513" },
-    { "id": "bricks_slab",     "displayName": "Bricks Slab",     "texture": "8,4", "shape": "slab", "solid": true, "opaque": false, "mapColor": "#964640" },
-    { "id": "bricks_slab_top", "displayName": "Bricks Slab (Top)","texture": "8,4", "shape": "slab_top", "solid": true, "opaque": false, "inventory": false, "mapColor": "#964640" },
-    { "id": "bricks_stairs",   "displayName": "Bricks Stairs",   "texture": "8,4", "shape": "stairs", "solid": true, "opaque": false, "mapColor": "#964640" },
+    // ----- slabs & stairs: inherit the material via "base" -------------------
+    { "id": "stone_slab",           "displayName": "Stone Slab",            "base": "stone",        "shape": "slab" },
+    { "id": "stone_slab_top",       "displayName": "Stone Slab (Top)",      "base": "stone",        "shape": "slab_top" },
+    { "id": "stone_stairs",         "displayName": "Stone Stairs",          "base": "stone",        "shape": "stairs" },
+    { "id": "planks_slab",          "displayName": "Planks Slab",           "base": "planks",       "shape": "slab" },
+    { "id": "planks_slab_top",      "displayName": "Planks Slab (Top)",     "base": "planks",       "shape": "slab_top" },
+    { "id": "planks_stairs",        "displayName": "Planks Stairs",         "base": "planks",       "shape": "stairs" },
+    { "id": "cobblestone_slab",     "displayName": "Cobblestone Slab",      "base": "cobblestone",  "shape": "slab" },
+    { "id": "cobblestone_slab_top", "displayName": "Cobblestone Slab (Top)", "base": "cobblestone", "shape": "slab_top" },
+    { "id": "cobblestone_stairs",   "displayName": "Cobblestone Stairs",    "base": "cobblestone",  "shape": "stairs" },
+    { "id": "sand_slab",            "displayName": "Sand Slab",             "base": "sand",         "shape": "slab" },
+    { "id": "sand_slab_top",        "displayName": "Sand Slab (Top)",       "base": "sand",         "shape": "slab_top" },
+    { "id": "sand_stairs",          "displayName": "Sand Stairs",           "base": "sand",         "shape": "stairs" },
+    { "id": "dirt_slab",            "displayName": "Dirt Slab",             "base": "dirt",         "shape": "slab" },
+    { "id": "dirt_slab_top",        "displayName": "Dirt Slab (Top)",       "base": "dirt",         "shape": "slab_top" },
+    { "id": "dirt_stairs",          "displayName": "Dirt Stairs",           "base": "dirt",         "shape": "stairs" },
+    { "id": "bricks_slab",          "displayName": "Bricks Slab",           "base": "bricks",       "shape": "slab" },
+    { "id": "bricks_slab_top",      "displayName": "Bricks Slab (Top)",     "base": "bricks",       "shape": "slab_top" },
+    { "id": "bricks_stairs",        "displayName": "Bricks Stairs",         "base": "bricks",       "shape": "stairs" },
 
+    // ----- decorative blocks ---------------------------------------------------
     { "id": "smoothstone",     "displayName": "Smooth Stone",    "texture": "6,0", "mapColor": "#A1A2A1" },
     { "id": "shimmerrock",     "displayName": "Shimmerrock",     "texture": "10,0", "mapColor": "#060C1D" },
     { "id": "quartz",          "displayName": "Quartz",          "texture": "11,0", "mapColor": "#F1EBE2" },
@@ -89,6 +150,7 @@
     { "id": "whitebrick",      "displayName": "White Brick",     "texture": "8,5", "mapColor": "#E8E8E8" },
     { "id": "corn_block",      "displayName": "Corn Block",      "texture": "10,5", "top": "9,5", "mapColor": "#F8C818" },
 
+    // ----- cloth colors ---------------------------------------------------------
     { "id": "blackcloth",      "displayName": "Black Cloth",     "texture": "0,6", "mapColor": "#222222" },
     { "id": "darkgraycloth",   "displayName": "Dark Gray Cloth", "texture": "1,6", "mapColor": "#555555" },
     { "id": "graycloth",       "displayName": "Gray Cloth",      "texture": "2,6", "mapColor": "#888888" },
@@ -109,18 +171,21 @@
     { "id": "purple_cloth",    "displayName": "Purple Cloth",    "texture": "13,7", "mapColor": "#7A2BD0" },
     { "id": "magenta_cloth",   "displayName": "Magenta Cloth",   "texture": "14,7", "mapColor": "#D02BD0" },
 
-    { "id": "blue_glass",      "displayName": "Blue Glass",      "texture": "1,5", "shape": "glass", "translucent": true, "opaque": false, "transparent": true, "mapColor": "#7A7AFF" },
-    { "id": "red_glass",       "displayName": "Red Glass",       "texture": "2,5", "shape": "glass", "translucent": true, "opaque": false, "transparent": true, "mapColor": "#FF6A6A" },
-    { "id": "green_glass",     "displayName": "Green Glass",     "texture": "3,5", "shape": "glass", "translucent": true, "opaque": false, "transparent": true, "mapColor": "#6AFF6A" },
-    { "id": "yellow_glass",    "displayName": "Yellow Glass",    "texture": "4,5", "shape": "glass", "translucent": true, "opaque": false, "transparent": true, "mapColor": "#FFF06A" },
-    { "id": "mosaic_glass",    "displayName": "Mosaic Glass",    "texture": "4,6", "shape": "glass", "translucent": true, "opaque": false, "transparent": true, "mapColor": "#9AD0E8" },
+    // ----- glass colors ("translucent" = per-pixel alpha like real glass) ------
+    { "id": "blue_glass",      "displayName": "Blue Glass",      "texture": "1,5", "shape": "glass", "translucent": true, "mapColor": "#7A7AFF" },
+    { "id": "red_glass",       "displayName": "Red Glass",       "texture": "2,5", "shape": "glass", "translucent": true, "mapColor": "#FF6A6A" },
+    { "id": "green_glass",     "displayName": "Green Glass",     "texture": "3,5", "shape": "glass", "translucent": true, "mapColor": "#6AFF6A" },
+    { "id": "yellow_glass",    "displayName": "Yellow Glass",    "texture": "4,5", "shape": "glass", "translucent": true, "mapColor": "#FFF06A" },
+    { "id": "mosaic_glass",    "displayName": "Mosaic Glass",    "texture": "4,6", "shape": "glass", "mapColor": "#9AD0E8" },
 
+    // ----- bricks & quartz --------------------------------------------------------
     { "id": "purple_bricks",   "displayName": "Purple Bricks",   "texture": "5,6", "mapColor": "#7A4AB0" },
     { "id": "orange_bricks",   "displayName": "Orange Bricks",   "texture": "6,6", "mapColor": "#E87A2A" },
     { "id": "cobble_bricks",   "displayName": "Cobblestone Bricks","texture": "7,6", "mapColor": "#7A7A7A" },
     { "id": "gray_bricks",     "displayName": "Gray Bricks",     "texture": "8,6", "mapColor": "#9A9A9A" },
     { "id": "cobbled_quartz",  "displayName": "Cobbled Quartz",  "texture": "15,7", "mapColor": "#D8D2C8" },
 
+    // ----- plastics (texture = side, top/bottom differ) --------------------------
     { "id": "white_plastic",   "displayName": "White Plastic",   "texture": "1,8", "top": "0,8", "bottom": "2,8", "mapColor": "#E8E8E8" },
     { "id": "yellow_plastic",  "displayName": "Yellow Plastic",  "texture": "1,9", "top": "0,9", "bottom": "2,9", "mapColor": "#F0D018" },
     { "id": "blue_plastic",    "displayName": "Blue Plastic",    "texture": "1,10", "top": "0,10", "bottom": "2,10", "mapColor": "#3A6AF0" },
@@ -128,8 +193,10 @@
     { "id": "red_plastic",     "displayName": "Red Plastic",     "texture": "1,12", "top": "0,12", "bottom": "2,12", "mapColor": "#E03030" },
     { "id": "black_plastic",   "displayName": "Black Plastic",   "texture": "1,13", "top": "0,13", "bottom": "2,13", "mapColor": "#2A2A2A" },
 
-    { "id": "green_mushroom",  "displayName": "Green Mushroom",  "texture": "15,1", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "mapColor": "#3A8A3A" },
-
-    { "id": "torch",           "displayName": "Torch",           "texture": "12,2", "shape": "cross", "solid": false, "opaque": false, "transparent": true, "alpha": 0.95, "lightEmission": 14, "mapColor": "#FFAA00" }
+    // ----- misc / special ----------------------------------------------------------
+    { "id": "green_mushroom",  "displayName": "Green Mushroom",  "texture": "15,1", "shape": "cross", "mapColor": "#3A8A3A" },
+    // Torch: lightEmission 0..15 glows at night. Wall-mounting uses meta 1-4
+    // (lean directions), set automatically by the game when placed on a wall.
+    { "id": "torch",           "displayName": "Torch",           "texture": "12,2", "shape": "cross", "lightEmission": 14, "mapColor": "#FFAA00" }
   ]
 }

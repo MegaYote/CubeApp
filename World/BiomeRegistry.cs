@@ -84,7 +84,12 @@ namespace CubeApp
         public static void LoadFromJson(string json)
         {
             _biomes.Clear();
-            using var doc = JsonDocument.Parse(json);
+            // biomes.json is hand-edited: allow // and /* */ comments + trailing commas.
+            using var doc = JsonDocument.Parse(json, new JsonDocumentOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+            });
             if (!doc.RootElement.TryGetProperty("biomes", out var biomes)) return;
 
             foreach (var b in biomes.EnumerateArray())

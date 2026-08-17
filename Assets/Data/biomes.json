@@ -1,4 +1,31 @@
 {
+  // ============================================================================
+  // biomes.json — terrain biome definitions.
+  //
+  // Every world column gets exactly one biome, chosen by matching its noise
+  // temperature and humidity against the ranges below (first match wins in
+  // file order). Tune the ranges to reshape the world's layout.
+  //
+  // FIELDS:
+  //   id              unique lowercase id (used in code/debug)
+  //   displayName     name shown in debug/UI
+  //   temperature     { "min": -1..1, "max": -1..1 } matching range for noise temp
+  //   humidity        { "min": -1..1, "max": -1..1 } matching range for noise humidity
+  //   water           true = generate as ocean (terrain sits below water level)
+  //   baseHeight      0..1 ground elevation baseline (higher = higher ground)
+  //   heightVariation 0..1 how much the surface rolls up and down
+  //   surfaceBlock    block id for the top layer
+  //   fillBlock       block id for the layers below the surface
+  //   fillDepth       how many layers of fillBlock under the surface block
+  //   treeDensity     0..n trees per chunk attempt rate (0 = no trees)
+  //   treeType        "oak" | "pine" (which tree style to spawn)
+  //   fillMixBlock    optional second fill block scattered through the fill
+  //   fillMixChance   0..1 chance a fill layer is fillMixBlock instead
+  //
+  // DEFAULTS when omitted: baseHeight 0.4, heightVariation 0.1, surfaceBlock
+  // "grass", fillBlock "dirt", fillDepth 3, treeDensity 0, treeType "oak".
+  // ============================================================================
+
   "biomes": [
     {
       "id": "paradise",
