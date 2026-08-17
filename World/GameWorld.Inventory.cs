@@ -22,10 +22,11 @@ namespace CubeApp
         }
 
         // ---- dropped items (survival: mined blocks fall to the ground until collected) ----
-        /// <summary>Leaves drop nothing for now (sapling drops aren't implemented yet).</summary>
+        /// <summary>Leaves drop a sapling 1-in-10, otherwise nothing (Minecraft-style).</summary>
         private static readonly int _idLeaves = BlockRegistry.GetId("leaves");
-        /// <summary>Gravel drops flint instead of more gravel (test item drop).</summary>
+        /// <summary>Gravel drops flint 1-in-10, otherwise gravel (Minecraft-style).</summary>
         private static readonly int _idGravel = BlockRegistry.GetId("gravel");
+        private static readonly int _idSapling = BlockRegistry.GetId("sapling");
         // Flint is a GENUINE item (items.json), not a block - resolve through the item registry.
         private static readonly int _idFlint = ItemRegistry.GetId("flint");
         private readonly List<DroppedItem> _droppedItems = new();
