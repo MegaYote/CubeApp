@@ -36,6 +36,9 @@
     { "id": "flint_spear",      "displayName": "Flint Spear",      "category": "tool",     "itemTile": "4,0",  "stackSize": 1,  "durability": 80, "mapColor": "#8A8A8A" },
     { "id": "persimmon",        "displayName": "Persimmon",        "category": "food",     "itemTile": "0,2",  "stackSize": 64, "foodValue": 4, "mapColor": "#D2691E" },
 
+    // empty bucket — tile 1,2 on items.png; fill mechanics later
+    { "id": "bucket",           "displayName": "Bucket",           "category": "tool",     "itemTile": "1,2",  "stackSize": 1,  "mapColor": "#7A7A7A" },
+
     // "sap" is a BLOCK (see blocks.json); this entry only gives its dropped
     // item a dedicated icon from items.png. placedBlock "" clears the block's
     // placement: sap blocks are only obtainable by crafting (later) - for now the

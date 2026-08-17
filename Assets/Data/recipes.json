@@ -15,9 +15,6 @@
   // ============================================================================
 
   "recipes": [
-    // two planks (any rotation) -> 4 sticks
-    { "input": ["planks", "planks", "", ""], "output": "stick", "count": 4 },
-
     // four planks -> 1 workbench
     { "input": ["planks", "planks", "planks", "planks"], "output": "workbench", "count": 1 },
 
@@ -32,6 +29,10 @@
     // flint top-left, flint top-right, stick bottom-left, sap bottom-right ->
     // 1 flint pick (the sap binds the flint heads to the stick)
     { "input": ["flint", "flint", "stick", "sap"], "output": "flint_pickaxe", "count": 1 },
+
+    // plank top-left, plank top-right, sap bottom-left, sap bottom-right ->
+    // 1 bucket (empty by default)
+    { "input": ["planks", "planks", "sap", "sap"], "output": "bucket", "count": 1 },
 
     // two cobblestone -> 4 cobblestone slabs
     { "input": ["cobblestone", "cobblestone", "", ""], "output": "cobblestone_slab", "count": 4 },
