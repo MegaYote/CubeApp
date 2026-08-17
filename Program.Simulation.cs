@@ -61,7 +61,7 @@ namespace Cubuild
         // Cubuild C++ port: hold-to-mine. Progress = delta / (BASE_BREAK_TIME * hardness).
         // Switching target (or releasing) resets progress. Spawns shards every 20% and breaks the
         // block at 100%.
-        // The flint hatchet: LEFT-click mines logs AND planks 15% faster than before (which
+        // The flint hatchet: LEFT-click mines logs AND planks faster than before (which
         // itself was 15% over base, so ~32% total). Holding RIGHT-click on a log CHOPs it at
         // NORMAL speed (no bonus) and strips 1-4 planks on break; chopping a PLANK strips
         // it into 1-4 sticks instead. FLINT: left-click mining logs is 5% faster, and
@@ -70,7 +70,7 @@ namespace Cubuild
         private static readonly int _logBlockId = BlockRegistry.GetId("log");
         private static readonly int _plankBlockId = BlockRegistry.GetId("planks");
         private static readonly int _flintItemId = ItemRegistry.GetId("flint");
-        private static readonly float _hatchetSpeedMul = 1.15f * 1.15f; // compounded: 15% faster than the previous 15%
+        private static readonly float _hatchetSpeedMul = 1.15f * 1.75f; // compounded: 15% faster than the previous 15%
         private const float FlintLogSpeedMul = 1.05f; // flint's weak 5% log-mining bonus
 
         private void UpdateMining(TickInputState tickInput, float deltaSeconds)
