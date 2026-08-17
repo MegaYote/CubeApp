@@ -64,22 +64,30 @@ namespace Cubuild
         // The flint hatchet: LEFT-click mines logs AND planks 15% faster than before (which
         // itself was 15% over base, so ~32% total). Holding RIGHT-click on a log CHOPs it at
         // NORMAL speed (no bonus) and strips 1-4 planks on break; chopping a PLANK strips
-        // it into 1-4 sticks instead.
+        // it into 1-4 sticks instead. FLINT: left-click mining logs is 5% faster, and
+        // right-clicking a log CHOPs it into a workbench - always, no chance roll.
         private static readonly int _hatchetItemId = ItemRegistry.GetId("flint_hatchet");
         private static readonly int _logBlockId = BlockRegistry.GetId("log");
         private static readonly int _plankBlockId = BlockRegistry.GetId("planks");
+        private static readonly int _flintItemId = ItemRegistry.GetId("flint");
         private static readonly float _hatchetSpeedMul = 1.15f * 1.15f; // compounded: 15% faster than the previous 15%
+        private const float FlintLogSpeedMul = 1.05f; // flint's weak 5% log-mining bonus
 
         private void UpdateMining(TickInputState tickInput, float deltaSeconds)
         {
             if (World == null) return;
 
-            // Hatchet chop: holding RIGHT click on a log with the hatchet mines it like
-            // left click, but at NORMAL speed, and the log strips into 1-4 planks on
-            // break (the drop override lives in GameWorld.TryBreakBlockAt).
+            // Right-click CHOP modes (survival only): the hatchet strips logs/planks,
+            // flint converts a log into a workbench. Left-click always wins over chop.
             bool hatchetHeld = World.SelectedBlock == _hatchetItemId;
-            bool chopHeld = tickInput.PlaceHeld && hatchetHeld && !World.IsCreative;
-            bool miningHeld = tickInput.BreakHeld || chopHeld;
+            bool flintHeld = World.SelectedBlock == _flintItemId;
+            var chopKind = GameWorld.WoodChopKind.None;
+            if (!World.IsCreative && tickInput.PlaceHeld && !tickInput.BreakHeld)
+            {
+                if (hatchetHeld) chopKind = GameWorld.WoodChopKind.Hatchet;
+                else if (flintHeld) chopKind = GameWorld.WoodChopKind.Flint;
+            }
+            bool miningHeld = tickInput.BreakHeld || chopKind != GameWorld.WoodChopKind.None;
 
             if (miningHeld && _ignoreInteractFrames == 0)
             {
@@ -115,15 +123,23 @@ namespace Cubuild
                 if (pick.HasValue)
                 {
                     var target = pick.Value.Remove;
-                    // Chop mode only strips LOGS and PLANKS: anything else under the
-                    // crosshair is a no-op (no mining, no placement - tools never place anyway).
-                    if (chopHeld && !tickInput.BreakHeld
-                        && (!World.Chunks.TryGetLoadedBlock(target.x, target.y, target.z, out int chopProbe)
-                            || (chopProbe != _logBlockId && chopProbe != _plankBlockId)))
+                    // Chop mode only strips wood: the hatchet accepts logs + planks, flint
+                    // accepts only logs (it carves them into workbenches). Anything else
+                    // under the crosshair is a no-op (no mining, no placement - tools never
+                    // place anyway).
+                    if (chopKind != GameWorld.WoodChopKind.None)
                     {
-                        _miningTarget = null;
-                        _miningProgress = 0f;
-                        return;
+                        int chopProbe = 0;
+                        bool probeOk = World.Chunks.TryGetLoadedBlock(target.x, target.y, target.z, out chopProbe);
+                        bool validTarget = chopKind == GameWorld.WoodChopKind.Hatchet
+                            ? chopProbe == _logBlockId || chopProbe == _plankBlockId
+                            : chopProbe == _logBlockId;
+                        if (!probeOk || !validTarget)
+                        {
+                            _miningTarget = null;
+                            _miningProgress = 0f;
+                            return;
+                        }
                     }
                     bool sameTarget = _miningTarget.HasValue
                         && _miningTarget.Value.x == target.x
@@ -153,11 +169,18 @@ namespace Cubuild
                     }
 
                     float breakTime = BaseBreakTime * _miningBlockHardness;
-                    // Hatchet left-click bonus: 15% faster on logs AND planks (chops stay
-                    // normal speed).
-                    if (!chopHeld && (_miningBlockId == _logBlockId || _miningBlockId == _plankBlockId) && hatchetHeld)
+                    // Left-click speed bonuses (chops stay normal speed):
+                    // hatchet: ~32% faster on logs + planks; flint: 5% faster on logs.
+                    if (chopKind == GameWorld.WoodChopKind.None)
                     {
-                        breakTime /= _hatchetSpeedMul;
+                        if (hatchetHeld && (_miningBlockId == _logBlockId || _miningBlockId == _plankBlockId))
+                        {
+                            breakTime /= _hatchetSpeedMul;
+                        }
+                        else if (flintHeld && _miningBlockId == _logBlockId)
+                        {
+                            breakTime /= FlintLogSpeedMul;
+                        }
                     }
                     float oldProgress = _miningProgress;
                     _miningProgress += (float)(deltaSeconds / breakTime);
@@ -173,9 +196,9 @@ namespace Cubuild
                     if (_miningProgress >= 1f)
                     {
                         // Fully mined: break it (reuse the existing break path so particles,
-                        // remesh and sound all fire). A chop passes the flag so the log
-                        // strips into 1-4 planks instead of dropping itself.
-                        DeleteBlockAt(target.x, target.y, target.z, chopHeld && !tickInput.BreakHeld);
+                        // remesh and sound all fire). A chop passes the kind so the world
+                        // strips the block (hatchet: planks/sticks; flint: workbench).
+                        DeleteBlockAt(target.x, target.y, target.z, chopKind);
                         _miningTarget = null;
                         _miningProgress = 0f;
                     }
@@ -195,12 +218,13 @@ namespace Cubuild
         }
 
         // Breaks the block at a world position (shared by mining completion). Returns true if a
-        // block was removed. chopWood forwards to the world so a hatchet chop strips the log
-        // into 1-4 planks instead of the normal log drop.
-        private bool DeleteBlockAt(int x, int y, int z, bool chopWood = false)
+        // block was removed. chop forwards to the world so a hatchet chop strips the log
+        // into 1-4 planks (or planks into sticks), and a flint chop turns a log into a
+        // workbench instead of the normal log drop.
+        private bool DeleteBlockAt(int x, int y, int z, GameWorld.WoodChopKind chop = GameWorld.WoodChopKind.None)
         {
             if (World == null) return false;
-            if (!World.TryBreakBlockAt(x, y, z, out int removedBlockId, chopWood)) return false;
+            if (!World.TryBreakBlockAt(x, y, z, out int removedBlockId, chop)) return false;
             gpuRenderer?.SpawnBlockBreakParticles(x, y, z, removedBlockId, 12);
             needsMeshUpdate = true;
 

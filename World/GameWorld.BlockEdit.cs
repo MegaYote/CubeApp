@@ -8,6 +8,11 @@ namespace Cubuild
     {
         private static readonly int _idTorch = BlockRegistry.GetId("torch");
 
+        /// <summary>How a right-click "chop" breaks the targeted wood block: the hatchet
+        /// strips logs into planks / planks into sticks; flint converts a log straight
+        /// into a workbench (always, no chance roll).</summary>
+        public enum WoodChopKind { None = 0, Hatchet, Flint }
+
         public bool TryBreakBlock(PlayerState p, Point3D origin, Point3D direction, out int removedBlockId, out (int x, int y, int z) removedPos)
         {
             removedBlockId = 0;
@@ -26,32 +31,36 @@ namespace Cubuild
 
         /// <summary>Breaks the block at an exact world position (used by the mining system).
         /// Returns true if a block was removed, with its previous id for particle spawning.
-        /// With <paramref name="chopWood"/> (hatchet right-click) a log strips into 1-4
-        /// planks instead of dropping itself.</summary>
-        public bool TryBreakBlockAt(int x, int y, int z, out int removedBlockId, bool chopWood = false)
+        /// With <paramref name="chop"/> (hatchet or flint right-click) a log strips: the
+        /// hatchet makes 1-4 planks, flint makes a workbench (always). The hatchet can also
+        /// strip planks into 1-4 sticks.</summary>
+        public bool TryBreakBlockAt(int x, int y, int z, out int removedBlockId, WoodChopKind chop = WoodChopKind.None)
         {
             removedBlockId = 0;
             if (!Chunks.TryGetLoadedBlock(x, y, z, out removedBlockId)) return false;
             if (!Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId)) return false;
             // Survival: mining a block drops a physical item you have to collect - no teleporting
             // into the inventory. Leaves drop a sapling 1-in-10, otherwise nothing; gravel
-            // drops flint 1-in-10 (like Minecraft) and otherwise drops itself. Mining a log
-            // while holding flint works 1-in-10 and drops a workbench instead of a log.
-            // Stone mined with a bare FIST (no tool in hand) drops gravel 1-in-10, otherwise
-            // nothing; with any tool it drops itself as normal. A hatchet CHOP (right-click)
-            // strips any log into 1-4 planks - the plank count can be more than one, unlike
-            // every other drop.
+            // drops flint 1-in-10 (like Minecraft) and otherwise drops itself. Stone mined
+            // with a bare FIST (no tool in hand) drops gravel 1-in-10, otherwise nothing;
+            // with any tool it drops itself as normal. Right-click CHOP drops (hatchet: log
+            // -> 1-4 planks, plank -> 1-4 sticks; flint: log -> 1 workbench) can produce
+            // multiple items, unlike every other drop.
             int dropId = removedBlockId;
             int dropCount = 1;
-            if (chopWood && dropId == _idLog)
+            if (chop == WoodChopKind.Hatchet && dropId == _idLog)
             {
                 dropId = _idPlanks;
                 dropCount = 1 + _regenRandom.Next(4); // 1..4 planks
             }
-            else if (chopWood && dropId == _idPlanks)
+            else if (chop == WoodChopKind.Hatchet && dropId == _idPlanks)
             {
                 dropId = _idStick;
                 dropCount = 1 + _regenRandom.Next(4); // 1..4 sticks
+            }
+            else if (chop == WoodChopKind.Flint && dropId == _idLog)
+            {
+                dropId = _idWorkbench; // flint carves a log into a workbench, always
             }
             else if (dropId == _idLeaves)
             {
@@ -60,7 +69,6 @@ namespace Cubuild
                 dropId = RollLeafDrop(flintBonus: true, naturalDecay: false);
             }
             else if (dropId == _idGravel) dropId = _regenRandom.Next(10) == 0 ? _idFlint : _idGravel;
-            else if (dropId == _idLog && SelectedBlock == _idFlint && _regenRandom.Next(10) == 0) dropId = _idWorkbench;
             else if (dropId == _idStone && SelectedBlock <= 0) dropId = _regenRandom.Next(10) == 0 ? _idGravel : 0;
             if (!IsCreative && dropId > 0)
             {
