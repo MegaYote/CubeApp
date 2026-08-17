@@ -128,7 +128,13 @@ namespace Cubuild
                             existing.FoodValue = dto.FoodValue;
                             existing.MapColor = ParseMapColor(dto.MapColor ?? "#7F7F7F");
                             // PlacedBlock intentionally stays the block's own id: redefining the
-                            // item does not change what it places.
+                            // item does not change what it places. UNLESS the entry explicitly
+                            // declares "placedBlock": "" - that clears placement so crafting-only
+                            // blocks (like sap) can't be plopped down from the hotbar yet.
+                            if (dto.PlacedBlock != null)
+                            {
+                                existing.PlacedBlock = string.IsNullOrEmpty(dto.PlacedBlock) ? null : dto.PlacedBlock;
+                            }
                             continue;
                         }
 

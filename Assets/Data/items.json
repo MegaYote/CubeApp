@@ -37,7 +37,9 @@
     { "id": "persimmon",        "displayName": "Persimmon",        "category": "food",     "itemTile": "0,2",  "stackSize": 64, "foodValue": 4, "mapColor": "#D2691E" },
 
     // "sap" is a BLOCK (see blocks.json); this entry only gives its dropped
-    // item a dedicated icon from items.png.
-    { "id": "sap",              "displayName": "Sap",              "category": "misc",     "itemTile": "10,2", "stackSize": 64, "mapColor": "#442200" }
+    // item a dedicated icon from items.png. placedBlock "" clears the block's
+    // placement: sap blocks are only obtainable by crafting (later) - for now the
+    // dropped/held item is just an ingredient that can't be placed.
+    { "id": "sap",              "displayName": "Sap",              "category": "misc",     "itemTile": "10,2", "stackSize": 64, "placedBlock": "", "mapColor": "#442200" }
   ]
 }
