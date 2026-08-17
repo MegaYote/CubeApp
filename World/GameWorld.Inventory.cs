@@ -27,6 +27,7 @@ namespace Cubuild
         /// <summary>Gravel drops flint 1-in-10, otherwise gravel (Minecraft-style).</summary>
         private static readonly int _idGravel = BlockRegistry.GetId("gravel");
         private static readonly int _idSapling = BlockRegistry.GetId("sapling");
+        private static readonly int _idStick = ItemRegistry.GetId("stick");
         private static readonly int _idLog = BlockRegistry.GetId("log");
         private static readonly int _idStone = BlockRegistry.GetId("stone");
         private static readonly int _idWorkbench = BlockRegistry.GetId("workbench");

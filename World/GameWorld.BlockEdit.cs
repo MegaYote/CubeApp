@@ -38,7 +38,14 @@ namespace Cubuild
             // Stone mined with a bare FIST (no tool in hand) drops gravel 1-in-10, otherwise
             // nothing; with any tool it drops itself as normal.
             int dropId = removedBlockId;
-            if (dropId == _idLeaves) dropId = _regenRandom.Next(10) == 0 ? _idSapling : 0;
+            if (dropId == _idLeaves)
+            {
+                // Sapling chance stays as-is; with FLINT in hand the otherwise-nothing
+                // outcome gets its own 1-in-10 roll for a stick.
+                if (_regenRandom.Next(10) == 0) dropId = _idSapling;
+                else if (SelectedBlock == _idFlint && _regenRandom.Next(10) == 0) dropId = _idStick;
+                else dropId = 0;
+            }
             else if (dropId == _idGravel) dropId = _regenRandom.Next(10) == 0 ? _idFlint : _idGravel;
             else if (dropId == _idLog && SelectedBlock == _idFlint && _regenRandom.Next(10) == 0) dropId = _idWorkbench;
             else if (dropId == _idStone && SelectedBlock <= 0) dropId = _regenRandom.Next(10) == 0 ? _idGravel : 0;
