@@ -26,7 +26,7 @@
 
     // stick top-left, flint top-right, stick bottom-left -> 1 flint hatchet
     // (the L-shape matches in any rotation)
-    { "input": ["stick", "flint", "stick", ""], "output": "flint_axe", "count": 1 },
+    { "input": ["stick", "flint", "stick", ""], "output": "flint_hatchet", "count": 1 },
 
     // two cobblestone -> 4 cobblestone slabs
     { "input": ["cobblestone", "cobblestone", "", ""], "output": "cobblestone_slab", "count": 4 },

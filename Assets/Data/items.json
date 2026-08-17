@@ -30,7 +30,7 @@
   "items": [
     { "id": "flint",            "displayName": "Flint",            "category": "gemstone", "itemTile": "11,2", "stackSize": 64, "mapColor": "#6E6E6E" },
     { "id": "stick",            "displayName": "Stick",            "category": "misc",     "itemTile": "0,0",  "stackSize": 64, "mapColor": "#8A5A2B" },
-    { "id": "flint_axe",        "displayName": "Flint Hatchet",   "category": "tool",     "itemTile": "1,0",  "stackSize": 1,  "toolType": "axe",     "toolLevel": 2, "durability": 60, "mapColor": "#8A8A8A" },
+    { "id": "flint_hatchet",    "displayName": "Flint Hatchet",   "category": "tool",     "itemTile": "1,0",  "stackSize": 1,  "toolType": "axe",     "toolLevel": 2, "durability": 60, "mapColor": "#8A8A8A" },
     { "id": "flint_pickaxe",    "displayName": "Flint Pickaxe",    "category": "tool",     "itemTile": "2,0",  "stackSize": 1,  "toolType": "pickaxe",  "toolLevel": 2, "durability": 60, "mapColor": "#8A8A8A" },
     { "id": "flint_shovel",     "displayName": "Flint Shovel",     "category": "tool",     "itemTile": "3,0",  "stackSize": 1,  "toolType": "shovel",   "toolLevel": 2, "durability": 60, "mapColor": "#8A8A8A" },
     { "id": "flint_spear",      "displayName": "Flint Spear",      "category": "tool",     "itemTile": "4,0",  "stackSize": 1,  "durability": 80, "mapColor": "#8A8A8A" },
