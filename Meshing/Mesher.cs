@@ -491,6 +491,7 @@ namespace CubeApp
             int height = chunk.Height;
             int depth = chunk.Depth;
             int width = chunk.Width;
+            int torchId = BlockRegistry.GetId("torch");
 
             for (int x = 0; x < width; x++)
             {
@@ -511,6 +512,18 @@ namespace CubeApp
                         double brightness = ChunkLighting.Brightness(lighting.GetLight(wx, ly, wz));
                         var blockPos = new Point3D(wx, wy, wz);
 
+                        // Torches with wall meta (1-4, set by placement against a side face)
+                        // render as the full X-cross leaning away from the wall.
+                        if (id == torchId)
+                        {
+                            int meta = GetMetaAt(lookup, wx, wy, wz);
+                            if (meta >= 1 && meta <= 4)
+                            {
+                                EmitTorchWallFace(mesh, wx, wy, wz, tile, alpha, (float)brightness, meta);
+                                continue;
+                            }
+                        }
+
                         // Diagonal 0,0 -> 1,1 (top vertices first so the sprite isn't flipped).
                         mesh.Add(new MeshFace(
                             new Point3D(wx + 1, wy + 1, wz + 1),
@@ -528,6 +541,98 @@ namespace CubeApp
                     }
                 }
             }
+        }
+
+        // ---- Torch wall face (meta 1-4: leans +X/-X/+Z/-Z away from its wall) ---------
+
+        // A wall torch renders as ONE flat full-cell quad perpendicular to the wall, leaning
+        // ~22.5deg away from it (the Minecraft wall-torch look): the bottom edge sits flush
+        // against the wall face and the top edge tilts out into the cell. The full-cell
+        // extent keeps the sprite art at its natural size (the visible torch art is 2px wide
+        // x 10px tall out of the 16px tile, same world scale as the floor X-cross), and the
+        // axis-aligned normal gives clean axis UVs. Top vertices first, matching the cross
+        // plants.
+        private static void EmitTorchWallFace(List<MeshFace> mesh, int wx, int wy, int wz,
+            TextureRect tile, float alpha, float brightness, int meta)
+        {
+            const float lean = 0.414f;  // tan(22.5deg) - the classic wall-torch tilt
+            const float wallLift = 0.2f; // wall torches hang slightly higher than floor torches
+            var blockPos = new Point3D(wx, wy, wz);
+            Point3D p0, p1, p2, p3;
+            Point3D normal;
+            switch (meta)
+            {
+                case 1: // lean +X, wall at -X face
+                    p0 = new Point3D(wx + lean, wy + 1 + wallLift, wz + 0);
+                    p1 = new Point3D(wx + lean, wy + 1 + wallLift, wz + 1);
+                    p2 = new Point3D(wx, wy + wallLift, wz + 1);
+                    p3 = new Point3D(wx, wy + wallLift, wz + 0);
+                    normal = new Point3D(1, 0, 0);
+                    break;
+                case 2: // lean -X, wall at +X face
+                    p0 = new Point3D(wx + 1 - lean, wy + 1 + wallLift, wz + 0);
+                    p1 = new Point3D(wx + 1 - lean, wy + 1 + wallLift, wz + 1);
+                    p2 = new Point3D(wx + 1, wy + wallLift, wz + 1);
+                    p3 = new Point3D(wx + 1, wy + wallLift, wz + 0);
+                    normal = new Point3D(-1, 0, 0);
+                    break;
+                case 3: // lean +Z, wall at -Z face
+                    p0 = new Point3D(wx + 0, wy + 1 + wallLift, wz + lean);
+                    p1 = new Point3D(wx + 1, wy + 1 + wallLift, wz + lean);
+                    p2 = new Point3D(wx + 1, wy + wallLift, wz);
+                    p3 = new Point3D(wx + 0, wy + wallLift, wz);
+                    normal = new Point3D(0, 0, 1);
+                    break;
+                default: // meta 4: lean -Z, wall at +Z face
+                    p0 = new Point3D(wx + 0, wy + 1 + wallLift, wz + 1 - lean);
+                    p1 = new Point3D(wx + 1, wy + 1 + wallLift, wz + 1 - lean);
+                    p2 = new Point3D(wx + 1, wy + wallLift, wz + 1);
+                    p3 = new Point3D(wx + 0, wy + wallLift, wz + 1);
+                    normal = new Point3D(0, 0, -1);
+                    break;
+            }
+
+            mesh.Add(new MeshFace(p0, p1, p2, p3, tile, normal, blockPos, brightness, 1, 1, alpha));
+
+            // Fold copy: the same sprite folded 90deg around the front quad's art line so the
+            // torch reads solid from the sides. It's a tilted RECTANGLE (edges perpendicular,
+            // at 22.5deg) so both quads share the art line at every height - the sprites
+            // coincide with no double-image. The fudged normal (all components <= 0.5) forces
+            // the edge-based UV path, which is what maps the sprite onto the leaning line.
+            // Meta 1 offsets (mirrored/rotated for 2-4), all at z = +0.5:
+            //   top:  (-0.04798, 1.19126) / (0.87598, 0.80874)
+            //   bottom: (0.46198, -0.19126) / (-0.46198, 0.19126)
+            var foldNormal = new Point3D(0.001f, 0.001f, 0.49f);
+            Point3D q0, q1, q2, q3;
+            switch (meta)
+            {
+                case 1:
+                    q0 = new Point3D(wx - 0.04798f, wy + 1.19126f + wallLift, wz + 0.5f);
+                    q1 = new Point3D(wx + 0.87598f, wy + 0.80874f + wallLift, wz + 0.5f);
+                    q2 = new Point3D(wx + 0.46198f, wy - 0.19126f + wallLift, wz + 0.5f);
+                    q3 = new Point3D(wx - 0.46198f, wy + 0.19126f + wallLift, wz + 0.5f);
+                    break;
+                case 2:
+                    q0 = new Point3D(wx + 1.04798f, wy + 1.19126f + wallLift, wz + 0.5f);
+                    q1 = new Point3D(wx + 0.12402f, wy + 0.80874f + wallLift, wz + 0.5f);
+                    q2 = new Point3D(wx + 0.53802f, wy - 0.19126f + wallLift, wz + 0.5f);
+                    q3 = new Point3D(wx + 1.46198f, wy + 0.19126f + wallLift, wz + 0.5f);
+                    break;
+                case 3:
+                    q0 = new Point3D(wx + 0.5f, wy + 1.19126f + wallLift, wz - 0.04798f);
+                    q1 = new Point3D(wx + 0.5f, wy + 0.80874f + wallLift, wz + 0.87598f);
+                    q2 = new Point3D(wx + 0.5f, wy - 0.19126f + wallLift, wz + 0.46198f);
+                    q3 = new Point3D(wx + 0.5f, wy + 0.19126f + wallLift, wz - 0.46198f);
+                    break;
+                default:
+                    q0 = new Point3D(wx + 0.5f, wy + 1.19126f + wallLift, wz + 1.04798f);
+                    q1 = new Point3D(wx + 0.5f, wy + 0.80874f + wallLift, wz + 0.12402f);
+                    q2 = new Point3D(wx + 0.5f, wy - 0.19126f + wallLift, wz + 0.53802f);
+                    q3 = new Point3D(wx + 0.5f, wy + 0.19126f + wallLift, wz + 1.46198f);
+                    break;
+            }
+
+            mesh.Add(new MeshFace(q0, q1, q2, q3, tile, foldNormal, blockPos, brightness, 1, 1, alpha));
         }
 
         // ---- Special-solid pass (slabs, stairs) ---------------------------------------

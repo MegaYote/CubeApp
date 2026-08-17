@@ -6,6 +6,8 @@ namespace CubeApp
 {
     public sealed partial class GameWorld : IDisposable
     {
+        private static readonly int _idTorch = BlockRegistry.GetId("torch");
+
         public bool TryBreakBlock(PlayerState p, Point3D origin, Point3D direction, out int removedBlockId, out (int x, int y, int z) removedPos)
         {
             removedBlockId = 0;
@@ -48,6 +50,9 @@ namespace CubeApp
             // block, it loses support and breaks automatically.  The break cascades upward
             // so a multi-block plant can be supported in the future.
             BreakUnsupportedCross(x, y + 1, z);
+            // Wall torches attach to the SIDE of a block; if their wall is removed they
+            // lose their support too (a floor torch above is handled by the cross cascade).
+            BreakUnsupportedWallTorches(x, y, z);
 
             return true;
         }
@@ -132,6 +137,28 @@ namespace CubeApp
                 return false;
             }
 
+            // Torches: placed on a top face -> floor torch (X-cross); placed against a
+            // side face -> wall torch (single quad leaning away from the wall, meta 1-4).
+            // A wall torch needs a solid wall behind it; torches can't hang from ceilings.
+            if (blockToPlace == _idTorch)
+            {
+                if (normal.Y < 0) return false;
+                if (normal.Y == 0)
+                {
+                    int wallX = place.x - (int)normal.X;
+                    int wallZ = place.z - (int)normal.Z;
+                    if (!Chunks.TryGetLoadedBlock(wallX, place.y, wallZ, out var wallId)
+                        || wallId == BlockRegistry.AirId
+                        || !BlockRegistry.IsSolid(wallId)
+                        || BlockRegistry.IsCross(wallId)
+                        || IsReplaceableFluid(wallId))
+                    {
+                        return false;
+                    }
+                    meta = normal.X > 0 ? 1 : normal.X < 0 ? 2 : normal.Z > 0 ? 3 : 4;
+                }
+            }
+
             if (WouldBlockIntersectPlayer(p, place.x, place.y, place.z, blockToPlace, meta)) return false;
             if (!Chunks.TrySetBlock(place.x, place.y, place.z, blockToPlace, meta)) return false;
             if (!IsCreative) TryConsumeFromInventory(spendId, 1);
@@ -156,7 +183,11 @@ namespace CubeApp
             var editedChunk = new ChunkCoordinates(ebLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
             Mesher.RequestImmediateRemesh(editedChunk);
             BlockEdited?.Invoke(x, y, z, blockId, meta);
-            if (blockId == BlockRegistry.AirId) BreakUnsupportedCross(x, y + 1, z);
+            if (blockId == BlockRegistry.AirId)
+            {
+                BreakUnsupportedCross(x, y + 1, z);
+                BreakUnsupportedWallTorches(x, y, z);
+            }
             return true;
         }
 
@@ -215,6 +246,27 @@ namespace CubeApp
             BlockEdited?.Invoke(x, y, z, 0, 0);
             // Cascade upward — if there's another cross block above, it also loses support.
             BreakUnsupportedCross(x, y + 1, z);
+        }
+
+        /// <summary>Breaks any wall torches whose wall block was just removed. A torch at the
+        /// given 4-neighbor cell with the matching lean meta has its wall at (x, y, z).</summary>
+        private void BreakUnsupportedWallTorches(int x, int y, int z)
+        {
+            BreakWallTorchAt(x + 1, y, z, 1); // leans +X -> wall at torch.X-1 == x
+            BreakWallTorchAt(x - 1, y, z, 2); // leans -X -> wall at torch.X+1 == x
+            BreakWallTorchAt(x, y, z + 1, 3); // leans +Z -> wall at torch.Z-1 == z
+            BreakWallTorchAt(x, y, z - 1, 4); // leans -Z -> wall at torch.Z+1 == z
+        }
+
+        private void BreakWallTorchAt(int x, int y, int z, int expectedMeta)
+        {
+            if (!Chunks.TryGetLoadedBlockAndMeta(x, y, z, out var id, out var meta)) return;
+            if (id != _idTorch || meta != expectedMeta) return;
+            Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId);
+            BlockTicks?.OnBlockChanged(x, y, z);
+            int layer = ChunkManager.LayerForWorldY(y);
+            Mesher.RequestImmediateRemesh(new ChunkCoordinates(layer, WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            BlockEdited?.Invoke(x, y, z, 0, 0);
         }
 
         private static string SlabMaterialOf(int id)

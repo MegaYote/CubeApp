@@ -335,7 +335,22 @@ namespace CubeApp
                     _ => new[] { (0.0, 0.0, 0.0, 1.0, 1.0, 0.5), (0.0, 0.0, 0.5, 1.0, 0.5, 1.0) },
                 };
             }
-            if (BlockRegistry.IsCross(id)) return new[] { (0.25, 0.0, 0.25, 0.75, 0.8, 0.75) };
+            if (BlockRegistry.IsCross(id))
+            {
+                // Wall torches (meta 1-4): raised like the render (0.2) and hugging the wall
+                // plane they're attached to instead of centered in the cell.
+                if (id == _idTorch && meta >= 1 && meta <= 4)
+                {
+                    return meta switch
+                    {
+                        1 => new[] { (0.0, 0.2, 0.3, 0.5, 0.9, 0.7) },  // lean +X, wall at -X
+                        2 => new[] { (0.5, 0.2, 0.3, 1.0, 0.9, 0.7) },  // lean -X, wall at +X
+                        3 => new[] { (0.3, 0.2, 0.0, 0.7, 0.9, 0.5) },  // lean +Z, wall at -Z
+                        _ => new[] { (0.3, 0.2, 0.5, 0.7, 0.9, 1.0) },  // lean -Z, wall at +Z
+                    };
+                }
+                return new[] { (0.25, 0.0, 0.25, 0.75, 0.8, 0.75) };
+            }
             return new[] { (0.0, 0.0, 0.0, 1.0, 1.0, 1.0) };
         }
 
