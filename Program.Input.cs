@@ -49,8 +49,8 @@ namespace Cubuild
                 }
             }
             // Clicking while a menu-style overlay is open must NOT re-capture the mouse - the
-            // E-menu / biome menu are only closed by E/ESC now.
-            if (screen == GameScreen.Playing && !mouseLook && !handEditorOpen && !inventoryOpen && !biomeMenuOpen
+            // E-menu / crafting / biome menu are only closed by E/ESC now.
+            if (screen == GameScreen.Playing && !mouseLook && !handEditorOpen && !inventoryOpen && !craftingOpen && !biomeMenuOpen
                 && (frameInput.BreakBlockPressed || frameInput.PlaceBlockPressed))
             {
                 EnableMouseLook();

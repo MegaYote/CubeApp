@@ -22,7 +22,7 @@ namespace Cubuild
             if (screen == GameScreen.Paused || screen != GameScreen.Playing && screen != GameScreen.Dead) return;
             if (World == null) return;
             // Menu overlays free the mouse; don't move, mine, or place while they're open.
-            if (handEditorOpen || inventoryOpen || biomeMenuOpen)
+            if (handEditorOpen || inventoryOpen || craftingOpen || biomeMenuOpen)
             {
                 tickInput = new TickInputState(false, false, false, false, false, false, false, false, false, Vector2.Zero);
             }
