@@ -15,9 +15,6 @@
   // ============================================================================
 
   "recipes": [
-    // one log -> 4 planks
-    { "input": ["log", "", "", ""], "output": "planks", "count": 4 },
-
     // two planks (any rotation) -> 4 sticks
     { "input": ["planks", "planks", "", ""], "output": "stick", "count": 4 },
 

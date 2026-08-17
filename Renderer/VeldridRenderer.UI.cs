@@ -324,10 +324,11 @@ namespace Cubuild.Renderer
             // Same scale as the survival E-menu (3x) so both panels feel identical.
             const float uiScale = 3.0f;
             const float imgW = 111f, imgH = 49f;
-            // Inventory section: 10 columns at 18px design steps = 178px wide -> 534 on screen.
-            const float invW = 178f * uiScale;
+            // Inventory section below the panel uses the E-menu texture (190x111 design),
+            // which is wider than the crafting art (111x49); the art floats centered above it.
+            const float invW = 190f * uiScale;
             float winW = invW;
-            float winH = imgH * uiScale + 30f + 4f * 18f * uiScale + 12f + 16f * uiScale + 24f;
+            float winH = imgH * uiScale + 24f + 111f * uiScale + 24f;
             float winX = (displaySize.X - winW) / 2f;
             float winY = Math.Max(30f, (displaySize.Y - winH) / 2f);
             // Panel art sits centered above the inventory section.
@@ -406,36 +407,68 @@ namespace Cubuild.Renderer
                 }
             }
 
-            // ---- player inventory below the panel (Minecraft-style) ----
-            // Bag: 4 rows x 10; hotbar: 1 row x 10. Same 48px cells / 54px steps as the
-            // E-menu, same click kinds (0 = bag slot index, 1 = hotbar index) so the cursor
-            // carries items between inventory and grid.
+            // ---- player inventory below the panel ----
+            // Uses the SAME UI texture as the regular E-menu (inventory.png), placed directly
+            // beneath the crafting art. Its painted bag/hotbar slots get invisible buttons at
+            // the exact E-menu coordinates (design px: bag (5+18c, 6+18r), hotbar (5+18i, 88),
+            // cell 16x16, 1px border inset) and the same click kinds (0 = bag, 1 = hotbar).
             float slotPx = 16f * uiScale;
-            float stepX = 18f * uiScale, stepY = 18f * uiScale;
-            float invTop = imgH * uiScale + 30f;
-            float hotbarTop = invTop + 4f * stepY + 12f;
-            uint slotBorder = ImGui.ColorConvertFloat4ToU32(new Vector4(0.55f, 0.58f, 0.62f, 0.9f));
-            uint slotFill = ImGui.ColorConvertFloat4ToU32(new Vector4(0.13f, 0.16f, 0.19f, 1f));
-            float borderPx = 3f; // 1 design px at 3x
-            for (int row = 0; row < 4; row++)
+            float borderPx = 1f * uiScale;
+            float invTop = imgH * uiScale + 24f;
+            if (_inventoryImGuiId != IntPtr.Zero)
             {
-                for (int col = 0; col < 10; col++)
+                var invTopLeft = contentScreen + new Vector2(0f, invTop);
+                fg.AddImage(_inventoryImGuiId, invTopLeft, invTopLeft + new Vector2(190f, 111f) * uiScale, Vector2.Zero, Vector2.One);
+                for (int row = 0; row < 4; row++)
                 {
-                    int slot = row * 10 + col;
-                    var contents = _hud.BagSlots != null && slot < _hud.BagSlots.Count
-                        ? _hud.BagSlots[slot] : default;
-                    var pos = new Vector2(col * stepX, invTop + row * stepY);
-                    DrawCraftingInvCell($"cbg{slot}", contents.ItemId, contents.Count, pos, 0, slot,
-                        slotPx, borderPx, slotFill, slotBorder, contentScreen, fg, fgTextCol);
+                    for (int col = 0; col < 10; col++)
+                    {
+                        int slot = row * 10 + col;
+                        var contents = _hud.BagSlots != null && slot < _hud.BagSlots.Count
+                            ? _hud.BagSlots[slot] : default;
+                        var pos = new Vector2((5f + col * 18f) * uiScale + borderPx,
+                            invTop + (6f + row * 18f) * uiScale + borderPx);
+                        ImGui.SetCursorPos(pos);
+                        DrawInventorySlotCellAt($"cbg{slot}", contents.ItemId, contents.Count, 0, slot,
+                            slotPx, fg, fgTextCol);
+                    }
+                }
+                for (int i = 0; i < 10; i++)
+                {
+                    int bid = _hud.Hotbar != null && i < _hud.Hotbar.Count ? _hud.Hotbar[i] : 0;
+                    int count = _hud.HotbarCounts != null && i < _hud.HotbarCounts.Count ? _hud.HotbarCounts[i] : 0;
+                    var pos = new Vector2((5f + i * 18f) * uiScale + borderPx,
+                        invTop + 88f * uiScale + borderPx);
+                    ImGui.SetCursorPos(pos);
+                    DrawInventorySlotCellAt($"chb{i}", bid, count, 1, i, slotPx, fg, fgTextCol);
                 }
             }
-            for (int i = 0; i < 10; i++)
+            else
             {
-                int bid = _hud.Hotbar != null && i < _hud.Hotbar.Count ? _hud.Hotbar[i] : 0;
-                int count = _hud.HotbarCounts != null && i < _hud.HotbarCounts.Count ? _hud.HotbarCounts[i] : 0;
-                var pos = new Vector2(i * stepX, hotbarTop);
-                DrawCraftingInvCell($"chb{i}", bid, count, pos, 1, i,
-                    slotPx, borderPx, slotFill, slotBorder, contentScreen, fg, fgTextCol);
+                // No texture: plain grey cells so the menu is still usable.
+                float stepX = 18f * uiScale, stepY = 18f * uiScale;
+                uint slotBorder = ImGui.ColorConvertFloat4ToU32(new Vector4(0.55f, 0.58f, 0.62f, 0.9f));
+                uint slotFill = ImGui.ColorConvertFloat4ToU32(new Vector4(0.13f, 0.16f, 0.19f, 1f));
+                for (int row = 0; row < 4; row++)
+                {
+                    for (int col = 0; col < 10; col++)
+                    {
+                        int slot = row * 10 + col;
+                        var contents = _hud.BagSlots != null && slot < _hud.BagSlots.Count
+                            ? _hud.BagSlots[slot] : default;
+                        var pos = new Vector2(col * stepX, invTop + row * stepY);
+                        DrawCraftingInvCell($"cbg{slot}", contents.ItemId, contents.Count, pos, 0, slot,
+                            slotPx, 3f, slotFill, slotBorder, contentScreen, fg, fgTextCol);
+                    }
+                }
+                for (int i = 0; i < 10; i++)
+                {
+                    int bid = _hud.Hotbar != null && i < _hud.Hotbar.Count ? _hud.Hotbar[i] : 0;
+                    int count = _hud.HotbarCounts != null && i < _hud.HotbarCounts.Count ? _hud.HotbarCounts[i] : 0;
+                    var pos = new Vector2(i * stepX, invTop + 4f * stepY + 12f);
+                    DrawCraftingInvCell($"chb{i}", bid, count, pos, 1, i,
+                        slotPx, 3f, slotFill, slotBorder, contentScreen, fg, fgTextCol);
+                }
             }
 
             ImGui.End();
