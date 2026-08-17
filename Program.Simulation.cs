@@ -61,11 +61,13 @@ namespace Cubuild
         // Cubuild C++ port: hold-to-mine. Progress = delta / (BASE_BREAK_TIME * hardness).
         // Switching target (or releasing) resets progress. Spawns shards every 20% and breaks the
         // block at 100%.
-        // The flint hatchet: LEFT-click mines logs 15% faster than before (which itself was 15%
-        // over base, so ~32% total). Holding RIGHT-click on a log CHOPs it at NORMAL speed
-        // (no bonus) and strips 1-4 planks on break.
+        // The flint hatchet: LEFT-click mines logs AND planks 15% faster than before (which
+        // itself was 15% over base, so ~32% total). Holding RIGHT-click on a log CHOPs it at
+        // NORMAL speed (no bonus) and strips 1-4 planks on break; chopping a PLANK strips
+        // it into 1-4 sticks instead.
         private static readonly int _hatchetItemId = ItemRegistry.GetId("flint_hatchet");
         private static readonly int _logBlockId = BlockRegistry.GetId("log");
+        private static readonly int _plankBlockId = BlockRegistry.GetId("planks");
         private static readonly float _hatchetSpeedMul = 1.15f * 1.15f; // compounded: 15% faster than the previous 15%
 
         private void UpdateMining(TickInputState tickInput, float deltaSeconds)
@@ -113,11 +115,11 @@ namespace Cubuild
                 if (pick.HasValue)
                 {
                     var target = pick.Value.Remove;
-                    // Chop mode only strips LOGS: anything else under the crosshair is a
-                    // no-op (no mining, no placement - tools never place anyway).
+                    // Chop mode only strips LOGS and PLANKS: anything else under the
+                    // crosshair is a no-op (no mining, no placement - tools never place anyway).
                     if (chopHeld && !tickInput.BreakHeld
                         && (!World.Chunks.TryGetLoadedBlock(target.x, target.y, target.z, out int chopProbe)
-                            || chopProbe != _logBlockId))
+                            || (chopProbe != _logBlockId && chopProbe != _plankBlockId)))
                     {
                         _miningTarget = null;
                         _miningProgress = 0f;
@@ -151,8 +153,9 @@ namespace Cubuild
                     }
 
                     float breakTime = BaseBreakTime * _miningBlockHardness;
-                    // Hatchet left-click bonus: 15% faster on logs (chops stay normal speed).
-                    if (!chopHeld && _miningBlockId == _logBlockId && hatchetHeld)
+                    // Hatchet left-click bonus: 15% faster on logs AND planks (chops stay
+                    // normal speed).
+                    if (!chopHeld && (_miningBlockId == _logBlockId || _miningBlockId == _plankBlockId) && hatchetHeld)
                     {
                         breakTime /= _hatchetSpeedMul;
                     }

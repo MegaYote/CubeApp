@@ -48,6 +48,11 @@ namespace Cubuild
                 dropId = _idPlanks;
                 dropCount = 1 + _regenRandom.Next(4); // 1..4 planks
             }
+            else if (chopWood && dropId == _idPlanks)
+            {
+                dropId = _idStick;
+                dropCount = 1 + _regenRandom.Next(4); // 1..4 sticks
+            }
             else if (dropId == _idLeaves)
             {
                 // Natural leaf drop: sapling 1-in-10, sap (1-in-20 hand / 1-in-10 flint),
