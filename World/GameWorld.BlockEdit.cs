@@ -40,11 +40,9 @@ namespace Cubuild
             int dropId = removedBlockId;
             if (dropId == _idLeaves)
             {
-                // Sapling chance stays as-is; with FLINT in hand the otherwise-nothing
+                // Natural leaf drop: 1-in-10 sapling; with FLINT in hand the otherwise-nothing
                 // outcome gets its own 1-in-10 roll for a stick.
-                if (_regenRandom.Next(10) == 0) dropId = _idSapling;
-                else if (SelectedBlock == _idFlint && _regenRandom.Next(10) == 0) dropId = _idStick;
-                else dropId = 0;
+                dropId = RollLeafDrop(flintBonus: true);
             }
             else if (dropId == _idGravel) dropId = _regenRandom.Next(10) == 0 ? _idFlint : _idGravel;
             else if (dropId == _idLog && SelectedBlock == _idFlint && _regenRandom.Next(10) == 0) dropId = _idWorkbench;
@@ -166,11 +164,24 @@ namespace Cubuild
             }
         }
 
+        // The leaf drop table: 1-in-10 sapling, always. The flint-stick bonus only applies
+        // to HAND-breaking (there's no flint in a hand during natural decay, so decay calls
+        // this with flintBonus:false) — the sapling chance is identical either way.
+        private int RollLeafDrop(bool flintBonus)
+        {
+            if (_regenRandom.Next(10) == 0) return _idSapling;
+            if (flintBonus && SelectedBlock == _idFlint && _regenRandom.Next(10) == 0) return _idStick;
+            return 0;
+        }
+
         private void RemoveDecayedLeaf(int x, int y, int z)
         {
+            // Only pop it if it's still a leaf — the player may have built over it (or
+            // another mechanic changed it) during the countdown.
+            if (!Chunks.TryGetLoadedBlock(x, y, z, out int currentId) || currentId != _idLeaves) return;
             if (!Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId)) return;
-            // Decayed leaves roll the same sapling chance as hand-broken ones.
-            int dropId = _regenRandom.Next(10) == 0 ? _idSapling : 0;
+            // Decayed leaves roll the SAME drop as hand-broken ones (no flint bonus).
+            int dropId = RollLeafDrop(flintBonus: false);
             if (!IsCreative && dropId > 0)
             {
                 SpawnItemDrop(dropId, 1, new Point3D(x + 0.5, y + 0.5, z + 0.5));
