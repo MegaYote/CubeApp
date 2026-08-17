@@ -25,8 +25,10 @@ namespace Cubuild
         }
 
         /// <summary>Breaks the block at an exact world position (used by the mining system).
-        /// Returns true if a block was removed, with its previous id for particle spawning.</summary>
-        public bool TryBreakBlockAt(int x, int y, int z, out int removedBlockId)
+        /// Returns true if a block was removed, with its previous id for particle spawning.
+        /// With <paramref name="chopWood"/> (hatchet right-click) a log strips into 1-4
+        /// planks instead of dropping itself.</summary>
+        public bool TryBreakBlockAt(int x, int y, int z, out int removedBlockId, bool chopWood = false)
         {
             removedBlockId = 0;
             if (!Chunks.TryGetLoadedBlock(x, y, z, out removedBlockId)) return false;
@@ -36,9 +38,17 @@ namespace Cubuild
             // drops flint 1-in-10 (like Minecraft) and otherwise drops itself. Mining a log
             // while holding flint works 1-in-10 and drops a workbench instead of a log.
             // Stone mined with a bare FIST (no tool in hand) drops gravel 1-in-10, otherwise
-            // nothing; with any tool it drops itself as normal.
+            // nothing; with any tool it drops itself as normal. A hatchet CHOP (right-click)
+            // strips any log into 1-4 planks - the plank count can be more than one, unlike
+            // every other drop.
             int dropId = removedBlockId;
-            if (dropId == _idLeaves)
+            int dropCount = 1;
+            if (chopWood && dropId == _idLog)
+            {
+                dropId = _idPlanks;
+                dropCount = 1 + _regenRandom.Next(4); // 1..4 planks
+            }
+            else if (dropId == _idLeaves)
             {
                 // Natural leaf drop: sapling 1-in-10, sap (1-in-20 hand / 1-in-10 flint),
                 // then the flint-stick bonus.
@@ -49,7 +59,7 @@ namespace Cubuild
             else if (dropId == _idStone && SelectedBlock <= 0) dropId = _regenRandom.Next(10) == 0 ? _idGravel : 0;
             if (!IsCreative && dropId > 0)
             {
-                SpawnItemDrop(dropId, 1, new Point3D(x + 0.5, y + 0.5, z + 0.5));
+                SpawnItemDrop(dropId, dropCount, new Point3D(x + 0.5, y + 0.5, z + 0.5));
             }
             // Chopping away a tree's logs orphan its canopy: any leaves no longer within
             // reach of a remaining log decompose (Minecraft-style).
