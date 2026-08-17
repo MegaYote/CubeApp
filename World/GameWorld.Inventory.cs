@@ -27,6 +27,8 @@ namespace CubeApp
         /// <summary>Gravel drops flint 1-in-10, otherwise gravel (Minecraft-style).</summary>
         private static readonly int _idGravel = BlockRegistry.GetId("gravel");
         private static readonly int _idSapling = BlockRegistry.GetId("sapling");
+        private static readonly int _idLog = BlockRegistry.GetId("log");
+        private static readonly int _idWorkbench = BlockRegistry.GetId("workbench");
         // Flint is a GENUINE item (items.json), not a block - resolve through the item registry.
         private static readonly int _idFlint = ItemRegistry.GetId("flint");
         private readonly List<DroppedItem> _droppedItems = new();

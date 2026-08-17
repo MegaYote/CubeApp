@@ -33,10 +33,12 @@ namespace CubeApp
             if (!Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId)) return false;
             // Survival: mining a block drops a physical item you have to collect - no teleporting
             // into the inventory. Leaves drop a sapling 1-in-10, otherwise nothing; gravel
-            // drops flint 1-in-10 (like Minecraft) and otherwise drops itself.
+            // drops flint 1-in-10 (like Minecraft) and otherwise drops itself. Mining a log
+            // while holding flint works 1-in-10 and drops a workbench instead of a log.
             int dropId = removedBlockId;
             if (dropId == _idLeaves) dropId = _regenRandom.Next(10) == 0 ? _idSapling : 0;
             else if (dropId == _idGravel) dropId = _regenRandom.Next(10) == 0 ? _idFlint : _idGravel;
+            else if (dropId == _idLog && SelectedBlock == _idFlint && _regenRandom.Next(10) == 0) dropId = _idWorkbench;
             if (!IsCreative && dropId > 0)
             {
                 SpawnItemDrop(dropId, 1, new Point3D(x + 0.5, y + 0.5, z + 0.5));

@@ -75,7 +75,7 @@
 
     // ----- building materials ------------------------------------------------
     { "id": "bricks",          "displayName": "Bricks",          "texture": "8,4", "mapColor": "#964640" },
-    { "id": "log",             "displayName": "Log",             "texture": "4,1", "top": "5,1", "bottom": "5,1", "mapColor": "#6B4A28", "zombieCanBreak": true, "zombieBreakSpeed": "Medium" },
+    { "id": "log",             "displayName": "Log",             "texture": "4,1", "top": "5,1", "bottom": "5,1", "hardness": 4 /* 4 = 2x the default wood mining time */, "mapColor": "#6B4A28", "zombieCanBreak": true, "zombieBreakSpeed": "Medium" },
     { "id": "leaves",          "displayName": "Leaves",          "texture": "4,3", "shape": "cutout", "mapColor": "#3A7A1F", "zombieCanBreak": true, "zombieBreakSpeed": "Fast" },
     { "id": "glass",           "displayName": "Glass",           "texture": "0,5", "shape": "glass", "mapColor": "#C8C8C8", "zombieCanBreak": true, "zombieBreakSpeed": "Medium" },
     { "id": "bomb",            "displayName": "Bomb",            "texture": "8,0", "top": "9,0", "mapColor": "#333333" },
