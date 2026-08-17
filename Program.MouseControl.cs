@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Cubuild.Renderer;
 using Cubuild.World;
 using Veldrid;
@@ -15,6 +16,11 @@ namespace Cubuild
 {
     public sealed partial class Program : IDisposable
     {
+        // SDL2 warp: parks the OS cursor at the window center. Exposed by SDL2.dll which ships
+        // next to the exe (used when menus open so the pointer is already at the crosshair).
+        [DllImport("SDL2", CallingConvention = CallingConvention.Cdecl)]
+        private static extern void SDL_WarpMouseInWindow(IntPtr window, int x, int y);
+
         private static double Dot(Point3D a, Point3D b) => a.X * b.X + a.Y * b.Y + a.Z * b.Z;
 
         // ------------------------------------------------------------------
@@ -47,6 +53,13 @@ namespace Cubuild
             TrySetBoolProperty(sdlWindow, "MouseRelativeMode", captured);
             TrySetBoolProperty(sdlWindow, "InputGrabbed", captured);
             TrySetBoolProperty(sdlWindow, "MouseGrabbed", captured);
+            if (!captured)
+            {
+                // Menus open with the pointer ALREADY at the crosshair (window center) instead of
+                // wherever the OS cursor drifted while relative mouse mode was hiding it. SDL
+                // injects a motion event, so ImGui picks it up on the next frame too.
+                try { SDL_WarpMouseInWindow(sdlWindow.SdlWindowHandle, sdlWindow.Width / 2, sdlWindow.Height / 2); } catch { }
+            }
         }
 
         private static void TrySetBoolProperty(Sdl2Window sdlWindow, string propertyName, bool value)
