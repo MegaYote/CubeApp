@@ -313,6 +313,10 @@ namespace Cubuild.Renderer
         //   2x2 grid cells at (7,7),(24,7),(7,25),(24,25), each 16x17
         //   result well (79,16) 11x17 — left click crafts the shown recipe
         //   cursor cell (91,16) 13x17 — shows the held stack (display only)
+        // Below the panel: the player inventory, Minecraft-style — 4 rows x 10 bag slots
+        // + a hotbar row (10-wide, so the window is wider than the panel art, which floats
+        // centered above it). Bag/hotbar slots reuse E-menu click kinds 0/1 so the cursor
+        // drags items straight from the inventory into the crafting grid.
         // Clicks ride the inventory click queue: kind 4 = grid slot (target 0..3),
         // kind 5 = result. Program maps them to GameWorld.CraftingClickSlot / TryCraft.
         private void DrawCraftingWindow(Vector2 displaySize)
@@ -320,9 +324,14 @@ namespace Cubuild.Renderer
             // Same scale as the survival E-menu (3x) so both panels feel identical.
             const float uiScale = 3.0f;
             const float imgW = 111f, imgH = 49f;
-            float winW = imgW * uiScale, winH = imgH * uiScale;
+            // Inventory section: 10 columns at 18px design steps = 178px wide -> 534 on screen.
+            const float invW = 178f * uiScale;
+            float winW = invW;
+            float winH = imgH * uiScale + 30f + 4f * 18f * uiScale + 12f + 16f * uiScale + 24f;
             float winX = (displaySize.X - winW) / 2f;
             float winY = Math.Max(30f, (displaySize.Y - winH) / 2f);
+            // Panel art sits centered above the inventory section.
+            Vector2 artOffset = new((winW - imgW * uiScale) * 0.5f, 0f);
 
             // Dim the world behind the panel, like the E-menu.
             var fgOverlay = ImGui.GetForegroundDrawList();
@@ -340,19 +349,21 @@ namespace Cubuild.Renderer
             var fg = ImGui.GetForegroundDrawList();
             uint fgTextCol = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 1f));
 
-            // The panel art (or a plain fallback if the texture is missing).
+            // The panel art (or a plain fallback if the texture is missing), centered
+            // horizontally above the inventory section.
+            var artTopLeft = contentScreen + artOffset;
             if (_craftingImGuiId != IntPtr.Zero)
             {
-                fg.AddImage(_craftingImGuiId, contentScreen, contentScreen + new Vector2(winW, winH), Vector2.Zero, Vector2.One);
+                fg.AddImage(_craftingImGuiId, artTopLeft, artTopLeft + new Vector2(imgW * uiScale, imgH * uiScale), Vector2.Zero, Vector2.One);
             }
             else
             {
                 uint panelCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.33f, 0.34f, 0.34f, 1f));
                 uint cellCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.20f, 0.21f, 0.21f, 1f));
-                fg.AddRectFilled(contentScreen, contentScreen + new Vector2(46f * uiScale, 49f * uiScale), panelCol);
-                fg.AddRectFilled(contentScreen + new Vector2(73f * uiScale, 9f * uiScale), contentScreen + new Vector2(109f * uiScale, 39f * uiScale), panelCol);
-                fg.AddRectFilled(contentScreen + new Vector2(7f * uiScale, 7f * uiScale), contentScreen + new Vector2(40f * uiScale, 42f * uiScale), cellCol);
-                fg.AddRectFilled(contentScreen + new Vector2(79f * uiScale, 16f * uiScale), contentScreen + new Vector2(104f * uiScale, 33f * uiScale), cellCol);
+                fg.AddRectFilled(artTopLeft, artTopLeft + new Vector2(46f * uiScale, 49f * uiScale), panelCol);
+                fg.AddRectFilled(artTopLeft + new Vector2(73f * uiScale, 9f * uiScale), artTopLeft + new Vector2(109f * uiScale, 39f * uiScale), panelCol);
+                fg.AddRectFilled(artTopLeft + new Vector2(7f * uiScale, 7f * uiScale), artTopLeft + new Vector2(40f * uiScale, 42f * uiScale), cellCol);
+                fg.AddRectFilled(artTopLeft + new Vector2(79f * uiScale, 16f * uiScale), artTopLeft + new Vector2(104f * uiScale, 33f * uiScale), cellCol);
             }
 
             // 2x2 grid cells.
@@ -361,20 +372,20 @@ namespace Cubuild.Renderer
             for (int i = 0; i < 4; i++)
             {
                 var cell = gridPos[i];
-                var screenMin = contentScreen + cell * uiScale;
+                var screenMin = artTopLeft + cell * uiScale;
                 var screenMax = screenMin + gridSize * uiScale;
                 (int ItemId, int Count) contents = _hud.CraftingSlots != null && i < _hud.CraftingSlots.Count
                     ? _hud.CraftingSlots[i] : (0, 0);
-                ImGui.SetCursorPos(cell * uiScale);
+                ImGui.SetCursorPos(artOffset + cell * uiScale);
                 DrawCraftingCellAt($"cg{i}", contents.ItemId, contents.Count, screenMin, screenMax,
                     4, i, 1f * uiScale, 16f * uiScale, fg, fgTextCol);
             }
 
             // Result well: shows the crafted product; left click crafts.
             {
-                var screenMin = contentScreen + new Vector2(79, 16) * uiScale;
+                var screenMin = artTopLeft + new Vector2(79, 16) * uiScale;
                 var screenMax = screenMin + new Vector2(11, 17) * uiScale;
-                ImGui.SetCursorPos(new Vector2(79, 16) * uiScale);
+                ImGui.SetCursorPos(artOffset + new Vector2(79, 16) * uiScale);
                 int resId = _hud.CraftingResult?.ItemId ?? 0;
                 int resCount = _hud.CraftingResult?.Count ?? 0;
                 DrawCraftingCellAt("cres", resId, resCount, screenMin, screenMax, 5, 0,
@@ -388,11 +399,43 @@ namespace Cubuild.Renderer
                 var heldUv = IconUv(_hud.HeldStack.Value.ItemId, out IntPtr heldTex);
                 if (heldTex != IntPtr.Zero)
                 {
-                    var center = contentScreen + new Vector2(97.5f, 24.5f) * uiScale;
+                    var center = artTopLeft + new Vector2(97.5f, 24.5f) * uiScale;
                     float iconSize = 13f * uiScale;
                     fg.AddImage(heldTex, center - new Vector2(iconSize * 0.5f, iconSize * 0.5f), center + new Vector2(iconSize * 0.5f, iconSize * 0.5f),
                         new Vector2(heldUv.X, heldUv.Y), new Vector2(heldUv.X + heldUv.Z, heldUv.Y + heldUv.W));
                 }
+            }
+
+            // ---- player inventory below the panel (Minecraft-style) ----
+            // Bag: 4 rows x 10; hotbar: 1 row x 10. Same 48px cells / 54px steps as the
+            // E-menu, same click kinds (0 = bag slot index, 1 = hotbar index) so the cursor
+            // carries items between inventory and grid.
+            float slotPx = 16f * uiScale;
+            float stepX = 18f * uiScale, stepY = 18f * uiScale;
+            float invTop = imgH * uiScale + 30f;
+            float hotbarTop = invTop + 4f * stepY + 12f;
+            uint slotBorder = ImGui.ColorConvertFloat4ToU32(new Vector4(0.55f, 0.58f, 0.62f, 0.9f));
+            uint slotFill = ImGui.ColorConvertFloat4ToU32(new Vector4(0.13f, 0.16f, 0.19f, 1f));
+            float borderPx = 3f; // 1 design px at 3x
+            for (int row = 0; row < 4; row++)
+            {
+                for (int col = 0; col < 10; col++)
+                {
+                    int slot = row * 10 + col;
+                    var contents = _hud.BagSlots != null && slot < _hud.BagSlots.Count
+                        ? _hud.BagSlots[slot] : default;
+                    var pos = new Vector2(col * stepX, invTop + row * stepY);
+                    DrawCraftingInvCell($"cbg{slot}", contents.ItemId, contents.Count, pos, 0, slot,
+                        slotPx, borderPx, slotFill, slotBorder, contentScreen, fg, fgTextCol);
+                }
+            }
+            for (int i = 0; i < 10; i++)
+            {
+                int bid = _hud.Hotbar != null && i < _hud.Hotbar.Count ? _hud.Hotbar[i] : 0;
+                int count = _hud.HotbarCounts != null && i < _hud.HotbarCounts.Count ? _hud.HotbarCounts[i] : 0;
+                var pos = new Vector2(i * stepX, hotbarTop);
+                DrawCraftingInvCell($"chb{i}", bid, count, pos, 1, i,
+                    slotPx, borderPx, slotFill, slotBorder, contentScreen, fg, fgTextCol);
             }
 
             ImGui.End();
@@ -426,6 +469,21 @@ namespace Cubuild.Renderer
                             ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 1)), heldCount.ToString());
                 }
             }
+        }
+
+        // One inventory slot in the crafting menu's lower section: a painted cell background
+        // (dark fill + light border, like Minecraft) on the Foreground list, then the shared
+        // E-menu cell logic on top for clicks/hover/icon/count (kind 0 = bag, 1 = hotbar).
+        private void DrawCraftingInvCell(string id, int itemId, int count, Vector2 pos,
+            int kind, int target, float slotPx, float borderPx, uint fillCol, uint borderCol,
+            Vector2 contentScreen, ImDrawListPtr fg, uint fgTextCol)
+        {
+            var screenMin = contentScreen + pos;
+            var screenMax = screenMin + new Vector2(slotPx, slotPx);
+            fg.AddRectFilled(screenMin, screenMax, fillCol);
+            fg.AddRect(screenMin, screenMax, borderCol, 0f, 0, borderPx);
+            ImGui.SetCursorPos(pos);
+            DrawInventorySlotCellAt(id, itemId, count, kind, target, slotPx, fg, fgTextCol);
         }
 
         // One crafting cell: invisible click target (window layer) whose item icon + count are
