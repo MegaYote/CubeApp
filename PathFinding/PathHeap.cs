@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// A binary min-heap of PathPoints ordered by their A* f-score (TotalPathDistance +

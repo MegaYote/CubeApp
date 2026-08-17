@@ -1,7 +1,7 @@
 using System;
 using System.Numerics;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Handles raycasting for block interaction (pick, break, place) and duck/entity targeting.

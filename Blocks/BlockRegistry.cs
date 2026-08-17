@@ -4,7 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Text.Json;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Central, data-driven catalogue of every block, loaded once at startup from blocks.json.

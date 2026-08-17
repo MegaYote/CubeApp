@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 
-namespace CubeApp.World
+namespace Cubuild.World
 {
     /// <summary>
     /// Hidden sky islands: rare floating landmasses placed FAR above the cloud deck, invisible

@@ -1,7 +1,7 @@
 using System.Numerics;
 using System.Collections.Generic;
 
-namespace CubeApp.Renderer
+namespace Cubuild.Renderer
 {
     /// <summary>
     /// A block being mined by a zombie. The renderer draws a shrink-cube overlay for each one,

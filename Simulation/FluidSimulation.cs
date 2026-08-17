@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Cellular liquid spreading for water blocks.

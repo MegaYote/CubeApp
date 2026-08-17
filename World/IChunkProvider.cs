@@ -1,4 +1,4 @@
-namespace CubeApp.World
+namespace Cubuild.World
 {
     public interface IChunkProvider
     {

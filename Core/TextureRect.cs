@@ -1,4 +1,4 @@
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Minimal integer rectangle used for atlas tile coordinates.

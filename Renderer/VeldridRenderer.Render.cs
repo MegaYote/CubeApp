@@ -1,11 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using ImGuiNET;
 using Veldrid;
 using Veldrid.SPIRV;
 
-namespace CubeApp.Renderer
+namespace Cubuild.Renderer
 {
     public sealed partial class VeldridRenderer : IRenderer, IDisposable
     {
@@ -106,16 +106,16 @@ namespace CubeApp.Renderer
 
         /// <summary>Feeds the active falling-block entities to the renderer (drawn as 3D cubes
         /// using the world pipeline so they depth-test against terrain).</summary>
-        public void SetFallingBlocks(IReadOnlyList<CubeApp.FallingBlockData> fallingBlocks)
+        public void SetFallingBlocks(IReadOnlyList<Cubuild.FallingBlockData> fallingBlocks)
         {
-            _fallingBlocks = fallingBlocks ?? Array.Empty<CubeApp.FallingBlockData>();
+            _fallingBlocks = fallingBlocks ?? Array.Empty<Cubuild.FallingBlockData>();
         }
 
         /// <summary>Feeds the survival item drops to the renderer (drawn as small cubes using
         /// the falling-block pipeline so they depth-test against terrain).</summary>
-        public void SetItemDrops(IReadOnlyList<CubeApp.ItemDropRenderData> itemDrops)
+        public void SetItemDrops(IReadOnlyList<Cubuild.ItemDropRenderData> itemDrops)
         {
-            _itemDrops = itemDrops ?? Array.Empty<CubeApp.ItemDropRenderData>();
+            _itemDrops = itemDrops ?? Array.Empty<Cubuild.ItemDropRenderData>();
         }
 
         // Builds cube geometry for all falling blocks into the scratch buffers and draws them.
@@ -246,20 +246,20 @@ namespace CubeApp.Renderer
             }
         }
 
-        public void SetEntities(IReadOnlyList<CubeApp.MobRenderData> mobRenderData)
+        public void SetEntities(IReadOnlyList<Cubuild.MobRenderData> mobRenderData)
         {
             // Route the unified MobRenderData snapshots to per-model instance lists. DuckInstance
             // carries exactly the fields both models need, so it doubles as the player instance.
             // Duck + player are hand-authored cube models; every OTHER mob type (coyote, zombie,
             // anything discovered in MobEntities/) renders through the generic MobModel entry.
-            _allMobRenderData = mobRenderData ?? Array.Empty<CubeApp.MobRenderData>();
+            _allMobRenderData = mobRenderData ?? Array.Empty<Cubuild.MobRenderData>();
             _duckList.Clear();
             _playerList.Clear();
             foreach (var entry in _modelMobs.Values) entry.Instances.Clear();
             if (mobRenderData == null || mobRenderData.Count == 0)
             {
-                _duckInstances = Array.Empty<CubeApp.DuckInstance>();
-                _playerInstances = Array.Empty<CubeApp.DuckInstance>();
+                _duckInstances = Array.Empty<Cubuild.DuckInstance>();
+                _playerInstances = Array.Empty<Cubuild.DuckInstance>();
                 return;
             }
 
@@ -270,7 +270,7 @@ namespace CubeApp.Renderer
                 bool isDuck = string.Equals(md.MobType, "duck", StringComparison.OrdinalIgnoreCase);
                 bool isPlayer = !isDuck && string.Equals(md.MobType, "player", StringComparison.OrdinalIgnoreCase);
 
-                var inst = new CubeApp.DuckInstance(
+                var inst = new Cubuild.DuckInstance(
                     md.Position, md.Yaw, md.HeadYawLocal,
                     md.WalkPhase, md.WalkAmount, md.AnimTime, md.AnimBlend, md.FlapPhase,
                     md.VelocityY, md.OnGround,

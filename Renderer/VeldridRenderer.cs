@@ -1,11 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using ImGuiNET;
 using Veldrid;
 using Veldrid.SPIRV;
 
-namespace CubeApp.Renderer
+namespace Cubuild.Renderer
 {
     // Veldrid renderer implementing mesh upload, unlit texture shading, and an ImGui-based HUD overlay.
     // No GDI+/System.Drawing is used anywhere in this renderer.
@@ -242,11 +242,11 @@ namespace CubeApp.Renderer
         private DeviceBuffer? _duckIndexBuffer;
         private uint _duckVertexCapacity;
         private uint _duckIndexCapacity;
-        private IReadOnlyList<CubeApp.DuckInstance> _duckInstances = Array.Empty<CubeApp.DuckInstance>();
+        private IReadOnlyList<Cubuild.DuckInstance> _duckInstances = Array.Empty<Cubuild.DuckInstance>();
         // Reusable backing lists (cleared + refilled each frame) so SetEntities doesn't allocate
         // three Lists every frame (FPS roadmap #6). The draw loops read these via the fields above.
-        private readonly List<CubeApp.DuckInstance> _duckList = new();
-        private readonly List<CubeApp.DuckInstance> _playerList = new();
+        private readonly List<Cubuild.DuckInstance> _duckList = new();
+        private readonly List<Cubuild.DuckInstance> _playerList = new();
         private float[] _duckVertexScratch = Array.Empty<float>();
         private ushort[] _duckIndexScratch = Array.Empty<ushort>();
         private const int DuckFloatsPerVertex = 9; // pos(3) + uv(2) + color(4)
@@ -304,7 +304,7 @@ namespace CubeApp.Renderer
         private float _heldBlockZ = -0.412f;
         private float _heldBlockSize = 0.289f; // held block cube size
         private uint _playerIndexCapacity;
-        private IReadOnlyList<CubeApp.DuckInstance> _playerInstances = Array.Empty<CubeApp.DuckInstance>();
+        private IReadOnlyList<Cubuild.DuckInstance> _playerInstances = Array.Empty<Cubuild.DuckInstance>();
         private float[] _playerVertexScratch = Array.Empty<float>();
         private ushort[] _playerIndexScratch = Array.Empty<ushort>();
 
@@ -315,7 +315,7 @@ namespace CubeApp.Renderer
         {
             public MobModel? Model;
             public ResourceSet? TextureSet;
-            public List<CubeApp.DuckInstance> Instances = new();
+            public List<Cubuild.DuckInstance> Instances = new();
             public DeviceBuffer? VertexBuffer;
             public DeviceBuffer? IndexBuffer;
             public uint VertexCapacity;
@@ -326,13 +326,13 @@ namespace CubeApp.Renderer
 
         private readonly Dictionary<string, MobModelEntry> _modelMobs = new();
         // Full mob snapshot kept for F3 nametag rendering (world -> screen projection).
-        private IReadOnlyList<CubeApp.MobRenderData> _allMobRenderData = Array.Empty<CubeApp.MobRenderData>();
+        private IReadOnlyList<Cubuild.MobRenderData> _allMobRenderData = Array.Empty<Cubuild.MobRenderData>();
 
         // Current camera (so chunk frustum culling and the mob meshing can read it) and the six
         // view-frustum planes refreshed each frame from the view-projection matrix.
-        private CubeApp.Point3D? _cameraPosition;
+        private Cubuild.Point3D? _cameraPosition;
         private System.Numerics.Matrix4x4? _viewProjection;
-        public CubeApp.Point3D? CameraPosition => _cameraPosition;
+        public Cubuild.Point3D? CameraPosition => _cameraPosition;
         public System.Numerics.Matrix4x4? ViewProjection => _viewProjection;
         private readonly Vector4[] _frustumPlanes = new Vector4[6];
 
@@ -504,7 +504,7 @@ namespace CubeApp.Renderer
         // tile rect) is updated. For hundreds of falling blocks this uploads ~2.8KB instead of
         // rebuilding + re-uploading full cube geometry (~500KB) - the difference between a big
         // cave-in being smooth vs stuttering.
-        private IReadOnlyList<CubeApp.FallingBlockData> _fallingBlocks = Array.Empty<CubeApp.FallingBlockData>();
+        private IReadOnlyList<Cubuild.FallingBlockData> _fallingBlocks = Array.Empty<Cubuild.FallingBlockData>();
         private DeviceBuffer? _fallingVertexBuffer;  // static cube mesh (once)
         private DeviceBuffer? _fallingIndexBuffer;   // static cube indices (once)
         private DeviceBuffer? _fallingInstanceBuffer; // per-frame instance data (dynamic)
@@ -517,7 +517,7 @@ namespace CubeApp.Renderer
         // Dropped items reuse the falling-block pipeline with a SMALLER static cube mesh
         // (scale ~0.3) so survival mining drops read as little collectible blocks.
         private const float ItemDropScale = 0.3f;
-        private IReadOnlyList<CubeApp.ItemDropRenderData> _itemDrops = Array.Empty<CubeApp.ItemDropRenderData>();
+        private IReadOnlyList<Cubuild.ItemDropRenderData> _itemDrops = Array.Empty<Cubuild.ItemDropRenderData>();
         private Pipeline? _itemDropPipeline;
         private DeviceBuffer? _itemDropVertexBuffer;
         private DeviceBuffer? _itemDropIndexBuffer;
@@ -574,17 +574,17 @@ namespace CubeApp.Renderer
             public uint IbOffsetBytes;
             public uint IndexCount;
         }
-        private readonly Dictionary<CubeApp.ChunkCoordinates, ChunkRange> _chunkRanges = new();
+        private readonly Dictionary<Cubuild.ChunkCoordinates, ChunkRange> _chunkRanges = new();
         // Cutout (cross plants / leaves, alpha-tested, depth-writing) and transparent (water,
         // blended, no depth-write) faces live in separate ranges drawn as their own passes.
-        private readonly Dictionary<CubeApp.ChunkCoordinates, ChunkRange> _cutoutRanges = new();
-        private readonly Dictionary<CubeApp.ChunkCoordinates, ChunkRange> _glassRanges = new();
-        private readonly Dictionary<CubeApp.ChunkCoordinates, ChunkRange> _transparentRanges = new();
+        private readonly Dictionary<Cubuild.ChunkCoordinates, ChunkRange> _cutoutRanges = new();
+        private readonly Dictionary<Cubuild.ChunkCoordinates, ChunkRange> _glassRanges = new();
+        private readonly Dictionary<Cubuild.ChunkCoordinates, ChunkRange> _transparentRanges = new();
         private readonly List<(uint VbOffset, uint VbBytes, uint IbOffset, uint IbBytes)> _freeBlocks = new();
-        private readonly List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _drawCommands = new();
-        private readonly List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _cutoutDrawCommands = new();
-        private readonly List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _glassDrawCommands = new();
-        private readonly List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _transparentDrawCommands = new();
+        private readonly List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _drawCommands = new();
+        private readonly List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _cutoutDrawCommands = new();
+        private readonly List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _glassDrawCommands = new();
+        private readonly List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _transparentDrawCommands = new();
         private IndirectDrawIndexedArguments[] _indirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
         private IndirectDrawIndexedArguments[] _cutoutIndirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
         private IndirectDrawIndexedArguments[] _glassIndirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
@@ -631,7 +631,7 @@ namespace CubeApp.Renderer
 
         private readonly System.Collections.Concurrent.ConcurrentQueue<PendingUpload> _pendingUploads = new();
         private readonly System.Collections.Concurrent.ConcurrentQueue<PendingUpload> _pendingPriorityUploads = new(); // player edits jump the line
-        private readonly System.Collections.Concurrent.ConcurrentQueue<CubeApp.ChunkCoordinates> _pendingRemovals = new();
+        private readonly System.Collections.Concurrent.ConcurrentQueue<Cubuild.ChunkCoordinates> _pendingRemovals = new();
         private ChunkManager? _chunkManager; // set via SetChunkManager, used by MeshChunkImmediate
         // Cached mining-block light (0..15), captured once per mining CHUNK like the C++
         // startBreaking: the max of the 6 neighbors' combined light. Used to shade the shrink
@@ -643,7 +643,7 @@ namespace CubeApp.Renderer
 
         private readonly struct PendingUpload
         {
-            public CubeApp.ChunkCoordinates Coord { get; }
+            public Cubuild.ChunkCoordinates Coord { get; }
             public uint[] Vertices { get; }
             public ushort[] Indices { get; }
             public uint[] CutoutVertices { get; }
@@ -653,7 +653,7 @@ namespace CubeApp.Renderer
             public uint[] TransparentVertices { get; }
             public ushort[] TransparentIndices { get; }
 
-            public PendingUpload(CubeApp.ChunkCoordinates coord, uint[] vertices, ushort[] indices,
+            public PendingUpload(Cubuild.ChunkCoordinates coord, uint[] vertices, ushort[] indices,
                 uint[] cutoutVertices, ushort[] cutoutIndices, uint[] glassVertices, ushort[] glassIndices,
                 uint[] transparentVertices, ushort[] transparentIndices)
             {
@@ -930,7 +930,7 @@ namespace CubeApp.Renderer
             _gd?.Dispose();
         }
 
-        public void UploadChunk(CubeApp.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces)
+        public void UploadChunk(Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces)
         {
             BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr);
             _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr));
@@ -938,7 +938,7 @@ namespace CubeApp.Renderer
 
         // Player edits jump the line: same vertex data, but enqueued on the priority queue that
         // ProcessPendingPriorityMeshes drains every frame for instant feedback.
-        public void UploadChunkPriority(CubeApp.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces)
+        public void UploadChunkPriority(Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces)
         {
             BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr);
             _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr));
@@ -955,7 +955,7 @@ namespace CubeApp.Renderer
         // Sizes are deterministic (4 verts + 6 indices per face), so the target arrays are filled
         // directly - no List<T>, no ToArray() copies, no double allocation per chunk upload.
         private void BuildMesh(
-            System.Collections.Generic.IReadOnlyList<CubeApp.MeshFace> faces,
+            System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces,
             out uint[] vertsArr, out ushort[] indicesArr,
             out uint[] cutoutVertsArr, out ushort[] cutoutIndicesArr,
             out uint[] glassVertsArr, out ushort[] glassIndicesArr,
@@ -985,7 +985,7 @@ namespace CubeApp.Renderer
             var transIndices = new ushort[transFaces * 6];
             // Hoisted out of the face loop: stackalloc reserves stack for the method, so a
             // per-face stackalloc would grow the frame with face count (CA2014).
-            Span<CubeApp.Point3D> vertsSpan = stackalloc CubeApp.Point3D[4];
+            Span<Cubuild.Point3D> vertsSpan = stackalloc Cubuild.Point3D[4];
             int opaqueFace = 0;
             int cutoutFace = 0;
             int glassFace = 0;
@@ -1149,67 +1149,67 @@ namespace CubeApp.Renderer
             transIndicesArr = transIndices;
         }
 
-        public void RemoveChunk(CubeApp.ChunkCoordinates coords)
+        public void RemoveChunk(Cubuild.ChunkCoordinates coords)
         {
             // Enqueue removal to be processed on render thread
             _pendingRemovals.Enqueue(coords);
         }
 
-        private static bool TryGetCubuildFaceAxes(CubeApp.Point3D normal, out CubeApp.Point3D uAxis, out CubeApp.Point3D vAxis)
+        private static bool TryGetCubuildFaceAxes(Cubuild.Point3D normal, out Cubuild.Point3D uAxis, out Cubuild.Point3D vAxis)
         {
             if (normal.X > 0.5)
             {
-                uAxis = new CubeApp.Point3D(0, 0, -1);
-                vAxis = new CubeApp.Point3D(0, -1, 0);
+                uAxis = new Cubuild.Point3D(0, 0, -1);
+                vAxis = new Cubuild.Point3D(0, -1, 0);
                 return true;
             }
 
             if (normal.X < -0.5)
             {
-                uAxis = new CubeApp.Point3D(0, 0, 1);
-                vAxis = new CubeApp.Point3D(0, -1, 0);
+                uAxis = new Cubuild.Point3D(0, 0, 1);
+                vAxis = new Cubuild.Point3D(0, -1, 0);
                 return true;
             }
 
             if (normal.Z > 0.5)
             {
-                uAxis = new CubeApp.Point3D(1, 0, 0);
-                vAxis = new CubeApp.Point3D(0, -1, 0);
+                uAxis = new Cubuild.Point3D(1, 0, 0);
+                vAxis = new Cubuild.Point3D(0, -1, 0);
                 return true;
             }
 
             if (normal.Z < -0.5)
             {
-                uAxis = new CubeApp.Point3D(-1, 0, 0);
-                vAxis = new CubeApp.Point3D(0, -1, 0);
+                uAxis = new Cubuild.Point3D(-1, 0, 0);
+                vAxis = new Cubuild.Point3D(0, -1, 0);
                 return true;
             }
 
             if (normal.Y > 0.5)
             {
-                uAxis = new CubeApp.Point3D(1, 0, 0);
-                vAxis = new CubeApp.Point3D(0, 0, -1);
+                uAxis = new Cubuild.Point3D(1, 0, 0);
+                vAxis = new Cubuild.Point3D(0, 0, -1);
                 return true;
             }
 
             if (normal.Y < -0.5)
             {
-                uAxis = new CubeApp.Point3D(1, 0, 0);
-                vAxis = new CubeApp.Point3D(0, 0, 1);
+                uAxis = new Cubuild.Point3D(1, 0, 0);
+                vAxis = new Cubuild.Point3D(0, 0, 1);
                 return true;
             }
 
-            uAxis = new CubeApp.Point3D(0, 0, 0);
-            vAxis = new CubeApp.Point3D(0, 0, 0);
+            uAxis = new Cubuild.Point3D(0, 0, 0);
+            vAxis = new Cubuild.Point3D(0, 0, 0);
             return false;
         }
 
-        private static double Dot(CubeApp.Point3D a, CubeApp.Point3D b)
+        private static double Dot(Cubuild.Point3D a, Cubuild.Point3D b)
         {
             return a.X * b.X + a.Y * b.Y + a.Z * b.Z;
         }
 
-        public void UpdateCamera(CubeApp.Point3D position, float yaw, float pitch,
+        public void UpdateCamera(Cubuild.Point3D position, float yaw, float pitch,
             float walkPhase = 0f, float walkAmount = 0f, bool firstPerson = false, bool grounded = true)
         {
             _firstPersonCamera = firstPerson;
@@ -1368,7 +1368,7 @@ namespace CubeApp.Renderer
             _fogEnd = chunkRadius * ChunkManager.ChunkSize;
         }
 
-        public void SetChunkManager(CubeApp.ChunkManager manager)
+        public void SetChunkManager(Cubuild.ChunkManager manager)
         {
             _chunkManager = manager;
         }
@@ -1509,18 +1509,18 @@ namespace CubeApp.Renderer
 
         // Synchronously re-mesh one chunk (used for instant player edits). The greedy mesh from the
         // mesher is uploaded via the priority path; the background worker later refines neighbours.
-        public void MeshChunkImmediate(CubeApp.ChunkCoordinates coords)
+        public void MeshChunkImmediate(Cubuild.ChunkCoordinates coords)
         {
             if (_chunkManager == null) return;
             if (!_chunkManager.TryGetLoadedChunk(coords, out var chunk)) return;
 
-            var chunksToPass = new System.Collections.Generic.List<CubeApp.Chunk> { chunk };
+            var chunksToPass = new System.Collections.Generic.List<Cubuild.Chunk> { chunk };
             int chunkX = chunk.OriginX / ChunkManager.ChunkSize;
             int chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
-            if (_chunkManager.TryGetLoadedChunk(new CubeApp.ChunkCoordinates(chunkX - 1, chunkZ), out var left)) chunksToPass.Add(left);
-            if (_chunkManager.TryGetLoadedChunk(new CubeApp.ChunkCoordinates(chunkX + 1, chunkZ), out var right)) chunksToPass.Add(right);
-            if (_chunkManager.TryGetLoadedChunk(new CubeApp.ChunkCoordinates(chunkX, chunkZ - 1), out var back)) chunksToPass.Add(back);
-            if (_chunkManager.TryGetLoadedChunk(new CubeApp.ChunkCoordinates(chunkX, chunkZ + 1), out var front)) chunksToPass.Add(front);
+            if (_chunkManager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(chunkX - 1, chunkZ), out var left)) chunksToPass.Add(left);
+            if (_chunkManager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(chunkX + 1, chunkZ), out var right)) chunksToPass.Add(right);
+            if (_chunkManager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(chunkX, chunkZ - 1), out var back)) chunksToPass.Add(back);
+            if (_chunkManager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(chunkX, chunkZ + 1), out var front)) chunksToPass.Add(front);
 
             var faces = Mesher.GenerateMesh(chunksToPass);
             if (faces != null && faces.Count > 0)

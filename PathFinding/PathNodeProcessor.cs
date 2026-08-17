@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Samples the block world to decide which pathfinding nodes are walkable. A node at (x,y,z)

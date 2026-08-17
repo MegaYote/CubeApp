@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Gravity for sand/gravel/dirt/red_clay (anything flagged "gravity" in blocks.json).

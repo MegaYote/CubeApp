@@ -1,11 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using ImGuiNET;
 using Veldrid;
 using Veldrid.SPIRV;
 
-namespace CubeApp.Renderer
+namespace Cubuild.Renderer
 {
     public sealed partial class VeldridRenderer : IRenderer, IDisposable
     {
@@ -123,7 +123,7 @@ namespace CubeApp.Renderer
         // Poses one player's bones (limb swing / head turn) and bakes them, with the body yaw,
         // hurt-flash tint and death roll, into the shared scratch buffers. Same scheme as WriteDuck
         // but with voxel-style limb animation and no in-air body tilt.
-        private void WritePlayer(in CubeApp.DuckInstance inst, ref int vf, ref int ii, ref ushort baseVertex)
+        private void WritePlayer(in Cubuild.DuckInstance inst, ref int vf, ref int ii, ref ushort baseVertex)
         {
             bool isDead = inst.IsDead;
             float hurtFactor = isDead ? 0f : (inst.HurtTimer > 0f ? Math.Clamp(inst.HurtTimer / 0.2f, 0f, 1f) : 0f);

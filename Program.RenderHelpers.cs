@@ -1,17 +1,17 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
 using System.Reflection;
-using CubeApp.Renderer;
-using CubeApp.World;
+using Cubuild.Renderer;
+using Cubuild.World;
 using Veldrid;
 using Veldrid.Sdl2;
 using Veldrid.StartupUtilities;
-using static CubeApp.ChunkManager;
-using CubeApp;
+using static Cubuild.ChunkManager;
+using Cubuild;
 
-namespace CubeApp
+namespace Cubuild
 {
     public sealed partial class Program : IDisposable
     {

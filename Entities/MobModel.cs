@@ -6,7 +6,7 @@ using System.Text;
 using System.Text.Json;
 using Veldrid;
 
-namespace CubeApp
+namespace Cubuild
 {
     public sealed class MobModel : IDisposable
     {

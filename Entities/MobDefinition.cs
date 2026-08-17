@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Defines a mob type that can be spawned. Mobs are auto-discovered from the MobEntities/ folder.

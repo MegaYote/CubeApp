@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// A single node in a pathfinding grid search: integer cell coords, accumulated path cost,

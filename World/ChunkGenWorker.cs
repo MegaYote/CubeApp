@@ -2,7 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Generates chunks off the main thread. A small pool of workers drains the

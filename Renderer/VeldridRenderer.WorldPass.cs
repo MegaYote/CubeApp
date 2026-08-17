@@ -1,17 +1,17 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using ImGuiNET;
 using Veldrid;
 using Veldrid.SPIRV;
 
-namespace CubeApp.Renderer
+namespace Cubuild.Renderer
 {
     public sealed partial class VeldridRenderer : IRenderer, IDisposable
     {
         private void DrawWorldPass(
             CommandList cl,
-            System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            System.Collections.Generic.List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
             IndirectDrawIndexedArguments[] scratch,
             Pipeline pipeline,
             ref uint[] cullData)
@@ -568,7 +568,7 @@ namespace CubeApp.Renderer
         // Poses one duck's bones (walk/flap/head-turn) and bakes them, with the body yaw, in-air /
         // death tilt and hurt-flash tint, into the shared vertex/index scratch buffers. Mirrors
         // Cubuild's updateDuckEntityVisual ('blockbench_duck' branch).
-        private void WriteDuck(in CubeApp.DuckInstance inst, ref int vf, ref int ii, ref ushort baseVertex)
+        private void WriteDuck(in Cubuild.DuckInstance inst, ref int vf, ref int ii, ref ushort baseVertex)
         {
             bool isDead = inst.IsDead;
             float walkPhase = inst.WalkPhase;

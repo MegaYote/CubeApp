@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>Which animation axis a duck bone rotates about at runtime.</summary>
     public enum DuckBoneAxis

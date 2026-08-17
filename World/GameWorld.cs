@@ -1,8 +1,8 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// The authoritative simulation world. Everything the game simulates lives here and runs

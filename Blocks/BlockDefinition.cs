@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// A fully data-driven block definition loaded from blocks.json. A block is identified by a

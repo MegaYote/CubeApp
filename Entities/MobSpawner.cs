@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// A spawnable mob type with a weight and pack size. Weight controls how often it's picked

@@ -3,10 +3,10 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Text;
 
-namespace CubeApp.Net
+namespace Cubuild.Net
 {
     /// <summary>
-    /// Message types for the CubeApp network protocol. All messages are length-prefixed frames:
+    /// Message types for the Cubuild network protocol. All messages are length-prefixed frames:
     ///   4-byte little-endian body length | 1-byte message type | body bytes
     /// Bodies are written with <see cref="NetWriter"/>/read with <see cref="NetReader"/>.
     /// </summary>

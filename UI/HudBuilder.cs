@@ -1,8 +1,8 @@
 using System;
 using System.Numerics;
-using CubeApp.Renderer;
+using Cubuild.Renderer;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Builds the HUD overlay state each frame. Extracted from Program.BuildHud() so the main loop

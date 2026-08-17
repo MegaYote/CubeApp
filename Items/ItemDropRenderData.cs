@@ -1,4 +1,4 @@
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Render data for one dropped item: a small cube (or flat sprite) the renderer draws

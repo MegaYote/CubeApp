@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp.World
+namespace Cubuild.World
 {
     /// <summary>
     /// Underground gravel splotches: small, OCCASIONAL pockets of gravel buried in the stone

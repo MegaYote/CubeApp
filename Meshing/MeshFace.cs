@@ -1,4 +1,4 @@
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// A single greedy-merged quad. Vertices are stored as four inline value-type corners

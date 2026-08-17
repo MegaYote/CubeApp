@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Computes per-block light levels on a discrete 0..15 scale for a region of chunks.

@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// The engine's scheduled-tick list. Fluid updates are bucketed per

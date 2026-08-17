@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>The animatable bones of the player model.</summary>
     public enum PlayerBoneId

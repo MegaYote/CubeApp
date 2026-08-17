@@ -1,4 +1,4 @@
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// The play mode of a world. Creative is the sandbox: unlimited flight, invulnerability,

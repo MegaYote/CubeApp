@@ -1,7 +1,7 @@
 using System;
 using System.Numerics;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Handles player movement, physics, and collision detection.

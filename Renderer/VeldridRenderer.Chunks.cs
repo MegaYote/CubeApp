@@ -1,15 +1,15 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using ImGuiNET;
 using Veldrid;
 using Veldrid.SPIRV;
 
-namespace CubeApp.Renderer
+namespace Cubuild.Renderer
 {
     public sealed partial class VeldridRenderer : IRenderer, IDisposable
     {
-        private void WriteChunkData(CubeApp.ChunkCoordinates coord, uint[] verts, ushort[] indices,
+        private void WriteChunkData(Cubuild.ChunkCoordinates coord, uint[] verts, ushort[] indices,
             uint[] cutoutVerts, ushort[] cutoutIndices, uint[] glassVerts, ushort[] glassIndices,
             uint[] transVerts, ushort[] transIndices)
         {
@@ -134,7 +134,7 @@ namespace CubeApp.Renderer
             _freeBlocks.Add((r.VbOffsetBytes, r.VbBytes, r.IbOffsetBytes, r.IndexCount * sizeof(ushort)));
         }
 
-        private void FreeChunkRange(CubeApp.ChunkCoordinates coord)
+        private void FreeChunkRange(Cubuild.ChunkCoordinates coord)
         {
             if (_chunkRanges.TryGetValue(coord, out var r))
             {
@@ -255,7 +255,7 @@ namespace CubeApp.Renderer
         // std430: vec4 aabbMin + vec4 aabbMax + uvec4 cmd + uint firstInstance = 16 uint32s per
         // chunk. The array is sized exactly to the command count so it can be uploaded whole.
         private void FillCullData(
-            System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            System.Collections.Generic.List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
             ref uint[] target)
         {
             int count = commands.Count;
@@ -299,7 +299,7 @@ namespace CubeApp.Renderer
         // before its dispatch) - a GraphicsDevice-level upload executes immediately and would be
         // overwritten by the last pass, making every dispatch read the wrong AABBs.
         private void ApplyHeightmapOcclusion(
-            System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            System.Collections.Generic.List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
             ref uint[] cullData)
         {
             // cullData is indexed the same as commands (i*16 per chunk, InstanceCount at +9).
@@ -315,7 +315,7 @@ namespace CubeApp.Renderer
 
         private void RunGpuCull(
             CommandList cl,
-            System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            System.Collections.Generic.List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
             ref uint[] cullData)
         {
             if (commands.Count == 0) return;
@@ -364,9 +364,9 @@ namespace CubeApp.Renderer
         // a new one, or removes the entry when the chunk no longer has faces in this pass. Also
         // grows the pass's indirect scratch so CPU-cull draws have room.
         private void SyncPassCommand(
-            System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            System.Collections.Generic.List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
             ref IndirectDrawIndexedArguments[] scratch,
-            CubeApp.ChunkCoordinates coord,
+            Cubuild.ChunkCoordinates coord,
             ChunkRange? range)
         {
             int found = -1;
@@ -497,7 +497,7 @@ namespace CubeApp.Renderer
         // angular height clearly beats the target's, with a margin, so nothing pops while visible.
         private const double BlockingMargin = 0.12; // angular margin (radians-ish, slope units)
         private const int NearSkipChunks = 2;
-        private bool IsHeightmapOccluded(CubeApp.ChunkCoordinates coord)
+        private bool IsHeightmapOccluded(Cubuild.ChunkCoordinates coord)
         {
             if (_chunkManager == null || !_cameraPosition.HasValue) return false;
             if (coord.Layer != ChunkManager.GroundLayer) return false; // only ground terrain occludes
@@ -535,7 +535,7 @@ namespace CubeApp.Renderer
                 int cz = (int)Math.Floor(camCz + stepZ * s + 0.5);
                 if (cx == coord.X && cz == coord.Z) break; // reached the target column
 
-                if (_chunkManager.TryGetLoadedChunk(new CubeApp.ChunkCoordinates(ChunkManager.GroundLayer, cx, cz), out var blocker))
+                if (_chunkManager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(ChunkManager.GroundLayer, cx, cz), out var blocker))
                 {
                     if (blocker.TopSolidY == int.MinValue) continue;
                     double blockDist = Math.Max(1.0, Math.Sqrt((cx - camCx) * (cx - camCx) + (cz - camCz) * (cz - camCz)));
@@ -553,7 +553,7 @@ namespace CubeApp.Renderer
         // the current view frustum. Returns the visible count; falls back to "everything" when no
         // camera is set.
         private uint CullDrawCommands(
-            System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            System.Collections.Generic.List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
             IndirectDrawIndexedArguments[] scratch)
         {
             int n = 0;
@@ -591,7 +591,7 @@ namespace CubeApp.Renderer
 
         // AABB-vs-frustum via the positive-vertex trick. The chunk AABB covers the full world
         // height, so this culls by horizontal footprint only - still rejects everything off-screen.
-        private bool ChunkInFrustum(CubeApp.ChunkCoordinates coord)
+        private bool ChunkInFrustum(Cubuild.ChunkCoordinates coord)
         {            float minX = coord.X * ChunkManager.ChunkSize;
             float maxX = minX + ChunkManager.ChunkSize;
             float minZ = coord.Z * ChunkManager.ChunkSize;

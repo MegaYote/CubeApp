@@ -1,4 +1,4 @@
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Sim state for one dropped item (a stack the player mined or threw that didn't go

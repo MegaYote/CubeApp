@@ -1,4 +1,4 @@
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// A fully data-driven item definition loaded from items.json. Items live in the same

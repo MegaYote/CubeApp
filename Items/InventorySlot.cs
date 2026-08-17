@@ -1,4 +1,4 @@
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// One inventory slot: an item id + count (Minecraft-style stacks; blocks are items too,

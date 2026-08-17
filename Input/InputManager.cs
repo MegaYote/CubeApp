@@ -3,7 +3,7 @@ using System.Numerics;
 using Veldrid;
 using Veldrid.Sdl2;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Events dispatched when the player performs significant actions.

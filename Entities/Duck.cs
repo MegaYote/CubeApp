@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// A snapshot of a duck handed to the renderer each frame: where it is, which way it faces and

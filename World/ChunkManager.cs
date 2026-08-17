@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using CubeApp.World;
+using Cubuild.World;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Chunk storage + streaming for the whole world. The world is three vertically-stacked

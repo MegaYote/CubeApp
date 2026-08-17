@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// One 2x2 crafting recipe: four input ids ("" = empty) and an output item id + count.

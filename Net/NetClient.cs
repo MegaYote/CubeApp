@@ -5,10 +5,10 @@ using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace CubeApp.Net
+namespace Cubuild.Net
 {
     /// <summary>
-    /// Client side of CubeApp networking. Connects to a host, performs the Hello/Welcome
+    /// Client side of Cubuild networking. Connects to a host, performs the Hello/Welcome
     /// handshake, then:
     ///   - sends TickInputState + look every frame (SerializeInput)
     ///   - receives 20Hz snapshots: remote players to render, block edits to apply to the local

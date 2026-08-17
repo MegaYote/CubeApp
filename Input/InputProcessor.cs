@@ -3,7 +3,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using Veldrid;
 
-namespace CubeApp
+namespace Cubuild
 {
     public readonly struct FrameInputState
     {

@@ -1,17 +1,17 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
 using System.Reflection;
-using CubeApp.Renderer;
-using CubeApp.World;
+using Cubuild.Renderer;
+using Cubuild.World;
 using Veldrid;
 using Veldrid.Sdl2;
 using Veldrid.StartupUtilities;
-using static CubeApp.ChunkManager;
-using CubeApp;
+using static Cubuild.ChunkManager;
+using Cubuild;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Presentation layer: window, GPU, input, HUD and screen state. All simulation lives in
@@ -30,12 +30,12 @@ namespace CubeApp
         private readonly InputProcessor input = new();
         private bool mouseLook;
         private volatile bool needsMeshUpdate = true;
-        private string baseTitle = "Chunk Mesh Example";
+        private string baseTitle = "Cubuild";
         private bool showFps;
         private int frameCount;
         // Reusable per-frame entity render list (avoids one List allocation every frame).
         private readonly List<MobRenderData> _entityRenderScratch = new();
-        private readonly List<CubeApp.Renderer.ZombieMiningTarget> _zombieMiningScratch = new();
+        private readonly List<Cubuild.Renderer.ZombieMiningTarget> _zombieMiningScratch = new();
 
         // ---- world loading screen ----
         // Staged loader state: pre-generates + meshes a chunk radius around spawn so the player
@@ -168,7 +168,7 @@ namespace CubeApp
             {
                 try
                 {
-                    string logPath = System.IO.Path.Combine(AppContext.BaseDirectory, "cubeapp-crash.log");
+                    string logPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Cubuild-crash.log");
                     System.IO.File.WriteAllText(logPath, DateTime.Now + Environment.NewLine + ex);
                 }
                 catch { }

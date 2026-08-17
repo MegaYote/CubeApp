@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp
+namespace Cubuild
 {
     public sealed partial class GameWorld : IDisposable
     {

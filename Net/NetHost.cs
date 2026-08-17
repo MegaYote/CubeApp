@@ -7,10 +7,10 @@ using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace CubeApp.Net
+namespace Cubuild.Net
 {
     /// <summary>
-    /// Host side of CubeApp networking. Runs the authoritative <see cref="GameWorld"/> (which may
+    /// Host side of Cubuild networking. Runs the authoritative <see cref="GameWorld"/> (which may
     /// be shared with the local player's rendering), accepts TCP clients, receives their input +
     /// block edits, simulates them (StepRemotePlayers), and broadcasts a full snapshot to every
     /// client at 20Hz. Block edits from clients are applied to the world and folded into the next

@@ -1,4 +1,4 @@
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Interface for mobs that can be rendered. Allows the renderer to work with

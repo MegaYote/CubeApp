@@ -6,7 +6,7 @@ using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using Silk.NET.OpenAL;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// OpenAL sound playback: every sound gets its own hardware source that plays once and
@@ -128,7 +128,7 @@ namespace CubeApp
             }
             try
             {
-                string tmp = Path.Combine(Path.GetTempPath(), "cubeapp_snd_" + Guid.NewGuid().ToString("N") + ".mp3");
+                string tmp = Path.Combine(Path.GetTempPath(), "Cubuild_snd_" + Guid.NewGuid().ToString("N") + ".mp3");
                 File.WriteAllBytes(tmp, audioBytes);
                 try
                 {
@@ -217,7 +217,7 @@ namespace CubeApp
                     continue;
                 }
 
-                // Embedded resource names use dots for the folder path (e.g. "CubeApp.Assets.Sounds.sounds.grass.mp3").
+                // Embedded resource names use dots for the folder path (e.g. "Cubuild.Assets.Sounds.sounds.grass.mp3").
                 // The sound name is the FILE NAME without extension, regardless of which folder it lives in.
                 string[] parts = resource.Split('.');
                 if (parts.Length < 2) continue;

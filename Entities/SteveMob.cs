@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// A spawnable NPC that uses the voxel player model (<see cref="PlayerModel"/>) and

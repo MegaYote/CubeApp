@@ -1,7 +1,7 @@
 using System;
 using System.Diagnostics;
 
-namespace CubeApp.Engine
+namespace Cubuild.Engine
 {
     // Fixed-step simulation timer. Clocks a high-resolution source against the system clock to
     // correct for drift, accumulates fractional ticks, and exposes how many whole ticks elapse

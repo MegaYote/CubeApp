@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp.World
+namespace Cubuild.World
 {
     /// <summary>
     /// The Great Pyramid: a single colossal solid-brick pyramid that exists exactly once per

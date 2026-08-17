@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Identity of a chunk. The world is two vertically-stacked layers (like two world generators

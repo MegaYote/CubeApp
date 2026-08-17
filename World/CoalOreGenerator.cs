@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp.World
+namespace Cubuild.World
 {
     /// <summary>
     /// Coal ore: blob veins (Cubuild-style minable clusters) that can appear at ANY depth but

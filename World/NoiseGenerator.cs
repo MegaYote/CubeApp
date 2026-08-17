@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp.World
+namespace Cubuild.World
 {
     /// <summary>
     /// Classic improved Perlin noise: a 512-entry permutation table with the quintic fade and the

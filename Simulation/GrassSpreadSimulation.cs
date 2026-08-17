@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Grass spread (MC BlockGrass.updateTick port, adapted to our two-grass design).

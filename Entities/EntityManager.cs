@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using Veldrid;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Manages entities (mobs) in the game world.
@@ -319,12 +319,12 @@ namespace CubeApp
             _mobRenderData.Clear();
             foreach (var mob in _mobs)
             {
-                _mobRenderData.Add(CubeApp.MobRenderData.FromMob(mob));
+                _mobRenderData.Add(Cubuild.MobRenderData.FromMob(mob));
             }
         }
 
         /// <summary>Collects mining targets from all zombies actively breaking blocks.</summary>
-        public void CollectMiningTargets(System.Collections.Generic.List<CubeApp.Renderer.ZombieMiningTarget> list)
+        public void CollectMiningTargets(System.Collections.Generic.List<Cubuild.Renderer.ZombieMiningTarget> list)
         {
             list.Clear();
             foreach (var mob in _mobs)
@@ -332,7 +332,7 @@ namespace CubeApp
                 var mb = ((IMobRenderable)mob).MiningBlock;
                 if (mb.HasValue)
                 {
-                    list.Add(new CubeApp.Renderer.ZombieMiningTarget
+                    list.Add(new Cubuild.Renderer.ZombieMiningTarget
                     {
                         X = mb.Value.X, Y = mb.Value.Y, Z = mb.Value.Z,
                         BlockId = mb.Value.BlockId,

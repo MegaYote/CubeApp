@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// Abstraction over "something that can mesh chunks in the background". The real mesh worker

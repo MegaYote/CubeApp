@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp.World
+namespace Cubuild.World
 {
     /// <summary>
     /// Generates the DEEP layer (world -256..-65): solid stone carved into a labyrinth of

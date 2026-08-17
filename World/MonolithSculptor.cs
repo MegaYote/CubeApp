@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp.World
+namespace Cubuild.World
 {
     /// <summary>
     /// Controllable monolith feature. The terrain's relief noise can accidentally produce

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Numerics;
 using Veldrid;
 
-namespace CubeApp.Renderer
+namespace Cubuild.Renderer
 {
     /// <summary>
     /// Minimal no-op InputSnapshot. The HUD rendered via ImGui in this project is

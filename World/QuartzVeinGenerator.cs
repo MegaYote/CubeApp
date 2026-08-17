@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp.World
+namespace Cubuild.World
 {
     /// <summary>
     /// Sedimentary quartz veins: huge underground quartz strata that follow the terrain surface,

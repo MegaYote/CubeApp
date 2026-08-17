@@ -1,6 +1,6 @@
-using CubeApp.World;
+using Cubuild.World;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// The authoritative biome map. Two large low-frequency noise fields (temperature and

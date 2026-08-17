@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp
+namespace Cubuild
 {
     /// <summary>
     /// A snapshot of a mob handed to the renderer each frame: position, yaw, and animation state.

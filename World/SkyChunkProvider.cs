@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp.World
+namespace Cubuild.World
 {
     /// <summary>
     /// Generates the SKY layer (world 384..1023): a completely empty air chunk at generation

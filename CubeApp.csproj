@@ -2,6 +2,8 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net9.0-windows</TargetFramework>
+    <RootNamespace>Cubuild</RootNamespace>
+    <AssemblyName>Cubuild</AssemblyName>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- OpenAL (Silk.NET) uses pointer-based calls for device/source handles. -->

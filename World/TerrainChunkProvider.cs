@@ -1,6 +1,6 @@
 using System;
 
-namespace CubeApp.World
+namespace Cubuild.World
 {
     /// <summary>
     /// Builds the surface terrain for a ground-layer chunk. A low-resolution density field (5x17x5

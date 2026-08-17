@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CubeApp.World
+namespace Cubuild.World
 {
     /// <summary>
     /// Regular pyramids: small, geometrically-perfect brick pyramids. Like the Great Pyramid,

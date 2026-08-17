@@ -1,4 +1,4 @@
-namespace CubeApp
+namespace Cubuild
 {
     using System.Collections.Generic;
     // Which top-level screen the game is showing. The title/create/pause screens are rendered by

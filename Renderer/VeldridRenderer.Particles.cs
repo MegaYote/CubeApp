@@ -1,15 +1,15 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using ImGuiNET;
 using Veldrid;
 using Veldrid.SPIRV;
 
-namespace CubeApp.Renderer
+namespace Cubuild.Renderer
 {
     public sealed partial class VeldridRenderer : IRenderer, IDisposable
     {
-        private void SortPassBackToFront(int passId, System.Collections.Generic.List<(CubeApp.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands)
+        private void SortPassBackToFront(int passId, System.Collections.Generic.List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands)
         {
             if (!_cameraPosition.HasValue) return;
             var cam = _cameraPosition.Value;
@@ -26,7 +26,7 @@ namespace CubeApp.Renderer
             commands.Sort((a, b) => ChunkCenterDistSq(b.Coord, cam).CompareTo(ChunkCenterDistSq(a.Coord, cam))); // far first
         }
 
-        private static float ChunkCenterDistSq(CubeApp.ChunkCoordinates coord, CubeApp.Point3D cam)
+        private static float ChunkCenterDistSq(Cubuild.ChunkCoordinates coord, Cubuild.Point3D cam)
         {
             float cx = coord.X * ChunkManager.ChunkSize + ChunkManager.ChunkSize * 0.5f;
             float cz = coord.Z * ChunkManager.ChunkSize + ChunkManager.ChunkSize * 0.5f;
