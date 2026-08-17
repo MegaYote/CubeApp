@@ -35,10 +35,13 @@ namespace Cubuild
             // into the inventory. Leaves drop a sapling 1-in-10, otherwise nothing; gravel
             // drops flint 1-in-10 (like Minecraft) and otherwise drops itself. Mining a log
             // while holding flint works 1-in-10 and drops a workbench instead of a log.
+            // Stone mined with a bare FIST (no tool in hand) drops gravel 1-in-10, otherwise
+            // nothing; with any tool it drops itself as normal.
             int dropId = removedBlockId;
             if (dropId == _idLeaves) dropId = _regenRandom.Next(10) == 0 ? _idSapling : 0;
             else if (dropId == _idGravel) dropId = _regenRandom.Next(10) == 0 ? _idFlint : _idGravel;
             else if (dropId == _idLog && SelectedBlock == _idFlint && _regenRandom.Next(10) == 0) dropId = _idWorkbench;
+            else if (dropId == _idStone && SelectedBlock <= 0) dropId = _regenRandom.Next(10) == 0 ? _idGravel : 0;
             if (!IsCreative && dropId > 0)
             {
                 SpawnItemDrop(dropId, 1, new Point3D(x + 0.5, y + 0.5, z + 0.5));
