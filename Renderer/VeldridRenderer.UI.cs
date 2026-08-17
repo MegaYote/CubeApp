@@ -308,7 +308,8 @@ namespace Cubuild.Renderer
             ImGui.PopID();
         }
 
-        // Workbench crafting menu: the user's 111x49 design scaled up 6x. Layout (design px):
+        // Workbench crafting menu: the user's 111x49 design scaled 3x to match the
+        // survival E-menu's uiScale (DrawInventoryWindow uses 3.0f). Layout (design px):
         //   2x2 grid cells at (7,7),(24,7),(7,25),(24,25), each 16x17
         //   result well (79,16) 11x17 — left click crafts the shown recipe
         //   cursor cell (91,16) 13x17 — shows the held stack (display only)
@@ -316,7 +317,8 @@ namespace Cubuild.Renderer
         // kind 5 = result. Program maps them to GameWorld.CraftingClickSlot / TryCraft.
         private void DrawCraftingWindow(Vector2 displaySize)
         {
-            const float uiScale = 6f;
+            // Same scale as the survival E-menu (3x) so both panels feel identical.
+            const float uiScale = 3.0f;
             const float imgW = 111f, imgH = 49f;
             float winW = imgW * uiScale, winH = imgH * uiScale;
             float winX = (displaySize.X - winW) / 2f;
