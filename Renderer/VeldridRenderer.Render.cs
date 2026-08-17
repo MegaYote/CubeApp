@@ -173,31 +173,35 @@ namespace Cubuild.Renderer
         }
 
         // Draws survival item drops as small tumbling cubes (same vertex layout as falling
-        // Item drops: EVERY drop renders as a flat camera-facing sprite of its item texture
-        // (like the hotbar icons) - never a tumbling cube, and never a crossquad. Genuine
-        // items (flint, tools, sap) sample items.png; block items (stone, planks, logs,
-        // crossquads like saplings/torches...) sample their terrain tile. Two passes exist
-        // only because the texture set differs per atlas - both use the sprite pipeline.
+        // Item drops. Passes:
+//   0 = plain BLOCK drops -> tumbling cubes (terrain atlas; the old cube behavior).
+//   1 = genuine items + blocks with items.png art (flint, tools, sap) -> flat
+//       camera-facing sprites from items.png, like the hotbar icons.
+//   2 = CROSSQUAD block drops (saplings, torches) -> flat sprites from the terrain
+//       atlas, because a crossed-quad block tossed around as a cube looks wrong.
         private void DrawItemDrops(CommandList cl)
         {
             int n = _itemDrops.Count;
             if (n == 0 || _itemDropSpritePipeline == null || _spriteVertexBuffer == null) return;
 
-            for (int pass = 0; pass < 2; pass++)
+            for (int pass = 0; pass < 3; pass++)
             {
                 int passCount = 0;
                 for (int i = 0; i < n; i++)
                 {
-                    ItemRegistry.GetTile(_itemDrops[i].ItemId, out bool fromItems);
-                    if ((pass == 0 && fromItems) || (pass == 1 && !fromItems)) continue;
-                    passCount++;
+                    if (DropPassOf(_itemDrops[i].ItemId) == pass) passCount++;
                 }
                 if (passCount == 0) continue;
-                var textureSet = pass == 0 ? _textureSet : _itemsTextureSet;
+
+                bool cube = pass == 0;
+                bool itemsAtlas = pass == 1;
+                if (!cube && _itemDropSpritePipeline == null) continue;
+                if (cube && (_itemDropPipeline == null || _itemDropVertexBuffer == null)) continue;
+                var textureSet = itemsAtlas ? _itemsTextureSet : _textureSet;
                 if (textureSet == null) continue;
 
-                float atlasW = Math.Max(1f, pass == 1 ? _itemsAtlasPixelsW : _atlasWidth);
-                float atlasH = Math.Max(1f, pass == 1 ? _itemsAtlasPixelsH : _atlasHeight);
+                float atlasW = Math.Max(1f, itemsAtlas ? _itemsAtlasPixelsW : _atlasWidth);
+                float atlasH = Math.Max(1f, itemsAtlas ? _itemsAtlasPixelsH : _atlasHeight);
 
                 // 11 floats per instance: worldPos (3) + tileRect (4) + rotation quat (4).
                 int instFloats = passCount * 11;
@@ -207,9 +211,9 @@ namespace Cubuild.Renderer
                 for (int i = 0; i < n; i++)
                 {
                     var it = _itemDrops[i];
-                    var tr = ItemRegistry.GetTile(it.ItemId, out bool fromItems);
-                    if ((pass == 0 && fromItems) || (pass == 1 && !fromItems)) continue;
-                    // The sprite shader offsets the quad around this center point.
+                    if (DropPassOf(it.ItemId) != pass) continue;
+                    var tr = ItemRegistry.GetTile(it.ItemId, out _);
+                    // Rotate around the center, so pass base + half-scale.
                     _itemDropInstanceScratch[vf++] = it.X + halfScale;
                     _itemDropInstanceScratch[vf++] = it.Y + halfScale;
                     _itemDropInstanceScratch[vf++] = it.Z + halfScale;
@@ -232,15 +236,25 @@ namespace Cubuild.Renderer
                 }
                 _gd.UpdateBuffer(_itemDropInstanceBuffer, 0, _itemDropInstanceScratch);
 
-                cl.SetPipeline(_itemDropSpritePipeline);
+                cl.SetPipeline(cube ? _itemDropPipeline : _itemDropSpritePipeline);
                 cl.SetGraphicsResourceSet(0, _projViewSet);
                 cl.SetGraphicsResourceSet(1, textureSet);
                 cl.SetGraphicsResourceSet(2, _fogSet);
-                cl.SetVertexBuffer(0, _spriteVertexBuffer);
+                cl.SetVertexBuffer(0, cube ? _itemDropVertexBuffer : _spriteVertexBuffer);
                 cl.SetVertexBuffer(1, _itemDropInstanceBuffer);
-                cl.SetIndexBuffer(_spriteIndexBuffer, IndexFormat.UInt16);
-                cl.DrawIndexed(6u, (uint)passCount, 0, 0, 0);
+                cl.SetIndexBuffer(cube ? _itemDropIndexBuffer : _spriteIndexBuffer, IndexFormat.UInt16);
+                cl.DrawIndexed(cube ? FallingCubeIndices : 6u, (uint)passCount, 0, 0, 0);
             }
+        }
+
+        // Which drop pass an item belongs to: 0 = plain block (cube), 1 = items.png sprite,
+        // 2 = crossquad block (terrain sprite).
+        private static int DropPassOf(int itemId)
+        {
+            ItemRegistry.GetTile(itemId, out bool fromItems);
+            if (fromItems) return 1;                     // genuine item / block with items.png art
+            if (BlockRegistry.IsCross(itemId)) return 2; // crossquad: sprite, never a cube
+            return 0;                                    // plain block: tumbling cube
         }
 
         public void SetEntities(IReadOnlyList<Cubuild.MobRenderData> mobRenderData)
