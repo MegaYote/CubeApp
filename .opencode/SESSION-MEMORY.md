@@ -1,5 +1,10 @@
 # Session Memory — Cubuild
 
+## PROJECT RENAMED CubeApp -> Cubuild (8/17, from user's other laptop, commit e5121f1)
+- **Everything renamed**: namespace + `<AssemblyName>Cubuild</AssemblyName>` (exe = `Cubuild.exe`), ~103 files. csproj FILE name is still `CubeApp.csproj` — build commands unchanged (`dotnet build CubeApp.csproj -c Release`).
+- **Publish protocol now uses Cubuild names**: copy `Cubuild.exe/.dll/.deps.json/.runtimeconfig.json` → `bin\Release\net9.0-windows\win-x64\publish\`, delete stale `CubeApp.*` files there, kill + relaunch `Cubuild.exe` from publish. Saves folder (`publish\saves`) persisted through the swap.
+- Only remaining "CubeApp" text is in `Docs\*.md/txt` (unimportant).
+
 ## WORKBENCH CRAFTING MENU (8/17, committed)
 - **Right-click a workbench block → crafting menu** (user's own UI design, `Assets/Textures/crafting.png`, 111x49, embedded). `World.TryPickWorkbench` (GameWorld.Crafting.cs) raycasts; Program.Input routes right-click to open instead of place; ESC closes before pause, E closes it.
 - **GameWorld.Crafting.cs**: `CraftingGrid` (4× (ItemId,Count), row-major 2x2), `CraftingResult` recomputed after every mutation, `CraftingClickSlot(slot,rightClick)` = E-menu cursor semantics (left: pick/stack/swap; right: half/drop-1), `TryCraft()` clears grid → output to HeldStack (refuses if cursor can't hold, MC-style). Cursor shared with the E-menu (HeldStack) so items drag between menus.
