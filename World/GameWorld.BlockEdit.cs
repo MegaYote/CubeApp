@@ -53,6 +53,9 @@ namespace Cubuild
             {
                 SpawnItemDrop(dropId, 1, new Point3D(x + 0.5, y + 0.5, z + 0.5));
             }
+            // Chopping away a tree's logs orphan its canopy: any leaves no longer within
+            // reach of a remaining log decompose (Minecraft-style).
+            if (removedBlockId == _idLog) DecayLeavesNear(x, y, z);
             BlockTicks?.OnBlockChanged(x, y, z);
             int rLayer = ChunkManager.LayerForWorldY(y);
             var editedChunk = new ChunkCoordinates(rLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
@@ -68,6 +71,69 @@ namespace Cubuild
             BreakUnsupportedWallTorches(x, y, z);
 
             return true;
+        }
+
+        // ---- leaf decay (Minecraft-style) ----
+        // Leaves decompose once no log remains within 6 blocks (Manhattan distance, the
+        // vanilla survival rule). Triggered whenever a log breaks: the canopy region around
+        // the break is scanned, every leaf with no surviving log in range is removed, and
+        // decayed leaves roll the normal sapling drop (1-in-10, no flint bonus).
+        private const int LeafSupportDistance = 6;
+        private const int LeafScanHalfExtent = 8;
+
+        private void DecayLeavesNear(int bx, int by, int bz)
+        {
+            // Collect the logs and leaf candidates inside the scan cube in one pass.
+            Span<(int X, int Y, int Z)> logs = stackalloc (int, int, int)[64];
+            Span<(int X, int Y, int Z)> leaves = stackalloc (int, int, int)[512];
+            int logCount = 0, leafCount = 0;
+            for (int dy = -LeafScanHalfExtent; dy <= LeafScanHalfExtent; dy++)
+            {
+                for (int dz = -LeafScanHalfExtent; dz <= LeafScanHalfExtent; dz++)
+                {
+                    for (int dx = -LeafScanHalfExtent; dx <= LeafScanHalfExtent; dx++)
+                    {
+                        int x = bx + dx, y = by + dy, z = bz + dz;
+                        if (!Chunks.TryGetLoadedBlock(x, y, z, out int id)) continue;
+                        if (id == _idLog && logCount < logs.Length) logs[logCount++] = (x, y, z);
+                        else if (id == _idLeaves && leafCount < leaves.Length) leaves[leafCount++] = (x, y, z);
+                    }
+                }
+            }
+
+            // Every leaf that can no longer reach a log decomposes.
+            for (int i = 0; i < leafCount; i++)
+            {
+                var (x, y, z) = leaves[i];
+                bool supported = false;
+                for (int j = 0; j < logCount; j++)
+                {
+                    var (lx, ly, lz) = logs[j];
+                    if (Math.Abs(x - lx) + Math.Abs(y - ly) + Math.Abs(z - lz) <= LeafSupportDistance)
+                    {
+                        supported = true;
+                        break;
+                    }
+                }
+                if (!supported) RemoveDecayedLeaf(x, y, z);
+            }
+        }
+
+        private void RemoveDecayedLeaf(int x, int y, int z)
+        {
+            if (!Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId)) return;
+            // Decayed leaves roll the same sapling chance as hand-broken ones.
+            int dropId = _regenRandom.Next(10) == 0 ? _idSapling : 0;
+            if (!IsCreative && dropId > 0)
+            {
+                SpawnItemDrop(dropId, 1, new Point3D(x + 0.5, y + 0.5, z + 0.5));
+            }
+            BlockTicks?.OnBlockChanged(x, y, z);
+            int rLayer = ChunkManager.LayerForWorldY(y);
+            var editedChunk = new ChunkCoordinates(rLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
+            Mesher.RequestImmediateRemesh(editedChunk);
+            BlockEdited?.Invoke(x, y, z, 0, 0);
+            BreakUnsupportedCross(x, y + 1, z);
         }
 
         /// <summary>Places the currently selected item at the targeted face. Items without a
