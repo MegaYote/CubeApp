@@ -29,6 +29,10 @@
     // in any rotation)
     { "input": ["stick", "flint", "stick", "sap"], "output": "flint_hatchet", "count": 1 },
 
+    // flint top-left, flint top-right, stick bottom-left, sap bottom-right ->
+    // 1 flint pick (the sap binds the flint heads to the stick)
+    { "input": ["flint", "flint", "stick", "sap"], "output": "flint_pickaxe", "count": 1 },
+
     // two cobblestone -> 4 cobblestone slabs
     { "input": ["cobblestone", "cobblestone", "", ""], "output": "cobblestone_slab", "count": 4 },
 
