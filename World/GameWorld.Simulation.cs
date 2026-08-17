@@ -151,6 +151,7 @@ namespace Cubuild
                 LocalPlayer.DeathTimer = Math.Min(1f, LocalPlayer.DeathTimer + deltaSeconds);
             StepItemDrops(deltaSeconds);
             BlockTicks?.Tick(deltaSeconds);
+            UpdateLeafDecay(deltaSeconds);
             StepPlayer(LocalPlayer, tickInput, deltaSeconds);
             // Third-person body yaw: the body lags the look direction (slowly while idle, faster
             // while moving/flying) so the head can swivel ahead of the body like a real person.

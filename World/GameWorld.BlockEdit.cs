@@ -74,12 +74,59 @@ namespace Cubuild
         }
 
         // ---- leaf decay (Minecraft-style) ----
-        // Leaves decompose once no log remains within 6 blocks (Manhattan distance, the
-        // vanilla survival rule). Triggered whenever a log breaks: the canopy region around
-        // the break is scanned, every leaf with no surviving log in range is removed, and
-        // decayed leaves roll the normal sapling drop (1-in-10, no flint bonus).
+        // Leaves don't vanish the moment their last log is chopped: once no log remains
+        // within 6 blocks (Manhattan distance, the vanilla survival rule) they begin to
+        // DETERIORATE — each leaf rolls its own randomized 1.5–5s countdown and pops when
+        // it expires, so the canopy melts away gradually. Placing a log back in range
+        // before a leaf's timer hits zero saves it (like MC's "don't break that leaf!").
+        // Timers are runtime-only (not saved), and only advance while the sim runs.
         private const int LeafSupportDistance = 6;
         private const int LeafScanHalfExtent = 8;
+        private readonly Dictionary<(int X, int Y, int Z), float> _decayingLeaves = new();
+
+        private void UpdateLeafDecay(float deltaSeconds)
+        {
+            if (_decayingLeaves.Count == 0) return;
+            var due = new List<(int X, int Y, int Z)>(8);
+            foreach (var kv in _decayingLeaves)
+            {
+                float left = kv.Value - deltaSeconds;
+                _decayingLeaves[kv.Key] = left;
+                if (left <= 0f) due.Add(kv.Key);
+            }
+            foreach (var pos in due)
+            {
+                _decayingLeaves.Remove(pos);
+                // Support re-check at expiry: a log placed during the wait saves the leaf.
+                if (HasLogNearby(pos.X, pos.Y, pos.Z)) continue;
+                RemoveDecayedLeaf(pos.X, pos.Y, pos.Z);
+            }
+        }
+
+        private bool HasLogNearby(int x, int y, int z)
+        {
+            for (int dy = -LeafSupportDistance; dy <= LeafSupportDistance; dy++)
+            {
+                for (int dz = -LeafSupportDistance; dz <= LeafSupportDistance; dz++)
+                {
+                    for (int dx = -LeafSupportDistance; dx <= LeafSupportDistance; dx++)
+                    {
+                        int lx = x + dx, ly = y + dy, lz = z + dz;
+                        if (Math.Abs(dx) + Math.Abs(dy) + Math.Abs(dz) > LeafSupportDistance) continue;
+                        if (Chunks.TryGetLoadedBlock(lx, ly, lz, out int id) && id == _idLog) return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private void ScheduleLeafDecay(int x, int y, int z)
+        {
+            // One countdown per leaf; the first schedule wins (re-scans don't reset it).
+            if (_decayingLeaves.ContainsKey((x, y, z))) return;
+            float delay = 1.5f + (float)_regenRandom.NextDouble() * 3.5f; // 1.5..5 seconds
+            _decayingLeaves[(x, y, z)] = delay;
+        }
 
         private void DecayLeavesNear(int bx, int by, int bz)
         {
@@ -101,7 +148,7 @@ namespace Cubuild
                 }
             }
 
-            // Every leaf that can no longer reach a log decomposes.
+            // Every leaf that can no longer reach a log starts deteriorating.
             for (int i = 0; i < leafCount; i++)
             {
                 var (x, y, z) = leaves[i];
@@ -115,7 +162,7 @@ namespace Cubuild
                         break;
                     }
                 }
-                if (!supported) RemoveDecayedLeaf(x, y, z);
+                if (!supported) ScheduleLeafDecay(x, y, z);
             }
         }
 
