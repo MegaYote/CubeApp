@@ -100,6 +100,8 @@ namespace CubeApp
         private bool _settingsWasOpen;
         private readonly MenuState menu = new();
         private bool inventoryOpen;
+        /// <summary>Workbench crafting menu open (right-click a workbench block while playing).</summary>
+        private bool craftingOpen;
         private bool handEditorOpen;
         private bool biomeMenuOpen;
 
@@ -122,6 +124,7 @@ namespace CubeApp
         {
             BlockRegistry.LoadDefault();
             ItemRegistry.LoadDefault(); // seeds blocks as items + loads items.json
+            RecipeRegistry.LoadDefault();
             BiomeRegistry.LoadDefault();
             MobRegistry.DiscoverMobs(AppDomain.CurrentDomain.BaseDirectory);
             RefreshSavedWorlds();

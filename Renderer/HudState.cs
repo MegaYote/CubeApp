@@ -23,6 +23,8 @@ namespace CubeApp.Renderer
     {
         public bool ShowDebug;
         public bool InventoryOpen;
+        /// <summary>Workbench crafting menu open (right-click a workbench block).</summary>
+        public bool CraftingOpen;
         public bool BiomeMenuOpen;
         public bool HandEditorOpen;
         public bool FlyMode;
@@ -56,6 +58,11 @@ namespace CubeApp.Renderer
         public IReadOnlyList<int> HotbarCounts;
         /// <summary>The stack riding the cursor while the inventory is open (survival drag/drop).</summary>
         public (int ItemId, int Count)? HeldStack;
+
+        /// <summary>Workbench crafting grid, row-major 2x2 (4 slots). Empty/ignored unless CraftingOpen.</summary>
+        public IReadOnlyList<(int ItemId, int Count)> CraftingSlots;
+        /// <summary>Live crafting result for the current grid (null = no recipe).</summary>
+        public (int ItemId, int Count)? CraftingResult;
 
         /// <summary>Player health 0..10, drives the healthbar heart slice (10 = full heart).</summary>
         public int PlayerHealth;
@@ -115,6 +122,7 @@ namespace CubeApp.Renderer
         {
             ShowDebug = false,
             InventoryOpen = false,
+            CraftingOpen = false,
             BiomeMenuOpen = false,
             HandEditorOpen = false,
             FlyMode = false,
@@ -138,6 +146,8 @@ namespace CubeApp.Renderer
             BagSlots = Array.Empty<InventorySlot>(),
             HotbarCounts = Array.Empty<int>(),
             HeldStack = null,
+            CraftingSlots = Array.Empty<(int ItemId, int Count)>(),
+            CraftingResult = null,
             PlayerHealth = 20,
             DeathCause = DeathCause.Unknown,
             HighlightWorldQuad = null,

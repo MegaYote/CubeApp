@@ -31,6 +31,30 @@ namespace CubeApp.Renderer
             }
         }
 
+        // Loads the workbench crafting menu background (user's 111x49 design) and exposes it to
+        // ImGui so the crafting window can paint it as its panel.
+        private void LoadCraftingTexture()
+        {
+            try
+            {
+                byte[]? bytes = LoadImageBytes("crafting.png");
+                if (bytes == null) return;
+                var image = StbImageSharp.ImageResult.FromMemory(bytes, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                var texDesc = TextureDescription.Texture2D((uint)image.Width, (uint)image.Height, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
+                _craftingTexture = _gd.ResourceFactory.CreateTexture(texDesc);
+                _gd.UpdateTexture(_craftingTexture, image.Data, 0, 0, 0, (uint)image.Width, (uint)image.Height, 1, 0, 0);
+                _craftingView = _gd.ResourceFactory.CreateTextureView(_craftingTexture);
+                if (_imguiRenderer != null)
+                {
+                    _craftingImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _craftingView);
+                }
+            }
+            catch
+            {
+                // ignore; the crafting menu falls back to plain ImGui slots
+            }
+        }
+
         // Loads the embedded title-screen logo and exposes it to ImGui.
         private void LoadLogo()
         {

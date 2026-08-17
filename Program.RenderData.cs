@@ -115,7 +115,7 @@ namespace CubeApp
             }
             return new HudState
             {
-                ShowDebug = showFps, InventoryOpen = inventoryOpen, BiomeMenuOpen = biomeMenuOpen, HandEditorOpen = handEditorOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
+                ShowDebug = showFps, InventoryOpen = inventoryOpen, CraftingOpen = craftingOpen, BiomeMenuOpen = biomeMenuOpen, HandEditorOpen = handEditorOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
                 MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                 EntityMs = World.LastEntityMs, EntityCount = World.Entities.MobCount,
                 FacingText = $"{GetCompassDirection(World.PlayerYaw)} ({GameWorld.NormalizeYaw(World.PlayerYaw):0.0} deg)",
@@ -125,6 +125,7 @@ namespace CubeApp
                 BiomeText = World.ChunkProvider?.BiomeNameAt((int)Math.Floor(World.PlayerPosition.X), (int)Math.Floor(World.PlayerPosition.Z)) ?? string.Empty,
                 Hotbar = World.Hotbar, HighlightWorldQuad = highlightQuad,
                 Mode = World.Mode, BagSlots = World.BagSlots, HotbarCounts = World.HotbarCounts, HeldStack = World.HeldStack,
+                CraftingSlots = World.CraftingGrid, CraftingResult = World.CraftingResult,
                 PlayerHealth = World.LocalPlayer.Health,
                 DeathCause = World.LocalPlayer.DeathCause,
                 PlayerX = World.PlayerPosition.X,

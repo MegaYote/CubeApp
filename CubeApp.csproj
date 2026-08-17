@@ -30,6 +30,10 @@
     <EmbeddedResource Include="Assets\Data\items.json" />
     <!-- Data-driven biome definitions (temperature/humidity ranges, height, surfaces). -->
     <EmbeddedResource Include="Assets\Data\biomes.json" />
+    <!-- Data-driven 2x2 crafting recipes (grid input -> item output). -->
+    <EmbeddedResource Include="Assets\Data\recipes.json" />
+    <!-- Workbench crafting menu background (user's UI design). -->
+    <EmbeddedResource Include="Assets\Textures\crafting.png" />
     <!-- Title-screen logo graphic. -->
     <EmbeddedResource Include="Assets\Textures\cubuild.png" />
     <!-- Healthbar sprite sheet (10 slice-countdown hearts + extras; top-left = full heart). -->

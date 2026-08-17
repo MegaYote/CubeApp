@@ -21,10 +21,11 @@ namespace CubeApp
             {
                 if (screen == GameScreen.Playing)
                 {
-                    // ESC closes the E-menu / biome menu first; only then does it pause.
-                    if (inventoryOpen || biomeMenuOpen)
+                    // ESC closes the E-menu / crafting menu / biome menu first; only then does it pause.
+                    if (inventoryOpen || craftingOpen || biomeMenuOpen)
                     {
                         inventoryOpen = false;
+                        craftingOpen = false;
                         biomeMenuOpen = false;
                         EnableMouseLook();
                     }
@@ -88,7 +89,7 @@ namespace CubeApp
                 if (frameInput.ToggleInventoryPressed)
                 {
                     inventoryOpen = !inventoryOpen;
-                    if (inventoryOpen) DisableMouseLook();
+                    if (inventoryOpen) { craftingOpen = false; DisableMouseLook(); }
                     else EnableMouseLook();
                 }
                 // Teleport menu is a creative sandbox convenience.
@@ -155,7 +156,20 @@ namespace CubeApp
                     // primes the target so progress starts immediately this frame.
                 }
             }
-            if (screen == GameScreen.Playing && mouseLook && World != null && _ignoreInteractFrames == 0 && frameInput.PlaceBlockPressed) PlaceSelectedBlock();
+            if (screen == GameScreen.Playing && mouseLook && World != null && _ignoreInteractFrames == 0 && frameInput.PlaceBlockPressed)
+            {
+                // Right-click on a workbench opens the crafting menu; anywhere else places.
+                if (World.TryPickWorkbench(World.PlayerPosition, World.GetCameraForward(), out _))
+                {
+                    craftingOpen = true;
+                    inventoryOpen = false;
+                    DisableMouseLook();
+                }
+                else
+                {
+                    PlaceSelectedBlock();
+                }
+            }
         }
 
         private void CycleRenderDistance()

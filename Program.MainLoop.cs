@@ -181,10 +181,19 @@ namespace CubeApp
                                 World.SelectedBlock = invBlock;
                             }
                         }
-                        // Survival drag/drop clicks (cursor stacks).
+                        // Survival drag/drop clicks (cursor stacks) + workbench crafting clicks.
                         while (gpuRenderer.TryTakeInventoryClick(out var click))
                         {
-                            if (World == null || World.IsCreative) continue;
+                            if (World == null) continue;
+                            // Crafting grid/result clicks work in both modes (the survival
+                            // cursor just never gets populated in creative, so no-op there).
+                            if (click.Kind == 4 || click.Kind == 5)
+                            {
+                                if (click.Kind == 4) World.CraftingClickSlot(click.Target, click.Button == 1);
+                                else if (click.Button == 0) World.TryCraft();
+                                continue;
+                            }
+                            if (World.IsCreative) continue;
                             switch (click.Kind)
                             {
                                 case 0: // bag slot (target = slot index 0..39)

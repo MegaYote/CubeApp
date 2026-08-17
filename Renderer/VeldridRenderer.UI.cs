@@ -308,6 +308,162 @@ namespace CubeApp.Renderer
             ImGui.PopID();
         }
 
+        // Workbench crafting menu: the user's 111x49 design scaled up 6x. Layout (design px):
+        //   2x2 grid cells at (7,7),(24,7),(7,25),(24,25), each 16x17
+        //   result well (79,16) 11x17 — left click crafts the shown recipe
+        //   cursor cell (91,16) 13x17 — shows the held stack (display only)
+        // Clicks ride the inventory click queue: kind 4 = grid slot (target 0..3),
+        // kind 5 = result. Program maps them to GameWorld.CraftingClickSlot / TryCraft.
+        private void DrawCraftingWindow(Vector2 displaySize)
+        {
+            const float uiScale = 6f;
+            const float imgW = 111f, imgH = 49f;
+            float winW = imgW * uiScale, winH = imgH * uiScale;
+            float winX = (displaySize.X - winW) / 2f;
+            float winY = Math.Max(30f, (displaySize.Y - winH) / 2f);
+
+            // Dim the world behind the panel, like the E-menu.
+            var fgOverlay = ImGui.GetForegroundDrawList();
+            uint dimCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.10f, 0.10f, 0.10f, 0.65f));
+            fgOverlay.AddRectFilled(Vector2.Zero, displaySize, dimCol);
+
+            ImGui.SetNextWindowPos(new Vector2(winX, winY), ImGuiCond.Always);
+            ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
+            ImGuiWindowFlags flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
+                | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar
+                | ImGuiWindowFlags.NoBackground;
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+            ImGui.Begin("##crafting", flags);
+            var contentScreen = ImGui.GetCursorScreenPos();
+            var fg = ImGui.GetForegroundDrawList();
+            uint fgTextCol = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 1f));
+
+            // The panel art (or a plain fallback if the texture is missing).
+            if (_craftingImGuiId != IntPtr.Zero)
+            {
+                fg.AddImage(_craftingImGuiId, contentScreen, contentScreen + new Vector2(winW, winH), Vector2.Zero, Vector2.One);
+            }
+            else
+            {
+                uint panelCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.33f, 0.34f, 0.34f, 1f));
+                uint cellCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.20f, 0.21f, 0.21f, 1f));
+                fg.AddRectFilled(contentScreen, contentScreen + new Vector2(46f * uiScale, 49f * uiScale), panelCol);
+                fg.AddRectFilled(contentScreen + new Vector2(73f * uiScale, 9f * uiScale), contentScreen + new Vector2(109f * uiScale, 39f * uiScale), panelCol);
+                fg.AddRectFilled(contentScreen + new Vector2(7f * uiScale, 7f * uiScale), contentScreen + new Vector2(40f * uiScale, 42f * uiScale), cellCol);
+                fg.AddRectFilled(contentScreen + new Vector2(79f * uiScale, 16f * uiScale), contentScreen + new Vector2(104f * uiScale, 33f * uiScale), cellCol);
+            }
+
+            // 2x2 grid cells.
+            var gridPos = new[] { new Vector2(7, 7), new Vector2(24, 7), new Vector2(7, 25), new Vector2(24, 25) };
+            var gridSize = new Vector2(16, 17);
+            for (int i = 0; i < 4; i++)
+            {
+                var cell = gridPos[i];
+                var screenMin = contentScreen + cell * uiScale;
+                var screenMax = screenMin + gridSize * uiScale;
+                (int ItemId, int Count) contents = _hud.CraftingSlots != null && i < _hud.CraftingSlots.Count
+                    ? _hud.CraftingSlots[i] : (0, 0);
+                ImGui.SetCursorPos(cell * uiScale);
+                DrawCraftingCellAt($"cg{i}", contents.ItemId, contents.Count, screenMin, screenMax,
+                    4, i, 1f * uiScale, 16f * uiScale, fg, fgTextCol);
+            }
+
+            // Result well: shows the crafted product; left click crafts.
+            {
+                var screenMin = contentScreen + new Vector2(79, 16) * uiScale;
+                var screenMax = screenMin + new Vector2(11, 17) * uiScale;
+                ImGui.SetCursorPos(new Vector2(79, 16) * uiScale);
+                int resId = _hud.CraftingResult?.ItemId ?? 0;
+                int resCount = _hud.CraftingResult?.Count ?? 0;
+                DrawCraftingCellAt("cres", resId, resCount, screenMin, screenMax, 5, 0,
+                    4f * uiScale, 15f * uiScale, fg, fgTextCol);
+            }
+
+            // Cursor cell: display-only copy of the held stack so the design's right box
+            // shows what's in your hand (the floating cursor also follows the mouse).
+            if (_hud.HeldStack.HasValue)
+            {
+                var heldUv = IconUv(_hud.HeldStack.Value.ItemId, out IntPtr heldTex);
+                if (heldTex != IntPtr.Zero)
+                {
+                    var center = contentScreen + new Vector2(97.5f, 24.5f) * uiScale;
+                    float iconSize = 13f * uiScale;
+                    fg.AddImage(heldTex, center - new Vector2(iconSize * 0.5f, iconSize * 0.5f), center + new Vector2(iconSize * 0.5f, iconSize * 0.5f),
+                        new Vector2(heldUv.X, heldUv.Y), new Vector2(heldUv.X + heldUv.Z, heldUv.Y + heldUv.W));
+                }
+            }
+
+            ImGui.End();
+            ImGui.PopStyleVar(); // WindowPadding
+
+            // Clicks outside the window throw items, matching the E-menu.
+            var mousePos = ImGui.GetMousePos();
+            bool insideWindow = mousePos.X >= winX && mousePos.X <= winX + winW
+                && mousePos.Y >= winY && mousePos.Y <= winY + winH;
+            if (!insideWindow)
+            {
+                if (ImGui.IsMouseClicked(ImGuiMouseButton.Left)) _inventoryClicks.Enqueue((2, 0, 0));
+                if (ImGui.IsMouseClicked(ImGuiMouseButton.Right)) _inventoryClicks.Enqueue((2, 0, 1));
+            }
+
+            // The cursor-held stack floats at the mouse, like the E-menu.
+            if (_hud.HeldStack.HasValue)
+            {
+                int bid = _hud.HeldStack.Value.ItemId;
+                var heldUv2 = IconUv(bid, out IntPtr heldTex2);
+                if (heldTex2 != IntPtr.Zero)
+                {
+                    var mp = ImGui.GetMousePos();
+                    var drawList = ImGui.GetForegroundDrawList();
+                    float half = 16f * uiScale * 0.5f;
+                    drawList.AddImage(heldTex2, mp + new Vector2(-half, -half), mp + new Vector2(half, half),
+                        new Vector2(heldUv2.X, heldUv2.Y), new Vector2(heldUv2.X + heldUv2.Z, heldUv2.Y + heldUv2.W));
+                    int heldCount = _hud.HeldStack.Value.Count;
+                    if (heldCount > 1)
+                        drawList.AddText(mp + new Vector2(half - 16f, half - 17f),
+                            ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 1)), heldCount.ToString());
+                }
+            }
+        }
+
+        // One crafting cell: invisible click target (window layer) whose item icon + count are
+        // drawn on the Foreground list so they sit on top of the dim overlay. kind 4 = grid slot
+        // (target 0..3), kind 5 = result well. inset/size are in SCREEN pixels.
+        private void DrawCraftingCellAt(string id, int itemId, int count, Vector2 screenMin, Vector2 screenMax,
+            int kind, int target, float inset, float iconSize, ImDrawListPtr fg, uint fgTextCol)
+        {
+            ImGui.PushID(id);
+            ImGui.InvisibleButton($"##{id}", screenMax - screenMin);
+            if (ImGui.IsItemClicked(ImGuiMouseButton.Left)) _inventoryClicks.Enqueue((kind, target, 0));
+            if (ImGui.IsItemClicked(ImGuiMouseButton.Right)) _inventoryClicks.Enqueue((kind, target, 1));
+            bool hovered = false;
+            if (ImGui.IsItemHovered())
+            {
+                hovered = true;
+                if (itemId > 0)
+                {
+                    string name = ItemRegistry.Get(itemId).DisplayName;
+                    ImGui.SetTooltip(kind == 5 ? $"Craft {name}" : name);
+                }
+            }
+
+            if (hovered)
+            {
+                uint hoverCol = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 0.22f));
+                fg.AddRectFilled(screenMin, screenMax, hoverCol);
+            }
+            var cellUv = IconUv(itemId, out IntPtr cellTex);
+            if (cellTex != IntPtr.Zero)
+            {
+                var iconMin = screenMin + new Vector2(inset, inset);
+                fg.AddImage(cellTex, iconMin, iconMin + new Vector2(iconSize, iconSize),
+                    new Vector2(cellUv.X, cellUv.Y), new Vector2(cellUv.X + cellUv.Z, cellUv.Y + cellUv.W));
+                if (count > 1 && ItemRegistry.StackSizeOf(itemId) > 1)
+                    fg.AddText(screenMax - new Vector2(16, 17), fgTextCol, count.ToString());
+            }
+            ImGui.PopID();
+        }
+
         // Biome teleport menu (B key): lists every biome, clicking one queues a teleport request
         // that Program consumes to find and jump to the nearest location of that biome. The last
         // entry is special: the Great Pyramid has a fixed once-per-world location.
@@ -1109,6 +1265,12 @@ namespace CubeApp.Renderer
             if (_hud.InventoryOpen)
             {
                 DrawInventoryWindow(displaySize);
+            }
+
+            // Workbench crafting menu (right-click a workbench block).
+            if (_hud.CraftingOpen)
+            {
+                DrawCraftingWindow(displaySize);
             }
 
             // Biome teleport menu (B key).

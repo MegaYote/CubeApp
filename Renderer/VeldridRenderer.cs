@@ -418,6 +418,10 @@ namespace CubeApp.Renderer
         private Texture? _inventoryTexture;
         private TextureView? _inventoryView;
         private IntPtr _inventoryImGuiId;
+        // The workbench crafting menu background (user's design, 111x49), loaded from crafting.png.
+        private Texture? _craftingTexture;
+        private TextureView? _craftingView;
+        private IntPtr _craftingImGuiId;
         // Healthbar sprite sheet (healthbar.png): 13px hearts on a 15px grid. The top-left sprite
         // (index 0) is the FULL heart - the one shown until the slice-countdown sprites are wired.
         private Texture? _healthbarTexture;
@@ -787,6 +791,7 @@ namespace CubeApp.Renderer
             LoadLogo();
             LoadHotbarTextures();
             LoadInventoryTexture();
+            LoadCraftingTexture();
             LoadHealthbarTexture();
         }
 

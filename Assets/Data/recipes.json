@@ -1,0 +1,36 @@
+{
+  // ============================================================================
+  // recipes.json — 2x2 crafting recipes for the workbench menu.
+  //
+  // Each recipe has:
+  //   input   the 2x2 grid, row-major: [ top-left, top-right, bottom-left, bottom-right ]
+  //           "" or null = empty slot. Any ROTATION of a pattern also matches
+  //           (so ["planks","planks","",""] matches it placed vertically too).
+  //   output  block or item id to produce
+  //   count   how many (default 1)
+  //
+  // The workbench menu is opened by right-clicking a workbench block. Grid
+  // slots hold stacks you drag in from your inventory (E menu cursor); the
+  // result appears in the output well and is picked up with a left click.
+  // ============================================================================
+
+  "recipes": [
+    // one log -> 4 planks
+    { "input": ["log", "", "", ""], "output": "planks", "count": 4 },
+
+    // two planks (any rotation) -> 4 sticks
+    { "input": ["planks", "planks", "", ""], "output": "stick", "count": 4 },
+
+    // four planks -> 1 workbench
+    { "input": ["planks", "planks", "planks", "planks"], "output": "workbench", "count": 1 },
+
+    // flint + stick -> 1 flint spear
+    { "input": ["flint", "stick", "", ""], "output": "flint_spear", "count": 1 },
+
+    // two cobblestone -> 4 cobblestone slabs
+    { "input": ["cobblestone", "cobblestone", "", ""], "output": "cobblestone_slab", "count": 4 },
+
+    // two sand -> 4 sand slabs
+    { "input": ["sand", "sand", "", ""], "output": "sand_slab", "count": 4 }
+  ]
+}
