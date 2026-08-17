@@ -48,7 +48,7 @@ namespace Cubuild.Renderer
                 winH = Math.Min(520, displaySize.Y - 64);
             }
             float winX = (displaySize.X - winW) / 2f;
-            float winY = 20f;
+            float winY = Math.Max(30f, (displaySize.Y - winH) / 2f); // centered, like the crafting menu
             ImGui.SetNextWindowPos(new Vector2(winX, winY), ImGuiCond.Always);
             ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
             ImGuiWindowFlags flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
