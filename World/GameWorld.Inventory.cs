@@ -193,6 +193,15 @@ namespace Cubuild
         /// <summary>The stack riding the mouse cursor while the inventory is open.</summary>
         public (int ItemId, int Count)? HeldStack { get; set; }
 
+        /// <summary>Restores the whole bag from a save (Minecraft-style: everything persists).</summary>
+        public void RestoreBag(ReadOnlySpan<InventorySlot> slots)
+        {
+            for (int i = 0; i < BagSlotCount; i++)
+            {
+                _bagSlots[i] = i < slots.Length ? slots[i] : default;
+            }
+        }
+
         // Unified slot access: 0..39 = bag, 40..49 = hotbar.
         private InventorySlot GetSlot(int slot)
         {

@@ -201,6 +201,9 @@ namespace Cubuild
         /// <summary>Day/night clock in world ticks. Full cycle = 24000 ticks.</summary>
         public long WorldTime { get; private set; }
 
+        /// <summary>Restores the day/night clock from a save.</summary>
+        public void SetWorldTime(long ticks) => WorldTime = Math.Max(0, ticks);
+
         /// <summary>Force-advance the day/night clock by 25% of its 24000-tick cycle (T key).</summary>
     }
 }

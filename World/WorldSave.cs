@@ -31,7 +31,7 @@ namespace Cubuild
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 4;
+        public const int Version = 5;
 
         public string Name = "World 1";
         public int Seed;
@@ -41,6 +41,16 @@ namespace Cubuild
         public float Yaw, Pitch;
         public int SelectedSlot;
         public int[] Hotbar = new int[10];
+        /// <summary>v5: full E-menu bag (4 rows x 10), Minecraft-style inventory persistence.</summary>
+        public InventorySlot[] Bag = new InventorySlot[40];
+        /// <summary>v5: stack riding the cursor when the inventory closed.</summary>
+        public bool HasHeldStack;
+        public int HeldItemId;
+        public int HeldCount;
+        /// <summary>v5: player hearts (0..10).</summary>
+        public int PlayerHealth = 10;
+        /// <summary>v5: day/night clock in world ticks (full cycle = 24000).</summary>
+        public long WorldTime;
         public List<SavedChunk> Chunks = new();
         public List<SavedMob> Mobs = new();
 
@@ -61,6 +71,19 @@ namespace Cubuild
                 w.Write(Pitch);
                 w.Write(SelectedSlot);
                 for (int i = 0; i < 10; i++) w.Write(i < Hotbar.Length ? Hotbar[i] : 0);
+
+                // v5: full player + inventory state (bag, cursor, health, time of day).
+                w.Write(PlayerHealth);
+                w.Write(WorldTime);
+                for (int i = 0; i < 40; i++)
+                {
+                    var slot = i < Bag.Length ? Bag[i] : default;
+                    w.Write(slot.ItemId);
+                    w.Write(slot.Count);
+                }
+                w.Write(HasHeldStack);
+                w.Write(HeldItemId);
+                w.Write(HeldCount);
 
                 w.Write(Chunks.Count);
                 foreach (var c in Chunks)
@@ -116,6 +139,20 @@ namespace Cubuild
                 save.SelectedSlot = reader.ReadInt32();
                 save.Hotbar = new int[10];
                 for (int i = 0; i < 10; i++) save.Hotbar[i] = reader.ReadInt32();
+
+                if (version >= 5)
+                {
+                    save.PlayerHealth = reader.ReadInt32();
+                    save.WorldTime = reader.ReadInt64();
+                    save.Bag = new InventorySlot[40];
+                    for (int i = 0; i < 40; i++)
+                    {
+                        save.Bag[i] = new InventorySlot { ItemId = reader.ReadInt32(), Count = reader.ReadInt32() };
+                    }
+                    save.HasHeldStack = reader.ReadBoolean();
+                    save.HeldItemId = reader.ReadInt32();
+                    save.HeldCount = reader.ReadInt32();
+                }
 
                 int chunkCount = reader.ReadInt32();
                 for (int i = 0; i < chunkCount; i++)

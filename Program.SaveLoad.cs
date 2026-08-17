@@ -44,7 +44,20 @@ namespace Cubuild
                     Pitch = World.PlayerPitch,
                     SelectedSlot = World.SelectedSlot,
                     Hotbar = (int[])World.Hotbar.Clone(),
+                    PlayerHealth = World.LocalPlayer.Health,
+                    WorldTime = World.WorldTime,
+                    Bag = new InventorySlot[40],
                 };
+                for (int i = 0; i < 40 && i < World.BagSlots.Count; i++)
+                {
+                    save.Bag[i] = World.BagSlots[i];
+                }
+                if (World.HeldStack is var held && held.HasValue)
+                {
+                    save.HasHeldStack = true;
+                    save.HeldItemId = held.Value.ItemId;
+                    save.HeldCount = held.Value.Count;
+                }
                 foreach (var coord in World.Chunks.ModifiedChunks)
                 {
                     if (World.Chunks.TryGetLoadedChunk(coord, out var chunk))
@@ -85,6 +98,11 @@ namespace Cubuild
                 for (int i = 0; i < GameWorld.HotbarSlots; i++) World.Hotbar[i] = save.Hotbar[i];
             }
             World.SetSelectedSlot(Math.Clamp(save.SelectedSlot, 0, GameWorld.HotbarSlots - 1));
+            World.RestoreBag(save.Bag);
+            World.HeldStack = save.HasHeldStack && save.HeldItemId > 0 && save.HeldCount > 0
+                ? (save.HeldItemId, save.HeldCount) : null;
+            World.LocalPlayer.Health = Math.Clamp(save.PlayerHealth, 0, 10);
+            World.SetWorldTime(save.WorldTime);
             World.Entities.LoadMobs(save.Mobs);
             needsMeshUpdate = true;
         }

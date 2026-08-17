@@ -1,5 +1,14 @@
 # Session Memory — Cubuild
 
+## SAVE FORMAT v5: FULL MINECRAFT-STYLE STATE (8/17, committed)
+- **WorldSave.cs Version 4→5** (magic "CUBW", binary + deflate). Old v4 saves still load (v5 fields default: bag empty, health 10, time 0).
+- **Newly persisted**: full 40-slot E-menu bag (`InventorySlot[40]` itemId+count pairs), cursor `HeldStack` (has + itemId + count), `PlayerHealth` (0..10), `WorldTime` (day/night ticks, restore via `World.SetWorldTime`). All read/written between hotbar and chunks; load gated on `version >= 5`.
+- **New GameWorld hooks**: `RestoreBag(ReadOnlySpan<InventorySlot>)` (GameWorld.Inventory.cs), `SetWorldTime(long)` (GameWorld.Simulation.cs, clamps ≥ 0). Program.SaveLoad fills the fields in SaveWorld + restores in LoadWorld (health clamped 0..10, held stack dropped if itemId/count ≤ 0).
+- Already saved before v5: name/seed/mode, player pos+yaw+pitch, selected slot, hotbar, modified chunks, mobs. The game also writes a save every frame + on ESC + on quit (Program.MainLoop.cs:241).
+
+## CRAFTING UI SCALE 3x (8/17, committed)
+- DrawCraftingWindow `uiScale` 6f → **3.0f** to match the survival E-menu (`DrawInventoryWindow` uses 3.0f). Panel now 333x147.
+
 ## PROJECT RENAMED CubeApp -> Cubuild (8/17, from user's other laptop, commit e5121f1)
 - **Everything renamed**: namespace + `<AssemblyName>Cubuild</AssemblyName>` (exe = `Cubuild.exe`), ~103 files. csproj FILE name is still `CubeApp.csproj` — build commands unchanged (`dotnet build CubeApp.csproj -c Release`).
 - **Publish protocol now uses Cubuild names**: copy `Cubuild.exe/.dll/.deps.json/.runtimeconfig.json` → `bin\Release\net9.0-windows\win-x64\publish\`, delete stale `CubeApp.*` files there, kill + relaunch `Cubuild.exe` from publish. Saves folder (`publish\saves`) persisted through the swap.
@@ -9,7 +18,7 @@
 - **Right-click a workbench block → crafting menu** (user's own UI design, `Assets/Textures/crafting.png`, 111x49, embedded). `World.TryPickWorkbench` (GameWorld.Crafting.cs) raycasts; Program.Input routes right-click to open instead of place; ESC closes before pause, E closes it.
 - **GameWorld.Crafting.cs**: `CraftingGrid` (4× (ItemId,Count), row-major 2x2), `CraftingResult` recomputed after every mutation, `CraftingClickSlot(slot,rightClick)` = E-menu cursor semantics (left: pick/stack/swap; right: half/drop-1), `TryCraft()` clears grid → output to HeldStack (refuses if cursor can't hold, MC-style). Cursor shared with the E-menu (HeldStack) so items drag between menus.
 - **RecipeRegistry (Items/RecipeRegistry.cs)** + **Assets/Data/recipes.json** (comment-friendly like other data JSONs): input = 4 ids row-major (`""` = empty), output/count; matches ANY of the 4 rotations of the 2x2 pattern. Loaded in Program ctor AFTER ItemRegistry. Starter recipes: log→planks×4, planks×2→stick×4, planks×4→workbench, flint+stick→flint_spear, cobble×2→cobble_slab×4, sand×2→sand_slab×4.
-- **UI (VeldridRenderer.UI.cs DrawCraftingWindow)**: crafting.png drawn at 6x (666x294), dim overlay like E-menu; grid cells at design px (7,7),(24,7),(7,25),(24,25) 16x17; result well (79,16) 11x17 — left click crafts; cursor cell (91,16) 13x17 = display of HeldStack. Clicks ride the existing `_inventoryClicks` queue: **kind 4 = grid slot (target 0..3), kind 5 = result well** — drained in Program.MainLoop BEFORE the `IsCreative` skip (so crafting clicks work in both modes; cursor just stays empty in creative).
+- **UI (VeldridRenderer.UI.cs DrawCraftingWindow)**: crafting.png drawn at **3x** (333x147, matches survival E-menu scale), dim overlay like E-menu; grid cells at design px (7,7),(24,7),(7,25),(24,25) 16x17; result well (79,16) 11x17 — left click crafts; cursor cell (91,16) 13x17 = display of HeldStack. Clicks ride the existing `_inventoryClicks` queue: **kind 4 = grid slot (target 0..3), kind 5 = result well** — drained in Program.MainLoop BEFORE the `IsCreative` skip (so crafting clicks work in both modes; cursor just stays empty in creative).
 - DESIGN INTERPRETATION (user must verify in-game): left panel = 2x2 input grid, arrow = flow, right panel = result well + cursor display. UI scale const `uiScale = 6f` in DrawCraftingWindow; fallback panels draw if texture missing.
 
 ## DATA FILE EDITING MADE FRIENDLY (8/16, committed)
