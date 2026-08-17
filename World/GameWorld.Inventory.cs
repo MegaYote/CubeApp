@@ -33,6 +33,8 @@ namespace Cubuild
         private static readonly int _idWorkbench = BlockRegistry.GetId("workbench");
         // Flint is a GENUINE item (items.json), not a block - resolve through the item registry.
         private static readonly int _idFlint = ItemRegistry.GetId("flint");
+        // Sap is a block whose DROPPED form uses the items.json sap entry's icon.
+        private static readonly int _idSap = ItemRegistry.GetId("sap");
         private readonly List<DroppedItem> _droppedItems = new();
         private readonly List<ItemDropRenderData> _itemDropRenderScratch = new();
         public IReadOnlyList<DroppedItem> DroppedItems => _droppedItems;

@@ -40,9 +40,9 @@ namespace Cubuild
             int dropId = removedBlockId;
             if (dropId == _idLeaves)
             {
-                // Natural leaf drop: 1-in-10 sapling; with FLINT in hand the otherwise-nothing
-                // outcome gets its own 1-in-10 roll for a stick.
-                dropId = RollLeafDrop(flintBonus: true);
+                // Natural leaf drop: sapling 1-in-10, sap (1-in-20 hand / 1-in-10 flint),
+                // then the flint-stick bonus.
+                dropId = RollLeafDrop(flintBonus: true, naturalDecay: false);
             }
             else if (dropId == _idGravel) dropId = _regenRandom.Next(10) == 0 ? _idFlint : _idGravel;
             else if (dropId == _idLog && SelectedBlock == _idFlint && _regenRandom.Next(10) == 0) dropId = _idWorkbench;
@@ -164,12 +164,15 @@ namespace Cubuild
             }
         }
 
-        // The leaf drop table: 1-in-10 sapling, always. The flint-stick bonus only applies
-        // to HAND-breaking (there's no flint in a hand during natural decay, so decay calls
-        // this with flintBonus:false) — the sapling chance is identical either way.
-        private int RollLeafDrop(bool flintBonus)
+        // The leaf drop table. First roll is always the 1-in-10 sapling. Then, on the
+        // otherwise-nothing outcome: sap drops 1-in-20 by hand, 1-in-10 with flint in hand,
+        // or 1-in-12 when the leaf decays naturally; and with flint there's still the extra
+        // 1-in-10 stick. One item per leaf, rolls in priority order (sapling > sap > stick).
+        private int RollLeafDrop(bool flintBonus, bool naturalDecay)
         {
             if (_regenRandom.Next(10) == 0) return _idSapling;
+            int sapChance = naturalDecay ? 12 : (flintBonus && SelectedBlock == _idFlint ? 10 : 20);
+            if (_regenRandom.Next(sapChance) == 0) return _idSap;
             if (flintBonus && SelectedBlock == _idFlint && _regenRandom.Next(10) == 0) return _idStick;
             return 0;
         }
@@ -180,8 +183,9 @@ namespace Cubuild
             // another mechanic changed it) during the countdown.
             if (!Chunks.TryGetLoadedBlock(x, y, z, out int currentId) || currentId != _idLeaves) return;
             if (!Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId)) return;
-            // Decayed leaves roll the SAME drop as hand-broken ones (no flint bonus).
-            int dropId = RollLeafDrop(flintBonus: false);
+            // Decayed leaves roll the SAME drop table as hand-broken ones (no flint bonus,
+            // sap at its natural 1-in-12 rate).
+            int dropId = RollLeafDrop(flintBonus: false, naturalDecay: true);
             if (!IsCreative && dropId > 0)
             {
                 SpawnItemDrop(dropId, 1, new Point3D(x + 0.5, y + 0.5, z + 0.5));
