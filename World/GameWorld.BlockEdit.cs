@@ -43,6 +43,12 @@ namespace CubeApp
             var editedChunk = new ChunkCoordinates(rLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
             Mesher.RequestImmediateRemesh(editedChunk);
             BlockEdited?.Invoke(x, y, z, 0, 0);
+
+            // If a cross block (flower, sapling, torch, etc.) sits on top of the removed
+            // block, it loses support and breaks automatically.  The break cascades upward
+            // so a multi-block plant can be supported in the future.
+            BreakUnsupportedCross(x, y + 1, z);
+
             return true;
         }
 
@@ -117,6 +123,15 @@ namespace CubeApp
                 }
             }
 
+            // Cross blocks (flowers, saplings, torches, etc.) can't be stacked on top of
+            // other cross blocks and break automatically when their support is removed.
+            if (BlockRegistry.IsCross(blockToPlace)
+                && Chunks.TryGetLoadedBlock(place.x, place.y - 1, place.z, out var belowId)
+                && BlockRegistry.IsCross(belowId))
+            {
+                return false;
+            }
+
             if (WouldBlockIntersectPlayer(p, place.x, place.y, place.z, blockToPlace, meta)) return false;
             if (!Chunks.TrySetBlock(place.x, place.y, place.z, blockToPlace, meta)) return false;
             if (!IsCreative) TryConsumeFromInventory(spendId, 1);
@@ -141,6 +156,7 @@ namespace CubeApp
             var editedChunk = new ChunkCoordinates(ebLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
             Mesher.RequestImmediateRemesh(editedChunk);
             BlockEdited?.Invoke(x, y, z, blockId, meta);
+            if (blockId == BlockRegistry.AirId) BreakUnsupportedCross(x, y + 1, z);
             return true;
         }
 
@@ -179,6 +195,27 @@ namespace CubeApp
         }
 
         private static bool IsReplaceableFluid(int id) => id == BlockRegistry.GetId("water");
+
+        /// <summary>If (x, y, z) holds a cross block with no solid support below, break it
+        /// and cascade upward.  Future multi-block plants (2-tall ferns, etc.) can extend
+        /// this to check a whitelist of supported configurations.</summary>
+        private void BreakUnsupportedCross(int x, int y, int z)
+        {
+            if (!Chunks.TryGetLoadedBlock(x, y, z, out var id)) return;
+            if (!BlockRegistry.IsCross(id)) return;
+            // A cross block is supported if the block directly below is solid (full cube
+            // or any non-air non-cross shape).  Cross blocks below don't count as support.
+            if (Chunks.TryGetLoadedBlock(x, y - 1, z, out var below) && below != BlockRegistry.AirId && !BlockRegistry.IsCross(below))
+                return;
+            // No support — break this cross block (no drops, like flowers/saplings in Minecraft).
+            Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId);
+            BlockTicks?.OnBlockChanged(x, y, z);
+            int ucLayer = ChunkManager.LayerForWorldY(y);
+            Mesher.RequestImmediateRemesh(new ChunkCoordinates(ucLayer, WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            BlockEdited?.Invoke(x, y, z, 0, 0);
+            // Cascade upward — if there's another cross block above, it also loses support.
+            BreakUnsupportedCross(x, y + 1, z);
+        }
 
         private static string SlabMaterialOf(int id)
         {
