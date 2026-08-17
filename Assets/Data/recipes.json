@@ -24,9 +24,10 @@
     // flint + stick -> 1 flint spear
     { "input": ["flint", "stick", "", ""], "output": "flint_spear", "count": 1 },
 
-    // stick top-left, flint top-right, stick bottom-left -> 1 flint hatchet
-    // (the L-shape matches in any rotation)
-    { "input": ["stick", "flint", "stick", ""], "output": "flint_hatchet", "count": 1 },
+    // stick top-left, flint top-right, stick bottom-left, sap bottom-right ->
+    // 1 flint hatchet (the sap binds the sticks to the flint, like real life; matches
+    // in any rotation)
+    { "input": ["stick", "flint", "stick", "sap"], "output": "flint_hatchet", "count": 1 },
 
     // two cobblestone -> 4 cobblestone slabs
     { "input": ["cobblestone", "cobblestone", "", ""], "output": "cobblestone_slab", "count": 4 },
