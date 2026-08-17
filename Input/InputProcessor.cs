@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Veldrid;
 
 namespace CubeApp
@@ -121,6 +122,18 @@ namespace CubeApp
     {
         private static readonly string[] MouseDeltaMemberNames = ["MouseDelta", "currentMouseDelta", "CurrentMouseDelta"];
 
+        // SDL2 key polling — bypasses broken SDL2 event delivery for movement keys.
+        [DllImport("SDL2.dll", CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr SDL_GetKeyboardState(out int numkeys);
+
+        // SDL scancodes for movement keys
+        private const int SDL_SCANCODE_W = 26;
+        private const int SDL_SCANCODE_S = 22;
+        private const int SDL_SCANCODE_A = 4;
+        private const int SDL_SCANCODE_D = 7;
+        private const int SDL_SCANCODE_SPACE = 44;
+        private const int SDL_SCANCODE_LSHIFT = 225;
+
         private bool moveForward;
         private bool moveBackward;
         private bool moveLeft;
@@ -187,117 +200,118 @@ namespace CubeApp
 
         public void ProcessSnapshot(InputSnapshot snapshot, bool mouseCaptured, float sensitivity)
         {
+            // Poll SDL2 keyboard state directly for movement keys.
+            // SDL2 event delivery is broken when multiple keys are held: it stops generating
+            // key-repeat events for one key when another is pressed.  SDL_GetKeyboardState
+            // reads the hardware state and always reflects reality.
+            IntPtr keyStatePtr = SDL_GetKeyboardState(out int numkeys);
+            unsafe
+            {
+                byte* keyState = (byte*)keyStatePtr;
+                moveForward = keyState[SDL_SCANCODE_W] != 0;
+                moveBackward = keyState[SDL_SCANCODE_S] != 0;
+                moveLeft = keyState[SDL_SCANCODE_A] != 0;
+                moveRight = keyState[SDL_SCANCODE_D] != 0;
+                moveUp = keyState[SDL_SCANCODE_SPACE] != 0;
+                moveDown = keyState[SDL_SCANCODE_LSHIFT] != 0;
+
+                // jumpPressed is consumed each tick (one-shot).  Set it whenever Space is
+                // physically held so StepPlayer can trigger a jump each time the player lands.
+                jumpPressed = keyState[SDL_SCANCODE_SPACE] != 0;
+            }
+
+            // Process key events only for non-movement actions (toggles, one-shots).
             foreach (var keyEvent in snapshot.KeyEvents)
             {
-                bool down = keyEvent.Down;
+                if (!keyEvent.Down) continue;
                 switch (keyEvent.Key)
                 {
-                    case Key.W:
-                        moveForward = down;
-                        break;
-                    case Key.S:
-                        moveBackward = down;
-                        break;
-                    case Key.A:
-                        moveLeft = down;
-                        break;
-                    case Key.D:
-                        moveRight = down;
-                        break;
-                    case Key.Space:
-                        moveUp = down;
-                        if (down) jumpPressed = true;
-                        break;
-                    case Key.ShiftLeft:
-                        moveDown = down;
-                        break;
                     case Key.Escape:
-                        if (down) toggleMouseCapturePressed = true;
+                        toggleMouseCapturePressed = true;
                         break;
                     case Key.F3:
-                        if (down) toggleDebugPressed = true;
+                        toggleDebugPressed = true;
                         break;
                     case Key.E:
-                        if (down) toggleInventoryPressed = true;
+                        toggleInventoryPressed = true;
                         break;
                     case Key.B:
-                        if (down) toggleBiomeMenuPressed = true;
+                        toggleBiomeMenuPressed = true;
                         break;
                     case Key.F8:
-                        if (down) toggleHandEditorPressed = true;
+                        toggleHandEditorPressed = true;
                         break;
                     case Key.F:
-                        if (down) cycleRenderDistancePressed = true;
+                        cycleRenderDistancePressed = true;
                         break;
                     case Key.G:
-                        if (down) spawnMobPressed = true;
+                        spawnMobPressed = true;
                         break;
                     case Key.H:
-                        if (down) spawnCoyotePressed = true;
+                        spawnCoyotePressed = true;
                         break;
                     case Key.P:
-                        if (down) spawnStevePressed = true;
+                        spawnStevePressed = true;
                         break;
                     case Key.J:
-                        if (down) spawnZombiePressed = true;
+                        spawnZombiePressed = true;
                         break;
                     case Key.O:
-                        if (down) damageSelfPressed = true;
+                        damageSelfPressed = true;
                         break;
                     case Key.Q:
-                        if (down) dropItemPressed = true;
+                        dropItemPressed = true;
                         break;
                     case Key.F5:
-                        if (down) toggleThirdPersonPressed = true;
+                        toggleThirdPersonPressed = true;
                         break;
                     case Key.F6:
-                        if (down) toggleFullbrightPressed = true;
+                        toggleFullbrightPressed = true;
                         break;
                     case Key.T:
-                        if (down) advanceTimePressed = true;
+                        advanceTimePressed = true;
                         break;
                     case Key.F7:
-                        if (down) toggleGpuCullPressed = true;
+                        toggleGpuCullPressed = true;
                         break;
                     case Key.F11:
-                        if (down) toggleFullscreenPressed = true;
+                        toggleFullscreenPressed = true;
                         break;
                     case Key.Enter:
-                        // Alt+Enter toggles fullscreen (standard games convention).
-                        if (down && keyEvent.Modifiers.HasFlag(ModifierKeys.Alt)) toggleFullscreenPressed = true;
+                        if (keyEvent.Modifiers.HasFlag(ModifierKeys.Alt)) toggleFullscreenPressed = true;
                         break;
                     case Key.F2:
-                        if (down) toggleFlyPressed = true;
+                        toggleFlyPressed = true;
                         break;
                     case Key.Number1:
-                        if (down) selectedSlot = 0;
+                        selectedSlot = 0;
                         break;
                     case Key.Number2:
-                        if (down) selectedSlot = 1;
+                        selectedSlot = 1;
                         break;
                     case Key.Number3:
-                        if (down) selectedSlot = 2;
+                        selectedSlot = 2;
                         break;
                     case Key.Number4:
-                        if (down) selectedSlot = 3;
+                        selectedSlot = 3;
                         break;
                     case Key.Number5:
-                        if (down) selectedSlot = 4;
+                        selectedSlot = 4;
                         break;
                     case Key.Number6:
-                        if (down) selectedSlot = 5;
+                        selectedSlot = 5;
                         break;
                     case Key.Number7:
-                        if (down) selectedSlot = 6;
+                        selectedSlot = 6;
                         break;
                     case Key.Number8:
-                        if (down) selectedSlot = 7;
+                        selectedSlot = 7;
                         break;
                     case Key.Number9:
-                        if (down) selectedSlot = 8;
+                        selectedSlot = 8;
                         break;
                     case Key.Number0:
-                        if (down) selectedSlot = 9;
+                        selectedSlot = 9;
                         break;
                 }
             }
