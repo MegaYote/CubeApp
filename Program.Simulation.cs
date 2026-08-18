@@ -395,17 +395,25 @@ namespace Cubuild
             int waterBucketId = ItemRegistry.GetId("water_bucket");
             int waterBlockId = BlockRegistry.GetId("water");
             if (World.SelectedBlock != bucketId) return false;
+
             var pick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
             if (!pick.HasValue) return false;
+
             int targetBlockId;
             if (!World.Chunks.TryGetLoadedBlock(pick.Value.Remove.x, pick.Value.Remove.y, pick.Value.Remove.z, out targetBlockId))
                 return false;
             if (targetBlockId != waterBlockId) return false;
+
             // Remove the water block
             World.Chunks.TrySetBlock(pick.Value.Remove.x, pick.Value.Remove.y, pick.Value.Remove.z, BlockRegistry.AirId);
-            // Replace held bucket with water bucket
+
+            // In survival, replace bucket with water_bucket. If the selected slot has count 0
+            // (can happen if obtained in creative before the fix), seed it first.
             if (!World.IsCreative)
             {
+                int selected = World.SelectedSlot;
+                if (World.Hotbar[selected] == bucketId && World.HotbarCounts[selected] <= 0)
+                    World.HotbarCounts[selected] = 1;
                 World.TryConsumeFromInventory(bucketId, 1);
                 World.TryAddToInventory(waterBucketId, 1);
             }
