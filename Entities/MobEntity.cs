@@ -617,8 +617,10 @@ namespace Cubuild
         private bool UpdateChase(float dt, ChunkManager manager)
         {
             var target = _chaseTarget.Value;
-            double dx = target.X - Position.X, dz = target.Z - Position.Z;
-            double distSq = dx * dx + dz * dz;
+            double dx = target.X - Position.X;
+            double dy = target.Y - Position.Y;
+            double dz = target.Z - Position.Z;
+            double distSq = dx * dx + dy * dy + dz * dz;
             if (distSq > AggroRange * AggroRange) { ClearPathGoal(); return false; }
 
             _attackCooldown = Math.Max(0f, _attackCooldown - dt);
