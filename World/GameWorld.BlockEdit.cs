@@ -8,10 +8,10 @@ namespace Cubuild
     {
         private static readonly int _idTorch = BlockRegistry.GetId("torch");
 
-        /// <summary>How a right-click "chop" breaks the targeted wood block: the hatchet
-        /// strips logs into planks / planks into sticks; flint converts a log straight
-        /// into a workbench (always, no chance roll).</summary>
-        public enum WoodChopKind { None = 0, Hatchet, Flint }
+        /// <summary>How a right-click "chop" breaks the targeted block: the hatchet
+        /// strips logs into planks / planks into sticks; flint converts a log into a
+        /// workbench; pickaxe converts stone into cobblestone.</summary>
+        public enum WoodChopKind { None = 0, Hatchet, Flint, Pickaxe }
 
         public bool TryBreakBlock(PlayerState p, Point3D origin, Point3D direction, out int removedBlockId, out (int x, int y, int z) removedPos)
         {
@@ -62,6 +62,12 @@ namespace Cubuild
             {
                 dropId = _idWorkbench; // flint carves a log into a workbench, always
             }
+            else if (chop == WoodChopKind.Pickaxe && (dropId == _idStone || dropId == _idCobblestone))
+            {
+                // Pickaxe right-click chop: stone/cobblestone -> cobblestone (normal speed)
+                dropId = _idCobblestone;
+                dropCount = 1;
+            }
             else if (dropId == _idLeaves)
             {
                 // Natural leaf drop: sapling 1-in-10, sap (1-in-20 hand / 1-in-10 flint),
@@ -70,6 +76,8 @@ namespace Cubuild
             }
             else if (dropId == _idGravel) dropId = _regenRandom.Next(10) == 0 ? _idFlint : _idGravel;
             else if (dropId == _idStone && SelectedBlock <= 0) dropId = _regenRandom.Next(10) == 0 ? _idGravel : 0;
+            // Obsidian yields nothing - it's too hard to extract anything from it
+            else if (dropId == _idObsidian) dropId = 0;
             if (!IsCreative && dropId > 0)
             {
                 SpawnItemDrop(dropId, dropCount, new Point3D(x + 0.5, y + 0.5, z + 0.5));

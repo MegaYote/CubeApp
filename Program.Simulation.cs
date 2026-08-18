@@ -61,33 +61,49 @@ namespace Cubuild
         // Cubuild C++ port: hold-to-mine. Progress = delta / (BASE_BREAK_TIME * hardness).
         // Switching target (or releasing) resets progress. Spawns shards every 20% and breaks the
         // block at 100%.
-        // The flint hatchet: LEFT-click mines logs AND planks faster than before (which
+// The flint hatchet: LEFT-click mines logs AND planks faster than before (which
         // itself was 15% over base, so ~32% total). Holding RIGHT-click on a log CHOPs it at
         // NORMAL speed (no bonus) and strips 1-4 planks on break; chopping a PLANK strips
         // it into 1-4 sticks instead. FLINT: left-click mining logs is 5% faster, and
         // right-clicking a log CHOPs it into a workbench - always, no chance roll.
+        // FLINT PICKAXE: LEFT-click mines stone-types 25% faster (stone, cobblestone, smoothstone,
+        // quartz, shimmerrock, obsidian, etc. - but NOT wood, dirt, sand, leaves). RIGHT-click
+        // on stone/cobblestone CHOPs it into cobblestone at NORMAL speed.
+        // FLINT SHOVEL: LEFT-click mines soily/gravelly blocks 15% faster (dirt, grass, gravel,
+        // sand, redclay, clay-like blocks). Obsidian is the hardest (hardness 50) and yields nothing.
         private static readonly int _hatchetItemId = ItemRegistry.GetId("flint_hatchet");
         private static readonly int _logBlockId = BlockRegistry.GetId("log");
         private static readonly int _plankBlockId = BlockRegistry.GetId("planks");
         private static readonly int _flintItemId = ItemRegistry.GetId("flint");
-        private static readonly float _hatchetSpeedMul = 1.15f * 1.75f; // compounded: 15% faster than the previous 15%
+        private static readonly int _pickaxeItemId = ItemRegistry.GetId("flint_pickaxe");
+        private static readonly int _shovelItemId = ItemRegistry.GetId("flint_shovel");
+        private static readonly int _stoneBlockId = BlockRegistry.GetId("stone");
+        private static readonly int _cobbleBlockId = BlockRegistry.GetId("cobblestone");
+        private static readonly int _obsidianBlockId = BlockRegistry.GetId("obsidian");
+        private static readonly float _hatchetSpeedMul = 1.15f * 1.15f; // compounded: 15% faster than the previous 15%
         private const float FlintLogSpeedMul = 1.05f; // flint's weak 5% log-mining bonus
+        private const float PickaxeStoneSpeedMul = 1.25f; // pickaxe 25% faster on stone-types
+        private const float ShovelDirtSpeedMul = 1.15f; // shovel 15% faster on soily/gravelly blocks
 
         private void UpdateMining(TickInputState tickInput, float deltaSeconds)
         {
             if (World == null) return;
 
-            // Right-click CHOP modes (survival only): the hatchet strips logs/planks,
-            // flint converts a log into a workbench. Left-click always wins over chop.
-            bool hatchetHeld = World.SelectedBlock == _hatchetItemId;
-            bool flintHeld = World.SelectedBlock == _flintItemId;
-            var chopKind = GameWorld.WoodChopKind.None;
-            if (!World.IsCreative && tickInput.PlaceHeld && !tickInput.BreakHeld)
-            {
-                if (hatchetHeld) chopKind = GameWorld.WoodChopKind.Hatchet;
-                else if (flintHeld) chopKind = GameWorld.WoodChopKind.Flint;
-            }
-            bool miningHeld = tickInput.BreakHeld || chopKind != GameWorld.WoodChopKind.None;
+// Right-click CHOP modes (survival only): the hatchet strips logs/planks,
+        // flint converts a log into a workbench, pickaxe converts stone to cobblestone.
+        // Left-click always wins over chop.
+        bool hatchetHeld = World.SelectedBlock == _hatchetItemId;
+        bool flintHeld = World.SelectedBlock == _flintItemId;
+        bool pickaxeHeld = World.SelectedBlock == _pickaxeItemId;
+        bool shovelHeld = World.SelectedBlock == _shovelItemId;
+        var chopKind = GameWorld.WoodChopKind.None;
+        if (!World.IsCreative && tickInput.PlaceHeld && !tickInput.BreakHeld)
+        {
+            if (hatchetHeld) chopKind = GameWorld.WoodChopKind.Hatchet;
+            else if (flintHeld) chopKind = GameWorld.WoodChopKind.Flint;
+            else if (pickaxeHeld) chopKind = GameWorld.WoodChopKind.Pickaxe;
+        }
+        bool miningHeld = tickInput.BreakHeld || chopKind != GameWorld.WoodChopKind.None;
 
             if (miningHeld && _ignoreInteractFrames == 0)
             {
@@ -131,9 +147,13 @@ namespace Cubuild
                     {
                         int chopProbe = 0;
                         bool probeOk = World.Chunks.TryGetLoadedBlock(target.x, target.y, target.z, out chopProbe);
-                        bool validTarget = chopKind == GameWorld.WoodChopKind.Hatchet
-                            ? chopProbe == _logBlockId || chopProbe == _plankBlockId
-                            : chopProbe == _logBlockId;
+                        bool validTarget = chopKind switch
+                        {
+                            GameWorld.WoodChopKind.Hatchet => chopProbe == _logBlockId || chopProbe == _plankBlockId,
+                            GameWorld.WoodChopKind.Flint => chopProbe == _logBlockId,
+                            GameWorld.WoodChopKind.Pickaxe => chopProbe == _stoneBlockId || chopProbe == _cobbleBlockId,
+                            _ => false
+                        };
                         if (!probeOk || !validTarget)
                         {
                             _miningTarget = null;
@@ -171,6 +191,7 @@ namespace Cubuild
                     float breakTime = BaseBreakTime * _miningBlockHardness;
                     // Left-click speed bonuses (chops stay normal speed):
                     // hatchet: ~32% faster on logs + planks; flint: 5% faster on logs.
+                    // pickaxe: 25% faster on stone-types; shovel: 15% on soily/gravelly blocks.
                     if (chopKind == GameWorld.WoodChopKind.None)
                     {
                         if (hatchetHeld && (_miningBlockId == _logBlockId || _miningBlockId == _plankBlockId))
@@ -180,6 +201,14 @@ namespace Cubuild
                         else if (flintHeld && _miningBlockId == _logBlockId)
                         {
                             breakTime /= FlintLogSpeedMul;
+                        }
+                        else if (pickaxeHeld && IsStoneType(_miningBlockId))
+                        {
+                            breakTime /= PickaxeStoneSpeedMul;
+                        }
+                        else if (shovelHeld && IsSoilyBlock(_miningBlockId))
+                        {
+                            breakTime /= ShovelDirtSpeedMul;
                         }
                     }
                     float oldProgress = _miningProgress;
@@ -422,6 +451,52 @@ namespace Cubuild
         private void OnLocalEdit(int x, int y, int z, int blockId, int meta)
         {
             _netClient?.SendBlockEdit(x, y, z, blockId, meta);
+        }
+
+        // Checks if a block is a "stone type" that benefits from pickaxe speed bonus.
+        private static bool IsStoneType(int blockId)
+        {
+            return blockId == BlockRegistry.GetId("stone")
+                || blockId == BlockRegistry.GetId("cobblestone")
+                || blockId == BlockRegistry.GetId("smoothstone")
+                || blockId == BlockRegistry.GetId("obsidian")
+                || blockId == BlockRegistry.GetId("mossycobblestone")
+                || blockId == BlockRegistry.GetId("smoothstone")
+                || blockId == BlockRegistry.GetId("shimmerrock")
+                || blockId == BlockRegistry.GetId("quartz")
+                || blockId == BlockRegistry.GetId("darkstone")
+                || blockId == BlockRegistry.GetId("bluebrick")
+                || blockId == BlockRegistry.GetId("greenbrick")
+                || blockId == BlockRegistry.GetId("yellowbrick")
+                || blockId == BlockRegistry.GetId("pinkbrick")
+                || blockId == BlockRegistry.GetId("cyanbrick")
+                || blockId == BlockRegistry.GetId("blackbrick")
+                || blockId == BlockRegistry.GetId("whitebrick")
+                || blockId == BlockRegistry.GetId("purple_bricks")
+                || blockId == BlockRegistry.GetId("orange_bricks")
+                || blockId == BlockRegistry.GetId("cobble_bricks")
+                || blockId == BlockRegistry.GetId("gray_bricks")
+                || blockId == BlockRegistry.GetId("cobbled_quartz")
+                || blockId == BlockRegistry.GetId("tiledstone")
+                || blockId == BlockRegistry.GetId("mossycobblestone")
+                || blockId == BlockRegistry.GetId("bricks");
+        }
+
+        // Checks if a block is a "soily/gravelly" type that benefits from shovel speed bonus.
+        private static bool IsSoilyBlock(int blockId)
+        {
+            return blockId == BlockRegistry.GetId("dirt")
+                || blockId == BlockRegistry.GetId("grass")
+                || blockId == BlockRegistry.GetId("grass_spreading")
+                || blockId == BlockRegistry.GetId("gravel")
+                || blockId == BlockRegistry.GetId("sand")
+                || blockId == BlockRegistry.GetId("redclay")
+                || blockId == BlockRegistry.GetId("dirt_slab")
+                || blockId == BlockRegistry.GetId("sand_slab")
+                || blockId == BlockRegistry.GetId("sand")
+                || blockId == BlockRegistry.GetId("redclay")
+                || blockId == BlockRegistry.GetId("dirt_stairs")
+                || blockId == BlockRegistry.GetId("sand_stairs");
         }
 
         // Builds MobRenderData for remote players: from the host snapshot (as a client) or from
