@@ -117,6 +117,97 @@ namespace Cubuild
         }
 
         /// <summary>
+        /// Performs a block hit-test along a ray specifically for FLUIDS (water, etc.).
+        /// Unlike TryPickBlock, this stops at fluid blocks instead of passing through them.
+        /// Used for bucket filling. Returns the first fluid block hit, or null.
+        /// </summary>
+        public PickBlockResult? TryPickFluid(Point3D origin, Point3D direction, int fluidBlockId = -1)
+        {
+            direction = direction.Normalized();
+            var blockX = (int)Math.Floor(origin.X);
+            var blockY = (int)Math.Floor(origin.Y);
+            var blockZ = (int)Math.Floor(origin.Z);
+
+            var stepX = Math.Sign(direction.X);
+            var stepY = Math.Sign(direction.Y);
+            var stepZ = Math.Sign(direction.Z);
+
+            var tDeltaX = stepX != 0 ? Math.Abs(1.0 / direction.X) : double.PositiveInfinity;
+            var tDeltaY = stepY != 0 ? Math.Abs(1.0 / direction.Y) : double.PositiveInfinity;
+            var tDeltaZ = stepZ != 0 ? Math.Abs(1.0 / direction.Z) : double.PositiveInfinity;
+
+            var tMaxX = stepX > 0 ? (blockX + 1.0 - origin.X) * tDeltaX : (origin.X - blockX) * tDeltaX;
+            var tMaxY = stepY > 0 ? (blockY + 1.0 - origin.Y) * tDeltaY : (origin.Y - blockY) * tDeltaY;
+            var tMaxZ = stepZ > 0 ? (blockZ + 1.0 - origin.Z) * tDeltaZ : (origin.Z - blockZ) * tDeltaZ;
+
+            var currentX = blockX;
+            var currentY = blockY;
+            var currentZ = blockZ;
+            var distance = 0.0;
+            var lastX = currentX;
+            var lastY = currentY;
+            var lastZ = currentZ;
+            var normal = Point3D.Zero;
+
+            for (int iteration = 0; iteration < 200 && distance <= BlockReach; iteration++)
+            {
+                if (_manager.TryGetLoadedBlock(currentX, currentY, currentZ, out var block))
+                {
+                    // Match specific fluid if provided, otherwise match any non-air, non-solid block
+                    // that reports as fluid (for now just match the given fluid ID or water)
+                    bool isTargetFluid = (fluidBlockId > 0 && block == fluidBlockId) ||
+                                         (fluidBlockId <= 0 && block != BlockRegistry.AirId &&
+                                          !BlockRegistry.IsSolid(block)); // non-solid = fluid-like
+                    if (isTargetFluid)
+                    {
+                        return new PickBlockResult((currentX, currentY, currentZ), (lastX, lastY, lastZ), normal, distance);
+                    }
+                }
+
+                lastX = currentX;
+                lastY = currentY;
+                lastZ = currentZ;
+
+                if (tMaxX < tMaxY)
+                {
+                    if (tMaxX < tMaxZ)
+                    {
+                        currentX += stepX;
+                        distance = tMaxX;
+                        tMaxX += tDeltaX;
+                        normal = new Point3D(-stepX, 0, 0);
+                    }
+                    else
+                    {
+                        currentZ += stepZ;
+                        distance = tMaxZ;
+                        tMaxZ += tDeltaZ;
+                        normal = new Point3D(0, 0, -stepZ);
+                    }
+                }
+                else
+                {
+                    if (tMaxY < tMaxZ)
+                    {
+                        currentY += stepY;
+                        distance = tMaxY;
+                        tMaxY += tDeltaY;
+                        normal = new Point3D(0, -stepY, 0);
+                    }
+                    else
+                    {
+                        currentZ += stepZ;
+                        distance = tMaxZ;
+                        tMaxZ += tDeltaZ;
+                        normal = new Point3D(0, 0, -stepZ);
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// Checks if a block at the given coordinates would intersect the player's bounding box.
         /// Returns true if there is an intersection (block placement should be rejected).
         /// </summary>

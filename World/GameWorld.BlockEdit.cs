@@ -454,6 +454,26 @@ namespace Cubuild
             return dirZ > 0 ? 2 : 3;
         }
 
+        // Computes the face rectangle (minX,minY,minZ,maxX,maxY,maxZ) for a fluid block
+        // given the normal pointing toward the ray origin.
+        private (double minX, double minY, double minZ, double maxX, double maxY, double maxZ)
+        GetFluidFaceRect(int x, int y, int z, Point3D normal)
+        {
+            if (Math.Abs(normal.X) > 0.5) // X face
+            {
+                double xVal = normal.X > 0 ? x + 1.0 : x;
+                return (xVal, y, z, xVal, y + 1.0, z + 1.0);
+            }
+            if (Math.Abs(normal.Y) > 0.5) // Y face
+            {
+                double yVal = normal.Y > 0 ? y + 1.0 : y;
+                return (x, yVal, z, x + 1.0, yVal, z + 1.0);
+            }
+            // Z face
+            double zVal = normal.Z > 0 ? z + 1.0 : z;
+            return (x, y, zVal, x + 1.0, y + 1.0, zVal);
+        }
+
         private bool WouldBlockIntersectPlayer(PlayerState p, int x, int y, int z, int blockId, int meta)
         {
             double minX = p.Position.X - PlayerRadius;
@@ -530,6 +550,62 @@ namespace Cubuild
                 {
                     if (tMaxY < tMaxZ) { currentY += stepY; distance = tMaxY; tMaxY += tDeltaY; }
                     else { currentZ += stepZ; distance = tMaxZ; tMaxZ += tDeltaZ; }
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Performs a fluid hit-test along a ray (for bucket filling).
+        /// Unlike TryPickBlock, this DOES hit water instead of passing through it.
+        /// Returns the first matching fluid block hit, or null.
+        /// </summary>
+        public PickBlockResult? TryPickFluid(Point3D origin, Point3D direction, int fluidBlockId)
+        {
+            direction = direction.Normalized();
+            int blockX = (int)Math.Floor(origin.X);
+            int blockY = (int)Math.Floor(origin.Y);
+            int blockZ = (int)Math.Floor(origin.Z);
+            var stepX = Math.Sign(direction.X);
+            var stepY = Math.Sign(direction.Y);
+            var stepZ = Math.Sign(direction.Z);
+            var tDeltaX = stepX != 0 ? Math.Abs(1.0 / direction.X) : double.PositiveInfinity;
+            var tDeltaY = stepY != 0 ? Math.Abs(1.0 / direction.Y) : double.PositiveInfinity;
+            var tDeltaZ = stepZ != 0 ? Math.Abs(1.0 / direction.Z) : double.PositiveInfinity;
+            var tMaxX = stepX > 0 ? (blockX + 1.0 - origin.X) * tDeltaX : (origin.X - blockX) * tDeltaX;
+            var tMaxY = stepY > 0 ? (blockY + 1.0 - origin.Y) * tDeltaY : (origin.Y - blockY) * tDeltaY;
+            var tMaxZ = stepZ > 0 ? (blockZ + 1.0 - origin.Z) * tDeltaZ : (origin.Z - blockZ) * tDeltaZ;
+            int currentX = blockX, currentY = blockY, currentZ = blockZ;
+            var maxDistance = BlockReach;
+            var distance = 0.0;
+            var lastX = currentX;
+            var lastY = currentY;
+            var lastZ = currentZ;
+            var normal = Point3D.Zero;
+
+            for (int iteration = 0; iteration < 400 && distance <= maxDistance; iteration++)
+            {
+                if (Chunks.TryGetLoadedBlockAndMeta(currentX, currentY, currentZ, out var block, out _))
+                {
+                    if (block == fluidBlockId)
+                    {
+                        var face = GetFluidFaceRect(currentX, currentY, currentZ, normal);
+                        var place = ((int)Math.Floor(currentX + normal.X + 0.5), (int)Math.Floor(currentY + normal.Y + 0.5), (int)Math.Floor(currentZ + normal.Z + 0.5));
+                        return new PickBlockResult((currentX, currentY, currentZ), place, normal, face);
+                    }
+                }
+
+                lastX = currentX; lastY = currentY; lastZ = currentZ;
+
+                if (tMaxX < tMaxY)
+                {
+                    if (tMaxX < tMaxZ) { currentX += stepX; distance = tMaxX; tMaxX += tDeltaX; normal = new Point3D(-stepX, 0, 0); }
+                    else { currentZ += stepZ; distance = tMaxZ; tMaxZ += tDeltaZ; normal = new Point3D(0, 0, -stepZ); }
+                }
+                else
+                {
+                    if (tMaxY < tMaxZ) { currentY += stepY; distance = tMaxY; tMaxY += tDeltaY; normal = new Point3D(0, -stepY, 0); }
+                    else { currentZ += stepZ; distance = tMaxZ; tMaxZ += tDeltaZ; normal = new Point3D(0, 0, -stepZ); }
                 }
             }
             return null;

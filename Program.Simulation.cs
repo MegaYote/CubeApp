@@ -396,13 +396,10 @@ namespace Cubuild
             int waterBlockId = BlockRegistry.GetId("water");
             if (World.SelectedBlock != bucketId) return false;
 
-            var pick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
+            // Use a dedicated fluid raycast that stops at water (unlike the normal
+            // block raycast which passes through water for placement).
+            var pick = World.TryPickFluid(World.PlayerPosition, World.GetCameraForward(), waterBlockId);
             if (!pick.HasValue) return false;
-
-            int targetBlockId;
-            if (!World.Chunks.TryGetLoadedBlock(pick.Value.Remove.x, pick.Value.Remove.y, pick.Value.Remove.z, out targetBlockId))
-                return false;
-            if (targetBlockId != waterBlockId) return false;
 
             // Remove the water block
             World.Chunks.TrySetBlock(pick.Value.Remove.x, pick.Value.Remove.y, pick.Value.Remove.z, BlockRegistry.AirId);
