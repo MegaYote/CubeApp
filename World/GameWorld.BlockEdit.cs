@@ -356,11 +356,32 @@ var place = pickResult.Value.Place;
 
             // Cross blocks (flowers, saplings, torches, etc.) can't be stacked on top of
             // other cross blocks and break automatically when their support is removed.
+            // Exception: torches on walls can be stacked vertically since they attach to the wall,
+            // not to the block below them.
             if (BlockRegistry.IsCross(blockToPlace)
                 && Chunks.TryGetLoadedBlock(place.x, place.y - 1, place.z, out var belowId)
                 && BlockRegistry.IsCross(belowId))
             {
-                return false;
+                // Allow torch stacking on walls: if placing on a side face (wall), the torch
+                // is supported by the wall, not the block below. The cross-block-below check
+                // only applies to floor/ceiling placement (normal.Y != 0).
+                if (blockToPlace == _idTorch || blockToPlace == _idSapTorch)
+                {
+                    // We're in placement logic - need to check if we're placing on a wall (side face)
+                    // The normal is available here as 'normal' parameter
+                    if (normal.Y == 0)
+                    {
+                        // Wall placement - allow stacking
+                    }
+                    else
+                    {
+                        return false; // Floor/ceiling stacking not allowed
+                    }
+                }
+                else
+                {
+                    return false; // Other cross blocks (flowers, saplings) can't stack
+                }
             }
 
             // Torches: placed on a top face -> floor torch (X-cross); placed against a
