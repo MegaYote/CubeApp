@@ -58,6 +58,11 @@ namespace Cubuild
             }
             if (frameInput.ToggleDebugPressed) showFps = !showFps;
             if (frameInput.ToggleFullscreenPressed) ToggleFullscreen();
+            if (frameInput.ToggleCreativePressed && World != null)
+            {
+                World.Mode = World.Mode == GameMode.Creative ? GameMode.Survival : GameMode.Creative;
+                World.FlyMode = World.IsCreative; // fly mode follows creative
+            }
             if (_ignoreInteractFrames > 0) _ignoreInteractFrames--;
             if (screen == GameScreen.Playing && World != null)
             {

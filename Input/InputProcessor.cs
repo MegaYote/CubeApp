@@ -24,6 +24,7 @@ namespace Cubuild
         public bool AdvanceTimePressed { get; }
         public bool ToggleGpuCullPressed { get; }
         public bool ToggleFullscreenPressed { get; }
+        public bool ToggleCreativePressed { get; }
         public bool BreakBlockPressed { get; }
         public bool PlaceBlockPressed { get; }
         public bool DropItemPressed { get; }
@@ -48,6 +49,7 @@ namespace Cubuild
             bool advanceTimePressed,
             bool toggleGpuCullPressed,
             bool toggleFullscreenPressed,
+            bool toggleCreativePressed,
             bool breakBlockPressed,
             bool placeBlockPressed,
             bool dropItemPressed,
@@ -71,6 +73,7 @@ namespace Cubuild
             AdvanceTimePressed = advanceTimePressed;
             ToggleGpuCullPressed = toggleGpuCullPressed;
             ToggleFullscreenPressed = toggleFullscreenPressed;
+            ToggleCreativePressed = toggleCreativePressed;
             BreakBlockPressed = breakBlockPressed;
             PlaceBlockPressed = placeBlockPressed;
             DropItemPressed = dropItemPressed;
@@ -133,6 +136,7 @@ namespace Cubuild
         private const int SDL_SCANCODE_D = 7;
         private const int SDL_SCANCODE_SPACE = 44;
         private const int SDL_SCANCODE_LSHIFT = 225;
+        private const int SDL_SCANCODE_SLASH = 56; // forward slash /
 
         private bool moveForward;
         private bool moveBackward;
@@ -159,6 +163,7 @@ namespace Cubuild
         private bool advanceTimePressed;
         private bool toggleGpuCullPressed;
         private bool toggleFullscreenPressed;
+        private bool toggleCreativePressed;
         private bool breakBlockPressed;
         private bool placeBlockPressed;
         private bool dropItemPressed;
@@ -187,6 +192,7 @@ namespace Cubuild
             toggleFlyPressed = false;
             toggleFullbrightPressed = false;
             toggleFullscreenPressed = false;
+            toggleCreativePressed = false;
             breakBlockPressed = false;
             placeBlockPressed = false;
             selectedSlot = null;
@@ -279,6 +285,9 @@ namespace Cubuild
                         break;
                     case Key.Enter:
                         if (keyEvent.Modifiers.HasFlag(ModifierKeys.Alt)) toggleFullscreenPressed = true;
+                        break;
+                    case Key.Slash:
+                        toggleCreativePressed = true;
                         break;
                     case Key.F2:
                         toggleFlyPressed = true;
@@ -411,6 +420,7 @@ namespace Cubuild
                 advanceTimePressed,
                 toggleGpuCullPressed,
                 toggleFullscreenPressed,
+                toggleCreativePressed,
                 breakBlockPressed,
                 placeBlockPressed,
                 dropItemPressed,
