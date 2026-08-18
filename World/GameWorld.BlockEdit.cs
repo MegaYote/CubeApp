@@ -7,6 +7,7 @@ namespace Cubuild
     public sealed partial class GameWorld : IDisposable
     {
         private static readonly int _idTorch = BlockRegistry.GetId("torch");
+        private static readonly int _idSapTorch = BlockRegistry.GetId("sap_torch");
 
         /// <summary>How a right-click "chop" breaks the targeted block: the hatchet
         /// strips logs into planks / planks into sticks; flint converts a log into a
@@ -364,11 +365,17 @@ var place = pickResult.Value.Place;
 
             // Torches: placed on a top face -> floor torch (X-cross); placed against a
             // side face -> wall torch (single quad leaning away from the wall, meta 1-4).
-            // A wall torch needs a solid wall behind it; torches can't hang from ceilings.
-            if (blockToPlace == _idTorch)
+            // Sap torches can also be placed on ceilings (upside-down, meta 5).
+            // A wall torch needs a solid wall behind it; regular torches can't hang from ceilings.
+            bool isSapTorch = blockToPlace == _idSapTorch;
+            if (blockToPlace == _idTorch || isSapTorch)
             {
-                if (normal.Y < 0) return false;
-                if (normal.Y == 0)
+                if (normal.Y < 0)
+                {
+                    if (!isSapTorch) return false; // regular torch can't go on ceiling
+                    meta = 5; // ceiling/upside-down
+                }
+                else if (normal.Y == 0)
                 {
                     int wallX = place.x - (int)normal.X;
                     int wallZ = place.z - (int)normal.Z;
@@ -473,20 +480,36 @@ var place = pickResult.Value.Place;
             BreakUnsupportedCross(x, y + 1, z);
         }
 
-        /// <summary>Breaks any wall torches whose wall block was just removed. A torch at the
-        /// given 4-neighbor cell with the matching lean meta has its wall at (x, y, z).</summary>
+        /// <summary>Breaks any wall/ceiling torches whose supporting block was just removed.</summary>
         private void BreakUnsupportedWallTorches(int x, int y, int z)
         {
+            // Wall torches (meta 1-4)
             BreakWallTorchAt(x + 1, y, z, 1); // leans +X -> wall at torch.X-1 == x
             BreakWallTorchAt(x - 1, y, z, 2); // leans -X -> wall at torch.X+1 == x
             BreakWallTorchAt(x, y, z + 1, 3); // leans +Z -> wall at torch.Z-1 == z
             BreakWallTorchAt(x, y, z - 1, 4); // leans -Z -> wall at torch.Z+1 == z
+
+            // Ceiling sap torches (meta 5) - the ceiling block is below the torch
+            BreakCeilingSapTorchAt(x, y + 1, z);
         }
 
         private void BreakWallTorchAt(int x, int y, int z, int expectedMeta)
         {
             if (!Chunks.TryGetLoadedBlockAndMeta(x, y, z, out var id, out var meta)) return;
-            if (id != _idTorch || meta != expectedMeta) return;
+            if (id != _idTorch && id != _idSapTorch) return;
+            if (meta != expectedMeta) return;
+            Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId);
+            BlockTicks?.OnBlockChanged(x, y, z);
+            int layer = ChunkManager.LayerForWorldY(y);
+            Mesher.RequestImmediateRemesh(new ChunkCoordinates(layer, WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            BlockEdited?.Invoke(x, y, z, 0, 0);
+        }
+
+        private void BreakCeilingSapTorchAt(int x, int y, int z)
+        {
+            if (!Chunks.TryGetLoadedBlockAndMeta(x, y, z, out var id, out var meta)) return;
+            if (id != _idSapTorch) return;
+            if (meta != 5) return; // only ceiling sap torches (meta 5)
             Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId);
             BlockTicks?.OnBlockChanged(x, y, z);
             int layer = ChunkManager.LayerForWorldY(y);

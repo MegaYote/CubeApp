@@ -40,6 +40,9 @@
     // flint top-left, stick bottom-left, sap any position -> 1 flint shovel
     { "input": ["flint", "sap", "stick", ""], "output": "flint_shovel", "count": 1 },
 
+    // sap on top of stick (vertical) -> 1 sap torch (sap makes it sticky for ceiling placement)
+    { "input": ["sap", "", "stick", ""], "output": "sap_torch", "count": 1 },
+
     // two cobblestone -> 4 cobblestone slabs
     { "input": ["cobblestone", "cobblestone", "", ""], "output": "cobblestone_slab", "count": 4 },
 
