@@ -231,7 +231,17 @@ namespace Cubuild.Renderer
             ImGui.PushID(id);
 
             // Check if this item has a flat sprite (items.png tile) - e.g., sap, flint, etc.
-            if (TryGetFlatSpriteUv(itemId, out var flatUv, out var flatTex))
+            // Also check for blocks with items.json overrides (like sap)
+            IntPtr flatTex = IntPtr.Zero;
+            Vector4 flatUv = default;
+            bool hasFlatSprite = TryGetFlatSpriteUv(itemId, out flatUv, out flatTex);
+            if (!hasFlatSprite && itemId < BlockRegistry.Count)
+            {
+                hasFlatSprite = TryGetBlockFlatSpriteUv(itemId, out var blockUv, out var blockTex);
+                if (hasFlatSprite) { flatUv = blockUv; flatTex = blockTex; }
+            }
+
+            if (hasFlatSprite && flatTex != IntPtr.Zero)
             {
                 ImGui.ImageButton($"##{id}", flatTex, new Vector2(48, 48),
                     new Vector2(flatUv.X, flatUv.Y), new Vector2(flatUv.X + flatUv.Z, flatUv.Y + flatUv.W),
@@ -319,6 +329,10 @@ namespace Cubuild.Renderer
             }
             // Check for flat sprite (items.png tile) first - e.g., sap, flint, etc.
                 bool hasFlatSprite = TryGetFlatSpriteUv(itemId, out var cellUv, out IntPtr cellTex);
+                if (!hasFlatSprite && itemId < BlockRegistry.Count)
+                {
+                    hasFlatSprite = TryGetBlockFlatSpriteUv(itemId, out cellUv, out cellTex);
+                }
                 if (!hasFlatSprite)
                 {
                     cellUv = IconUv(itemId, out cellTex);

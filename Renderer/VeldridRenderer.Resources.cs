@@ -512,6 +512,35 @@ namespace Cubuild.Renderer
             return true;
         }
 
+        // Gets the flat sprite UV + texture for a block that has an items.png override (like sap).
+        // These are blocks that have an items.json entry with itemTile, but their numeric ID is in the block range.
+        public bool TryGetBlockFlatSpriteUv(int blockId, out Vector4 uv, out IntPtr texId)
+        {
+            texId = IntPtr.Zero;
+            uv = default;
+
+            // Check if this block has an items.png tile override
+            var def = BlockRegistry.GetById(blockId);
+            if (!def.ItemTile.HasValue) return false;
+
+            var tile = def.ItemTile.Value;
+            if (tile.Width <= 0 || tile.Height <= 0) return false;
+
+            // Items.png texture
+            texId = _itemIconImGuiId;
+
+            // Items atlas dimensions
+            float atlasW = Math.Max(1f, _itemsAtlasPixelsW);
+            float atlasH = Math.Max(1f, _itemsAtlasPixelsH);
+
+            uv = new Vector4(
+                tile.X / atlasW,
+                tile.Y / atlasH,
+                tile.Width / atlasW,
+                tile.Height / atlasH);
+            return true;
+        }
+
         // Software-renders a block icon from the REAL mesher output: builds a tiny 16x16x16 chunk
         // with the block at (8,8,8), runs Mesher.GenerateMesh (the same mesh builder the world uses),
         // then rasterizes the actual MeshFaces into the 48px cell. Every shape - full cubes, slabs,
