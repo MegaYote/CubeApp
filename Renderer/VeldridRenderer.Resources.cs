@@ -463,6 +463,9 @@ namespace Cubuild.Renderer
                     texId = _itemIconImGuiId;
                     return _itemIconUv[rel];
                 }
+                // For blocks with items.json overrides (like sap), they're not in the item atlas
+                // Return zero UV - caller should handle this case by rendering as flat sprite from items.png
+                return default;
             }
             // Otherwise use block atlas for blocks
             if (itemId >= 0 && itemId < BlockRegistry.Count && _blockIconUv != null && itemId < _blockIconUv.Length)
@@ -479,6 +482,34 @@ namespace Cubuild.Renderer
             }
             texId = IntPtr.Zero;
             return default;
+        }
+
+        // Gets the flat sprite UV + texture for an item that has an items.png tile.
+        // Returns true if the item has a flat sprite representation (items.png tile).
+        public bool TryGetFlatSpriteUv(int itemId, out Vector4 uv, out IntPtr texId)
+        {
+            texId = IntPtr.Zero;
+            uv = default;
+            ItemRegistry.GetTile(itemId, out bool fromItemsAtlas);
+            if (!fromItemsAtlas) return false;
+
+            // Get the tile from ItemRegistry
+            var tile = ItemRegistry.GetTile(itemId, out _);
+            if (tile.Width <= 0 || tile.Height <= 0) return false;
+
+            // Items.png texture
+            texId = _itemIconImGuiId;
+
+            // Items atlas dimensions
+            float atlasW = Math.Max(1f, _itemsAtlasPixelsW);
+            float atlasH = Math.Max(1f, _itemsAtlasPixelsH);
+
+            uv = new Vector4(
+                tile.X / atlasW,
+                tile.Y / atlasH,
+                tile.Width / atlasW,
+                tile.Height / atlasH);
+            return true;
         }
 
         // Software-renders a block icon from the REAL mesher output: builds a tiny 16x16x16 chunk

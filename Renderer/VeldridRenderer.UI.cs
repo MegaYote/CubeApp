@@ -229,11 +229,12 @@ namespace Cubuild.Renderer
             int unified = kind == 1 ? 40 + target : target;
             bool shift = ImGui.IsKeyDown(ImGuiKey.LeftShift) || ImGui.IsKeyDown(ImGuiKey.RightShift);
             ImGui.PushID(id);
-            var uv = IconUv(itemId, out IntPtr iconTex);
-            if (iconTex != IntPtr.Zero)
+
+            // Check if this item has a flat sprite (items.png tile) - e.g., sap, flint, etc.
+            if (TryGetFlatSpriteUv(itemId, out var flatUv, out var flatTex))
             {
-                ImGui.ImageButton($"##{id}", iconTex, new Vector2(48, 48),
-                    new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W),
+                ImGui.ImageButton($"##{id}", flatTex, new Vector2(48, 48),
+                    new Vector2(flatUv.X, flatUv.Y), new Vector2(flatUv.X + flatUv.Z, flatUv.Y + flatUv.W),
                     Vector4.Zero, Vector4.One);
                 if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && shift) _inventoryClicks.Enqueue((3, unified, 0));
                 else if (ImGui.IsItemClicked(ImGuiMouseButton.Left)) _inventoryClicks.Enqueue((kind, unified, 0));
@@ -243,7 +244,6 @@ namespace Cubuild.Renderer
                     _hoveredInventorySlot = unified;
                     ImGui.SetTooltip(ItemRegistry.Get(itemId).DisplayName);
                 }
-                // Non-stackable items (tools) don't show a count, like Minecraft.
                 if (ItemRegistry.StackSizeOf(itemId) > 1)
                 {
                     ImGui.SameLine(0, 4);
@@ -252,13 +252,37 @@ namespace Cubuild.Renderer
             }
             else
             {
-                ImGui.ImageButton($"##{id}", _iconImGuiId, new Vector2(48, 48),
-                    new Vector2(0, 0), new Vector2(1, 1),
-                    new Vector4(0.12f, 0.12f, 0.12f, 1f), new Vector4(0.3f, 0.3f, 0.3f, 1f));
-                if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && shift) _inventoryClicks.Enqueue((3, unified, 0));
-                else if (ImGui.IsItemClicked(ImGuiMouseButton.Left)) _inventoryClicks.Enqueue((kind, unified, 0));
-                if (ImGui.IsItemClicked(ImGuiMouseButton.Right)) _inventoryClicks.Enqueue((kind, unified, 1));
-                if (ImGui.IsItemHovered()) _hoveredInventorySlot = unified;
+                // Fallback to block cube icon or item atlas
+                var uv = IconUv(itemId, out IntPtr iconTex);
+                if (iconTex != IntPtr.Zero)
+                {
+                    ImGui.ImageButton($"##{id}", iconTex, new Vector2(48, 48),
+                        new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W),
+                        Vector4.Zero, Vector4.One);
+                    if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && shift) _inventoryClicks.Enqueue((3, unified, 0));
+                    else if (ImGui.IsItemClicked(ImGuiMouseButton.Left)) _inventoryClicks.Enqueue((kind, unified, 0));
+                    if (ImGui.IsItemClicked(ImGuiMouseButton.Right)) _inventoryClicks.Enqueue((kind, unified, 1));
+                    if (ImGui.IsItemHovered())
+                    {
+                        _hoveredInventorySlot = unified;
+                        ImGui.SetTooltip(ItemRegistry.Get(itemId).DisplayName);
+                    }
+                    if (ItemRegistry.StackSizeOf(itemId) > 1)
+                    {
+                        ImGui.SameLine(0, 4);
+                        ImGui.Text(count.ToString());
+                    }
+                }
+                else
+                {
+                    ImGui.ImageButton($"##{id}", _iconImGuiId, new Vector2(48, 48),
+                        new Vector2(0, 0), new Vector2(1, 1),
+                        new Vector4(0.12f, 0.12f, 0.12f, 1f), new Vector4(0.3f, 0.3f, 0.3f, 1f));
+                    if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && shift) _inventoryClicks.Enqueue((3, unified, 0));
+                    else if (ImGui.IsItemClicked(ImGuiMouseButton.Left)) _inventoryClicks.Enqueue((kind, unified, 0));
+                    if (ImGui.IsItemClicked(ImGuiMouseButton.Right)) _inventoryClicks.Enqueue((kind, unified, 1));
+                    if (ImGui.IsItemHovered()) _hoveredInventorySlot = unified;
+                }
             }
             ImGui.PopID();
         }
@@ -293,17 +317,22 @@ namespace Cubuild.Renderer
                 uint hoverCol = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 0.22f));
                 fg.AddRectFilled(ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), hoverCol);
             }
-            var cellUv = IconUv(itemId, out IntPtr cellTex);
-            if (cellTex != IntPtr.Zero)
-            {
-                var rmin = ImGui.GetItemRectMin();
-                var rmax = ImGui.GetItemRectMax();
-                fg.AddImage(cellTex, rmin, rmax,
-                    new Vector2(cellUv.X, cellUv.Y), new Vector2(cellUv.X + cellUv.Z, cellUv.Y + cellUv.W));
-                // Tools (stack size 1) don't show a count, like Minecraft.
-                if (count > 1 && ItemRegistry.StackSizeOf(itemId) > 1)
-                    fg.AddText(rmax - new Vector2(16, 17), fgTextCol, count.ToString());
-            }
+            // Check for flat sprite (items.png tile) first - e.g., sap, flint, etc.
+                bool hasFlatSprite = TryGetFlatSpriteUv(itemId, out var cellUv, out IntPtr cellTex);
+                if (!hasFlatSprite)
+                {
+                    cellUv = IconUv(itemId, out cellTex);
+                }
+                if (cellTex != IntPtr.Zero)
+                {
+                    var rmin = ImGui.GetItemRectMin();
+                    var rmax = ImGui.GetItemRectMax();
+                    fg.AddImage(cellTex, rmin, rmax,
+                        new Vector2(cellUv.X, cellUv.Y), new Vector2(cellUv.X + cellUv.Z, cellUv.Y + cellUv.W));
+                    // Tools (stack size 1) don't show a count, like Minecraft.
+                    if (count > 1 && ItemRegistry.StackSizeOf(itemId) > 1)
+                        fg.AddText(rmax - new Vector2(16, 17), fgTextCol, count.ToString());
+                }
 
             ImGui.PopID();
         }
