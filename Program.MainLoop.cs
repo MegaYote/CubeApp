@@ -178,6 +178,7 @@ namespace Cubuild
                             if (World != null && invBlock > 0 && invBlock < ItemRegistry.Count)
                             {
                                 World.Hotbar[World.SelectedSlot] = invBlock;
+                                World.HotbarCounts[World.SelectedSlot] = Math.Min(GameWorld.MaxStackSize, ItemRegistry.StackSizeOf(invBlock));
                                 World.SelectedBlock = invBlock;
                             }
                         }
