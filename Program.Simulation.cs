@@ -366,11 +366,18 @@ namespace Cubuild
         private void PlaceSelectedBlock()
         {
             if (World == null) return;
-            // Right-click use dispatch: food is eaten (heals), items with a block behavior place,
-            // everything else (tools, gems) does nothing yet.
+            // Right-click use dispatch: food is eaten (heals), bucket fills from water,
+            // items with a block behavior place, everything else (tools, gems) does nothing yet.
             if (World.TryEatSelectedFood())
             {
                 _handPokeTimer = 0.3f; // first-person hand does a quick jab
+                return;
+            }
+            // Bucket fill: right-click water with an empty bucket -> removes water, gives water bucket.
+            if (TryFillBucketFromWater())
+            {
+                needsMeshUpdate = true;
+                _handPokeTimer = 0.3f;
                 return;
             }
             if (World.TryPlaceSelectedBlock(World.LocalPlayer, World.PlayerPosition, World.GetCameraForward()))
@@ -378,6 +385,31 @@ namespace Cubuild
                 needsMeshUpdate = true;
                 _handPokeTimer = 0.3f; // first-person hand does a quick jab
             }
+        }
+
+        // Attempts to fill an empty bucket with water from the targeted block.
+        // Returns true if the bucket was filled (water block removed, bucket -> water_bucket).
+        private bool TryFillBucketFromWater()
+        {
+            int bucketId = ItemRegistry.GetId("bucket");
+            int waterBucketId = ItemRegistry.GetId("water_bucket");
+            int waterBlockId = BlockRegistry.GetId("water");
+            if (World.SelectedBlock != bucketId) return false;
+            var pick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
+            if (!pick.HasValue) return false;
+            int targetBlockId;
+            if (!World.Chunks.TryGetLoadedBlock(pick.Value.Remove.x, pick.Value.Remove.y, pick.Value.Remove.z, out targetBlockId))
+                return false;
+            if (targetBlockId != waterBlockId) return false;
+            // Remove the water block
+            World.Chunks.TrySetBlock(pick.Value.Remove.x, pick.Value.Remove.y, pick.Value.Remove.z, BlockRegistry.AirId);
+            // Replace held bucket with water bucket
+            if (!World.IsCreative)
+            {
+                World.TryConsumeFromInventory(bucketId, 1);
+                World.TryAddToInventory(waterBucketId, 1);
+            }
+            return true;
         }
 
         // Sends local block edits to the host so they're applied authoritatively + echoed to all
