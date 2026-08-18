@@ -240,15 +240,31 @@ var place = pickResult.Value.Place;
             int bucketId = ItemRegistry.GetId("bucket");
             if (SelectedBlock == sealantId)
             {
-                // Check if this sealant is already depleted (8 uses)
                 int slot = SelectedSlot;
-                if (!IsCreative && _sealantUses.TryGetValue(slot, out int currentUses) && currentUses >= 8)
+
+                // Check if this sealant is already depleted (8 uses recorded, entry removed)
+                // but the player still has SelectedBlock pointing to the old sealantId.
+                // Also catch the case where the slot was converted to bucket but SelectedBlock wasn't synced.
+                bool slotHasSealant = Hotbar[slot] == sealantId;
+                bool selectedIsSealant = SelectedBlock == sealantId;
+
+                // If we have a sealant selected but the slot no longer has it (converted to bucket),
+                // sync SelectedBlock and block the action.
+                if (selectedIsSealant && !slotHasSealant)
                 {
-                    // Already used up - convert to empty bucket now
+                    SelectedBlock = Hotbar[slot]; // sync to bucket (or whatever is now in slot)
+                    return false;
+                }
+
+                // Check if this sealant is already depleted (8 uses recorded, entry removed)
+                if (!IsCreative && !_sealantUses.ContainsKey(slot) && slotHasSealant)
+                {
+                    // Dictionary entry removed = 8 uses consumed, but slot somehow still has sealant?
+                    // Force convert to bucket.
                     Hotbar[slot] = bucketId;
                     HotbarCounts[slot] = 1;
-                    _sealantUses.Remove(slot);
-                    return false; // Can't use depleted sealant
+                    SelectedBlock = bucketId; // sync
+                    return false;
                 }
 
                 var hit = pickResult.Value.Remove;
@@ -256,7 +272,6 @@ var place = pickResult.Value.Place;
                 {
                     // Convert planks -> treated_planks
                     Chunks.TrySetBlock(hit.x, hit.y, hit.z, treatedPlanksId);
-                    // mesh update handled by caller
 
                     // Track sealant uses per hotbar slot (simple durability system)
                     if (!IsCreative)
@@ -273,6 +288,7 @@ var place = pickResult.Value.Place;
                                 Hotbar[slot] = bucketId;
                                 HotbarCounts[slot] = 1;
                                 _sealantUses.Remove(slot);
+                                SelectedBlock = bucketId; // sync SelectedBlock immediately
                             }
                         }
                     }
