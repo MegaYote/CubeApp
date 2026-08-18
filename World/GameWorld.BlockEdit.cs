@@ -228,9 +228,49 @@ namespace Cubuild
         {
             var pickResult = TryPickBlock(origin, direction, out double hitDistance);
             if (!pickResult.HasValue) return false;
-            var place = pickResult.Value.Place;
+var place = pickResult.Value.Place;
             var normal = pickResult.Value.Normal;
             var hitPoint = origin + direction * hitDistance;
+
+            // Wood Sealant Bucket: right-click on planks -> converts to treated_planks.
+            // 8 uses per bucket, then reverts to empty bucket.
+            int sealantId = ItemRegistry.GetId("wood_sealant_bucket");
+            int planksId = BlockRegistry.GetId("planks");
+            int treatedPlanksId = BlockRegistry.GetId("treated_planks");
+            int bucketId = ItemRegistry.GetId("bucket");
+            if (SelectedBlock == sealantId)
+            {
+                var hit = pickResult.Value.Remove;
+                if (Chunks.TryGetLoadedBlock(hit.x, hit.y, hit.z, out var targetId) && targetId == planksId)
+                {
+                    // Convert planks -> treated_planks
+                    Chunks.TrySetBlock(hit.x, hit.y, hit.z, treatedPlanksId);
+                    // mesh update handled by caller
+
+                    // Track sealant uses per hotbar slot (simple durability system)
+                    if (!IsCreative)
+                    {
+                        int slot = SelectedSlot;
+                        if (Hotbar[slot] == sealantId)
+                        {
+                            // Track uses in a simple dictionary (slot -> uses)
+                            if (!_sealantUses.TryGetValue(slot, out int uses)) uses = 0;
+                            uses++;
+                            _sealantUses[slot] = uses;
+                            if (uses >= 8)
+                            {
+                                // Sealant used up -> revert to empty bucket
+                                Hotbar[slot] = bucketId;
+                                HotbarCounts[slot] = 1;
+                                _sealantUses.Remove(slot);
+                            }
+                        }
+                    }
+                    return true;
+                }
+                // Not planks, don't consume the sealant
+                return false;
+            }
 
             // The hotbar holds ITEM ids now; resolve to the block this item places (-1 = not a
             // block item, e.g. tools/food/gemstones - nothing to place).

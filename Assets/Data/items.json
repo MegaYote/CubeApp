@@ -40,7 +40,7 @@
     { "id": "bucket",           "displayName": "Bucket",           "category": "tool",     "itemTile": "1,2",  "stackSize": 1,  "mapColor": "#7A7A7A" },
     { "id": "water_bucket",   "displayName": "Water Bucket",   "category": "tool",     "itemTile": "3,2",  "stackSize": 1,  "mapColor": "#3A6FD8" },
 
-    { "id": "wood_sealant_bucket", "displayName": "Wood Sealant Bucket", "category": "tool",     "itemTile": "2,2",  "stackSize": 1,  "mapColor": "#4A3728" },
+    { "id": "wood_sealant_bucket", "displayName": "Wood Sealant Bucket", "category": "tool",     "itemTile": "2,2",  "stackSize": 1,  "durability": 8, "mapColor": "#4A3728" },
 
     // "sap" is a BLOCK (see blocks.json); this entry only gives its dropped
     // item a dedicated icon from items.png. placedBlock "" clears the block's

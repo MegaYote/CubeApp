@@ -63,6 +63,9 @@ namespace Cubuild
         public float PlayerWalkPhase { get => LocalPlayer.WalkPhase; set => LocalPlayer.WalkPhase = value; }
         public float PlayerWalkAmount { get => LocalPlayer.WalkAmount; set => LocalPlayer.WalkAmount = value; }
 
+        // Wood sealant bucket use tracking: slot index -> number of uses (max 8)
+        private readonly Dictionary<int, int> _sealantUses = new();
+
         // ---- remote player states (host-simulated clients, keyed by client id) ----
         private readonly Dictionary<int, PlayerState> _remotePlayers = new();
         private readonly object _remoteLock = new();
