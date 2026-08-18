@@ -8,6 +8,7 @@ namespace Cubuild
     {
         private static readonly int _idTorch = BlockRegistry.GetId("torch");
         private static readonly int _idSapTorch = BlockRegistry.GetId("sap_torch");
+        private static readonly int _idBurntTorch = BlockRegistry.GetId("burnt_torch");
 
         /// <summary>How a right-click "chop" breaks the targeted block: the hatchet
         /// strips logs into planks / planks into sticks; flint converts a log into a
@@ -413,6 +414,29 @@ var place = pickResult.Value.Place;
             }
 
             if (WouldBlockIntersectPlayer(p, place.x, place.y, place.z, blockToPlace, meta)) return false;
+
+            // Relight mechanic: right-click a burnt torch with sap to relight it
+            int sapItemId = ItemRegistry.GetId("sap");
+            int sapTorchBlockId = BlockRegistry.GetId("sap_torch");
+            int burntTorchBlockId = BlockRegistry.GetId("burnt_torch");
+            if (spendId == sapItemId && blockToPlace == _idBurntTorch)
+            {
+                if (!IsCreative)
+                {
+                    if (InventoryCount(sapItemId) < 1) return false;
+                    TryConsumeFromInventory(sapItemId, 1);
+                }
+                if (!Chunks.TrySetBlock(place.x, place.y, place.z, sapTorchBlockId, 0)) return false;
+                BlockTicks?.OnBlockChanged(place.x, place.y, place.z);
+                int placeLayer2 = ChunkManager.LayerForWorldY(place.y);
+                var editedChunk2 = new ChunkCoordinates(ChunkManager.LayerForWorldY(place.y), WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));
+                Mesher.RequestImmediateRemesh(editedChunk2);
+                BlockEdited?.Invoke(place.x, place.y, place.z, sapTorchBlockId, 0);
+                // Schedule this new sap torch to burn out
+                ScheduleBurntTorchConversion(place.x, place.y, place.z, 10.0f); // 10 seconds for testing
+                return true;
+            }
+
             if (!Chunks.TrySetBlock(place.x, place.y, place.z, blockToPlace, meta)) return false;
             if (!IsCreative) TryConsumeFromInventory(spendId, 1);
             BlockTicks?.OnBlockChanged(place.x, place.y, place.z);
@@ -420,6 +444,11 @@ var place = pickResult.Value.Place;
             var editedChunk = new ChunkCoordinates(placeLayer, WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));
             Mesher.RequestImmediateRemesh(editedChunk);
             BlockEdited?.Invoke(place.x, place.y, place.z, blockToPlace, meta);
+            // Schedule burn for sap torches
+            if (blockToPlace == _idSapTorch)
+            {
+                ScheduleSapTorchBurn(place.x, place.y, place.z);
+            }
             return true;
         }
 
@@ -436,6 +465,10 @@ var place = pickResult.Value.Place;
             var editedChunk = new ChunkCoordinates(ebLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
             Mesher.RequestImmediateRemesh(editedChunk);
             BlockEdited?.Invoke(x, y, z, blockId, meta);
+            if (blockId == _idSapTorch)
+            {
+                ScheduleSapTorchBurn(x, y, z);
+            }
             if (blockId == BlockRegistry.AirId)
             {
                 BreakUnsupportedCross(x, y + 1, z);
@@ -714,6 +747,33 @@ var place = pickResult.Value.Place;
                 }
             }
             return null;
+        }
+
+        private void ScheduleBurntTorchConversion(int x, int y, int z, float delaySeconds)
+        {
+            var pos = (x, y, z);
+            Task.Delay(TimeSpan.FromSeconds(delaySeconds)).ContinueWith(_ =>
+            {
+                if (Chunks.TryGetLoadedBlockAndMeta(x, y, z, out int id, out byte meta))
+                {
+                    if (id == _idSapTorch)
+                    {
+                        Chunks.TrySetBlock(x, y, z, _idBurntTorch);
+                        BlockTicks?.OnBlockChanged(x, y, z);
+                        Mesher.RequestImmediateRemesh(new ChunkCoordinates(ChunkManager.LayerForWorldY(y), WorldToChunkCoord(x), WorldToChunkCoord(z)));
+                        BlockEdited?.Invoke(x, y, z, _idBurntTorch, 0);
+                    }
+                }
+            });
+        }
+
+        /// <summary>
+        /// Called when a sap torch is placed (via placement or relighting). Schedules it to burn out after 10 seconds (testing).
+        /// </summary>
+        private void ScheduleSapTorchBurn(int x, int y, int z)
+        {
+            // 10 seconds for testing, will be longer in production
+            ScheduleBurntTorchConversion(x, y, z, 10.0f);
         }
 
         // ------------------------------------------------------------------
