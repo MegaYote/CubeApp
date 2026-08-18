@@ -34,6 +34,9 @@
     // 1 bucket (empty by default)
     { "input": ["planks", "planks", "sap", "sap"], "output": "bucket", "count": 1 },
 
+    // 1 sap + 1 water bucket (any arrangement) -> 1 wood sealant bucket
+    { "input": ["sap", "water_bucket", "", ""], "output": "wood_sealant_bucket", "count": 1 },
+
     // two cobblestone -> 4 cobblestone slabs
     { "input": ["cobblestone", "cobblestone", "", ""], "output": "cobblestone_slab", "count": 4 },
 
