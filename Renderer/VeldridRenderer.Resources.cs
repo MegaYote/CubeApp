@@ -452,16 +452,30 @@ namespace Cubuild.Renderer
         private Vector4 IconUv(int itemId, out IntPtr texId)
         {
             texId = _itemIconImGuiId;
+            // Check if this item has a dedicated items.png tile (like sap, flint, etc.)
+            // If it has an items.png tile, use the item atlas instead of the block atlas.
+            ItemRegistry.GetTile(itemId, out bool fromItemsAtlas);
+            if (fromItemsAtlas)
+            {
+                int rel = itemId - ItemRegistry.ItemIdBase;
+                if (rel >= 0 && _itemIconUv != null && rel < _itemIconUv.Length)
+                {
+                    texId = _itemIconImGuiId;
+                    return _itemIconUv[rel];
+                }
+            }
+            // Otherwise use block atlas for blocks
             if (itemId >= 0 && itemId < BlockRegistry.Count && _blockIconUv != null && itemId < _blockIconUv.Length)
             {
                 texId = _iconImGuiId;
                 return _blockIconUv[itemId];
             }
-            int rel = itemId - ItemRegistry.ItemIdBase;
-            if (rel >= 0 && _itemIconUv != null && rel < _itemIconUv.Length)
+            // Fallback to genuine items (appended after blocks)
+            int rel2 = itemId - ItemRegistry.ItemIdBase;
+            if (rel2 >= 0 && _itemIconUv != null && rel2 < _itemIconUv.Length)
             {
                 texId = _itemIconImGuiId;
-                return _itemIconUv[rel];
+                return _itemIconUv[rel2];
             }
             texId = IntPtr.Zero;
             return default;
