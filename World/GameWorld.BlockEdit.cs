@@ -256,40 +256,27 @@ var place = pickResult.Value.Place;
                     return false;
                 }
 
-                // Check if this sealant is already depleted (8 uses recorded, entry removed)
-                if (!IsCreative && !_sealantUses.ContainsKey(slot) && slotHasSealant)
-                {
-                    // Dictionary entry removed = 8 uses consumed, but slot somehow still has sealant?
-                    // Force convert to bucket.
-                    Hotbar[slot] = bucketId;
-                    HotbarCounts[slot] = 1;
-                    SelectedBlock = bucketId; // sync
-                    return false;
-                }
-
+                // Normal use: hit planks -> convert + track uses
                 var hit = pickResult.Value.Remove;
                 if (Chunks.TryGetLoadedBlock(hit.x, hit.y, hit.z, out var targetId) && targetId == planksId)
                 {
                     // Convert planks -> treated_planks
                     Chunks.TrySetBlock(hit.x, hit.y, hit.z, treatedPlanksId);
 
-                    // Track sealant uses per hotbar slot (simple durability system)
-                    if (!IsCreative)
+                    // Track sealant uses per hotbar slot (8 uses max)
+                    if (!IsCreative && slotHasSealant)
                     {
-                        if (Hotbar[slot] == sealantId)
+                        // Increment use count for this slot (first use = 1, etc.)
+                        int uses = _sealantUses.TryGetValue(slot, out int u) ? u + 1 : 1;
+                        _sealantUses[slot] = uses;
+
+                        // After 8 uses, convert to empty bucket and sync SelectedBlock
+                        if (uses >= 8)
                         {
-                            // Track uses in a simple dictionary (slot -> uses)
-                            if (!_sealantUses.TryGetValue(slot, out int uses)) uses = 0;
-                            uses++;
-                            _sealantUses[slot] = uses;
-                            if (uses >= 8)
-                            {
-                                // Sealant used up -> revert to empty bucket
-                                Hotbar[slot] = bucketId;
-                                HotbarCounts[slot] = 1;
-                                _sealantUses.Remove(slot);
-                                SelectedBlock = bucketId; // sync SelectedBlock immediately
-                            }
+                            Hotbar[slot] = bucketId;
+                            HotbarCounts[slot] = 1;
+                            _sealantUses.Remove(slot);
+                            SelectedBlock = bucketId; // instant sync so next click is blocked
                         }
                     }
                     return true;
