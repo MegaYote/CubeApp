@@ -240,6 +240,17 @@ var place = pickResult.Value.Place;
             int bucketId = ItemRegistry.GetId("bucket");
             if (SelectedBlock == sealantId)
             {
+                // Check if this sealant is already depleted (8 uses)
+                int slot = SelectedSlot;
+                if (!IsCreative && _sealantUses.TryGetValue(slot, out int currentUses) && currentUses >= 8)
+                {
+                    // Already used up - convert to empty bucket now
+                    Hotbar[slot] = bucketId;
+                    HotbarCounts[slot] = 1;
+                    _sealantUses.Remove(slot);
+                    return false; // Can't use depleted sealant
+                }
+
                 var hit = pickResult.Value.Remove;
                 if (Chunks.TryGetLoadedBlock(hit.x, hit.y, hit.z, out var targetId) && targetId == planksId)
                 {
@@ -250,7 +261,6 @@ var place = pickResult.Value.Place;
                     // Track sealant uses per hotbar slot (simple durability system)
                     if (!IsCreative)
                     {
-                        int slot = SelectedSlot;
                         if (Hotbar[slot] == sealantId)
                         {
                             // Track uses in a simple dictionary (slot -> uses)
