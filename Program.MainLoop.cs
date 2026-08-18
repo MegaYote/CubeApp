@@ -95,6 +95,15 @@ namespace Cubuild
                         gpuRenderer?.Resize(lastWidth, lastHeight);
                     }
                     input.ProcessSnapshot(snapshot, mouseLook, MouseSensitivity);
+
+                    // Sync mouse capture state with window focus.
+                    // If window lost focus while mouse look was active, SDL auto-releases capture
+                    // but our internal state gets out of sync. Disable to re-sync.
+                    if (!activeWindow.Focused && mouseLook)
+                    {
+                        DisableMouseLook();
+                    }
+
                     ProcessMenuActions();
                     ApplyFrameInput(input.CaptureFrameInput());
                     ApplyLookInput(input.CaptureLookDelta());
