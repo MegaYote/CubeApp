@@ -198,6 +198,6 @@
     // Torch: lightEmission 0..15 glows at night. Wall-mounting uses meta 1-4
     // (lean directions), set automatically by the game when placed on a wall.
     { "id": "torch",           "displayName": "Torch",           "texture": "12,2", "shape": "cross", "lightEmission": 14, "hardness": 0, "mapColor": "#FFAA00" },
-    { "id": "sap_torch",       "displayName": "Sap Torch",       "texture": "13,2", "shape": "cross", "lightEmission": 14, "hardness": 0, "mapColor": "#FFAA00" }
+    { "id": "sap_torch",       "displayName": "Sap Torch",       "texture": "13,2", "shape": "cross", "lightEmission": 7, "hardness": 0, "mapColor": "#FFAA00" }
   ]
 }
