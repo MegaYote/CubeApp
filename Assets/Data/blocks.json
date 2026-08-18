@@ -135,7 +135,7 @@
     { "id": "shimmerrock",     "displayName": "Shimmerrock",     "texture": "10,0", "mapColor": "#060C1D" },
     { "id": "quartz",          "displayName": "Quartz",          "texture": "11,0", "mapColor": "#F1EBE2" },
     { "id": "copper",          "displayName": "Copper Block",    "texture": "9,2", "top": "9,1", "bottom": "9,3", "mapColor": "#FEA749" },
-    { "id": "treated_planks",  "displayName": "Treated Planks",  "texture": "11,1", "mapColor": "#826941" },
+    { "id": "treated_planks",  "displayName": "Treated Planks",  "texture": "12,8", "mapColor": "#826941" },
     { "id": "tiledstone",      "displayName": "Tiled Stone",     "texture": "5,3", "mapColor": "#A3A4A3" },
     { "id": "workbench",       "displayName": "Workbench",       "texture": "11,3", "top": "11,2", "bottom": "11,1", "mapColor": "#77613C" },
     { "id": "rottingwood_2",   "displayName": "Rotting Wood 2",  "texture": "1,4", "mapColor": "#4A4030" },
