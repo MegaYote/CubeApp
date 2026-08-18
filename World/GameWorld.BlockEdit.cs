@@ -417,26 +417,28 @@ var place = pickResult.Value.Place;
 
             if (WouldBlockIntersectPlayer(p, place.x, place.y, place.z, blockToPlace, meta)) return false;
 
-            // Relight mechanic: right-click a burnt torch with sap to relight it
+            // Relight mechanic: right-click a BURNT TORCH with sap to relight it
             int sapItemId = ItemRegistry.GetId("sap");
             int sapTorchBlockId = BlockRegistry.GetId("sap_torch");
-            int burntTorchBlockId = BlockRegistry.GetId("burnt_torch");
-            if (spendId == sapItemId && blockToPlace == _idBurntTorch)
+            if (spendId == sapItemId)
             {
-                if (!IsCreative)
+                // Check if we're right-clicking a burnt torch (target block, not placement position)
+                var hit = pickResult.Value.Remove;
+                if (Chunks.TryGetLoadedBlock(hit.x, hit.y, hit.z, out var targetId) && targetId == _idBurntTorch)
                 {
-                    if (InventoryCount(sapItemId) < 1) return false;
-                    TryConsumeFromInventory(sapItemId, 1);
+                    if (!IsCreative)
+                    {
+                        if (InventoryCount(sapItemId) < 1) return false;
+                        TryConsumeFromInventory(sapItemId, 1);
+                    }
+                    // Replace burnt torch with fresh sap torch at the SAME position
+                    if (!Chunks.TrySetBlock(hit.x, hit.y, hit.z, sapTorchBlockId, 0)) return false;
+                    BlockTicks?.OnBlockChanged(hit.x, hit.y, hit.z);
+                    Mesher.RequestImmediateRemesh(new ChunkCoordinates(ChunkManager.LayerForWorldY(hit.y), WorldToChunkCoord(hit.x), WorldToChunkCoord(hit.z)));
+                    BlockEdited?.Invoke(hit.x, hit.y, hit.z, sapTorchBlockId, 0);
+                    ScheduleBurntTorchConversion(hit.x, hit.y, hit.z, 10.0f); // 10 seconds for testing
+                    return true;
                 }
-                if (!Chunks.TrySetBlock(place.x, place.y, place.z, sapTorchBlockId, 0)) return false;
-                BlockTicks?.OnBlockChanged(place.x, place.y, place.z);
-                int placeLayer2 = ChunkManager.LayerForWorldY(place.y);
-                var editedChunk2 = new ChunkCoordinates(ChunkManager.LayerForWorldY(place.y), WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));
-                Mesher.RequestImmediateRemesh(editedChunk2);
-                BlockEdited?.Invoke(place.x, place.y, place.z, sapTorchBlockId, 0);
-                // Schedule this new sap torch to burn out
-                ScheduleBurntTorchConversion(place.x, place.y, place.z, 10.0f); // 10 seconds for testing
-                return true;
             }
 
             if (!Chunks.TrySetBlock(place.x, place.y, place.z, blockToPlace, meta)) return false;

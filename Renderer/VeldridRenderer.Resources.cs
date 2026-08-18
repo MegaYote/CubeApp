@@ -519,11 +519,12 @@ namespace Cubuild.Renderer
             texId = IntPtr.Zero;
             uv = default;
 
-            // Check if this block has an items.png tile override
-            var def = BlockRegistry.GetById(blockId);
-            if (!def.ItemTile.HasValue) return false;
+            // Check if this block has an items.png tile override via ItemRegistry
+            ItemRegistry.GetTile(blockId, out bool fromItemsAtlas);
+            if (!fromItemsAtlas) return false;
 
-            var tile = def.ItemTile.Value;
+            // Get the tile from ItemRegistry (this works for blocks with items.json overrides)
+            var tile = ItemRegistry.GetTile(blockId, out _);
             if (tile.Width <= 0 || tile.Height <= 0) return false;
 
             // Items.png texture
