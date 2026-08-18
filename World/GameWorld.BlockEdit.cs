@@ -387,14 +387,16 @@ var place = pickResult.Value.Place;
 
             // Torches: placed on a top face -> floor torch (X-cross); placed against a
             // side face -> wall torch (single quad leaning away from the wall, meta 1-4).
-            // Sap torches can also be placed on ceilings (upside-down, meta 5).
+            // Sap torches and burnt torches can also be placed on ceilings (upside-down, meta 5).
             // A wall torch needs a solid wall behind it; regular torches can't hang from ceilings.
             bool isSapTorch = blockToPlace == _idSapTorch;
-            if (blockToPlace == _idTorch || isSapTorch)
+            bool isBurntTorch = blockToPlace == _idBurntTorch;
+            bool isSapOrBurnt = isSapTorch || isBurntTorch;
+            if (blockToPlace == _idTorch || isSapOrBurnt)
             {
                 if (normal.Y < 0)
                 {
-                    if (!isSapTorch) return false; // regular torch can't go on ceiling
+                    if (!isSapOrBurnt) return false; // regular torch can't go on ceiling
                     meta = 5; // ceiling/upside-down
                 }
                 else if (normal.Y == 0)
@@ -544,13 +546,13 @@ var place = pickResult.Value.Place;
             BreakWallTorchAt(x, y, z - 1, 4); // leans -Z -> wall at torch.Z+1 == z
 
             // Ceiling sap torches (meta 5) - the ceiling block is below the torch
-            BreakCeilingSapTorchAt(x, y + 1, z);
+            BreakCeilingTorchAt(x, y + 1, z);
         }
 
         private void BreakWallTorchAt(int x, int y, int z, int expectedMeta)
         {
             if (!Chunks.TryGetLoadedBlockAndMeta(x, y, z, out var id, out var meta)) return;
-            if (id != _idTorch && id != _idSapTorch) return;
+            if (id != _idTorch && id != _idSapTorch && id != _idBurntTorch) return;
             if (meta != expectedMeta) return;
             Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId);
             BlockTicks?.OnBlockChanged(x, y, z);
@@ -559,11 +561,11 @@ var place = pickResult.Value.Place;
             BlockEdited?.Invoke(x, y, z, 0, 0);
         }
 
-        private void BreakCeilingSapTorchAt(int x, int y, int z)
+        private void BreakCeilingTorchAt(int x, int y, int z)
         {
             if (!Chunks.TryGetLoadedBlockAndMeta(x, y, z, out var id, out var meta)) return;
-            if (id != _idSapTorch) return;
-            if (meta != 5) return; // only ceiling sap torches (meta 5)
+            if (id != _idSapTorch && id != _idBurntTorch) return;
+            if (meta != 5) return; // only ceiling torches (meta 5)
             Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId);
             BlockTicks?.OnBlockChanged(x, y, z);
             int layer = ChunkManager.LayerForWorldY(y);

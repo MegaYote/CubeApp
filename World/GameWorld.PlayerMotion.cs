@@ -339,7 +339,7 @@ namespace Cubuild
             {
                 // Wall torches (meta 1-4): raised like the render (0.2) and hugging the wall
                 // plane they're attached to instead of centered in the cell.
-                if ((id == _idTorch || id == _idSapTorch) && meta >= 1 && meta <= 4)
+                if ((id == _idTorch || id == _idSapTorch || id == _idBurntTorch) && meta >= 1 && meta <= 4)
                 {
                     return meta switch
                     {
@@ -349,8 +349,8 @@ namespace Cubuild
                         _ => new[] { (0.3, 0.2, 0.5, 0.7, 0.9, 1.0) },  // lean -Z, wall at +Z
                     };
                 }
-                // Ceiling sap torch (meta 5): upside-down, hanging from ceiling
-                if (id == _idSapTorch && meta == 5)
+                // Ceiling sap/burnt torch (meta 5): upside-down, hanging from ceiling
+                if ((id == _idSapTorch || id == _idBurntTorch) && meta == 5)
                 {
                     return new[] { (0.25, 0.3, 0.25, 0.75, 1.0, 0.7) }; // hanging from ceiling
                 }

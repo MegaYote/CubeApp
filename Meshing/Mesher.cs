@@ -493,6 +493,7 @@ namespace Cubuild
             int width = chunk.Width;
             int torchId = BlockRegistry.GetId("torch");
             int sapTorchId = BlockRegistry.GetId("sap_torch");
+            int burntTorchId = BlockRegistry.GetId("burnt_torch");
 
             for (int x = 0; x < width; x++)
             {
@@ -515,7 +516,8 @@ namespace Cubuild
 
                         // Torches with wall meta (1-4, set by placement against a side face)
                         // render as the full X-cross leaning away from the wall.
-                        if (id == torchId || id == sapTorchId)
+                        // Also applies to sap torches and burnt torches (meta 1-4).
+                        if (id == torchId || id == sapTorchId || id == burntTorchId)
                         {
                             int meta = GetMetaAt(lookup, wx, wy, wz);
                             if (meta >= 1 && meta <= 4)
