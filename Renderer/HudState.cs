@@ -109,6 +109,10 @@ namespace Cubuild.Renderer
         /// (set by Program when the player attacks a mob or punches the air).</summary>
         public float HandSwing;
 
+        /// <summary>Remaining seconds of the "World saved" toast (set when a save completes,
+        /// manual or autosave). 0 = not showing.</summary>
+        public float SaveToast;
+
         /// <summary>World position + block id of the block currently being mined (for the
         /// shrinking-block overlay). Only valid while MiningProgress > 0.</summary>
         public Vector3 MiningBlockPos;
@@ -163,6 +167,7 @@ namespace Cubuild.Renderer
             MiningBlockPos = Vector3.Zero,
             MiningBlockId = 0,
             MiningBlockNormal = new Point3D(0, 0, 0),
+            SaveToast = 0f,
         };
 
         /// <summary>Blocks being mined by zombies this frame — each gets a shrink-cube overlay.</summary>

@@ -127,6 +127,7 @@ namespace Cubuild
                     else
                     {
                         StepSimulation(input.CaptureTickInput(), (float)deltaSeconds);
+                        MaybeAutosave((float)deltaSeconds);
                     }
                     var t1 = stageStopwatch.ElapsedTicks;
                     lastUpdateMs = (t1 - t0) * 1000f / Stopwatch.Frequency;

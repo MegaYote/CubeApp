@@ -91,6 +91,7 @@ namespace Cubuild
                     RenderDistance = ChunkRenderRadius,
                     NetStatus = netStatus,
                     MultiplayerError = mpError,
+                    SaveToast = _saveToastTimer,
                 };
             }
             var forward = World.GetCameraForward();
@@ -142,6 +143,7 @@ namespace Cubuild
                 MiningBlockNormal = miningBlockNormal,
                 HandPoke = _handPokeTimer,
                 HandSwing = _handSwingTimer,
+                SaveToast = _saveToastTimer,
             };
         }
 

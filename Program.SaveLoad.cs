@@ -27,9 +27,33 @@ namespace Cubuild
             LoadWorld(save);
         }
 
-        private void SaveWorld()
+/// <summary>Seconds between background autosaves. Esc-save and quit-save still exist;
+        /// this only closes the crash/power-loss window.</summary>
+        private const float AutosaveIntervalSeconds = 180f;
+        private readonly object _saveWriteLock = new();
+        private volatile bool _autosaveInFlight;
+        private float _autosaveTimer;
+        private float _saveToastTimer;
+
+        /// <summary>Called every frame while playing. When the interval elapses, snapshots the
+        /// world and writes it to disk on a background thread so the game never stalls and
+        /// crashes/power loss only cost a few minutes of progress.</summary>
+        private void MaybeAutosave(float deltaSeconds)
+        {
+            _saveToastTimer = Math.Max(0f, _saveToastTimer - deltaSeconds);
+            if (World == null || _autosaveInFlight) return;
+            _autosaveTimer += deltaSeconds;
+            if (_autosaveTimer >= AutosaveIntervalSeconds)
+            {
+                _autosaveTimer = 0f;
+                SaveWorld(autosave: true);
+            }
+        }
+
+        private void SaveWorld(bool autosave = false)
         {
             if (World == null) return;
+            _autosaveTimer = 0f;
             try
             {
                 Directory.CreateDirectory(SavesFolder);
@@ -58,41 +82,74 @@ namespace Cubuild
                     save.HeldItemId = held.Value.ItemId;
                     save.HeldCount = held.Value.Count;
                 }
-foreach (var coord in World.Chunks.ModifiedChunks)
-            {
-                byte[] blocks;
-                byte[] meta;
-                if (World.Chunks.TryGetLoadedChunk(coord, out var chunk))
+                foreach (var coord in World.Chunks.ModifiedChunks)
                 {
-                    blocks = chunk.RawBlocks;
-                    meta = chunk.RawMeta;
+                    byte[] blocks;
+                    byte[] meta;
+                    if (World.Chunks.TryGetLoadedChunk(coord, out var chunk))
+                    {
+                        blocks = chunk.RawBlocks;
+                        meta = chunk.RawMeta;
+                    }
+                    else if (World.Chunks.TryGetCachedUnloadedChunk(coord.Layer, coord.X, coord.Z, out var cBlocks, out var cMeta))
+                    {
+                        // Unloaded but snapshotted at unload time - edits survive chunk streaming.
+                        blocks = cBlocks;
+                        meta = cMeta;
+                    }
+                    else
+                    {
+                        continue; // modified, unloaded, and evicted from the cache - nothing to write
+                    }
+                    save.Chunks.Add(new SavedChunk
+                    {
+                        Layer = coord.Layer,
+                        X = coord.X,
+                        Z = coord.Z,
+                        Blocks = (byte[])blocks.Clone(),
+                        Meta = (byte[])meta.Clone(),
+                    });
                 }
-                else if (World.Chunks.TryGetCachedUnloadedChunk(coord.Layer, coord.X, coord.Z, out var cBlocks, out var cMeta))
+                save.Mobs = World.Entities.SaveMobs();
+                string path = Path.Combine(SavesFolder, SanitizeFileName(save.Name) + ".cubuild");
+                if (autosave)
                 {
-                    // Unloaded but snapshotted at unload time - edits survive chunk streaming.
-                    blocks = cBlocks;
-                    meta = cMeta;
+                    // All snapshot cloning above happened on the main thread, so nothing the game
+                    // touches later can race this save. Write it on a background thread.
+                    _autosaveInFlight = true;
+                    var snapshot = save;
+                    Task.Run(() =>
+                    {
+                        try { WriteSaveToDisk(snapshot, path); }
+                        catch (Exception ex) { TryLogSaveError(ex); }
+                        finally { _autosaveInFlight = false; }
+                    });
                 }
                 else
                 {
-                    continue; // modified, unloaded, and evicted from the cache - nothing to write
+                    WriteSaveToDisk(save, path);
                 }
-                save.Chunks.Add(new SavedChunk
-                {
-                    Layer = coord.Layer,
-                    X = coord.X,
-                    Z = coord.Z,
-                    Blocks = (byte[])blocks.Clone(),
-                    Meta = (byte[])meta.Clone(),
-                });
-            }
-                save.Mobs = World.Entities.SaveMobs();
-                save.Save(Path.Combine(SavesFolder, SanitizeFileName(save.Name) + ".cubuild"));
+                _saveToastTimer = 3f;
             }
             catch (Exception ex)
             {
-                try { System.IO.File.AppendAllText("save_error.log", DateTime.Now + " Save failed: " + ex + Environment.NewLine); } catch { }
+                TryLogSaveError(ex);
             }
+        }
+
+        private void WriteSaveToDisk(WorldSave save, string path)
+        {
+            // One writer at a time: a finishing autosave and an Esc/quit save can never corrupt
+            // the file (the quit save simply waits the few milliseconds).
+            lock (_saveWriteLock)
+            {
+                save.Save(path);
+            }
+        }
+
+        private static void TryLogSaveError(Exception ex)
+        {
+            try { System.IO.File.AppendAllText("save_error.log", DateTime.Now + " Save failed: " + ex + Environment.NewLine); } catch { }
         }
 
         private void LoadWorld(WorldSave save)

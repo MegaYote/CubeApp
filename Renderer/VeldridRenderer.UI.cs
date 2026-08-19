@@ -1416,6 +1416,17 @@ namespace Cubuild.Renderer
                 drawList.AddText(labelPos, textColor, label);
             }
 
+            // "World saved" toast (appears after manual saves and background autosaves).
+            if (_hud.SaveToast > 0f)
+            {
+                const string toast = "World saved";
+                var toastPos = new Vector2(12, 40);
+                var toastSize = ImGui.CalcTextSize(toast);
+                uint toastBg = ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.47f));
+                drawList.AddRectFilled(toastPos - new Vector2(6, 3), toastPos + toastSize + new Vector2(6, 3), toastBg);
+                drawList.AddText(toastPos, textColor, toast);
+            }
+
             // Hand Editor (F8): tune the first-person hand/held-block pose live, then copy the
             // values line back to the dev. Frees the mouse (Program disables mouse look while
             // open) so the sliders are draggable.
