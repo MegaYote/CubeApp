@@ -480,7 +480,7 @@ void main() {
                 _itemDropShadowPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
                 {
                     BlendState = BlendStateDescription.SingleAlphaBlend,
-                    DepthStencilState = new DepthStencilStateDescription(true, true, ComparisonKind.LessEqual),
+                    DepthStencilState = new DepthStencilStateDescription(false, false, ComparisonKind.Always),
                     RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                     PrimitiveTopology = PrimitiveTopology.TriangleList,
                     ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
@@ -618,13 +618,13 @@ _itemDropIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)smallInd
                 _gd.UpdateBuffer(_itemDropIndexBuffer, 0, smallIndices);
             }
 
-            // Shadow mesh for item drops: a simple horizontal quad (shadow) at y = -0.08
+            // Shadow mesh for item drops: a simple horizontal quad (shadow) at y = -0.02
             {
                 // Shadow quad: slightly larger than item to cover it, flat on ground
                 var shadowVerts = new float[4 * (3 + 2 + 4)];
                 int sv = 0;
-                float shadowSize = 0.18f; // slightly larger than item
-                float shadowY = -0.08f; // slightly below item
+                float shadowSize = 0.25f; // larger shadow
+                float shadowY = -0.02f; // just below item, less z-fighting
                 float[] shadowCorners = { -shadowSize, shadowY, -shadowSize,  1f, 0f,  // bottom-left
                                           shadowSize, shadowY, -shadowSize,  1f, 1f,   // bottom-right
                                           shadowSize, shadowY,  shadowSize,  0f, 1f,   // top-right
@@ -646,9 +646,9 @@ _itemDropIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)smallInd
                 _gd.UpdateBuffer(_shadowIndexBuffer, 0, shadowIndices);
             }
 
-            // Create shadow texture (simple radial gradient circle)
+            // Create shadow texture (simple radial gradient circle) - darker, larger, stronger
             {
-                int texSize = 32;
+                int texSize = 64; // larger texture for smoother gradient
                 byte[] shadowData = new byte[texSize * texSize * 4];
                 float center = (texSize - 1) * 0.5f;
                 float maxDist = center;
@@ -661,8 +661,8 @@ _itemDropIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)smallInd
                         float dist = (float)Math.Sqrt(dx * dx + dy * dy);
                         float alpha = Math.Max(0f, 1f - dist / maxDist);
                         // Smooth falloff
-                        alpha = alpha * alpha * alpha;
-                        byte a = (byte)(alpha * 128); // max 50% opacity
+                        alpha = alpha * alpha;
+                        byte a = (byte)(alpha * 200); // max ~80% opacity for visible shadows
                         int i = (y * texSize + x) * 4;
                         shadowData[i + 0] = 0;     // R
                         shadowData[i + 1] = 0;     // G
@@ -670,7 +670,7 @@ _itemDropIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)smallInd
                         shadowData[i + 3] = a;     // A
                     }
                 }
-                var shadowTexDesc = TextureDescription.Texture2D((uint)texSize, (uint)texSize, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
+                var shadowTexDesc = TextureDescription.Texture2D((uint)64, (uint)64, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
                 var shadowTexture = _gd.ResourceFactory.CreateTexture(shadowTexDesc);
                 _gd.UpdateTexture<byte>(shadowTexture, shadowData, 0, 0, 0, (uint)shadowTexture.Width, (uint)shadowTexture.Height, 1, 0, 0);
                 _shadowTextureView = _gd.ResourceFactory.CreateTextureView(shadowTexture);
