@@ -18,12 +18,13 @@ namespace Cubuild.World
         // Amplified block-level 3D carving: a mid-frequency 3D density field sampled AT BLOCK
         // resolution near the surface line of amplified biomes (the 8-block field grid would
         // wash features out in interpolation, so this runs in the block fill loop instead).
-        // Frequency 0.15 => features ~6-10 blocks wide; strength 13 flips ~3-4 blocks of the
-        // surface line -> real overhangs, arches, ledges and pockets. Applied only within a
-        // thin band around the surface, so deep terrain stays solid. Non-amplified columns
-        // are untouched (bit-identical terrain).
-        private const double CarveFrequency = 0.17;
-        private const double CarveStrength = 20.0;
+        // Tuned for the SHATTERED HIGHLANDS look: tight frequency (features ~3-5 blocks),
+        // heavy Y-stretch (tall narrow rock columns -> spires and near-vertical cliffs) and
+        // savage strength (~10 blocks of flip range) so surfaces erode into ragged, broken
+        // shards instead of smooth slopes. Non-amplified columns are untouched.
+        private const double CarveFrequency = 0.32;
+        private const double CarveStrength = 34.0;
+        private const double CarveYStretch = 0.15; // vertical wavelength = 1/(freq*stretch)
         private readonly int seed;
         private readonly BiomeMap _biomeMap;
         private readonly NoiseOctaves _amplifiedCarve;
@@ -334,7 +335,7 @@ namespace Cubuild.World
                                 int wz = chunk.OriginZ + lz;
                                 int wy = chunk.OriginY + localY;
                                 double carve = _amplifiedCarve.Noise3DNormalized(
-                                    wx * CarveFrequency, wy * CarveFrequency * 0.5, wz * CarveFrequency);
+                                    wx * CarveFrequency, wy * CarveFrequency * CarveYStretch, wz * CarveFrequency);
                                 density += carve * CarveStrength * amp;
                             }
                         }
