@@ -29,6 +29,22 @@
   // ============================================================================
 
   "biomes": [
+    // ---- CLASSIC: minecraft-classic terrain style. The surface line is a pure 2D heightmap
+    // (classic had no rolling 3D hills!), QUANTIZED into blocky steps - flat plateaus that
+    // suddenly cliff up to the next level. Sheer coasts, blocky tablelands, zero smoothness.
+    {
+      "id": "classic",
+      "displayName": "Classic",
+      "temperature": { "min": 0.65, "max": 0.95 },
+      "humidity": { "min": 0.0, "max": 0.45 },
+      "water": false,
+      "baseHeight": 0.8,
+      "heightVariation": 0.0,
+      "surfaceBlock": "grass",
+      "fillBlock": "dirt",
+      "fillDepth": 3,
+      "treeDensity": 1
+    },
     // ---- ANOMALY (experimental): the density field is 4D simplex noise sampled on a
     // curved slice through 4D space (w follows y with a slow sine fold), so the terrain
     // folds and weaves with twisted strata - structures impossible for 3D noise. Claims

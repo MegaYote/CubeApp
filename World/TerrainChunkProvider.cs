@@ -68,6 +68,12 @@ namespace Cubuild.World
         private readonly NoiseOctaves _surfaceA;
         private readonly NoiseOctaves _continent;
         private readonly NoiseOctaves _relief;
+        // Classic-biome heightmap: the Classic biome replaces the surface line with a pure 2D
+        // height noise (classic Minecraft had NO rolling 3D hills - just flat plateaus that
+        // step up in sudden cliffs). Quantized so terrain rises in blocky steps.
+        private readonly NoiseOctaves _classicHeight;
+        private const double ClassicHeightFrequency = 0.08;  // ~100-block features
+        private const double ClassicStep = 0.75;             // step height in field-y (6 blocks)
         // 4D density field for the experimental Anomaly biome: sampled on a curved slice
         // through 4D space (w follows y with a slow sine fold) -> folded, weaving strata
         // that plain 3D noise cannot express.
@@ -91,6 +97,7 @@ namespace Cubuild.World
             _surfaceA = new NoiseOctaves(rand, 5, 1);
             _continent = new NoiseOctaves(rand, 9, 3);
             _relief = new NoiseOctaves(rand, 7, 9);
+            _classicHeight = new NoiseOctaves(rand, 3, 1);
             _anomalyNoise = new NoiseOctaves4D(rand, 9, 7);
             _amplifiedCarve = new NoiseOctaves(rand, 4, 3);
             Monoliths = new MonolithSculptor(seed);
@@ -193,6 +200,8 @@ namespace Cubuild.World
                     var biome = _biomeMap.BiomeAt(xq * 4.0, zq * 4.0);
                     // The Anomaly biome replaces the 3D body field with a 4D one (see below).
                     bool anomalyColumn = string.Equals(biome.Id, "anomaly", StringComparison.OrdinalIgnoreCase);
+                    // The Classic biome replaces the surface line with a quantized 2D heightmap.
+                    bool classicColumn = string.Equals(biome.Id, "classic", StringComparison.OrdinalIgnoreCase);
                     // ---- SMOOTHED BIOME SURFACE LINE ----
                     // A raw biome.BaseHeight is a step function: the instant you cross a biome
                     // border the target surface snaps from ocean-low (~0.28) to land-high (~0.56+),
@@ -255,6 +264,18 @@ namespace Cubuild.World
                     if (aboveSea > 0.0)
                     {
                         centerHeight = seaLevel + aboveSea * Math.Sqrt(aboveSea / (aboveSea + 0.6));
+                    }
+
+                    // ---- CLASSIC BIOME: 2D HEIGHTMAP SURFACE ----
+                    // Overrides the surface line with pure 2D height noise, QUANTIZED into
+                    // blocky steps: flat plateaus that suddenly cliff up to the next level -
+                    // classic Minecraft terrain, which never had rolling smooth hills. No
+                    // beach easing (classic coasts were sheer drops), no relief shaping.
+                    if (classicColumn)
+                    {
+                        double h = _classicHeight.Noise2DNormalized(xq * ClassicHeightFrequency, zq * ClassicHeightFrequency);
+                        double hf = 8.0 + (h * 0.5 + 0.5) * 12.0; // world 0 .. ~96
+                        centerHeight = Math.Floor(hf / ClassicStep) * ClassicStep;
                     }
 
                     for (int fy = 0; fy < fyCount; fy++)
