@@ -68,12 +68,13 @@
     // density field, the alpha surface pass (grass band at 60-65, sand/gravel dice, noise
     // dirt depth), big trees from mobSpawnerNoise, and the alpha ore distribution. The
     // optional "alpha" object exposes the generator knobs; these defaults are the exact
-    // 2010 constants. Claims the warm damp band between anomaly and paradise.
+    // 2010 constants. Shares the temperate band with hills - each claims half of it, so
+    // alpha is exactly as common as hills (first-match-wins, alpha listed first).
     {
       "id": "alpha",
       "displayName": "Alpha",
-      "temperature": { "min": 0.40, "max": 0.65 },
-      "humidity": { "min": 0.10, "max": 0.60 },
+      "temperature": { "min": 0.0, "max": 1.0 },
+      "humidity": { "min": -0.15, "max": 0.1375 },
       "water": false,
       "baseHeight": 0.5,
       "heightVariation": 0.25,
@@ -124,16 +125,17 @@
       "fillDepth": 6,
       "treeDensity": 0
     },
-    // ---- amplified hills: plains' climate band split in half, so hills and plains
-    // appear equally often (first match wins, so hills sits BEFORE plains). Alpha-style
-    // drama: highland base with amplified swings (gain 1.2) - valley floors plunge
-    // ~50 blocks BELOW sea level into flooded chasms, peaks push past world 150, and a
-    // heavy block-level 3D carve roughens every surface with overhangs and arches.
+    // ---- amplified hills: the temperate band split in half - alpha claims the low half,
+    // hills the upper half, so alpha and hills appear equally often (first match wins, so
+    // alpha sits before hills). Alpha-style drama: highland base with amplified swings
+    // (gain 1.2) - valley floors plunge ~50 blocks BELOW sea level into flooded chasms,
+    // peaks push past world 150, and a heavy block-level 3D carve roughens every surface
+    // with overhangs and arches.
     {
       "id": "hills",
       "displayName": "Hills",
       "temperature": { "min": 0.0, "max": 1.0 },
-      "humidity": { "min": -0.15, "max": 0.425 },
+      "humidity": { "min": 0.1375, "max": 0.425 },
       "water": false,
       "baseHeight": 0.93,
       "heightVariation": 0.75,
