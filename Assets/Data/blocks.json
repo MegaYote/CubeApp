@@ -202,6 +202,8 @@
     { "id": "burnt_torch",     "displayName": "Burnt Torch",     "texture": "11,8", "shape": "cross", "lightEmission": 0, "hardness": 0, "mapColor": "#333333" },
 
     // ----- carpenter's workshop -----------------------------------------------------
-    { "id": "carpenters_workbench", "displayName": "Carpenter's Workbench", "texture": "14,8", "top": "13,8", "bottom": "12,8", "hardness": 2, "mapColor": "#85613C" }
+    { "id": "carpenters_workbench", "displayName": "Carpenter's Workbench", "texture": "14,8", "top": "13,8", "bottom": "12,8", "hardness": 2, "mapColor": "#85613C" },
+    { "id": "masons_workbench",   "displayName": "Mason's Workbench",   "texture": "10,8", "top": "9,8",   "bottom": "8,8",  "hardness": 2, "mapColor": "#6E5C40" },
+    { "id": "serpentine",         "displayName": "Serpentine",         "texture": "15,8", "hardness": 5, "mapColor": "#3E8A5A" }
   ]
 }
