@@ -60,9 +60,9 @@
     },
     // ---- amplified hills: plains' climate band split in half, so hills and plains
     // appear equally often (first match wins, so hills sits BEFORE plains). Alpha-style
-    // drama: base 0.93 puts the deepest valley floors right AT sea level (no flooding,
-    // waterline edge everywhere), amplified peaks swing past world 100, and the surface
-    // is sculpted by 3D density carving - overhangs, arches and rocky bumps.
+    // drama: highland base with amplified swings (gain 1.2) - valley floors plunge
+    // ~50 blocks BELOW sea level into flooded chasms, peaks push past world 150, and a
+    // heavy block-level 3D carve roughens every surface with overhangs and arches.
     {
       "id": "hills",
       "displayName": "Hills",

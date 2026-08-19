@@ -22,8 +22,8 @@ namespace Cubuild.World
         // surface line -> real overhangs, arches, ledges and pockets. Applied only within a
         // thin band around the surface, so deep terrain stays solid. Non-amplified columns
         // are untouched (bit-identical terrain).
-        private const double CarveFrequency = 0.15;
-        private const double CarveStrength = 13.0;
+        private const double CarveFrequency = 0.17;
+        private const double CarveStrength = 20.0;
         private readonly int seed;
         private readonly BiomeMap _biomeMap;
         private readonly NoiseOctaves _amplifiedCarve;
@@ -224,7 +224,7 @@ namespace Cubuild.World
                     // and continuous, so terrain rolls smoothly between real peaks and deep
                     // valleys. Non-amplified biomes keep the original shaping unchanged
                     // (blendedAmplified ~ 0 => identical behavior).
-                    const double amplifiedGain = 0.6; // field-y of swing per relief unit
+                    const double amplifiedGain = 1.2; // field-y of swing per relief unit (valleys plunge ~50 below sea)
                     double reliefMagnitude = -reliefShaped; // 0..~0.26
                     reliefShaped = reliefMagnitude * (1.0 - blendedAmplified)
                         + relief * amplifiedGain * blendedAmplified;
@@ -328,7 +328,7 @@ namespace Cubuild.World
                                 Lerp(colHeights[fx0 * fzCount + fz0], colHeights[fx1 * fzCount + fz0], tx),
                                 Lerp(colHeights[fx0 * fzCount + fz1], colHeights[fx1 * fzCount + fz1], tx), tz);
                             int surfaceLY = (int)(surf * 8.0);
-                            if (ly >= surfaceLY - 7 && ly <= surfaceLY + 6)
+                            if (ly >= surfaceLY - 8 && ly <= surfaceLY + 8)
                             {
                                 int wx = chunk.OriginX + lx;
                                 int wz = chunk.OriginZ + lz;
