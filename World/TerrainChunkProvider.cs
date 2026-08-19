@@ -300,13 +300,24 @@ namespace Cubuild.World
                     // ---- CLASSIC BIOME: 2D HEIGHTMAP SURFACE ----
                     // Overrides the surface line with pure 2D height noise, QUANTIZED into
                     // blocky steps: flat plateaus that suddenly cliff up to the next level -
-                    // classic Minecraft terrain, which never had rolling smooth hills. No
-                    // beach easing (classic coasts were sheer drops), no relief shaping.
+                    // classic Minecraft terrain, which never had rolling smooth hills. The band
+                    // hugs the sea like real classic (world -4..~28, sea = 0): flat blocky
+                    // shores with the odd 6-block step inland instead of 96-block coastal
+                    // cliffs. Where the shore meets a water biome, ease toward the
+                    // beach-smoothed line so classic coasts slope into the ocean.
                     if (classicColumn)
                     {
+                        double easedLine = centerHeight; // the beach-smoothed line, pre-classic
                         double h = _classicHeight.Noise2DNormalized(xq * ClassicHeightFrequency, zq * ClassicHeightFrequency);
-                        double hf = 8.0 + (h * 0.5 + 0.5) * 12.0; // world 0 .. ~96
-                        centerHeight = Math.Floor(hf / ClassicStep) * ClassicStep;
+                        double hf = 7.5 + (h * 0.5 + 0.5) * 4.0; // world -4 .. ~28
+                        double classicH = Math.Floor(hf / ClassicStep) * ClassicStep;
+                        centerHeight = classicH;
+                        double wx = xq * 4.0, wz = zq * 4.0;
+                        if (_biomeMap.IsNearWater((int)wx, (int)wz, 6, 2))
+                        {
+                            double beachBlend = _biomeMap.IsNearWater((int)wx, (int)wz, 2, 1) ? 1.0 : 0.4;
+                            centerHeight = classicH + (easedLine - classicH) * beachBlend;
+                        }
                     }
 
                     for (int fy = 0; fy < fyCount; fy++)
