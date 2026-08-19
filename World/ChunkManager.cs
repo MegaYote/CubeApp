@@ -43,6 +43,19 @@ namespace Cubuild
         // the only chunks a world save needs to serialize.
         private readonly HashSet<ChunkCoordinates> _modifiedChunks = new();
         public IReadOnlyCollection<ChunkCoordinates> ModifiedChunks => _modifiedChunks;
+
+        // ---- unload cache (survives chunk streaming) ----
+        // When a MODIFIED chunk unloads, its block/meta arrays are snapshotted here instead of
+        // being discarded. That makes player edits survive streaming: the data is re-stamped onto
+        // the fresh regeneration when the player returns (GetOrCreateChunk) and is still written
+        // by SaveWorld even while the chunk is unloaded. Bound the memory with a generous cap and
+        // oldest-first eviction (an evicted chunk falls back to the old lossy behaviour, but only
+        // after ~hundreds of MB of modified terrain).
+        private const int UnloadCacheMaxChunks = 1024;
+        private readonly Dictionary<ChunkCoordinates, (long Stamp, byte[] Blocks, byte[] Meta)> _unloadedModifiedChunks = new();
+        private long _unloadCacheStamp;
+        private readonly object _unloadCacheLock = new();
+
         private readonly PriorityQueue<ChunkRequest, double> queue = new();
         private readonly object queueLock = new();
         private readonly ConcurrentDictionary<ChunkCoordinates, byte> pendingGeneration = new();
@@ -107,6 +120,22 @@ namespace Cubuild
 
             if (created)
             {
+                // A chunk that was modified before unloading has a snapshot in the unload cache.
+                // Stamp it over the fresh generation so player edits survive chunk streaming. The
+                // coord is already in _modifiedChunks (it was added when first edited), so the
+                // next SaveWorld still picks this chunk up.
+                lock (_unloadCacheLock)
+                {
+                    if (_unloadedModifiedChunks.TryGetValue(key, out var cached))
+                    {
+                        Array.Copy(cached.Blocks, result.RawBlocks, Math.Min(cached.Blocks.Length, result.RawBlocks.Length));
+                        Array.Copy(cached.Meta, result.RawMeta, Math.Min(cached.Meta.Length, result.RawMeta.Length));
+                        _unloadedModifiedChunks.Remove(key);
+                        result.NeedsRemesh = true;
+                        WireDirty(result);
+                    }
+                }
+
                 // A ground-layer cave can punch through the bedrock floor at world -64 (local 0).
                 // When the deep chunk below (world -65) generates, copy those openings onto its top
                 // row so the player can actually fall through into the deep layer instead of hitting
@@ -183,6 +212,24 @@ namespace Cubuild
 
         public void ApplySavedChunk(int chunkX, int chunkZ, byte[] blocks, byte[] meta)
             => ApplySavedChunk(GroundLayer, chunkX, chunkZ, blocks, meta);
+
+        /// <summary>Returns the snapshot of a modified chunk that was unloaded (if any). Lets the
+        /// world save serialize edits even for chunks that are no longer loaded.</summary>
+        public bool TryGetCachedUnloadedChunk(int layer, int chunkX, int chunkZ, out byte[] blocks, out byte[] meta)
+        {
+            lock (_unloadCacheLock)
+            {
+                if (_unloadedModifiedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var cached))
+                {
+                    blocks = cached.Blocks;
+                    meta = cached.Meta;
+                    return true;
+                }
+            }
+            blocks = Array.Empty<byte>();
+            meta = Array.Empty<byte>();
+            return false;
+        }
 
         public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
         {
@@ -493,12 +540,43 @@ namespace Cubuild
                 long dz = key.Z - (long)centerChunkZ;
                 if (dx * dx + dz * dz > radiusSq)
                 {
-                    if (loadedChunks.TryRemove(key, out var _))
-                    {
-                        removed.Add(key);
-                        pendingGeneration.TryRemove(key, out _);
+if (loadedChunks.TryRemove(key, out var removedChunk))
+                {
+                    removed.Add(key);
+                    pendingGeneration.TryRemove(key, out _);
 
-                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X - 1, key.Z), out var left))
+                    // Preserve player edits: snapshot modified chunks before discarding them so
+                    // their data survives until the next world save, and can be re-applied when
+                    // the player returns. Unmodified chunks regenerate identically from the seed,
+                    // so they don't need caching.
+                    if (_modifiedChunks.Contains(key))
+                    {
+                        lock (_unloadCacheLock)
+                        {
+                            _unloadedModifiedChunks[key] = (
+                                ++_unloadCacheStamp,
+                                (byte[])removedChunk.RawBlocks.Clone(),
+                                (byte[])removedChunk.RawMeta.Clone());
+                            // Oldest-first eviction when over the cap.
+                            while (_unloadedModifiedChunks.Count > UnloadCacheMaxChunks)
+                            {
+                                ChunkCoordinates oldest = default;
+                                long oldestStamp = long.MaxValue;
+                                foreach (var kv in _unloadedModifiedChunks)
+                                {
+                                    if (kv.Value.Stamp < oldestStamp)
+                                    {
+                                        oldestStamp = kv.Value.Stamp;
+                                        oldest = kv.Key;
+                                    }
+                                }
+                                if (oldestStamp == long.MaxValue) break;
+                                _unloadedModifiedChunks.Remove(oldest);
+                            }
+                        }
+                    }
+
+                    if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X - 1, key.Z), out var left))
                             left.NeedsRemesh = true;
                         if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X + 1, key.Z), out var right))
                             right.NeedsRemesh = true;

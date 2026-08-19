@@ -58,20 +58,34 @@ namespace Cubuild
                     save.HeldItemId = held.Value.ItemId;
                     save.HeldCount = held.Value.Count;
                 }
-                foreach (var coord in World.Chunks.ModifiedChunks)
+foreach (var coord in World.Chunks.ModifiedChunks)
+            {
+                byte[] blocks;
+                byte[] meta;
+                if (World.Chunks.TryGetLoadedChunk(coord, out var chunk))
                 {
-                    if (World.Chunks.TryGetLoadedChunk(coord, out var chunk))
-                    {
-                        save.Chunks.Add(new SavedChunk
-                        {
-                            Layer = coord.Layer,
-                            X = coord.X,
-                            Z = coord.Z,
-                            Blocks = (byte[])chunk.RawBlocks.Clone(),
-                            Meta = (byte[])chunk.RawMeta.Clone(),
-                        });
-                    }
+                    blocks = chunk.RawBlocks;
+                    meta = chunk.RawMeta;
                 }
+                else if (World.Chunks.TryGetCachedUnloadedChunk(coord.Layer, coord.X, coord.Z, out var cBlocks, out var cMeta))
+                {
+                    // Unloaded but snapshotted at unload time - edits survive chunk streaming.
+                    blocks = cBlocks;
+                    meta = cMeta;
+                }
+                else
+                {
+                    continue; // modified, unloaded, and evicted from the cache - nothing to write
+                }
+                save.Chunks.Add(new SavedChunk
+                {
+                    Layer = coord.Layer,
+                    X = coord.X,
+                    Z = coord.Z,
+                    Blocks = (byte[])blocks.Clone(),
+                    Meta = (byte[])meta.Clone(),
+                });
+            }
                 save.Mobs = World.Entities.SaveMobs();
                 save.Save(Path.Combine(SavesFolder, SanitizeFileName(save.Name) + ".cubuild"));
             }
