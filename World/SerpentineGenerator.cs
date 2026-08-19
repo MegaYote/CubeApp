@@ -47,6 +47,7 @@ namespace Cubuild.World
             if (!Enabled) return;
 
             int idStone = BlockRegistry.GetId("stone");
+            int idQuartz = BlockRegistry.GetId("quartz");
             int idSerpentine = BlockRegistry.GetId("serpentine");
             int idGold = BlockRegistry.GetId("goldore");
             const int originY = ChunkManager.GroundOriginY;
@@ -86,8 +87,12 @@ namespace Cubuild.World
                         int localY = wy - originY;
                         if (localY < 0 || localY >= chunkHeight) continue;
 
-                        // Only replace stone (caves/air stay as pockets; dirt/grass untouched).
-                        if (chunk[lx, localY, lz] != idStone) continue;
+                        // Touch stone AND already-placed quartz: the overlap zone with a quartz
+                        // vein is exactly where the gold contact forms (quartz ran first, so its
+                        // cells are already quartz here; they must NOT be skipped or the gold
+                        // branch becomes unreachable).
+                        int id = chunk[lx, localY, lz];
+                        if (id != idStone && id != idQuartz) continue;
 
                         // High-frequency scatter: leave some stone for a natural look.
                         double p = _presenceNoise.Noise3DNormalized(wx * 0.15, wy * 0.15, wz * 0.15);
@@ -98,8 +103,10 @@ namespace Cubuild.World
                         // so contact zones are seamless across chunk borders.
                         if (quartz.WouldPlaceQuartz(chunk, lx, lz, wx, wy, wz, terrainBandStart, chunkSize, chunkHeight))
                             chunk[lx, localY, lz] = idGold;
-                        else
+                        else if (id == idStone)
                             chunk[lx, localY, lz] = idSerpentine;
+                        // id == idQuartz with a negative quartz test is impossible (the test is
+                        // deterministic and that cell became quartz through it) - left untouched.
                     }
                 }
             }
