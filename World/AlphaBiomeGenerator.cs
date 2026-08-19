@@ -206,10 +206,8 @@ namespace Cubuild.World
                     double wz = chunkZ * 16 + z;
 
                     // Faithful dice for EVERY column (the original never skipped any).
-                    // Sand/gravel dice: 4-octave noise (~-2..+2) scaled by 2 keeps the 2010
-                    // mix of sandy coasts, gravel sea floors and stone beaches.
-                    bool sand = _sandGravel.Noise3D(wx / 32.0, wz / 32.0, 0.0) * 2.0 + _rand.NextDouble() * 0.2 > 0.0;
-                    bool gravel = _sandGravel.Noise3D(wz / 32.0, 109.0134, wx / 32.0) * 2.0 + _rand.NextDouble() * 0.2 > 3.0;
+                    bool sand = _sandGravel.Noise3D(wx / 32.0, wz / 32.0, 0.0) + _rand.NextDouble() * 0.2 > 0.0;
+                    bool gravel = _sandGravel.Noise3D(wz / 32.0, 109.0134, wx / 32.0) + _rand.NextDouble() * 0.2 > 3.0;
                     int depth = (int)(_dirtDepth.Noise2D(wx / 16.0, wz / 16.0) / 3.0 + 3.0 + _rand.NextDouble() * 0.25);
 
                     if (!isAlphaColumn((int)wx, (int)wz)) continue;
@@ -335,7 +333,7 @@ namespace Cubuild.World
             byte[] blocks = chunk.RawBlocks;
             _rand.SetSeed((long)chunkX * 318279123L + (long)chunkZ * 919871212L);
 
-            int count = (int)(_trees.Noise2D(chunkX * 4.0, chunkZ * 4.0) * 8.0); // x*0.25 == (chunkX*16)*0.25
+            int count = (int)_trees.Noise2D(chunkX * 4.0, chunkZ * 4.0) << 3; // x*0.25 == (chunkX*16)*0.25
             if (count <= 0) return;
 
             var tree = new BigTree(blocks, idWood, idLeaves, idGrass, idDirt);

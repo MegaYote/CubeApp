@@ -86,7 +86,8 @@
       "surfaceBlock": "grass",
       "fillBlock": "dirt",
       "fillDepth": 3,
-      "treeDensity": 0,
+      "treeDensity": 2,
+      "treeType": "round",
       "alpha": {
         "lowNoiseOctaves": 16,
         "highNoiseOctaves": 16,
