@@ -20,7 +20,8 @@
   //   fillBlock       block id for the layers below the surface
   //   fillDepth       how many layers of fillBlock under the surface block
   //   treeDensity     0..n trees per chunk attempt rate (0 = no trees)
-  //   treeType        "oak" | "pine" (which tree style to spawn)
+  //   treeType        "oak" | "pine" | "round" | "tall" | "dead" | "willow"
+  //                   (which tree style to spawn)
   //   fillMixBlock    optional second fill block scattered through the fill
   //   fillMixChance   0..1 chance a fill layer is fillMixBlock instead
   //
@@ -43,7 +44,8 @@
       "surfaceBlock": "grass",
       "fillBlock": "dirt",
       "fillDepth": 3,
-      "treeDensity": 1
+      "treeDensity": 1,
+      "treeType": "round"
     },
     // ---- ANOMALY (experimental): the density field is 4D simplex noise sampled on a
     // curved slice through 4D space (w follows y with a slow sine fold), so the terrain
@@ -63,7 +65,8 @@
       "surfaceBlock": "grass",
       "fillBlock": "dirt",
       "fillDepth": 3,
-      "treeDensity": 8
+      "treeDensity": 8,
+      "treeType": "tall"
     },
     // ---- ALPHA: a byte-faithful port of Minecraft's "old terrain generator" - the exact
     // generator Alpha v1.1.2_01 shipped with (the last release to use it). Full 684.412
@@ -158,7 +161,8 @@
       "surfaceBlock": "grass",
       "fillBlock": "dirt",
       "fillDepth": 3,
-      "treeDensity": 1
+      "treeDensity": 1,
+      "treeType": "willow"
     },
     {
       "id": "mountains",
