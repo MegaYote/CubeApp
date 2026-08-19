@@ -58,6 +58,11 @@ namespace Cubuild.World
         private readonly NoiseOctaves _continent;
         private readonly NoiseOctaves _relief;
 
+        /// <summary>Height of the terrain band in blocks (world -64 .. +191). Taller than the
+        /// original 128 so amplified biomes can grow REAL mountains; sea level stays at world 0.
+        /// Surface scans across the engine must use this instead of a hardcoded 127.</summary>
+        public const int TerrainBandBlocks = 256;
+
         public TerrainChunkProvider(int seed = 20260809)
         {
             this.seed = seed;
@@ -106,7 +111,7 @@ namespace Cubuild.World
             // Field x/z are in 4-block units (5 samples cover the chunk's 16 blocks), field y
             // in 8-block units (17 samples cover 128). All frequency/amplitude constants below
             // are this engine's own tuning.
-            const int fxCount = 5, fyCount = 17, fzCount = 5;
+            const int fxCount = 5, fyCount = TerrainBandBlocks / 8 + 1, fzCount = 5; // 33 field-y rows cover 256 blocks
             const double baseFreq = 592.0;
             double[] field = new double[fxCount * fyCount * fzCount];
 
@@ -151,7 +156,10 @@ namespace Cubuild.World
                         reliefShaped /= 5.2;
                     }
                     elevation += 0.5;
-                    reliefShaped = reliefShaped * fyCount / 16.0;
+                    // ANCHORED scale: keep the ORIGINAL 17/16 magnitude regardless of the taller
+                    // band, so non-amplified biomes generate byte-identical terrain to before.
+                    // Amplified biomes reach the new headroom via baseHeight instead.
+                    reliefShaped = reliefShaped * 17.0 / 16.0;
 
                     // ---- BIOME-DRIVEN SURFACE LINE ----
                     // The authoritative biome at this column sets the target surface height.
@@ -256,16 +264,16 @@ namespace Cubuild.World
             }
 
             // ---- generateTerrain: trilinear-interpolate the field into blocks ----
-            // The terrain band occupies local Y terrainBandStart..terrainBandStart+127; above it is
-            // open sky. Water below the band's sea level.
-            for (int ly = 0; ly < 128; ly++)
+            // The terrain band occupies local Y terrainBandStart..terrainBandStart+255
+            // (world -64..191); above it is open sky. Water below the band's sea level.
+            for (int ly = 0; ly < TerrainBandBlocks; ly++)
             {
                 int localY = terrainBandStart + ly;
                 double gy = ly / 8.0;
                 int fy0 = (int)gy;
                 int fy1 = fy0 + 1;
                 double ty = gy - fy0;
-                if (fy0 > 15) { fy0 = 15; fy1 = 16; ty = 1.0; }
+                if (fy0 > fyCount - 2) { fy0 = fyCount - 2; fy1 = fyCount - 1; ty = 1.0; }
 
                 for (int lx = 0; lx < chunkSize; lx++)
                 {
@@ -420,7 +428,7 @@ namespace Cubuild.World
                     int fillBlock = biomeFill;
 
                     // Scan the terrain band (band-relative 127..0, actual local terrainBandStart..+127).
-                    for (int bandLy = 127; bandLy >= 0; bandLy--)
+                    for (int bandLy = TerrainBandBlocks - 1; bandLy >= 0; bandLy--)
                     {
                         int ly = terrainBandStart + bandLy;
                         int idx = (x * width + z) * height + ly;
@@ -655,7 +663,7 @@ namespace Cubuild.World
                 for (int z = 0; z < width; z++)
                 {
                     int col = (x * width + z) * height;
-                    int maxLy = Math.Min(seaLevelLocalY, terrainBandStart + 128);
+                    int maxLy = Math.Min(seaLevelLocalY, terrainBandStart + TerrainBandBlocks);
                     for (int ly = terrainBandStart; ly < maxLy; ly++)
                     {
                         int idx = col + ly;

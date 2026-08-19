@@ -136,7 +136,7 @@ namespace Cubuild.World
 
         private static int FindSurfaceY(Chunk chunk, int lx, int lz, int terrainBandStart, int chunkHeight)
         {
-            for (int ly = terrainBandStart + 127; ly >= terrainBandStart; ly--)
+            for (int ly = terrainBandStart + TerrainChunkProvider.TerrainBandBlocks - 1; ly >= terrainBandStart; ly--)
             {
                 if (chunk[lx, ly, lz] != BlockRegistry.AirId) return ChunkManager.GroundOriginY + ly;
             }

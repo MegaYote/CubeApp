@@ -89,7 +89,7 @@ namespace Cubuild.World
                     // Anchor the base to the real terrain surface under this column so the
                     // pyramid grows out of the ground instead of floating.
                     int baseWy = originY - 1;
-                    for (int ly = terrainBandStart + 127; ly >= terrainBandStart; ly--)
+                    for (int ly = terrainBandStart + TerrainChunkProvider.TerrainBandBlocks - 1; ly >= terrainBandStart; ly--)
                     {
                         if (chunk[lx, ly, lz] != BlockRegistry.AirId)
                         {

@@ -41,7 +41,7 @@ namespace Cubuild.World
 
             var rand = new Random(unchecked(chunkX * 171119 + chunkZ * 351817 ^ _seed) ^ 0x2A93D15C);
 
-            int bandTopLocal = terrainBandStart + 127;
+            int bandTopLocal = terrainBandStart + TerrainChunkProvider.TerrainBandBlocks - 1;
             if (bandTopLocal >= chunkHeight) bandTopLocal = chunkHeight - 1;
 
             for (int i = 0; i < AttemptsPerChunk; i++)
@@ -65,7 +65,7 @@ namespace Cubuild.World
 
         private static int FindSurfaceLocalY(byte[] blocks, int lx, int lz, int chunkSize, int height, int terrainBandStart)
         {
-            for (int ly = terrainBandStart + 127; ly >= terrainBandStart; ly--)
+            for (int ly = terrainBandStart + TerrainChunkProvider.TerrainBandBlocks - 1; ly >= terrainBandStart; ly--)
             {
                 if (ly >= height) continue;
                 if (blocks[(lx * chunkSize + lz) * height + ly] != 0) return ly;

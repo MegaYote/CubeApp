@@ -137,7 +137,7 @@ namespace Cubuild.World
         // Finds the highest non-air block in a column within the terrain band, world Y.
         private static int FindSurfaceY(Chunk chunk, int lx, int lz, int terrainBandStart, int chunkSize, int chunkHeight)
         {
-            for (int ly = terrainBandStart + 127; ly >= terrainBandStart; ly--)
+            for (int ly = terrainBandStart + TerrainChunkProvider.TerrainBandBlocks - 1; ly >= terrainBandStart; ly--)
             {
                 int id = chunk[lx, ly, lz];
                 if (id != BlockRegistry.AirId) return ChunkManager.WorldOriginY + ly;
