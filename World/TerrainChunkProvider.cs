@@ -426,10 +426,14 @@ namespace Cubuild.World
 
             // ---- ALPHA terrain override (runs BEFORE the surface passes so the alpha cells
             // carry the true 2010 terrain, and the alpha surface pass dresses them first -
-            // the engine's caves then tunnel through alpha grass exactly like 1.1.2_01). ----
+            // the engine's caves then tunnel through alpha grass exactly like 1.1.2_01).
+            // Border cells blend the alpha density field with the engine's own field for
+            // smooth transitions instead of cliffs. ----
             if (hasAlpha)
             {
-                AlphaGen.FillOverride(chunk, chunkX, chunkZ, alphaCell, idStone, idWater);
+                AlphaGen.FillOverride(chunk, chunkX, chunkZ, alphaCell,
+                    (cx, cz) => _biomeMap.BiomeAt(cx * 4 + 2, cz * 4 + 2).Id,
+                    field, idStone, idWater);
                 AlphaGen.SurfacePass(chunk, chunkX, chunkZ, isAlphaColumn, idStone, idGrass, idDirt, idSand, idGravel, idWater);
             }
 

@@ -70,10 +70,45 @@ namespace Cubuild.World
         }
 
         // ---- chunk fill: 4x4 cells of alpha terrain overwrite the engine's fill ----
-        public void FillOverride(Chunk chunk, int chunkX, int chunkZ, bool[,] alphaCell, int idStone, int idWater)
+        // Border cells do NOT switch hard: each field node blends alpha density with the
+        // engine's own density by a smoothstep weight derived from the 4 cells around the
+        // node (neighbor-aware across chunk edges). Fully-alpha nodes stay byte-faithful;
+        // the ramp kills the cliff where alpha meets other biomes.
+        public void FillOverride(Chunk chunk, int chunkX, int chunkZ, bool[,] alphaCell,
+            Func<int, int, string> biomeIdAt, double[] engineField, int idStone, int idWater)
         {
             byte[] blocks = chunk.RawBlocks;
             const int height = ChunkManager.ChunkHeight;
+
+            // Neighbor-aware 6x6 cell mask (chunk cells -1..4): border weights ramp
+            // smoothly across chunk boundaries instead of snapping at them.
+            var cellMask = new bool[6, 6];
+            for (int gx = 0; gx < 6; gx++)
+                for (int gz = 0; gz < 6; gz++)
+                    cellMask[gx, gz] = string.Equals(
+                        biomeIdAt(chunkX * 4 + gx - 1, chunkZ * 4 + gz - 1), "alpha", StringComparison.OrdinalIgnoreCase);
+
+            // Smooth blend weight of a field node: alpha share of its 4 surrounding cells,
+            // S-curved so the transition is flat at both ends (alpha inside, engine outside).
+            double NodeWeight(int fx, int fz)
+            {
+                int a = (cellMask[fx, fz] ? 1 : 0) + (cellMask[fx + 1, fz] ? 1 : 0)
+                      + (cellMask[fx, fz + 1] ? 1 : 0) + (cellMask[fx + 1, fz + 1] ? 1 : 0);
+                double s = a / 4.0;
+                return s * s * (3.0 - 2.0 * s);
+            }
+
+            // The engine's density at an alpha node: its field y rows are 8 blocks apart,
+            // alpha's are 4, so sample halfway (alpha fy -> engine fy/2).
+            double EngineAt(int fx, int fy, int fz)
+            {
+                double yp = fy / 2.0;
+                int fy0 = (int)yp;
+                if (fy0 > 31) fy0 = 31;
+                double t = yp - fy0;
+                int baseIdx = (fx * 5 + fz) * 33 + fy0;
+                return engineField[baseIdx] + (engineField[baseIdx + 1] - engineField[baseIdx]) * t;
+            }
 
             for (int fx = 0; fx < 4; fx++)
             {
@@ -81,26 +116,36 @@ namespace Cubuild.World
                 {
                     if (!alphaCell[fx, fz]) continue;
 
-                    double wx = chunkX * 4 + fx; // field coord (world blocks / 4)
-                    double wz = chunkZ * 4 + fz;
-
-                    // The 4 corner columns of 33 field samples (4-block Y spacing).
-                    double[,] c = new double[4, 33];
-                    for (int y = 0; y < 33; y++)
+                    // The 4 corner field nodes of this cell (node coords 0..4 in the chunk).
+                    int[,] node = { { fx, fz }, { fx, fz + 1 }, { fx + 1, fz }, { fx + 1, fz + 1 } };
+                    var c = new double[4, 33];
+                    var cw = new double[4];
+                    bool fullAlpha = true;
+                    for (int n = 0; n < 4; n++)
                     {
-                        c[0, y] = FieldSample(wx, y, wz);
-                        c[1, y] = FieldSample(wx, y, wz + 1);
-                        c[2, y] = FieldSample(wx + 1, y, wz);
-                        c[3, y] = FieldSample(wx + 1, y, wz + 1);
+                        int nfx = node[n, 0], nfz = node[n, 1];
+                        double wn = NodeWeight(nfx, nfz);
+                        cw[n] = wn;
+                        if (wn < 1.0) fullAlpha = false;
+                        for (int y = 0; y < 33; y++)
+                        {
+                            double alpha = FieldSample(chunkX * 4 + nfx, y, chunkZ * 4 + nfz);
+                            double eng = EngineAt(nfx, y, nfz);
+                            c[n, y] = eng + (alpha - eng) * wn;
+                        }
                     }
 
                     int ox = fx * 4, oz = fz * 4;
 
-                    // Alpha tops out at 128: everything above the band in this cell is air.
-                    for (int x = ox; x < ox + 4; x++)
-                        for (int z = oz; z < oz + 4; z++)
-                            for (int ly = AlphaBandBlocks; ly < TerrainChunkProvider.TerrainBandBlocks; ly++)
-                                blocks[(x * 16 + z) * height + ly] = 0;
+                    // Only a fully-alpha cell tops out at 128: everything above its band is
+                    // air. Blended cells keep the engine's terrain above 128 untouched.
+                    if (fullAlpha)
+                    {
+                        for (int x = ox; x < ox + 4; x++)
+                            for (int z = oz; z < oz + 4; z++)
+                                for (int ly = AlphaBandBlocks; ly < TerrainChunkProvider.TerrainBandBlocks; ly++)
+                                    blocks[(x * 16 + z) * height + ly] = 0;
+                    }
 
                     // Plain trilinear over the 4x4x4 sub-cells, exactly like the original.
                     for (int seg = 0; seg < 32; seg++)
