@@ -72,7 +72,31 @@ namespace Cubuild
                     d.Velocity.X * (float)Math.Pow(0.5, dt * 4.0),
                     d.Velocity.Y - Gravity * dt,
                     d.Velocity.Z * (float)Math.Pow(0.5, dt * 4.0));
-                d.Position += d.Velocity * dt;
+                
+                // Horizontal movement with wall collision
+                double newX = d.Position.X + d.Velocity.X * dt;
+                double newZ = d.Position.Z + d.Velocity.Z * dt;
+                
+                // Check X collision
+                int checkBx = (int)Math.Floor(newX - 0.2);
+                int checkBy = (int)Math.Floor(d.Position.Y);
+                int checkBz = (int)Math.Floor(d.Position.Z);
+                if (Chunks.TryGetLoadedBlock(checkBx, checkBy, checkBz, out int wallId) && BlockRegistry.IsSolid(wallId))
+                {
+                    newX = d.Position.X; // cancel X movement
+                    d.Velocity = new Point3D(-d.Velocity.X * 0.2, d.Velocity.Y, d.Velocity.Z); // bounce
+                }
+                
+                // Check Z collision
+                checkBx = (int)Math.Floor(newX);
+                checkBz = (int)Math.Floor(newZ + 0.2);
+                if (Chunks.TryGetLoadedBlock(checkBx, checkBy, checkBz, out int zWallId) && BlockRegistry.IsSolid(zWallId))
+                {
+                    newZ = d.Position.Z; // cancel Z movement
+                    d.Velocity = new Point3D(d.Velocity.X, d.Velocity.Y, -d.Velocity.Z * 0.2); // bounce
+                }
+                
+                d.Position = new Point3D(newX, d.Position.Y + d.Velocity.Y * dt, newZ);
 
                 // Tumble while airborne: rotate the quaternion around the spin axis, with a
                 // little drag so the spin dies down naturally.
@@ -84,7 +108,7 @@ namespace Cubuild
                     float qx = d.SpinAxisX * s, qy = d.SpinAxisY * s, qz = d.SpinAxisZ * s, qw = c;
                     float nx = qw * d.RotX + qx * d.RotW + qy * d.RotZ - qz * d.RotY;
                     float ny = qw * d.RotY - qx * d.RotZ + qy * d.RotW + qz * d.RotX;
-                    float nz = qw * d.RotZ + qx * d.RotY - qy * d.RotX + qz * d.RotW;
+                    float nz = qw * d.RotZ + qx * d.RotY - qy * d.RotX + qz * d.RotX;
                     float nw = qw * d.RotW - qx * d.RotX - qy * d.RotY - qz * d.RotZ;
                     d.RotX = nx; d.RotY = ny; d.RotZ = nz; d.RotW = nw;
                     d.SpinSpeed *= (float)Math.Pow(0.5, dt * 2.0);
@@ -100,6 +124,21 @@ namespace Cubuild
                     d.Velocity = new Point3D(d.Velocity.X, 0, d.Velocity.Z);
                     d.SpinSpeed = 0f; // it lands and stops tumbling
                 }
+
+                // If a solid block appears ABOVE the item, push it up.
+                int aboveY = by + 1;
+                if (Chunks.TryGetLoadedBlock(bx, aboveY, bz, out int aboveId) && BlockRegistry.IsSolid(aboveId))
+                {
+                    // Find the next empty space above
+                    int newY = aboveY + 1;
+                    while (Chunks.TryGetLoadedBlock(bx, newY, bz, out int nextId) && BlockRegistry.IsSolid(nextId))
+                    {
+                        newY++;
+                    }
+                    d.Position = new Point3D(d.Position.X, newY + 0.01, d.Position.Z); // slight offset to prevent re-collision
+                    d.Velocity = new Point3D(d.Velocity.X, 0, d.Velocity.Z);
+                }
+
                 else if (d.Position.Y < ChunkManager.GroundOriginY - 10)
                 {
                     _droppedItems.RemoveAt(i); // fell out of the world
@@ -190,7 +229,7 @@ namespace Cubuild
                 _lastStreamChunkX = chunkX;
                 _lastStreamChunkZ = chunkZ;
                 _lastPlayerLayer = playerLayer;
-                // Only stream the chunk layer the player is standing in â€” deep, ground, or sky.
+                // Only stream the chunk layer the player is standing in — deep, ground, or sky.
                 // The other two layers sit idle until the player crosses into them, saving CPU
                 // and keeping generation focused on the one layer that matters right now.
                 Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, playerLayer);
@@ -208,6 +247,5 @@ namespace Cubuild
         /// <summary>Restores the day/night clock from a save.</summary>
         public void SetWorldTime(long ticks) => WorldTime = Math.Max(0, ticks);
 
-        /// <summary>Force-advance the day/night clock by 25% of its 24000-tick cycle (T key).</summary>
-    }
+        }
 }
