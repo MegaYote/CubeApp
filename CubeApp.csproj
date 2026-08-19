@@ -34,6 +34,8 @@
     <EmbeddedResource Include="Assets\Data\biomes.json" />
     <!-- Data-driven 2x2 crafting recipes (grid input -> item output). -->
     <EmbeddedResource Include="Assets\Data\recipes.json" />
+    <!-- Data-driven mob spawn rules (categories, weights, biome/light gates). -->
+    <EmbeddedResource Include="Assets\Data\spawns.json" />
     <!-- Workbench crafting menu background (user's UI design). -->
     <EmbeddedResource Include="Assets\Textures\crafting.png" />
     <!-- Title-screen logo graphic. -->

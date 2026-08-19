@@ -1,0 +1,86 @@
+{
+  // ============================================================================
+  // spawns.json — natural mob spawning rules (Minecraft-style).
+  //
+  // The game builds one spawner per "category" below. Each category has its own
+  // caps, Y-selection mode, light gate, cadence, and a weighted table of mob
+  // entries. An entry only participates when its biome list matches the biome of
+  // the chunk being sampled ("*" matches everything).
+  //
+  // CATEGORY FIELDS:
+  //   id            unique id (used in debug)
+  //   maxTotal      global cap for mobs spawned by this category
+  //   maxPerType    cap per mob type (e.g. max 12 ducks anywhere)
+  //   maxPerChunk   density budget per 16x16 chunk column - stops clumping
+  //   yMode         "surface" = walk terrain top; "depthBias" = caves/depths
+  //   lightGate     "any" = no light check; "bright" = light >= 9 (day animals);
+  //                 "dark" = light <= rand(8) (monsters: caves all day, surface
+  //                 only at night - same rule Minecraft uses)
+  //   spawnInterval seconds between spawn checks (attempts run each check)
+  //   entries[]     weighted mob table for the category
+  //
+  // ENTRY FIELDS:
+  //   mobId         id registered by MobDefinition
+  //   weight        relative pick chance vs other entries in the category
+  //   packMin/Max   how many spawn together per successful spot
+  //   biomes[]      biome ids this mob may spawn in ("*" = any)
+  //   nearWater     true = require a water block within ~4 blocks (duck ponds)
+  //   minY/maxY     height clamp for depthBias entries (monsters underground)
+  // ============================================================================
+
+  "categories": [
+    {
+      "id": "creature",
+      "maxTotal": 20,
+      "maxPerType": 12,
+      "maxPerChunk": 6,
+      "yMode": "surface",
+      "lightGate": "bright",
+      "spawnInterval": 2.0,
+      "entries": [
+        {
+          "mobId": "duck",
+          "weight": 6,
+          "packMin": 1,
+          "packMax": 3,
+          "biomes": ["plains", "hills"],
+          "nearWater": true
+        },
+        {
+          "mobId": "coyote",
+          "weight": 3,
+          "packMin": 1,
+          "packMax": 2,
+          "biomes": ["plains", "hills", "desert", "paradise"]
+        },
+        {
+          "mobId": "steve",
+          "weight": 1,
+          "packMin": 1,
+          "packMax": 1,
+          "biomes": ["plains", "hills", "paradise"]
+        }
+      ]
+    },
+    {
+      "id": "monster",
+      "maxTotal": 100,
+      "maxPerType": 20,
+      "maxPerChunk": 8,
+      "yMode": "depthBias",
+      "lightGate": "dark",
+      "spawnInterval": 2.0,
+      "entries": [
+        {
+          "mobId": "zombie",
+          "weight": 10,
+          "packMin": 1,
+          "packMax": 4,
+          "biomes": ["*"],
+          "minY": 8,
+          "maxY": 119
+        }
+      ]
+    }
+  ]
+}

@@ -550,7 +550,7 @@ namespace Cubuild
             ChunkProvider = new World.TerrainChunkProvider(seed);
             SkyChunkProvider = new World.SkyChunkProvider(seed);
             Chunks = new ChunkManager(new World.DeepChunkProvider(seed), ChunkProvider, SkyChunkProvider);
-            Entities = new EntityManager(Chunks);
+            Entities = new EntityManager(Chunks, (wx, wz) => ChunkProvider.BiomeAt(wx, wz));
             // The local player's body participates in mob separation: the player shoves mobs
             // aside (and mobs give a light shove back). Velocity is added so the push decays via
             // the normal walk friction; fly mode ignores it (velocity is overwritten each frame).

@@ -927,6 +927,9 @@ namespace Cubuild.World
             return _biomeMap.BiomeAt(worldX, worldZ).DisplayName;
         }
 
+        /// <summary>The biome definition at a world column (spawn rules key on biome id).</summary>
+        public BiomeDefinition BiomeAt(int worldX, int worldZ) => _biomeMap.BiomeAt(worldX, worldZ);
+
         private static double Lerp(double a, double b, double t)
         {
             return a + (b - a) * t;

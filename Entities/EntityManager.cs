@@ -16,15 +16,13 @@ namespace Cubuild
         private readonly Dictionary<string, MobModel> _loadedModels = new();
         private readonly Random _rand = new();
 
-        // Natural spawning + despawning. Set to null to disable.
-        private MobSpawner? _spawner;
-        private MobSpawner? _monsterSpawner;
-        private double _spawnAccumulator;
-        private double _monsterSpawnAccumulator;
+        // Natural spawning + despawning. Each category from spawns.json gets its own spawner
+        // (caps, biome-filtered table, light gate, cadence). Set to null to disable.
+        private readonly List<MobSpawner> _spawners = new();
+        private readonly Dictionary<MobSpawner, double> _spawnAccumulators = new();
         private readonly System.Diagnostics.Stopwatch _entityWatch = new();
         public float LastUpdateMs { get; private set; }
         public int MobCount => _mobs.Count;
-        private const double SpawnIntervalBase = 2.0; // check for spawning roughly every 2s
         // World->skylightSubtracted (0 day .. 11 night) for the monster darkness gate.
         private Func<int>? _skylightSubtractedFn;
 
@@ -32,28 +30,86 @@ namespace Cubuild
 
         public IReadOnlyList<MobRenderData> MobRenderData => _mobRenderData;
 
-        public EntityManager(ChunkManager chunkManager)
+        public EntityManager(ChunkManager chunkManager, Func<int, int, BiomeDefinition>? biomeAt = null)
         {
             _chunkManager = chunkManager ?? throw new ArgumentNullException(nameof(chunkManager));
-            // Natural spawn table: ducks are common, coyotes rarer, players (Steve) rarest.
-            _spawner = new MobSpawner(
-                new[]
-                {
-                    new MobSpawnEntry("duck", 6, 1, 3),
-                    new MobSpawnEntry("coyote", 3, 1, 2),
-                    new MobSpawnEntry("steve", 1, 1, 1),
-                },
+
+            // Build spawners from spawns.json (embedded resource or loose file). If the data file
+            // is missing or malformed, fall back to a sensible hardcoded table so the game boots.
+            List<SpawnCategory> categories;
+            try
+            {
+                categories = SpawnTable.LoadDefault();
+            }
+            catch
+            {
+                categories = DefaultFallbackTable();
+            }
+            foreach (var cat in categories)
+            {
+                AddSpawner(cat, biomeAt);
+            }
+        }
+
+        private void AddSpawner(SpawnCategory category, Func<int, int, BiomeDefinition>? biomeAt)
+        {
+            var spawner = new MobSpawner(
+                category,
                 AddMobAt,
-                () => _mobs.Count,
-                CountMobsOfType);
-            // Night monsters (zombies): separate spawner with the darkness/cave logic
-            // and a 100-mob cap.
-            _monsterSpawner = new MobSpawner(
-                new[] { new MobSpawnEntry("zombie", 1, 1, 4) },
-                AddMobAt,
-                () => _mobs.Count,
+                () => CountMobsOfCategory(category),
                 CountMobsOfType,
-                monsterSpawner: true);
+                CountMobsInChunkColumn,
+                biomeAt);
+            _spawners.Add(spawner);
+            _spawnAccumulators[spawner] = 0.0;
+        }
+
+        /// <summary>Hardcoded safety net when spawns.json can't be loaded: one creature and one
+        /// monster category mirroring the old behaviour.</summary>
+        private static List<SpawnCategory> DefaultFallbackTable()
+        {
+            var creatures = new SpawnCategory
+            {
+                Id = "creature", MaxTotal = 20, MaxPerType = 12, MaxPerChunk = 6,
+                YMode = SpawnYMode.Surface, LightGate = SpawnLightGate.Any, SpawnInterval = 2.0,
+            };
+            creatures.Rules.Add(new MobSpawnRule { MobId = "duck", Weight = 6, PackMin = 1, PackMax = 3, NearWater = false });
+            creatures.Rules.Add(new MobSpawnRule { MobId = "coyote", Weight = 3, PackMin = 1, PackMax = 2 });
+            creatures.Rules.Add(new MobSpawnRule { MobId = "steve", Weight = 1, PackMin = 1, PackMax = 1 });
+
+            var monsters = new SpawnCategory
+            {
+                Id = "monster", MaxTotal = 100, MaxPerType = 20, MaxPerChunk = 8,
+                YMode = SpawnYMode.DepthBias, LightGate = SpawnLightGate.Dark, SpawnInterval = 2.0,
+            };
+            monsters.Rules.Add(new MobSpawnRule { MobId = "zombie", Weight = 10, PackMin = 1, PackMax = 4, MinY = 8, MaxY = 119 });
+
+            return new List<SpawnCategory> { creatures, monsters };
+        }
+
+        /// <summary>Total mobs spawned by one category (sum over its rules' type counts) - caps
+        /// stay meaningful per category instead of bleeding across tables.</summary>
+        private int CountMobsOfCategory(SpawnCategory category)
+        {
+            int count = 0;
+            foreach (var rule in category.Rules)
+            {
+                count += CountMobsOfType(rule.MobId);
+            }
+            return count;
+        }
+
+        /// <summary>Mobs currently standing in a given chunk column (per-chunk density budget).</summary>
+        private int CountMobsInChunkColumn(int chunkX, int chunkZ)
+        {
+            int count = 0;
+            foreach (var mob in _mobs)
+            {
+                int mx = (int)Math.Floor(mob.Position.X / 16.0);
+                int mz = (int)Math.Floor(mob.Position.Z / 16.0);
+                if (mx == chunkX && mz == chunkZ) count++;
+            }
+            return count;
         }
 
         /// <summary>Total living mobs (for the spawn cap).</summary>
@@ -285,36 +341,27 @@ namespace Cubuild
             // horizontal repulsion applied to both entities.
             PushMobsApart(deltaSeconds);
 
-            // Natural spawning: attempt multiple passes each tick while under the cap (the
-            // interval only gates how often we check, so an empty area fills quickly without
-            // hammering every frame).
-            if (enableSpawning && _spawner != null)
+            // Natural spawning: each category ticks on its own interval from spawns.json and runs
+            // multiple passes per check, so an empty area fills quickly without hammering every
+            // frame. The light probe is only built for categories that gate on light, and only
+            // when a skylight source is wired in.
+            if (enableSpawning)
             {
-                _spawnAccumulator += deltaSeconds;
-                if (_spawnAccumulator >= SpawnIntervalBase)
+                int skylight = _skylightSubtractedFn?.Invoke() ?? 0;
+                foreach (var spawner in _spawners)
                 {
-                    _spawnAccumulator = 0;
-                    for (int pass = 0; pass < 10; pass++)
-                    {
-                        _spawner.TrySpawn(_chunkManager, playerPosition, _rand);
-                    }
-                }
-            }
+                    _spawnAccumulators[spawner] += deltaSeconds;
+                    if (_spawnAccumulators[spawner] < spawner.SpawnInterval) continue;
+                    _spawnAccumulators[spawner] = 0;
 
-            // Night monster spawning: same cadence, but zombies only appear in darkness and are
-            // strongly biased toward caves. The light gate uses the current night-dim level so they
-            // pour out of caves all day and over the surface at night.
-            if (enableSpawning && _monsterSpawner != null && _skylightSubtractedFn != null)
-            {
-                _monsterSpawnAccumulator += deltaSeconds;
-                if (_monsterSpawnAccumulator >= SpawnIntervalBase)
-                {
-                    _monsterSpawnAccumulator = 0;
-                    int skylight = _skylightSubtractedFn();
+                    Func<int, int, int, int>? lightProbe = null;
+                    if (spawner.Category.LightGate != SpawnLightGate.Any && _skylightSubtractedFn != null)
+                    {
+                        lightProbe = (x, y, z) => _chunkManager.GetSkyLightEstimate(x, y, z, skylight);
+                    }
                     for (int pass = 0; pass < 10; pass++)
                     {
-                        _monsterSpawner.TrySpawn(_chunkManager, playerPosition, _rand,
-                            (x, y, z) => _chunkManager.GetSkyLightEstimate(x, y, z, skylight));
+                        spawner.TrySpawn(_chunkManager, playerPosition, _rand, lightProbe);
                     }
                 }
             }
