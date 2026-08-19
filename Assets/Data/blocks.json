@@ -199,6 +199,9 @@
     // (lean directions), set automatically by the game when placed on a wall.
     { "id": "torch",           "displayName": "Torch",           "texture": "12,2", "shape": "cross", "lightEmission": 14, "hardness": 0, "mapColor": "#FFAA00" },
     { "id": "sap_torch",       "displayName": "Sap Torch",       "texture": "13,2", "shape": "cross", "lightEmission": 10, "hardness": 0, "mapColor": "#FFAA00" },
-    { "id": "burnt_torch",     "displayName": "Burnt Torch",     "texture": "11,8", "shape": "cross", "lightEmission": 0, "hardness": 0, "mapColor": "#333333" }
+    { "id": "burnt_torch",     "displayName": "Burnt Torch",     "texture": "11,8", "shape": "cross", "lightEmission": 0, "hardness": 0, "mapColor": "#333333" },
+
+    // ----- carpenter's workshop -----------------------------------------------------
+    { "id": "carpenters_workbench", "displayName": "Carpenter's Workbench", "texture": "14,8", "top": "13,8", "bottom": "12,8", "hardness": 2, "mapColor": "#85613C" }
   ]
 }
