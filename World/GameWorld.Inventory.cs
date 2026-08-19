@@ -342,15 +342,20 @@ namespace Cubuild
             for (int i = 0; i < drop; i++)
             {
                 var rand = _regenRandom;
-                // Nudge the heading by a small random amount (~±4.5°) so each item takes a
-                // slightly different arc and they fan out into a loose spread.
-                double yawRad = baseYawRad + (rand.NextDouble() - 0.5) * 0.16;
-                // Small speed wobble (±4%) so distances vary a touch too.
-                double speed = 5.5 * (1.0 + (rand.NextDouble() - 0.5) * 0.08);
-                double up = 0.35 + (rand.NextDouble() - 0.5) * 0.1;
+                // Skew the heading by up to ±10° so each item takes its own arc and the
+                // pile fans out into a loose cluster.
+                double yawRad = baseYawRad + (rand.NextDouble() - 0.5) * 0.35;
+                // Speed wobble (±15%) so they land at noticeably different distances too.
+                double speed = 5.5 * (1.0 + (rand.NextDouble() - 0.5) * 0.3);
+                double up = 0.35 + (rand.NextDouble() - 0.5) * 0.15;
                 var throwVel = new Point3D(Math.Sin(yawRad) * speed, up, Math.Cos(yawRad) * speed);
+                // Tiny spawn offset so even items on near-identical paths don't land on the
+                // exact same spot (throws only travel ~1 block, so angle alone can't spread
+                // them - this guarantees visible separation).
+                double ox = (rand.NextDouble() - 0.5) * 0.3;
+                double oz = (rand.NextDouble() - 0.5) * 0.3;
                 SpawnItemDrop(held.Value.ItemId, 1,
-                    new Point3D(LocalPlayer.Position.X, LocalPlayer.Position.Y, LocalPlayer.Position.Z), throwVel);
+                    new Point3D(LocalPlayer.Position.X + ox, LocalPlayer.Position.Y, LocalPlayer.Position.Z + oz), throwVel);
             }
             int nc = held.Value.Count - drop;
             if (nc <= 0) HeldStack = null;
