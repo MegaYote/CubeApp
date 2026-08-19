@@ -95,6 +95,8 @@
         "heightStretch": 4.0
       }
     },
+    {
+      "id": "paradise",
       "displayName": "Paradise Foothills",
       "temperature": { "min": 0.30, "max": 0.50 },
       "humidity": { "min": -0.35, "max": 0.15 },
