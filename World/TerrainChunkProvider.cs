@@ -68,6 +68,10 @@ namespace Cubuild.World
         private readonly NoiseOctaves _surfaceA;
         private readonly NoiseOctaves _continent;
         private readonly NoiseOctaves _relief;
+        // 4D density field for the experimental Anomaly biome: sampled on a curved slice
+        // through 4D space (w follows y with a slow sine fold) -> folded, weaving strata
+        // that plain 3D noise cannot express.
+        private readonly NoiseOctaves4D _anomalyNoise;
 
         /// <summary>Height of the terrain band in blocks (world -64 .. +191). Taller than the
         /// original 128 so amplified biomes can grow REAL mountains; sea level stays at world 0.
@@ -87,6 +91,7 @@ namespace Cubuild.World
             _surfaceA = new NoiseOctaves(rand, 5, 1);
             _continent = new NoiseOctaves(rand, 9, 3);
             _relief = new NoiseOctaves(rand, 7, 9);
+            _anomalyNoise = new NoiseOctaves4D(rand, 9, 7);
             _amplifiedCarve = new NoiseOctaves(rand, 4, 3);
             Monoliths = new MonolithSculptor(seed);
             QuartzVeins = new QuartzVeinGenerator(seed);
@@ -186,6 +191,8 @@ namespace Cubuild.World
                     // level -> water fills. Terrain height and biome label can never desync
                     // because both come from the same BiomeMap.
                     var biome = _biomeMap.BiomeAt(xq * 4.0, zq * 4.0);
+                    // The Anomaly biome replaces the 3D body field with a 4D one (see below).
+                    bool anomalyColumn = string.Equals(biome.Id, "anomaly", StringComparison.OrdinalIgnoreCase);
                     // ---- SMOOTHED BIOME SURFACE LINE ----
                     // A raw biome.BaseHeight is a step function: the instant you cross a biome
                     // border the target surface snaps from ocean-low (~0.28) to land-high (~0.56+),
@@ -255,15 +262,31 @@ namespace Cubuild.World
                         int idx = col + fy;
                         double yq = fy; // y field coord = worldY/8
 
-                        // Terrain body + vertical selector blend.
-                        double bodyA = _bodyA.Noise3D(xq * baseFreq, yq * baseFreq, zq * baseFreq) / 480.0;
-                        double bodyB = _bodyB.Noise3D(xq * baseFreq, yq * baseFreq, zq * baseFreq) / 480.0;
-                        double selector = (_upperSelector.Noise3D(xq * (baseFreq / 96.0), yq * (baseFreq / 192.0), zq * (baseFreq / 96.0)) / 11.0 + 1.0) / 2.0;
-
                         double density;
-                        if (selector < 0.0) density = bodyA;
-                        else if (selector > 1.0) density = bodyB;
-                        else density = bodyA + (bodyB - bodyA) * selector;
+                        if (anomalyColumn)
+                        {
+                            // ---- ANOMALY: 4D DENSITY FIELD ----
+                            // Sample 4D simplex on a curved slice through 4D space: w follows y
+                            // (twisting the vertical axis) plus a slow sine fold through the
+                            // hyperplane. The resulting density folds and weaves into twisted
+                            // strata, wrapped bands and alien structures - shapes 3D noise
+                            // physically cannot produce. Same weight envelope as the 3D body
+                            // (/480), so the surface line and falloff behave identically.
+                            double w4 = yq * baseFreq * 1.3 + (xq + zq) * baseFreq * 0.2
+                                + Math.Sin(xq * 0.5 + zq * 0.5 + yq * 0.4) * 3.0;
+                            density = _anomalyNoise.Noise4D(xq * baseFreq, yq * baseFreq, zq * baseFreq, w4) / 480.0;
+                        }
+                        else
+                        {
+                            // Terrain body + vertical selector blend.
+                            double bodyA = _bodyA.Noise3D(xq * baseFreq, yq * baseFreq, zq * baseFreq) / 480.0;
+                            double bodyB = _bodyB.Noise3D(xq * baseFreq, yq * baseFreq, zq * baseFreq) / 480.0;
+                            double selector = (_upperSelector.Noise3D(xq * (baseFreq / 96.0), yq * (baseFreq / 192.0), zq * (baseFreq / 96.0)) / 11.0 + 1.0) / 2.0;
+
+                            if (selector < 0.0) density = bodyA;
+                            else if (selector > 1.0) density = bodyB;
+                            else density = bodyA + (bodyB - bodyA) * selector;
+                        }
 
                         // Falloff: push density solid below the surface line, air above.
                         double falloff = ((double)fy - centerHeight) * 13.0 / elevation;

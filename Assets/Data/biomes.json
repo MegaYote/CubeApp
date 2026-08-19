@@ -29,6 +29,24 @@
   // ============================================================================
 
   "biomes": [
+    // ---- ANOMALY (experimental): the density field is 4D simplex noise sampled on a
+    // curved slice through 4D space (w follows y with a slow sine fold), so the terrain
+    // folds and weaves with twisted strata - structures impossible for 3D noise. Claims
+    // a small climate sliver; listed FIRST so first-match-wins gives it the band.
+    {
+      "id": "anomaly",
+      "displayName": "Anomaly",
+      "temperature": { "min": 0.40, "max": 0.60 },
+      "humidity": { "min": -0.60, "max": 0.10 },
+      "water": false,
+      "baseHeight": 0.85,
+      "heightVariation": 0.5,
+      "amplified": true,
+      "surfaceBlock": "grass",
+      "fillBlock": "dirt",
+      "fillDepth": 3,
+      "treeDensity": 0
+    },
     {
       "id": "paradise",
       "displayName": "Paradise Foothills",
