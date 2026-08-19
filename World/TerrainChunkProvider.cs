@@ -15,8 +15,16 @@ namespace Cubuild.World
         // Frequency of the relief noise. Higher = tighter-packed hills/mountains (smaller, more
         // broken-up regions); lower = broad, sweeping mountain ranges.
         private const double ReliefFrequency = 130.0;
+        // Amplified 3D surface carving: a mid-frequency 3D density field that sculpts random
+        // features (overhangs, arches, rocky bumps, pockets) into amplified terrain surfaces -
+        // the classic alpha-style carved look. Frequency: 0.85 => features ~8-12 blocks wide;
+        // strength: ~8 flips the density only within ~2-3 blocks of the surface line, so it
+        // carves shape without shredding the terrain.
+        private const double CarveFrequency = 0.85;
+        private const double CarveStrength = 8.0;
         private readonly int seed;
         private readonly BiomeMap _biomeMap;
+        private readonly NoiseOctaves _amplifiedCarve;
 
         /// <summary>Controllable monolith feature (see MonolithSculptor). A tunable tower/column
         /// feature: frequency/size/height/carve, seed-driven.</summary>
@@ -76,6 +84,7 @@ namespace Cubuild.World
             _surfaceA = new NoiseOctaves(rand, 5, 1);
             _continent = new NoiseOctaves(rand, 9, 3);
             _relief = new NoiseOctaves(rand, 7, 9);
+            _amplifiedCarve = new NoiseOctaves(rand, 4, 3);
             Monoliths = new MonolithSculptor(seed);
             QuartzVeins = new QuartzVeinGenerator(seed);
             Serpentines = new SerpentineGenerator(seed);
@@ -250,6 +259,22 @@ namespace Cubuild.World
                         double falloff = ((double)fy - centerHeight) * 13.0 / elevation;
                         if (falloff < 0.0) falloff *= 3.6;
                         density -= falloff;
+
+                        // ---- AMPLIFIED 3D CARVING ----
+                        // Amplified biomes get random 3D density sculpting: a mid-frequency 3D
+                        // noise field added to the density only flips cells within a couple of
+                        // blocks of the surface line (deep below it is solid, far above is air),
+                        // producing overhangs, arches, rocky bumps and little pockets - the
+                        // alpha-style "carved by density" surface. Non-amplified columns are
+                        // untouched (blendedAmplified ~ 0 => bit-identical terrain).
+                        if (blendedAmplified > 0.0)
+                        {
+                            double carve = _amplifiedCarve.Noise3D(
+                                xq * CarveFrequency,
+                                yq * CarveFrequency * 0.5,
+                                zq * CarveFrequency);
+                            density += carve * CarveStrength * blendedAmplified;
+                        }
 
                         // Force air in the top field rows.
                         if (fy > fyCount - 4)

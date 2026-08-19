@@ -60,15 +60,16 @@
     },
     // ---- amplified hills: plains' climate band split in half, so hills and plains
     // appear equally often (first match wins, so hills sits BEFORE plains). Alpha-style
-    // dramatic terrain: a modest base (~world 48) so valley FLOORS plunge to sea level
-    // (deep cuts flood into lakes), while amplified peaks still swing up past world 100.
+    // drama: base 0.93 puts the deepest valley floors right AT sea level (no flooding,
+    // waterline edge everywhere), amplified peaks swing past world 100, and the surface
+    // is sculpted by 3D density carving - overhangs, arches and rocky bumps.
     {
       "id": "hills",
       "displayName": "Hills",
       "temperature": { "min": 0.0, "max": 1.0 },
       "humidity": { "min": -0.15, "max": 0.425 },
       "water": false,
-      "baseHeight": 0.88,
+      "baseHeight": 0.93,
       "heightVariation": 0.75,
       "amplified": true,
       "surfaceBlock": "grass",
