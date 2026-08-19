@@ -158,8 +158,9 @@ namespace Cubuild
     ///  - Pick a LOADED ground-layer chunk 2-7 chunks out (32-112 blocks).
     ///  - Sample the chunk's biome, filter the rule table to matching entries, weight-roll one.
     ///  - Enforce the category's per-chunk density budget (mobs already in that column).
-    ///  - Roll Y per the category's mode (surface walk or depth-biased, clamped by rule MinY/MaxY).
-    ///  - Jitter a few cells: solid cube below, air at and above, >= 32 from the player,
+    ///     - Roll Y per the category's mode (surface walk or depth-biased, clamped by rule MinY/MaxY).
+    ///  - Jitter a few cells: solid cube below, air at and above, >= 32 HORIZONTAL blocks from
+    ///    the player (vertical never gates: caves spawn while the player stands above them),
     ///    near-water requirement, and the light gate.
     /// </summary>
     public sealed class MobSpawner
@@ -170,6 +171,8 @@ namespace Cubuild
         private readonly Func<string, int> _typeCountFn;
         private readonly Func<int, int, int> _chunkCountFn;
         private Func<int, int, BiomeDefinition>? _biomeAt;
+        // Horizontal-only spawn gate: vertical distance never blocks, so monsters rise from
+        // caves and shafts while the player stands on the surface above them (Minecraft rule).
         private const double SpawnMinDistanceSq = 32.0 * 32.0;
         private const int MaxPackMembers = 3;
         private const int SpawnPasses = 10;
@@ -249,9 +252,11 @@ namespace Cubuild
                 }
 
                 double dx = (x + 0.5) - playerPosition.X;
-                double dy = (y + 1.0) - playerPosition.Y;
                 double dz = (z + 0.5) - playerPosition.Z;
-                if (dx * dx + dy * dy + dz * dz < 1024.0) continue;
+                // Horizontal-only: a cave mob 60 blocks below the surface is fair game as long
+                // as it's at least 32 blocks away horizontally (vertical separation alone used to
+                // reject every deep spawn while the player stood above - the cave system starved).
+                if (dx * dx + dz * dz < SpawnMinDistanceSq) continue;
 
                 if (_spawnFn(rule.MobId, new Point3D(x + 0.5, y + 1.0, z + 0.5),
                     (float)(rand.NextDouble() * Math.PI * 2.0)))

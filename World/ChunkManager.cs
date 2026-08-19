@@ -432,6 +432,36 @@ namespace Cubuild
             return sky < 0 ? 0 : sky;
         }
 
+        /// <summary>
+        /// Light value for the spawner's light gates (0..15), day/night-aware AND torch-aware.
+        /// Cells that see the sky use the time-aware estimate (full 15 by day, dimmed at night);
+        /// shaded cells (caves, under roofs) read the baked torch/glow block-light grid, so a
+        /// torch-lit room genuinely protects you from monsters. 0 when the cell's chunk hasn't
+        /// meshed yet (fail dark - freshly generated caves may spawn until their first mesh).
+        /// </summary>
+        public int GetSpawnLight(int x, int y, int z, int skylightSubtracted)
+        {
+            int sky = GetSkyLightEstimate(x, y, z, skylightSubtracted);
+            if (sky > 0) return sky; // sees the sky: time of day is the only factor
+
+            // Shaded: the cached LightGrid here is exactly block light (baked sky is 0 under a
+            // roof), i.e. torch/glow light. O(1) lookup when the chunk has meshed.
+            int layer = LayerForWorldY(y);
+            int cx = FloorDiv(x, ChunkSize);
+            int cz = FloorDiv(z, ChunkSize);
+            if (TryGetLoadedChunk(new ChunkCoordinates(layer, cx, cz), out var chunk) && chunk.LightGrid != null)
+            {
+                int localX = x - chunk.OriginX;
+                int localY = y - chunk.OriginY;
+                int localZ = z - chunk.OriginZ;
+                if (localX >= 0 && localX < ChunkSize && localY >= 0 && localY < chunk.Height && localZ >= 0 && localZ < ChunkSize)
+                {
+                    return chunk.LightGrid[(localX * chunk.Depth + localZ) * chunk.Height + localY];
+                }
+            }
+            return 0;
+        }
+
         private static int FloorDiv(int value, int divisor)
         {
             int result = value / divisor;

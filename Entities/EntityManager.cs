@@ -20,6 +20,8 @@ namespace Cubuild
         // (caps, biome-filtered table, light gate, cadence). Set to null to disable.
         private readonly List<MobSpawner> _spawners = new();
         private readonly Dictionary<MobSpawner, double> _spawnAccumulators = new();
+        /// <summary>Mob type -> spawning category that owns it (caps follow the category).</summary>
+        private readonly Dictionary<string, SpawnCategory> _typeCategory = new(StringComparer.OrdinalIgnoreCase);
         private readonly System.Diagnostics.Stopwatch _entityWatch = new();
         public float LastUpdateMs { get; private set; }
         public int MobCount => _mobs.Count;
@@ -58,10 +60,11 @@ namespace Cubuild
                 AddMobAt,
                 () => CountMobsOfCategory(category),
                 CountMobsOfType,
-                CountMobsInChunkColumn,
+                (chunkX, chunkZ) => CountMobsInChunkColumn(chunkX, chunkZ, category),
                 biomeAt);
             _spawners.Add(spawner);
             _spawnAccumulators[spawner] = 0.0;
+            foreach (var rule in category.Rules) _typeCategory[rule.MobId] = category;
         }
 
         /// <summary>Hardcoded safety net when spawns.json can't be loaded: one creature and one
@@ -99,12 +102,15 @@ namespace Cubuild
             return count;
         }
 
-        /// <summary>Mobs currently standing in a given chunk column (per-chunk density budget).</summary>
-        private int CountMobsInChunkColumn(int chunkX, int chunkZ)
+        /// <summary>Mobs of THIS category standing in a chunk column (per-chunk density budget -
+        /// categories no longer crowd each other out of a column).</summary>
+        private int CountMobsInChunkColumn(int chunkX, int chunkZ, SpawnCategory category)
         {
             int count = 0;
             foreach (var mob in _mobs)
             {
+                if (mob is not MobEntity me) continue;
+                if (!_typeCategory.TryGetValue(me.MobTypeName, out var cat) || cat != category) continue;
                 int mx = (int)Math.Floor(mob.Position.X / 16.0);
                 int mz = (int)Math.Floor(mob.Position.Z / 16.0);
                 if (mx == chunkX && mz == chunkZ) count++;
@@ -343,8 +349,8 @@ namespace Cubuild
 
             // Natural spawning: each category ticks on its own interval from spawns.json and runs
             // multiple passes per check, so an empty area fills quickly without hammering every
-            // frame. The light probe is only built for categories that gate on light, and only
-            // when a skylight source is wired in.
+            // frame. The light probe combines the day/night-aware sky estimate with the baked
+            // torch/glow block light (Chunk.LightGrid), so torch-lit rooms are protected.
             if (enableSpawning)
             {
                 int skylight = _skylightSubtractedFn?.Invoke() ?? 0;
@@ -357,7 +363,7 @@ namespace Cubuild
                     Func<int, int, int, int>? lightProbe = null;
                     if (spawner.Category.LightGate != SpawnLightGate.Any && _skylightSubtractedFn != null)
                     {
-                        lightProbe = (x, y, z) => _chunkManager.GetSkyLightEstimate(x, y, z, skylight);
+                        lightProbe = (x, y, z) => _chunkManager.GetSpawnLight(x, y, z, skylight);
                     }
                     for (int pass = 0; pass < 10; pass++)
                     {
@@ -470,10 +476,12 @@ namespace Cubuild
 
         private bool ShouldDespawn(MobEntity mob, Point3D playerPosition)
         {
+            // Horizontal-only, mirroring the spawn gate and the 48-block restore radius: a mob
+            // deep below the player is only as far away as its horizontal distance. Vertical
+            // separation alone must never despawn cave mobs (it would undo the spawn gate fix).
             double dx = mob.Position.X - playerPosition.X;
-            double dy = mob.Position.Y - playerPosition.Y;
             double dz = mob.Position.Z - playerPosition.Z;
-            double distSq = dx * dx + dy * dy + dz * dz;
+            double distSq = dx * dx + dz * dz;
             if (distSq > 128.0 * 128.0) return true;
             if (distSq > 64.0 * 64.0)
             {
@@ -689,6 +697,7 @@ namespace Cubuild
         // can't grow memory without limit).
         private void DetachMob(MobEntity mob)
         {
+            _idleTimeAccum.Remove(mob); // stale timers would leak one entry per despawned mob
             var cc = ChunkOf(mob.Position);
             if (!_detachedMobs.TryGetValue(cc, out var list))
             {
@@ -738,11 +747,20 @@ namespace Cubuild
                     var m = list[i];
                     double dx = m.X - playerPosition.X;
                     double dz = m.Z - playerPosition.Z;
-                    if (dx * dx + dz * dz <= RestoreRadiusBlocks * RestoreRadiusBlocks)
+                    if (dx * dx + dz * dz > RestoreRadiusBlocks * RestoreRadiusBlocks) continue;
+
+                    // Caps are honored on the way back in: restore only when the owning
+                    // category's budgets have room, otherwise keep the snapshot and retry on a
+                    // later frame. Kills the population spike when returning to a dense area.
+                    if (_typeCategory.TryGetValue(m.Type, out var cat))
                     {
-                        SpawnSavedMob(m);
-                        list.RemoveAt(i);
+                        if (CountMobsOfCategory(cat) >= cat.MaxTotal) continue;
+                        if (CountMobsOfType(m.Type) >= cat.MaxPerType) continue;
+                        if (CountMobsInChunkColumn(key.X, key.Z, cat) >= cat.MaxPerChunk) continue;
                     }
+
+                    SpawnSavedMob(m);
+                    list.RemoveAt(i);
                 }
                 if (list.Count == 0) _detachedMobs.Remove(key);
             }
