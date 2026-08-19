@@ -26,6 +26,10 @@ namespace Cubuild.World
         /// that follow the terrain surface like real cliff strata.</summary>
         public QuartzVeinGenerator QuartzVeins { get; private set; }
 
+        /// <summary>Serpentine vein bands (see SerpentineGenerator): like quartz but biome-weighted
+        /// (very common in paradise); contact zones with quartz veins turn into gold ore.</summary>
+        public SerpentineGenerator Serpentines { get; private set; }
+
         /// <summary>Coal ore blobs (see CoalOreGenerator): prefer just under the living layer
         /// (decomposed biomass), rare deep pockets anywhere.</summary>
         public CoalOreGenerator CoalOres { get; private set; }
@@ -69,6 +73,7 @@ namespace Cubuild.World
             _relief = new NoiseOctaves(rand, 7, 9);
             Monoliths = new MonolithSculptor(seed);
             QuartzVeins = new QuartzVeinGenerator(seed);
+            Serpentines = new SerpentineGenerator(seed);
             CoalOres = new CoalOreGenerator(seed);
             GravelSplotches = new GravelSplotchGenerator(seed);
             Pyramids = new PyramidGenerator(seed);
@@ -289,6 +294,11 @@ namespace Cubuild.World
 
             // ---- sedimentary quartz veins (follows terrain, like cliff strata) ----
             QuartzVeins.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
+
+            // ---- serpentine veins (biome-weighted; paradise gets lots) ----
+            // Contact zones with quartz veins are gilded into gold ore automatically.
+            Serpentines.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight,
+                (wx, wz) => _biomeMap.BiomeAt(wx, wz).Id, QuartzVeins);
 
             // ---- underground gravel splotches (occasional pockets, easy to stumble on) ----
             GravelSplotches.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);

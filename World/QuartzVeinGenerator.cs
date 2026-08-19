@@ -49,10 +49,6 @@ namespace Cubuild.World
             int idQuartz = BlockRegistry.GetId("quartz");
             const int originY = ChunkManager.GroundOriginY;
 
-            // Maps Frequency (0..1) to a threshold on the -1..1 host field: higher Frequency =>
-            // lower threshold => more columns host veins. Default 0.4 => threshold 0.2.
-            double hostThreshold = 1.0 - 2.0 * Frequency;
-
             for (int lx = 0; lx < chunkSize; lx++)
             {
                 for (int lz = 0; lz < chunkSize; lz++)
@@ -60,27 +56,9 @@ namespace Cubuild.World
                     int wx = chunk.OriginX + lx;
                     int wz = chunk.OriginZ + lz;
 
-                    // Smooth region mask: veins exist in broad organic patches.
-                    if (_hostNoise.Noise2DNormalized(wx * 0.012, wz * 0.012) < hostThreshold)
+                    if (!IsVeinColumn(chunk, lx, lz, wx, wz, terrainBandStart, chunkHeight,
+                        out int veinTopY, out int veinBottomY))
                         continue;
-
-                    // Surface = topmost non-air block in the band (world Y).
-                    int surfaceY = FindSurfaceY(chunk, lx, lz, terrainBandStart, chunkHeight);
-                    if (surfaceY <= originY + 2) continue; // column has no real ground
-
-                    // Vein center's depth below the surface, undulating on a broad scale so the
-                    // band rides the hills (rises and falls with the terrain).
-                    double depthNoise = _depthNoise.Noise2DNormalized(wx * 0.008, wz * 0.008);
-                    double centerDepth = BaseDepth + depthNoise * DepthWaviness;
-                    if (centerDepth < 2.0) centerDepth = 2.0;
-
-                    double thickNoise = _thicknessNoise.Noise2DNormalized(wx * 0.02, wz * 0.02);
-                    double thickness = BaseThickness * (0.7 + 0.3 * thickNoise);
-                    if (thickness < 1.5) thickness = 1.5;
-
-                    int veinTopY = surfaceY - (int)(centerDepth - thickness * 0.5);
-                    int veinBottomY = surfaceY - (int)(centerDepth + thickness * 0.5);
-                    if (veinTopY > surfaceY) veinTopY = surfaceY;
 
                     for (int wy = veinTopY; wy >= veinBottomY; wy--)
                     {
@@ -91,14 +69,69 @@ namespace Cubuild.World
                         int id = chunk[lx, localY, lz];
                         if (id != idStone) continue;
 
-                        // High-frequency scatter: leave some stone for a natural look.
-                        double p = _presenceNoise.Noise3DNormalized(wx * 0.15, wy * 0.15, wz * 0.15);
-                        if (p < 1.0 - 2.0 * Fill) continue;
+                        if (!IsVeinCell(wx, wy, wz)) continue;
 
                         chunk[lx, localY, lz] = idQuartz;
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Deterministic "would quartz have formed at this exact cell?" test. Other generators
+        /// (e.g. serpentine veins) use this to find where their own formations overlap quartz -
+        /// overlapping cells become gold ore contact zones. Pure noise + column structure, so
+        /// the answer is identical no matter which chunk generation pass asks.
+        /// </summary>
+        public bool WouldPlaceQuartz(Chunk chunk, int lx, int lz, int wx, int wy, int wz,
+            int terrainBandStart, int chunkSize, int chunkHeight)
+        {
+            if (!IsVeinColumn(chunk, lx, lz, wx, wz, terrainBandStart, chunkHeight,
+                out int veinTopY, out int veinBottomY))
+                return false;
+            if (wy > veinTopY || wy < veinBottomY) return false;
+            return IsVeinCell(wx, wy, wz);
+        }
+
+        /// <summary>True when this column hosts a vein at all; fills the vein's world-Y band.</summary>
+        private bool IsVeinColumn(Chunk chunk, int lx, int lz, int wx, int wz,
+            int terrainBandStart, int chunkHeight, out int veinTopY, out int veinBottomY)
+        {
+            veinTopY = veinBottomY = 0;
+
+            // Maps Frequency (0..1) to a threshold on the -1..1 host field: higher Frequency =>
+            // lower threshold => more columns host veins. Default 0.4 => threshold 0.2.
+            double hostThreshold = 1.0 - 2.0 * Frequency;
+
+            // Smooth region mask: veins exist in broad organic patches.
+            if (_hostNoise.Noise2DNormalized(wx * 0.012, wz * 0.012) < hostThreshold)
+                return false;
+
+            // Surface = topmost non-air block in the band (world Y).
+            int surfaceY = FindSurfaceY(chunk, lx, lz, terrainBandStart, chunkHeight);
+            if (surfaceY <= ChunkManager.GroundOriginY + 2) return false; // column has no real ground
+
+            // Vein center's depth below the surface, undulating on a broad scale so the
+            // band rides the hills (rises and falls with the terrain).
+            double depthNoise = _depthNoise.Noise2DNormalized(wx * 0.008, wz * 0.008);
+            double centerDepth = BaseDepth + depthNoise * DepthWaviness;
+            if (centerDepth < 2.0) centerDepth = 2.0;
+
+            double thickNoise = _thicknessNoise.Noise2DNormalized(wx * 0.02, wz * 0.02);
+            double thickness = BaseThickness * (0.7 + 0.3 * thickNoise);
+            if (thickness < 1.5) thickness = 1.5;
+
+            veinTopY = surfaceY - (int)(centerDepth - thickness * 0.5);
+            veinBottomY = surfaceY - (int)(centerDepth + thickness * 0.5);
+            if (veinTopY > surfaceY) veinTopY = surfaceY;
+            return true;
+        }
+
+        /// <summary>High-frequency scatter: true when this specific cell becomes quartz.</summary>
+        private bool IsVeinCell(int wx, int wy, int wz)
+        {
+            double p = _presenceNoise.Noise3DNormalized(wx * 0.15, wy * 0.15, wz * 0.15);
+            return p >= 1.0 - 2.0 * Fill;
         }
 
         private static int FindSurfaceY(Chunk chunk, int lx, int lz, int terrainBandStart, int chunkHeight)
