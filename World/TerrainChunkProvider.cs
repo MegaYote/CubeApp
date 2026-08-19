@@ -15,13 +15,15 @@ namespace Cubuild.World
         // Frequency of the relief noise. Higher = tighter-packed hills/mountains (smaller, more
         // broken-up regions); lower = broad, sweeping mountain ranges.
         private const double ReliefFrequency = 130.0;
-        // Amplified 3D surface carving: a mid-frequency 3D density field that sculpts random
-        // features (overhangs, arches, rocky bumps, pockets) into amplified terrain surfaces -
-        // the classic alpha-style carved look. Frequency: 0.85 => features ~8-12 blocks wide;
-        // strength: ~8 flips the density only within ~2-3 blocks of the surface line, so it
-        // carves shape without shredding the terrain.
-        private const double CarveFrequency = 0.85;
-        private const double CarveStrength = 8.0;
+        // Amplified block-level 3D carving: a mid-frequency 3D density field sampled AT BLOCK
+        // resolution near the surface line of amplified biomes (the 8-block field grid would
+        // wash features out in interpolation, so this runs in the block fill loop instead).
+        // Frequency 0.15 => features ~6-10 blocks wide; strength 13 flips ~3-4 blocks of the
+        // surface line -> real overhangs, arches, ledges and pockets. Applied only within a
+        // thin band around the surface, so deep terrain stays solid. Non-amplified columns
+        // are untouched (bit-identical terrain).
+        private const double CarveFrequency = 0.15;
+        private const double CarveStrength = 13.0;
         private readonly int seed;
         private readonly BiomeMap _biomeMap;
         private readonly NoiseOctaves _amplifiedCarve;
@@ -123,6 +125,10 @@ namespace Cubuild.World
             const int fxCount = 5, fyCount = TerrainBandBlocks / 8 + 1, fzCount = 5; // 33 field-y rows cover 256 blocks
             const double baseFreq = 592.0;
             double[] field = new double[fxCount * fyCount * fzCount];
+            // Per-column surface line + amplified blend (4-block grid), needed by the
+            // block-level carve band in the fill loop below.
+            double[] colHeights = new double[fxCount * fzCount];
+            double[] colAmp = new double[fxCount * fzCount];
 
             for (int fx = 0; fx < fxCount; fx++)
             {
@@ -226,6 +232,9 @@ namespace Cubuild.World
                     double centerHeight = blendedBase * 16.0
                         + reliefShaped * (blendedVariation * 16.0);
 
+                    colHeights[fx * fzCount + fz] = centerHeight;
+                    colAmp[fx * fzCount + fz] = blendedAmplified;
+
                     // ---- BEACH SHELF ----
                     // Sea level is field-y 8 (world 64). Land biome targets sit only ~1 field-y
                     // (~8 blocks) above it while ocean floors drop ~28 blocks below, so even a
@@ -259,22 +268,6 @@ namespace Cubuild.World
                         double falloff = ((double)fy - centerHeight) * 13.0 / elevation;
                         if (falloff < 0.0) falloff *= 3.6;
                         density -= falloff;
-
-                        // ---- AMPLIFIED 3D CARVING ----
-                        // Amplified biomes get random 3D density sculpting: a mid-frequency 3D
-                        // noise field added to the density only flips cells within a couple of
-                        // blocks of the surface line (deep below it is solid, far above is air),
-                        // producing overhangs, arches, rocky bumps and little pockets - the
-                        // alpha-style "carved by density" surface. Non-amplified columns are
-                        // untouched (blendedAmplified ~ 0 => bit-identical terrain).
-                        if (blendedAmplified > 0.0)
-                        {
-                            double carve = _amplifiedCarve.Noise3D(
-                                xq * CarveFrequency,
-                                yq * CarveFrequency * 0.5,
-                                zq * CarveFrequency);
-                            density += carve * CarveStrength * blendedAmplified;
-                        }
 
                         // Force air in the top field rows.
                         if (fy > fyCount - 4)
@@ -317,6 +310,34 @@ namespace Cubuild.World
                         if (fz0 > 3) { fz0 = 3; fz1 = 4; tz = 1.0; }
 
                         double density = Trilinear(field, fx0, fy0, fz0, fx1, fy1, fz1, fxCount, fyCount, fzCount, tx, ty, tz);
+
+                        // ---- AMPLIFIED BLOCK-LEVEL 3D CARVING ----
+                        // Carve at 1-block resolution around the surface line: a mid-frequency
+                        // 3D noise flips individual cells (density sits within ~3-4 blocks of
+                        // the solid/air threshold here), producing real overhangs, arches,
+                        // ledges and rocky pockets - the alpha-style carved surface. Deep below
+                        // the surface stays solid and far above stays air (the carve never
+                        // reaches). Amp/surface are bilinear-interpolated from the 4-block field
+                        // grid so biome borders blend smoothly.
+                        double amp = Lerp(
+                            Lerp(colAmp[fx0 * fzCount + fz0], colAmp[fx1 * fzCount + fz0], tx),
+                            Lerp(colAmp[fx0 * fzCount + fz1], colAmp[fx1 * fzCount + fz1], tx), tz);
+                        if (amp > 0.01)
+                        {
+                            double surf = Lerp(
+                                Lerp(colHeights[fx0 * fzCount + fz0], colHeights[fx1 * fzCount + fz0], tx),
+                                Lerp(colHeights[fx0 * fzCount + fz1], colHeights[fx1 * fzCount + fz1], tx), tz);
+                            int surfaceLY = (int)(surf * 8.0);
+                            if (ly >= surfaceLY - 7 && ly <= surfaceLY + 6)
+                            {
+                                int wx = chunk.OriginX + lx;
+                                int wz = chunk.OriginZ + lz;
+                                int wy = chunk.OriginY + localY;
+                                double carve = _amplifiedCarve.Noise3DNormalized(
+                                    wx * CarveFrequency, wy * CarveFrequency * 0.5, wz * CarveFrequency);
+                                density += carve * CarveStrength * amp;
+                            }
+                        }
 
                         int block;
                         if (density > 0.0) block = idStone;
