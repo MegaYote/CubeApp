@@ -342,9 +342,9 @@ namespace Cubuild
             for (int i = 0; i < drop; i++)
             {
                 var rand = _regenRandom;
-                // Nudge the heading by a tiny random amount (~±1.7°) so each item takes a
-                // slightly different arc and they fan out instead of merging mid-flight.
-                double yawRad = baseYawRad + (rand.NextDouble() - 0.5) * 0.06;
+                // Nudge the heading by a small random amount (~±4.5°) so each item takes a
+                // slightly different arc and they fan out into a loose spread.
+                double yawRad = baseYawRad + (rand.NextDouble() - 0.5) * 0.16;
                 // Small speed wobble (±4%) so distances vary a touch too.
                 double speed = 5.5 * (1.0 + (rand.NextDouble() - 0.5) * 0.08);
                 double up = 0.35 + (rand.NextDouble() - 0.5) * 0.1;
