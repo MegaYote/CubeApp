@@ -337,9 +337,14 @@ namespace Cubuild
             var held = HeldStack;
             if (!held.HasValue || count <= 0) return;
             int drop = Math.Min(count, held.Value.Count);
-            var throwVel = ThrowVelocity();
             for (int i = 0; i < drop; i++)
             {
+                var throwVel = ThrowVelocity();
+                // Small random variation so items don't perfectly stack
+                throwVel = new Point3D(
+                    throwVel.X + (_regenRandom.NextDouble() - 0.5) * 0.3,
+                    throwVel.Y + (_regenRandom.NextDouble() - 0.5) * 0.15,
+                    throwVel.Z + (_regenRandom.NextDouble() - 0.5) * 0.3);
                 SpawnItemDrop(held.Value.ItemId, 1,
                     new Point3D(LocalPlayer.Position.X, LocalPlayer.Position.Y, LocalPlayer.Position.Z), throwVel);
             }
