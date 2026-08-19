@@ -110,8 +110,9 @@ namespace Cubuild.World
 
     /// <summary>
     /// Byte-faithful port of Minecraft's 2010 NoiseGeneratorOctaves: octave i samples the
-    /// Perlin field at 1/(2^i) scale and is weighted by 2^i (amplitude doubles with
-    /// wavelength) - the signature old-alpha noise stack that made the 684.412 terrain.
+    /// Perlin field at 2^i scale and is weighted by 1/(2^i) (frequency doubles, amplitude
+    /// halves each octave) - the signature old-alpha noise stack that made the 684.412
+    /// terrain. Returns roughly [-2, +2] for a 5-octave stack.
     /// </summary>
     public sealed class JavaOctaves
     {
@@ -130,7 +131,7 @@ namespace Cubuild.World
             double sum = 0.0, f = 1.0;
             for (int i = 0; i < _count; i++)
             {
-                sum += _gens[i].Noise(x / f, y / f, z / f) * f;
+                sum += _gens[i].Noise(x * f, y * f, z * f) / f;
                 f *= 2.0;
             }
             return sum;
@@ -141,7 +142,7 @@ namespace Cubuild.World
             double sum = 0.0, f = 1.0;
             for (int i = 0; i < _count; i++)
             {
-                sum += _gens[i].Noise(x / f, z / f) * f;
+                sum += _gens[i].Noise(x * f, z * f) / f;
                 f *= 2.0;
             }
             return sum;
