@@ -46,7 +46,7 @@
     {
       "id": "desert",
       "displayName": "Desert",
-      "temperature": { "min": 0.38, "max": 1.0 },
+      "temperature": { "min": 0.0, "max": 1.0 },
       "humidity": { "min": -1.0, "max": -0.15 },
       "water": false,
       "baseHeight": 0.55,
@@ -56,11 +56,27 @@
       "fillDepth": 6,
       "treeDensity": 0
     },
+    // ---- amplified hills: plains' climate band split in half, so hills and plains
+    // appear equally often (first match wins, so hills sits BEFORE plains). Terrain is
+    // an extreme-height plateau: high base with deep valley cuts, like amplified worlds.
+    {
+      "id": "hills",
+      "displayName": "Hills",
+      "temperature": { "min": 0.0, "max": 1.0 },
+      "humidity": { "min": -0.15, "max": 0.425 },
+      "water": false,
+      "baseHeight": 0.75,
+      "heightVariation": 0.32,
+      "surfaceBlock": "grass",
+      "fillBlock": "dirt",
+      "fillDepth": 3,
+      "treeDensity": 1
+    },
     {
       "id": "plains",
       "displayName": "Plains",
       "temperature": { "min": 0.0, "max": 1.0 },
-      "humidity": { "min": -0.15, "max": 1.0 },
+      "humidity": { "min": 0.425, "max": 1.0 },
       "water": false,
       "baseHeight": 0.56,
       "heightVariation": 0.08,
@@ -68,19 +84,6 @@
       "fillBlock": "dirt",
       "fillDepth": 3,
       "treeDensity": 1
-    },
-    {
-      "id": "hills",
-      "displayName": "Hills",
-      "temperature": { "min": 0.0, "max": 0.45 },
-      "humidity": { "min": -1.0, "max": -0.15 },
-      "water": false,
-      "baseHeight": 0.68,
-      "heightVariation": 0.15,
-      "surfaceBlock": "grass",
-      "fillBlock": "dirt",
-      "fillDepth": 3,
-      "treeDensity": 2
     },
     {
       "id": "mountains",
