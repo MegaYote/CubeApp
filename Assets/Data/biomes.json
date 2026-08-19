@@ -63,8 +63,38 @@
       "fillDepth": 3,
       "treeDensity": 0
     },
+    // ---- ALPHA: a byte-faithful port of Minecraft's "old terrain generator" - the exact
+    // generator Alpha v1.1.2_01 shipped with (the last release to use it). Full 684.412
+    // density field, the alpha surface pass (grass band at 60-65, sand/gravel dice, noise
+    // dirt depth), big trees from mobSpawnerNoise, and the alpha ore distribution. The
+    // optional "alpha" object exposes the generator knobs; these defaults are the exact
+    // 2010 constants. Claims the warm damp band between anomaly and paradise.
     {
-      "id": "paradise",
+      "id": "alpha",
+      "displayName": "Alpha",
+      "temperature": { "min": 0.40, "max": 0.65 },
+      "humidity": { "min": 0.10, "max": 0.60 },
+      "water": false,
+      "baseHeight": 0.5,
+      "heightVariation": 0.25,
+      "surfaceBlock": "grass",
+      "fillBlock": "dirt",
+      "fillDepth": 3,
+      "treeDensity": 0,
+      "alpha": {
+        "lowNoiseOctaves": 16,
+        "highNoiseOctaves": 16,
+        "selectorNoiseOctaves": 8,
+        "sandGravelNoiseOctaves": 4,
+        "dirtDepthNoiseOctaves": 4,
+        "treeNoiseOctaves": 5,
+        "coordinateScale": 684.412,
+        "heightScale": 984.412,
+        "mainNoiseScaleXZ": 8.55515,
+        "mainNoiseScaleY": 1.71103,
+        "heightStretch": 4.0
+      }
+    },
       "displayName": "Paradise Foothills",
       "temperature": { "min": 0.30, "max": 0.50 },
       "humidity": { "min": -0.35, "max": 0.15 },

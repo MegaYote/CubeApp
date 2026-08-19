@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using Cubuild.World;
 
 namespace Cubuild
 {
@@ -41,13 +42,16 @@ namespace Cubuild
         public string FillMixBlock { get; }
         /// <summary>Chance (0..1) that a fill layer becomes FillMixBlock instead of FillBlock.</summary>
         public float FillMixChance { get; }
+        /// <summary>Optional knobs for the byte-faithful Alpha biome generator (null = the exact
+        /// 2010 constants).</summary>
+        public AlphaTerrainParams? AlphaParams { get; }
 
         public BiomeDefinition(string id, string displayName,
             (float, float) temperature, (float, float) humidity,
             bool isWater, float baseHeight, float heightVariation,
             string surfaceBlock, string fillBlock, int fillDepth, int treeDensity,
             string treeType = "oak", string fillMixBlock = "", float fillMixChance = 0.5f,
-            bool amplified = false)
+            bool amplified = false, AlphaTerrainParams? alphaParams = null)
         {
             Id = id;
             DisplayName = displayName;
@@ -64,6 +68,7 @@ namespace Cubuild
             TreeType = treeType;
             FillMixBlock = fillMixBlock;
             FillMixChance = fillMixChance;
+            AlphaParams = alphaParams;
         }
     }
 
@@ -114,7 +119,23 @@ namespace Cubuild
                 string fillMix = b.TryGetProperty("fillMixBlock", out var fm) ? fm.GetString() ?? "" : "";
                 float mixChance = b.TryGetProperty("fillMixChance", out var mc) ? mc.GetSingle() : 0.5f;
                 bool amplified = b.TryGetProperty("amplified", out var amp) && amp.GetBoolean();
-                _biomes.Add(new BiomeDefinition(id, display, temp, hum, water, baseH, varH, surface, fill, depth, trees, treeType, fillMix, mixChance, amplified));
+                AlphaTerrainParams? alphaParams = null;
+                if (b.TryGetProperty("alpha", out var ap))
+                {
+                    alphaParams = new AlphaTerrainParams();
+                    if (ap.TryGetProperty("lowNoiseOctaves", out var v)) alphaParams.LowNoiseOctaves = v.GetInt32();
+                    if (ap.TryGetProperty("highNoiseOctaves", out v)) alphaParams.HighNoiseOctaves = v.GetInt32();
+                    if (ap.TryGetProperty("selectorNoiseOctaves", out v)) alphaParams.SelectorNoiseOctaves = v.GetInt32();
+                    if (ap.TryGetProperty("sandGravelNoiseOctaves", out v)) alphaParams.SandGravelNoiseOctaves = v.GetInt32();
+                    if (ap.TryGetProperty("dirtDepthNoiseOctaves", out v)) alphaParams.DirtDepthNoiseOctaves = v.GetInt32();
+                    if (ap.TryGetProperty("treeNoiseOctaves", out v)) alphaParams.TreeNoiseOctaves = v.GetInt32();
+                    if (ap.TryGetProperty("coordinateScale", out var dv)) alphaParams.CoordinateScale = dv.GetDouble();
+                    if (ap.TryGetProperty("heightScale", out dv)) alphaParams.HeightScale = dv.GetDouble();
+                    if (ap.TryGetProperty("mainNoiseScaleXZ", out dv)) alphaParams.MainNoiseScaleXZ = dv.GetDouble();
+                    if (ap.TryGetProperty("mainNoiseScaleY", out dv)) alphaParams.MainNoiseScaleY = dv.GetDouble();
+                    if (ap.TryGetProperty("heightStretch", out dv)) alphaParams.HeightStretch = dv.GetDouble();
+                }
+                _biomes.Add(new BiomeDefinition(id, display, temp, hum, water, baseH, varH, surface, fill, depth, trees, treeType, fillMix, mixChance, amplified, alphaParams));
             }
             Loaded = true;
         }

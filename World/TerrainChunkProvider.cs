@@ -29,6 +29,12 @@ namespace Cubuild.World
         private readonly BiomeMap _biomeMap;
         private readonly NoiseOctaves _amplifiedCarve;
 
+        // Byte-faithful 2010 old-terrain-generator port (the Alpha biome). Lazy: the biome
+        // registry must be loaded first so custom knobs from biomes.json can be applied.
+        private AlphaBiomeGenerator? _alphaGen;
+        private AlphaBiomeGenerator AlphaGen => _alphaGen ??= new AlphaBiomeGenerator(seed,
+            BiomeRegistry.Get("alpha").AlphaParams ?? new AlphaTerrainParams());
+
         /// <summary>Controllable monolith feature (see MonolithSculptor). A tunable tower/column
         /// feature: frequency/size/height/carve, seed-driven.</summary>
         public MonolithSculptor Monoliths { get; private set; }
@@ -130,6 +136,31 @@ namespace Cubuild.World
             int idDirt = BlockRegistry.GetId("dirt");
             int idSand = BlockRegistry.GetId("sand");
             int idGravel = BlockRegistry.GetId("gravel");
+            int idLog = BlockRegistry.GetId("log");
+            int idLeaves = BlockRegistry.GetId("leaves");
+            int idCoal = BlockRegistry.GetId("coalore");
+            int idIron = BlockRegistry.GetId("ironore");
+            int idGold = BlockRegistry.GetId("goldore");
+            int idDiamond = BlockRegistry.GetId("diamondore");
+
+            // ---- ALPHA BIOME cell map ----
+            // The Alpha biome replaces whole 4x4 cells with the byte-faithful 2010 generator:
+            // its own density field, surface pass, ores and big trees. Cells are sampled at
+            // their center; a chunk is "fullyAlpha" when all 16 cells are alpha (then every
+            // engine-only feature is skipped for purity - no monoliths/pyramids in Alpha).
+            var alphaCell = new bool[4, 4];
+            bool hasAlpha = false, fullyAlpha = true;
+            for (int fx = 0; fx < 4; fx++)
+            {
+                for (int fz = 0; fz < 4; fz++)
+                {
+                    alphaCell[fx, fz] = _biomeMap.BiomeAt(chunkX * 16 + fx * 4 + 2, chunkZ * 16 + fz * 4 + 2).Id == "alpha";
+                    if (alphaCell[fx, fz]) hasAlpha = true;
+                    else fullyAlpha = false;
+                }
+            }
+            bool[,] cellMask = alphaCell; // captured for the per-column lookup below
+            Func<int, int, bool> isAlphaColumn = (wx, wz) => cellMask[((wx - chunkX * 16) & 15) >> 2, ((wz - chunkZ * 16) & 15) >> 2];
 
             // ---- Build the 5 x 17 x 5 density field ----
             // Field x/z are in 4-block units (5 samples cover the chunk's 16 blocks), field y
@@ -393,8 +424,17 @@ namespace Cubuild.World
                 }
             }
 
+            // ---- ALPHA terrain override (runs BEFORE the surface passes so the alpha cells
+            // carry the true 2010 terrain, and the alpha surface pass dresses them first -
+            // the engine's caves then tunnel through alpha grass exactly like 1.1.2_01). ----
+            if (hasAlpha)
+            {
+                AlphaGen.FillOverride(chunk, chunkX, chunkZ, alphaCell, idStone, idWater);
+                AlphaGen.SurfacePass(chunk, chunkX, chunkZ, isAlphaColumn, idStone, idGrass, idDirt, idSand, idGravel, idWater);
+            }
+
             // ---- Surface materials pass ----
-            ReplaceBlocks(chunkX, chunkZ, chunk, idBedrock, idWater, idStone, idGrass, idDirt, idSand, idGravel, terrainBandStart);
+            ReplaceBlocks(chunkX, chunkZ, chunk, idBedrock, idWater, idStone, idGrass, idDirt, idSand, idGravel, terrainBandStart, alphaCell);
 
             // ---- water first, caves second ----
             // The oceans are flooded BEFORE carving so the walkers only ever tunnel through
@@ -404,28 +444,42 @@ namespace Cubuild.World
             GenerateCaves(chunkX, chunkZ, chunk, terrainBandStart);
             GenerateTrees(chunkX, chunkZ, chunk);
 
-            // ---- monoliths (controllable feature; runs after caves so towers stand on ground) ----
-            Monoliths.Sculpt(chunk, terrainBandStart, chunkSize, chunkHeight);
+            // ---- alpha forests & ores (the 2010 populate step; runs after caves like the
+            // original pipeline) ----
+            if (hasAlpha)
+            {
+                AlphaGen.GenerateTrees(chunk, chunkX, chunkZ, isAlphaColumn, idLog, idLeaves, idGrass, idDirt);
+                AlphaGen.GenerateOres(chunk, chunkX, chunkZ, alphaCell, idStone, idCoal, idIron, idGold, idDiamond);
+            }
 
-            // ---- sedimentary quartz veins (follows terrain, like cliff strata) ----
-            QuartzVeins.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
+            // ---- engine-only features ----
+            // Skipped ENTIRELY in fully-alpha chunks: the alpha biome is a faithful slice of
+            // 1.1.2_01, which had no monoliths, pyramids or the engine's ore styles.
+            if (!fullyAlpha)
+            {
+                // ---- monoliths (controllable feature; runs after caves so towers stand on ground) ----
+                Monoliths.Sculpt(chunk, terrainBandStart, chunkSize, chunkHeight);
 
-            // ---- serpentine veins (biome-weighted; paradise gets lots) ----
-            // Contact zones with quartz veins are gilded into gold ore automatically.
-            Serpentines.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight,
-                (wx, wz) => _biomeMap.BiomeAt(wx, wz).Id, QuartzVeins);
+                // ---- sedimentary quartz veins (follows terrain, like cliff strata) ----
+                QuartzVeins.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
 
-            // ---- underground gravel splotches (occasional pockets, easy to stumble on) ----
-            GravelSplotches.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
+                // ---- serpentine veins (biome-weighted; paradise gets lots) ----
+                // Contact zones with quartz veins are gilded into gold ore automatically.
+                Serpentines.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight,
+                    (wx, wz) => _biomeMap.BiomeAt(wx, wz).Id, QuartzVeins);
 
-            // ---- coal ore (biomass coal just under the living layer, rare deep pockets) ----
-            CoalOres.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
+                // ---- underground gravel splotches (occasional pockets, easy to stumble on) ----
+                GravelSplotches.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
 
-            // ---- regular pyramids (once-per-world monuments, geometrically perfect) ----
-            RegularPyramids.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight, EstimateSurfaceHeightAt);
+                // ---- coal ore (biomass coal just under the living layer, rare deep pockets) ----
+                CoalOres.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
 
-            // ---- the Great Pyramid (runs LAST so its volume is pure solid brick) ----
-            Pyramids.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
+                // ---- regular pyramids (once-per-world monuments, geometrically perfect) ----
+                RegularPyramids.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight, EstimateSurfaceHeightAt);
+
+                // ---- the Great Pyramid (runs LAST so its volume is pure solid brick) ----
+                Pyramids.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
+            }
 
             chunk.NeedsRemesh = true;
             return chunk;
@@ -461,7 +515,7 @@ namespace Cubuild.World
         // grass/dirt (or sand/gravel in their biomes), fills bedrock at the bottom.
         private void ReplaceBlocks(int chunkX, int chunkZ, Chunk chunk,
             int idBedrock, int idWater, int idStone, int idGrass, int idDirt, int idSand, int idGravel,
-            int terrainBandStart)
+            int terrainBandStart, bool[,] alphaCell)
         {
             byte[] blocks = chunk.RawBlocks;
             const int height = ChunkManager.ChunkHeight; // 448
@@ -476,6 +530,8 @@ namespace Cubuild.World
                 {
                     double wx = chunkX * width + x;
                     double wz = chunkZ * width + z;
+                    // Alpha columns keep the alpha surface pass' dressing: only bedrock here.
+                    bool isAlpha = alphaCell[x >> 2, z >> 2];
 
                     // The biome at this column drives the surface materials (surface/fill blocks
                     // and fill depth come straight from the data-driven biome definition).
@@ -528,11 +584,13 @@ namespace Cubuild.World
                         {
                             blocks[idx] = (byte)idBedrock;
                         }
-                        else if (blocks[idx] == 0)
+                        else if (!isAlpha)
                         {
-                            depthRemaining = -1;
-                        }
-                        else if (blocks[idx] == idStone)
+                            if (blocks[idx] == 0)
+                            {
+                                depthRemaining = -1;
+                            }
+                            else if (blocks[idx] == idStone)
                         {
                             if (depthRemaining == -1)
                             {
@@ -566,6 +624,7 @@ namespace Cubuild.World
                                 int layerFill = (biomeFillMix != 0 && rand.NextDouble() < fillMixChance) ? biomeFillMix : fillBlock;
                                 blocks[idx] = (byte)layerFill;
                             }
+                        }
                         }
                     }
                 }
