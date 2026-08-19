@@ -172,13 +172,14 @@ namespace Cubuild.Renderer
             }
         }
 
-        // Draws survival item drops as small tumbling cubes (same vertex layout as falling
+// Draws survival item drops as small tumbling cubes (same vertex layout as falling
         // Item drops. Passes:
-//   0 = plain BLOCK drops -> tumbling cubes (terrain atlas; the old cube behavior).
-//   1 = genuine items + blocks with items.png art (flint, tools, sap) -> flat
-//       camera-facing sprites from items.png, like the hotbar icons.
-//   2 = CROSSQUAD block drops (saplings, torches) -> flat sprites from the terrain
-//       atlas, because a crossed-quad block tossed around as a cube looks wrong.
+        //   0 = plain BLOCK drops -> tumbling cubes (terrain atlas; the old cube behavior).
+        //   1 = genuine items + blocks with items.png art (flint, tools, sap) -> flat
+        //       camera-facing sprites from items.png, like the hotbar icons.
+        //   2 = CROSSQUAD block drops (saplings, torches) -> flat sprites from the terrain
+        //       atlas, because a crossed-quad block tossed around as a cube looks wrong.
+        //   3 = SHADOWS for all drops -> small dark circles on the ground below each item.
         private void DrawItemDrops(CommandList cl)
         {
             int n = _itemDrops.Count;
@@ -190,9 +191,9 @@ namespace Cubuild.Renderer
             // pass's data - so a cube pass (block) plus a sprite pass (item) made the items
             // render as random blocks. Build ALL passes into one array, upload once, then draw
             // each pass from its own byte offset within that single instance buffer.
-            int[] passCounts = new int[3];
+            int[] passCounts = new int[4];
             int totalCount = 0;
-            for (int pass = 0; pass < 3; pass++)
+            for (int pass = 0; pass < 4; pass++)
             {
                 for (int i = 0; i < n; i++)
                 {
@@ -207,13 +208,14 @@ namespace Cubuild.Renderer
             if (_itemDropInstanceScratch.Length < totalFloats) _itemDropInstanceScratch = new float[totalFloats];
 
             // Per-pass first-instance offset into the shared scratch array.
-            int[] passStart = new int[3];
+            int[] passStart = new int[4];
             passStart[0] = 0;
             passStart[1] = passCounts[0];
             passStart[2] = passCounts[0] + passCounts[1];
+            passStart[3] = passCounts[0] + passCounts[1] + passCounts[2];
 
             const float halfScale = ItemDropScale * 0.5f;
-            for (int pass = 0; pass < 3; pass++)
+            for (int pass = 0; pass < 4; pass++)
             {
                 if (passCounts[pass] == 0) continue;
                 bool itemsAtlas = pass == 1;
@@ -251,6 +253,7 @@ namespace Cubuild.Renderer
             }
             _gd.UpdateBuffer(_itemDropInstanceBuffer, 0, _itemDropInstanceScratch);
 
+            // Pass 0-2: items (cubes, sprites)
             for (int pass = 0; pass < 3; pass++)
             {
                 int passCount = passCounts[pass];
@@ -272,10 +275,35 @@ namespace Cubuild.Renderer
                 cl.SetIndexBuffer(cube ? _itemDropIndexBuffer : _spriteIndexBuffer, IndexFormat.UInt16);
                 cl.DrawIndexed(cube ? FallingCubeIndices : 6u, (uint)passCount, 0, 0, 0);
             }
+
+            // Pass 3: shadows for all items
+            int shadowCount = passCounts[3];
+            if (shadowCount > 0 && _itemDropShadowPipeline != null && _shadowVertexBuffer != null &&
+                _shadowTextureView != null)
+            {
+                // Create resource set for shadow texture
+                ResourceSet shadowResourceSet = null;
+                if (_shadowTextureView != null && _atlasSampler != null)
+                {
+                    shadowResourceSet = _gd.ResourceFactory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _shadowTextureView, _atlasSampler));
+                }
+                if (shadowResourceSet != null)
+                {
+                    cl.SetPipeline(_itemDropShadowPipeline);
+                    cl.SetGraphicsResourceSet(0, _projViewSet);
+                    cl.SetGraphicsResourceSet(1, shadowResourceSet);
+                    cl.SetGraphicsResourceSet(2, _fogSet);
+                    cl.SetVertexBuffer(0, _shadowVertexBuffer);
+                    cl.SetVertexBuffer(1, _itemDropInstanceBuffer, (uint)(passStart[3] * 11 * sizeof(float)));
+                    cl.SetIndexBuffer(_shadowIndexBuffer, IndexFormat.UInt16);
+                    cl.DrawIndexed(6u, (uint)shadowCount, 0, 0, 0);
+                    shadowResourceSet?.Dispose();
+                }
+            }
         }
 
         // Which drop pass an item belongs to: 0 = plain block (cube), 1 = items.png sprite,
-        // 2 = crossquad block (terrain sprite).
+        // 2 = crossquad block (terrain sprite), 3 = shadow (all items).
         private static int DropPassOf(int itemId)
         {
             ItemRegistry.GetTile(itemId, out bool fromItems);

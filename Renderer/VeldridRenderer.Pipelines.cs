@@ -430,6 +430,65 @@ void main() {
                 });
             }
 
+            // Shadow pipeline for item drops - simple horizontal quad with shadow texture
+            {
+                string shadowVsCode = @"#version 450
+layout(location=0) in vec3 aCorner;
+layout(location=1) in vec2 aLocalUV;
+layout(location=2) in vec4 aShade;
+layout(location=3) in vec3 iWorldPos;
+layout(location=4) in vec4 iTileRect;
+layout(location=0) out vec2 vLocalUV;
+layout(location=1) out vec4 vTileRect;
+layout(location=2) out vec4 vColor;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() {
+    // The quad is flat on the ground (horizontal). Position it slightly below the item.
+    vec3 worldPos = iWorldPos + vec3(aCorner.x * 0.15, -0.08, aCorner.y * 0.15);
+    vLocalUV = aLocalUV;
+    vTileRect = iTileRect;
+    vColor = aShade;
+    gl_Position = projView * vec4(worldPos, 1.0);
+}";
+
+                string shadowFsCode = @"#version 450
+layout(location=0) in vec2 vLocalUV;
+layout(location=1) in vec4 vTileRect;
+layout(location=2) in vec4 vColor;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+layout(set=1, binding=0) uniform sampler2D uTexture;
+layout(set=2, binding=0) uniform FogParams { vec3 fogColor; float fogStart; float fogEnd; float fogDensity; };
+layout(location=0) out vec4 outColor;
+void main() {
+    vec2 uv = vLocalUV * vTileRect.zw + vTileRect.xy;
+    vec4 texColor = texture(uTexture, uv);
+    outColor = vColor * texColor;
+    // Simple fog
+    float fogFactor = clamp((vColor.w - 0.5) * 2.0, 0.0, 1.0);
+    outColor.rgb = mix(outColor.rgb, fogColor.rgb, fogFactor);
+}";
+
+                var shadowVsSpirv = SpirvCompilation.CompileGlslToSpirv(shadowVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+                var shadowFsSpirv = SpirvCompilation.CompileGlslToSpirv(shadowFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+                var shadowShaders = factory.CreateFromSpirv(
+                    new ShaderDescription(ShaderStages.Vertex, shadowVsSpirv.SpirvBytes, "main"),
+                    new ShaderDescription(ShaderStages.Fragment, shadowFsSpirv.SpirvBytes, "main"));
+                var shadowInstanceLayout = new VertexLayoutDescription(
+                    new VertexElementDescription("iWorldPos", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                    new VertexElementDescription("iTileRect", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
+                shadowInstanceLayout.InstanceStepRate = 1;
+                _itemDropShadowPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+                {
+                    BlendState = BlendStateDescription.SingleAlphaBlend,
+                    DepthStencilState = new DepthStencilStateDescription(true, true, ComparisonKind.LessEqual),
+                    RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                    PrimitiveTopology = PrimitiveTopology.TriangleList,
+                    ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
+                    ShaderSet = new ShaderSetDescription(new[] { fallingVertexLayout, shadowInstanceLayout }, new[] { shadowShaders[0], shadowShaders[1] }),
+                    Outputs = _sc.Framebuffer.OutputDescription
+                });
+            }
+
             // Static cube mesh (uploaded once): 24 verts (6 faces x 4) + 36 indices.
             // The FaceVertices table's +Z/-Z entries are wound opposite their normals (the greedy
             // pass corrects them); we must apply the SAME flip here or back-face culling culls
@@ -555,8 +614,66 @@ void main() {
                     smallIndices[si++] = (ushort)(fv + 2);
                     smallIndices[si++] = (ushort)(fv + 3);
                 }
-                _itemDropIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)smallIndices.Length * sizeof(ushort), BufferUsage.IndexBuffer));
+_itemDropIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)smallIndices.Length * sizeof(ushort), BufferUsage.IndexBuffer));
                 _gd.UpdateBuffer(_itemDropIndexBuffer, 0, smallIndices);
+            }
+
+            // Shadow mesh for item drops: a simple horizontal quad (shadow) at y = -0.08
+            {
+                // Shadow quad: slightly larger than item to cover it, flat on ground
+                var shadowVerts = new float[4 * (3 + 2 + 4)];
+                int sv = 0;
+                float shadowSize = 0.18f; // slightly larger than item
+                float shadowY = -0.08f; // slightly below item
+                float[] shadowCorners = { -shadowSize, shadowY, -shadowSize,  1f, 0f,  // bottom-left
+                                          shadowSize, shadowY, -shadowSize,  1f, 1f,   // bottom-right
+                                          shadowSize, shadowY,  shadowSize,  0f, 1f,   // top-right
+                                         -shadowSize, shadowY,  shadowSize,  0f, 0f };  // top-left
+                float[] shadowUvs = { 0, 1,  1, 1,  1, 0,  0, 0 };
+                for (int c = 0; c < 4; c++)
+                {
+                    shadowVerts[sv++] = shadowCorners[c * 3 + 0];
+                    shadowVerts[sv++] = shadowCorners[c * 3 + 1];
+                    shadowVerts[sv++] = shadowCorners[c * 3 + 2];
+                    shadowVerts[sv++] = shadowUvs[c * 2 + 0];
+                    shadowVerts[sv++] = shadowUvs[c * 2 + 1];
+                    shadowVerts[sv++] = 1f; shadowVerts[sv++] = 1f; shadowVerts[sv++] = 1f; shadowVerts[sv++] = 1f;
+                }
+                _shadowVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)shadowVerts.Length * sizeof(float), BufferUsage.VertexBuffer));
+                _gd.UpdateBuffer(_shadowVertexBuffer, 0, shadowVerts);
+                var shadowIndices = new ushort[] { 0, 1, 2, 0, 2, 3 };
+                _shadowIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)shadowIndices.Length * sizeof(ushort), BufferUsage.IndexBuffer));
+                _gd.UpdateBuffer(_shadowIndexBuffer, 0, shadowIndices);
+            }
+
+            // Create shadow texture (simple radial gradient circle)
+            {
+                int texSize = 32;
+                byte[] shadowData = new byte[texSize * texSize * 4];
+                float center = (texSize - 1) * 0.5f;
+                float maxDist = center;
+                for (int y = 0; y < texSize; y++)
+                {
+                    for (int x = 0; x < texSize; x++)
+                    {
+                        float dx = x - center;
+                        float dy = y - center;
+                        float dist = (float)Math.Sqrt(dx * dx + dy * dy);
+                        float alpha = Math.Max(0f, 1f - dist / maxDist);
+                        // Smooth falloff
+                        alpha = alpha * alpha * alpha;
+                        byte a = (byte)(alpha * 128); // max 50% opacity
+                        int i = (y * texSize + x) * 4;
+                        shadowData[i + 0] = 0;     // R
+                        shadowData[i + 1] = 0;     // G
+                        shadowData[i + 2] = 0;     // B
+                        shadowData[i + 3] = a;     // A
+                    }
+                }
+                var shadowTexDesc = TextureDescription.Texture2D((uint)texSize, (uint)texSize, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
+                var shadowTexture = _gd.ResourceFactory.CreateTexture(shadowTexDesc);
+                _gd.UpdateTexture<byte>(shadowTexture, shadowData, 0, 0, 0, (uint)shadowTexture.Width, (uint)shadowTexture.Height, 1, 0, 0);
+                _shadowTextureView = _gd.ResourceFactory.CreateTextureView(shadowTexture);
             }
 
             // create texture resource set if atlas loaded

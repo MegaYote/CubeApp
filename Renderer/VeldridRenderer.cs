@@ -535,8 +535,13 @@ namespace Cubuild.Renderer
         // tumbling cubes; held genuine items render as a camera-space flat sprite on the fist.
         private Pipeline? _itemDropSpritePipeline;
         private Pipeline? _heldBlockSpritePipeline;
+        private Pipeline? _itemDropShadowPipeline;
         private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + shade(4)
         private DeviceBuffer? _spriteIndexBuffer;   // 6 indices
+        // Shadow pipeline for item drops
+        private DeviceBuffer? _shadowVertexBuffer;
+        private DeviceBuffer? _shadowIndexBuffer;
+        private TextureView? _shadowTextureView;
         // Cube face geometry (same as Mesher.FaceVertices): back/front/bottom/top/right/left.
         private static readonly float[][] FallingCubeFaces = new float[][]
         {
