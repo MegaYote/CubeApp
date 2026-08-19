@@ -49,6 +49,8 @@
     // curved slice through 4D space (w follows y with a slow sine fold), so the terrain
     // folds and weaves with twisted strata - structures impossible for 3D noise. Claims
     // a small climate sliver; listed FIRST so first-match-wins gives it the band.
+    // EXTREMELY dense forests: the highest tree rate in the game (8 rolls per chunk),
+    // so anomaly territory chokes in woodland wherever the folded ground can root one.
     {
       "id": "anomaly",
       "displayName": "Anomaly",
@@ -61,7 +63,7 @@
       "surfaceBlock": "grass",
       "fillBlock": "dirt",
       "fillDepth": 3,
-      "treeDensity": 0
+      "treeDensity": 8
     },
     // ---- ALPHA: a byte-faithful port of Minecraft's "old terrain generator" - the exact
     // generator Alpha v1.1.2_01 shipped with (the last release to use it). Full 684.412
