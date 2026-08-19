@@ -46,6 +46,12 @@
     // item a dedicated icon from items.png. placedBlock "" clears the block's
     // placement: sap blocks are only obtainable by crafting (later) - for now the
     // dropped/held item is just an ingredient that can't be placed.
-    { "id": "sap",              "displayName": "Sap",              "category": "misc",     "itemTile": "10,2", "stackSize": 64, "placedBlock": "", "mapColor": "#442200" }
+    { "id": "sap",              "displayName": "Sap",              "category": "misc",     "itemTile": "10,2", "stackSize": 64, "placedBlock": "", "mapColor": "#442200" },
+
+    // ----- fuel & materials (items.png row 2, cols 12-15) ------------------------------
+    { "id": "quartz_shard",     "displayName": "Quartz Shard",     "category": "gemstone", "itemTile": "12,2", "stackSize": 64, "mapColor": "#F1EBE2" },
+    { "id": "charcoal",         "displayName": "Charcoal",         "category": "misc",     "itemTile": "13,2", "stackSize": 64, "mapColor": "#2B2B2B" },
+    { "id": "charcoal_fragment","displayName": "Charcoal Fragment","category": "misc",     "itemTile": "14,2", "stackSize": 64, "mapColor": "#3A3A3A" },
+    { "id": "coal",             "displayName": "Coal",             "category": "misc",     "itemTile": "15,2", "stackSize": 64, "mapColor": "#1C1C1C" }
   ]
 }
