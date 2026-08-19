@@ -135,6 +135,9 @@ namespace Cubuild.World
                     if (elevation > 1.0) elevation = 1.0;
 
                     double reliefShaped = relief / 1.0;
+                    // Raw relief sign is captured BEFORE shaping: amplified biomes use it so
+                    // terrain swings up to real peaks as well as carving down into valleys.
+                    double reliefSign = reliefShaped < 0.0 ? -1.0 : 1.0;
                     if (reliefShaped < 0.0) reliefShaped = -reliefShaped;
                     reliefShaped = reliefShaped * 2.6 - 2.6;
                     if (reliefShaped < 0.0)
@@ -171,6 +174,7 @@ namespace Cubuild.World
                     // gradually, so the land slopes down into the water instead of dropping off.
                     double blendedBase = 0.0;
                     double blendedVariation = 0.0;
+                    double blendedAmplified = 0.0;   // 0..1; how strongly amplified terrain is mixed in
                     double weightSum = 0.0;
                     const int blendCells = 4;            // look 4 field cells out (= 16 blocks)
                     const double blendSigma = 12.0;      // falloff width in world blocks
@@ -184,11 +188,22 @@ namespace Cubuild.World
                             var b = _biomeMap.BiomeAt(xq * 4.0 + dx, zq * 4.0 + dz);
                             blendedBase += b.BaseHeight * w;
                             blendedVariation += b.HeightVariation * w;
+                            blendedAmplified += (b.Amplified ? 1.0 : 0.0) * w;
                             weightSum += w;
                         }
                     }
                     blendedBase /= weightSum;
                     blendedVariation /= weightSum;
+                    blendedAmplified /= weightSum;
+
+                    // ---- AMPLIFIED RELIEF ----
+                    // Normal terrain relief only carves downward (reliefShaped <= 0). Amplified
+                    // biomes remap the relief magnitude onto the raw relief's sign: the higher
+                    // the blendedAmplified factor, the more the terrain swings up into real peaks
+                    // and down into deep valleys (amplified-worlds style). Non-amplified biomes
+                    // keep the original valley-only shaping (blendedAmplified ~ 0 => identical).
+                    double reliefMagnitude = -reliefShaped; // 0..~0.26
+                    reliefShaped = reliefMagnitude * (reliefSign * blendedAmplified - (1.0 - blendedAmplified));
 
                     double centerHeight = blendedBase * 16.0
                         + reliefShaped * (blendedVariation * 16.0);

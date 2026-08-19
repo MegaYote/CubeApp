@@ -24,6 +24,9 @@ namespace Cubuild
         public float BaseHeight { get; }
         /// <summary>How much the height varies (amplitude of the noise bump).</summary>
         public float HeightVariation { get; }
+        /// <summary>True = amplified terrain: the relief swings BOTH ways (real peaks AND deep
+        /// valleys, like amplified Minecraft worlds) instead of only carving downward.</summary>
+        public bool Amplified { get; }
         /// <summary>Block id name for the surface (topmost) block.</summary>
         public string SurfaceBlock { get; }
         /// <summary>Block id name for the fill below the surface.</summary>
@@ -43,7 +46,8 @@ namespace Cubuild
             (float, float) temperature, (float, float) humidity,
             bool isWater, float baseHeight, float heightVariation,
             string surfaceBlock, string fillBlock, int fillDepth, int treeDensity,
-            string treeType = "oak", string fillMixBlock = "", float fillMixChance = 0.5f)
+            string treeType = "oak", string fillMixBlock = "", float fillMixChance = 0.5f,
+            bool amplified = false)
         {
             Id = id;
             DisplayName = displayName;
@@ -52,6 +56,7 @@ namespace Cubuild
             IsWater = isWater;
             BaseHeight = baseHeight;
             HeightVariation = heightVariation;
+            Amplified = amplified;
             SurfaceBlock = surfaceBlock;
             FillBlock = fillBlock;
             FillDepth = fillDepth;
@@ -108,7 +113,8 @@ namespace Cubuild
                 string treeType = b.TryGetProperty("treeType", out var tt) ? tt.GetString() ?? "oak" : "oak";
                 string fillMix = b.TryGetProperty("fillMixBlock", out var fm) ? fm.GetString() ?? "" : "";
                 float mixChance = b.TryGetProperty("fillMixChance", out var mc) ? mc.GetSingle() : 0.5f;
-                _biomes.Add(new BiomeDefinition(id, display, temp, hum, water, baseH, varH, surface, fill, depth, trees, treeType, fillMix, mixChance));
+                bool amplified = b.TryGetProperty("amplified", out var amp) && amp.GetBoolean();
+                _biomes.Add(new BiomeDefinition(id, display, temp, hum, water, baseH, varH, surface, fill, depth, trees, treeType, fillMix, mixChance, amplified));
             }
             Loaded = true;
         }
