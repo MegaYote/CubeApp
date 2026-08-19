@@ -84,6 +84,12 @@ namespace Cubuild.World
         // through 4D space (w follows y with a slow sine fold) -> folded, weaving strata
         // that plain 3D noise cannot express.
         private readonly NoiseOctaves4D _anomalyNoise;
+        // Forest density field: low-frequency 2D noise that makes some regions DENSE
+        // woodland and others sparse clearings. Sampled per tree candidate (continuous
+        // across chunk borders); neutral areas keep the biome's normal tree rate.
+        private readonly NoiseOctaves _forestDensity;
+        private const double ForestFrequency = 0.015; // ~250-block woodland patches
+        private const double ForestGain = 5.0;        // -1..1 noise -> 0.1x .. 6x tree rate
 
         /// <summary>Height of the terrain band in blocks (world -64 .. +191). Taller than the
         /// original 128 so amplified biomes can grow REAL mountains; sea level stays at world 0.
@@ -106,6 +112,7 @@ namespace Cubuild.World
             _classicHeight = new NoiseOctaves(rand, 3, 1);
             _anomalyNoise = new NoiseOctaves4D(rand, 9, 7);
             _amplifiedCarve = new NoiseOctaves(rand, 4, 3);
+            _forestDensity = new NoiseOctaves(rand, 3, 0);
             Monoliths = new MonolithSculptor(seed);
             QuartzVeins = new QuartzVeinGenerator(seed);
             Serpentines = new SerpentineGenerator(seed);
@@ -853,13 +860,27 @@ namespace Cubuild.World
             const int height = ChunkManager.ChunkHeight;
 
             int treeCount = 0;
+            // Chunk-wide forest density (for the per-chunk tree cap): patches of dense
+            // woodland allow many more trees than the normal 8 before thinning back out.
+            double chunkForest = 1.0 + _forestDensity.Noise2DNormalized(
+                (chunkX * 16 + 8) * ForestFrequency, (chunkZ * 16 + 8) * ForestFrequency) * ForestGain;
+            if (chunkForest < 0.1) chunkForest = 0.1;
+            if (chunkForest > 6.0) chunkForest = 6.0;
+            int maxTrees = 8 + (int)(chunkForest * 2.0);
+
             for (int t = 0; t < 16; t++)
             {
                 int lx = rand.Next(16);
                 int lz = rand.Next(16);
                 var biome = _biomeMap.BiomeAt(chunkX * 16 + lx, chunkZ * 16 + lz);
                 if (biome.TreeDensity <= 0) continue;
-                if (rand.Next(16) >= biome.TreeDensity) continue;
+                // Per-candidate forest density: smooth across chunk borders, so woodland
+                // thins into clearings gradually instead of in chunk-sized steps.
+                double density = 1.0 + _forestDensity.Noise2DNormalized(
+                    (chunkX * 16 + lx) * ForestFrequency, (chunkZ * 16 + lz) * ForestFrequency) * ForestGain;
+                if (density < 0.1) density = 0.1;
+                if (density > 6.0) density = 6.0;
+                if (rand.Next(16) >= biome.TreeDensity * density) continue;
 
                 int surfaceY = -1;
                 for (int y = height - 1; y >= 0; y--)
@@ -886,7 +907,7 @@ namespace Cubuild.World
                 {
                     GenerateTree(blocks, lx, surfaceY + 1, lz, rand, idWood, idLeaves, idGrass, idDirt, idRedClay);
                 }
-                if (++treeCount >= 8) break;
+                if (++treeCount >= maxTrees) break;
             }
         }
 
