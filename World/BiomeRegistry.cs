@@ -36,8 +36,13 @@ namespace Cubuild
         public int FillDepth { get; }
         /// <summary>Approximate trees per chunk (0 = none).</summary>
         public int TreeDensity { get; }
-        /// <summary>Which tree generator this biome uses ("oak" or "pine").</summary>
+        /// <summary>Which tree generator this biome uses ("oak", "pine", "round", "tall",
+        /// "dead", "willow", "gnarled", "palm", "cypress").</summary>
         public string TreeType { get; }
+        /// <summary>Optional second tree style mixed into the biome's forests.</summary>
+        public string TreeTypeSecondary { get; }
+        /// <summary>Chance (0..1) a tree candidate grows as TreeTypeSecondary instead.</summary>
+        public float TreeSecondaryChance { get; }
         /// <summary>Optional block id mixed into the fill layers (e.g. red clay mixed with dirt).</summary>
         public string FillMixBlock { get; }
         /// <summary>Chance (0..1) that a fill layer becomes FillMixBlock instead of FillBlock.</summary>
@@ -50,7 +55,8 @@ namespace Cubuild
             (float, float) temperature, (float, float) humidity,
             bool isWater, float baseHeight, float heightVariation,
             string surfaceBlock, string fillBlock, int fillDepth, int treeDensity,
-            string treeType = "oak", string fillMixBlock = "", float fillMixChance = 0.5f,
+            string treeType = "oak", string treeTypeSecondary = "", float treeSecondaryChance = 0f,
+            string fillMixBlock = "", float fillMixChance = 0.5f,
             bool amplified = false, AlphaTerrainParams? alphaParams = null)
         {
             Id = id;
@@ -66,6 +72,8 @@ namespace Cubuild
             FillDepth = fillDepth;
             TreeDensity = treeDensity;
             TreeType = treeType;
+            TreeTypeSecondary = treeTypeSecondary;
+            TreeSecondaryChance = treeSecondaryChance;
             FillMixBlock = fillMixBlock;
             FillMixChance = fillMixChance;
             AlphaParams = alphaParams;
@@ -118,6 +126,8 @@ namespace Cubuild
                 string treeType = b.TryGetProperty("treeType", out var tt) ? tt.GetString() ?? "oak" : "oak";
                 string fillMix = b.TryGetProperty("fillMixBlock", out var fm) ? fm.GetString() ?? "" : "";
                 float mixChance = b.TryGetProperty("fillMixChance", out var mc) ? mc.GetSingle() : 0.5f;
+                string treeTypeSec = b.TryGetProperty("treeTypeSecondary", out var tts) ? tts.GetString() ?? "" : "";
+                float treeSecChance = b.TryGetProperty("treeSecondaryChance", out var tsc) ? tsc.GetSingle() : 0f;
                 bool amplified = b.TryGetProperty("amplified", out var amp) && amp.GetBoolean();
                 AlphaTerrainParams? alphaParams = null;
                 if (b.TryGetProperty("alpha", out var ap))
@@ -135,7 +145,7 @@ namespace Cubuild
                     if (ap.TryGetProperty("mainNoiseScaleY", out dv)) alphaParams.MainNoiseScaleY = dv.GetDouble();
                     if (ap.TryGetProperty("heightStretch", out dv)) alphaParams.HeightStretch = dv.GetDouble();
                 }
-                _biomes.Add(new BiomeDefinition(id, display, temp, hum, water, baseH, varH, surface, fill, depth, trees, treeType, fillMix, mixChance, amplified, alphaParams));
+                _biomes.Add(new BiomeDefinition(id, display, temp, hum, water, baseH, varH, surface, fill, depth, trees, treeType, treeTypeSec, treeSecChance, fillMix, mixChance, amplified, alphaParams));
             }
             Loaded = true;
         }

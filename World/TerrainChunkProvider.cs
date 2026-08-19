@@ -865,6 +865,7 @@ namespace Cubuild.World
             byte idGrass = (byte)BlockRegistry.GetId("grass");
             byte idDirt = (byte)BlockRegistry.GetId("dirt");
             byte idRedClay = (byte)BlockRegistry.GetId("redclay");
+            byte idSand = (byte)BlockRegistry.GetId("sand");
             const int height = ChunkManager.ChunkHeight;
 
             int treeCount = 0;
@@ -902,6 +903,13 @@ namespace Cubuild.World
                 if (surfaceY <= 0) continue;
                 // The trunk starts one block ABOVE the surface block (which must be grass/dirt/redclay).
                 string style = string.IsNullOrEmpty(biome.TreeType) ? "oak" : biome.TreeType.ToLowerInvariant();
+                // A biome can mix a SECOND tree style into its forests (e.g. desert grows
+                // dead snags with the occasional oasis palm).
+                if (biome.TreeSecondaryChance > 0f && !string.IsNullOrEmpty(biome.TreeTypeSecondary)
+                    && rand.NextDouble() < biome.TreeSecondaryChance)
+                {
+                    style = biome.TreeTypeSecondary.ToLowerInvariant();
+                }
                 switch (style)
                 {
                     case "pine":
@@ -917,11 +925,24 @@ namespace Cubuild.World
                         break;
                     case "dead":
                         // A bare snag: trunk with branch stubs and almost no leaves.
-                        GenerateDeadTree(blocks, lx, surfaceY + 1, lz, rand, idWood, idLeaves, idGrass, idDirt);
+                        GenerateDeadTree(blocks, lx, surfaceY + 1, lz, rand, idWood, idLeaves, idGrass, idDirt, idSand);
                         break;
                     case "willow":
                         // A squat umbrella-crowned tree for the open plains.
                         GenerateWillowTree(blocks, lx, surfaceY + 1, lz, rand, idWood, idLeaves, idGrass, idDirt);
+                        break;
+                    case "gnarled":
+                        // An ancient, gnarled old oak with hanging branch blobs (the hill
+                        // forests are ALL old trees - no sapling oaks up there).
+                        GenerateBigOakTree(blocks, lx, surfaceY + 1, lz, rand, idWood, idLeaves, idGrass, idDirt, idRedClay);
+                        break;
+                    case "palm":
+                        // A leaning desert palm with a fan of fronds (roots in sand).
+                        GeneratePalmTree(blocks, lx, surfaceY + 1, lz, rand, idWood, idLeaves, idGrass, idDirt, idSand);
+                        break;
+                    case "cypress":
+                        // A slim swamp cypress: flared skirt, narrow tiers, a pointed tip.
+                        GenerateCypressTree(blocks, lx, surfaceY + 1, lz, rand, idWood, idLeaves, idGrass, idDirt);
                         break;
                     default:
                         // Oak: small chance a sapling grows into a big, gnarled old tree.
@@ -1152,7 +1173,7 @@ namespace Cubuild.World
         // angles and only a tiny tuft of leaves left at the tip - haunted-looking. Grows
         // on grass or dirt.
         private void GenerateDeadTree(byte[] blocks, int x, int baseY, int z, Random rand,
-            byte idWood, byte idLeaves, byte idGrass, byte idDirt)
+            byte idWood, byte idLeaves, byte idGrass, byte idDirt, byte idSand)
         {
             const int height = ChunkManager.ChunkHeight;
             int trunkHeight = rand.Next(4) + 3;
@@ -1177,7 +1198,7 @@ namespace Cubuild.World
 
             if (baseY < 1) return;
             byte ground = blocks[(x * 16 + z) * height + (baseY - 1)];
-            if (ground != idGrass && ground != idDirt) return;
+            if (ground != idGrass && ground != idDirt && ground != idSand) return;
             if (ground == idGrass) blocks[(x * 16 + z) * height + (baseY - 1)] = idDirt;
 
             for (int i = 0; i < trunkHeight; i++)
@@ -1303,7 +1324,204 @@ namespace Cubuild.World
             }
         }
 
+        // A leaning desert palm with a fan of fronds (roots in sand).
+        private void GeneratePalmTree(byte[] blocks, int x, int baseY, int z, Random rand,
+            byte idWood, byte idLeaves, byte idGrass, byte idDirt, byte idSand)
+        {
+            const int height = ChunkManager.ChunkHeight;
+            int trunkHeight = rand.Next(4) + 4;   // 4..7
+            int offFactor = (rand.Next(4) + 1) / 2; // 1..2 (lean amount)
+            int dxSign = rand.Next(4) switch { 0 => 1, 1 => -1, 2 => 0, _ => 0 };
+            int dzSign = rand.Next(4) switch { 0 => 0, 1 => 0, 2 => 1, _ => -1 };
+
+            // Clearance: trunk column (radius 1 at each level) plus canopy footprint.
+            for (int i = 0; i <= trunkHeight; i++)
+            {
+                int ly = baseY + i;
+                if (ly < 0 || ly >= height) continue;
+                int off = i / offFactor;
+                int tx = x + dxSign * off;
+                int tz = z + dzSign * off;
+                if (tx < 0 || tx >= 16 || tz < 0 || tz >= 16) return;
+                int radius = (i >= trunkHeight - 1) ? 2 : 1;
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    for (int dz = -radius; dz <= radius; dz++)
+                    {
+                        int lx = tx + dx;
+                        int lz = tz + dz;
+                        if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16 || ly < 0 || ly >= height) return;
+                        byte b = blocks[(lx * 16 + lz) * height + ly];
+                        if (b != 0 && b != idLeaves) return;
+                    }
+                }
+            }
+
+            if (baseY < 1) return;
+            byte ground = blocks[(x * 16 + z) * height + (baseY - 1)];
+            if (ground != idGrass && ground != idDirt && ground != idSand) return;
+            if (ground == idGrass) blocks[(x * 16 + z) * height + (baseY - 1)] = idDirt;
+
+            // Trunk: lean with step every level.
+            for (int i = 0; i < trunkHeight; i++)
+            {
+                int y = baseY + i;
+                if (y < 0 || y >= height) break;
+                int off = i / offFactor;
+                int tx = x + dxSign * off;
+                int tz = z + dzSign * off;
+                if (tx < 0 || tx >= 16 || tz < 0 || tz >= 16) break;
+                int idx = (tx * 16 + tz) * height + y;
+                byte b = blocks[idx];
+                if (b == 0 || b == idLeaves) blocks[idx] = idWood;
+            }
+
+            // Frond crown at the top.
+            int topY = baseY + trunkHeight;
+            // Tip: plus shape of radius 2.
+            for (int dx = -2; dx <= 2; dx++)
+            {
+                for (int dz = -2; dz <= 2; dz++)
+                {
+                    if (Math.Abs(dx) == 2 && Math.Abs(dz) == 2) continue;
+                    int lx = x + dx;
+                    int lz = z + dz;
+                    if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) continue;
+                    int idx = (lx * 16 + lz) * height + topY;
+                    byte b = blocks[idx];
+                    if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
+                }
+            }
+            // Ring at top-1: radius 2 with corners cut.
+            for (int dx = -2; dx <= 2; dx++)
+            {
+                for (int dz = -2; dz <= 2; dz++)
+                {
+                    bool isCorner = Math.Abs(dx) == 2 && Math.Abs(dz) == 2;
+                    if (isCorner && rand.Next(3) != 0) continue;
+                    int lx = x + dx;
+                    int lz = z + dz;
+                    if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) continue;
+                    int idx = (lx * 16 + lz) * height + (topY - 1);
+                    byte b = blocks[idx];
+                    if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
+                }
+            }
+// Tiny cap on top.
+            if (topY + 1 < height)
+            {
+                int idx = (x * 16 + z) * height + (topY + 1);
+                byte b = blocks[idx];
+                if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
+            }
+        }
+
+        // A slim swamp cypress: flared skirt, narrow tiers, a pointed tip.
+        private void GenerateCypressTree(byte[] blocks, int x, int baseY, int z, Random rand,
+            byte idWood, byte idLeaves, byte idGrass, byte idDirt)
+        {
+            const int height = ChunkManager.ChunkHeight;
+            int trunkHeight = rand.Next(4) + 7;   // 7..10
+            int topY = baseY + trunkHeight;
+
+            // Clearance: radius 2 through the whole height (skirt + tiers).
+            for (int y = baseY; y <= topY + 1 && y < height; y++)
+            {
+                int radius = y <= baseY + 1 ? 2 : (y >= topY - 1 ? 1 : (y - baseY) % 2 == 0 ? 1 : 0);
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    for (int dz = -radius; dz <= radius; dz++)
+                    {
+                        int lx = x + dx;
+                        int lz = z + dz;
+                        if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16 || y < 0 || y >= height) return;
+                        byte b = blocks[(lx * 16 + lz) * height + y];
+                        if (b != 0 && b != idLeaves) return;
+                    }
+                }
+            }
+
+            if (baseY < 1) return;
+            byte ground = blocks[(x * 16 + z) * height + (baseY - 1)];
+            if (ground != idGrass && ground != idDirt) return;
+            if (ground == idGrass) blocks[(x * 16 + z) * height + (baseY - 1)] = idDirt;
+
+            // Skirt: baseY and baseY+1 with radius 2 corners cut.
+            for (int dx = -2; dx <= 2; dx++)
+            {
+                for (int dz = -2; dz <= 2; dz++)
+                {
+                    if (Math.Abs(dx) == 2 && Math.Abs(dz) == 2 && rand.Next(3) != 0) continue;
+                    int lx = x + dx;
+                    int lz = z + dz;
+                    if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) continue;
+                    // baseY
+                    int idx = (lx * 16 + lz) * height + baseY;
+                    byte b = blocks[idx];
+                    if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
+                    // baseY+1
+                    idx = (lx * 16 + lz) * height + (baseY + 1);
+                    b = blocks[idx];
+                    if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
+                }
+            }
+            // Tiers: from baseY+2 to topY-1, alternating full 3x3 and plus-shape.
+            for (int y = baseY + 2; y < topY; y++)
+            {
+                int dy = y - baseY;
+                if (dy % 2 == 0)
+                {
+                    // full 3x3
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        for (int dz = -1; dz <= 1; dz++)
+                        {
+                            int lx = x + dx;
+                            int lz = z + dz;
+                            if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) continue;
+                            int idx = (lx * 16 + lz) * height + y;
+                            byte b = blocks[idx];
+                            if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
+                        }
+                    }
+                }
+                else
+                {
+                    // plus-shape: centre + cardinals.
+                    int[] dirs = { 0, 1, -1 };
+                    foreach (int dz in dirs)
+                    {
+                        foreach (int dx in dirs)
+                        {
+                            if (dx == 0 && dz == 0) continue;
+                            int lx = x + dx;
+                            int lz = z + dz;
+                            if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) continue;
+                            int idx = (lx * 16 + lz) * height + y;
+                            byte b = blocks[idx];
+                            if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
+                        }
+                    }
+                    // centre
+                    {
+                        int idx = (x * 16 + z) * height + y;
+                        byte b = blocks[idx];
+                        if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
+                    }
+                }
+            }
+            // Tip: single leaf at top.
+            if (topY < height)
+            {
+                int idx = (x * 16 + z) * height + topY;
+                byte b = blocks[idx];
+                if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
+            }
+        }
+
         // A big, gnarled old oak: a tall trunk with a wide rounded dome canopy plus a few
+        // hanging branch blobs. Grows anywhere a normal oak would (grass, dirt, red clay).
+// A big, gnarled old oak: a tall trunk with a wide rounded dome canopy plus a few
         // hanging branch blobs. Grows anywhere a normal oak would (grass, dirt, red clay).
         private void GenerateBigOakTree(byte[] blocks, int x, int baseY, int z, Random rand,
             byte idWood, byte idLeaves, byte idGrass, byte idDirt, byte idRedClay)
