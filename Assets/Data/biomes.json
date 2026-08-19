@@ -59,17 +59,16 @@
       "treeDensity": 0
     },
     // ---- amplified hills: plains' climate band split in half, so hills and plains
-    // appear equally often (first match wins, so hills sits BEFORE plains). The terrain
-    // band is 256 blocks tall (sea at world 0), and baseHeight is a fraction of the core
-    // 128-block band - values ABOVE 1 reach into the tall headroom. 1.5 => highland base
-    // with amplified peaks swinging up past world 150 and deep valleys near sea level.
+    // appear equally often (first match wins, so hills sits BEFORE plains). Alpha-style
+    // dramatic terrain: a modest base (~world 48) so valley FLOORS plunge to sea level
+    // (deep cuts flood into lakes), while amplified peaks still swing up past world 100.
     {
       "id": "hills",
       "displayName": "Hills",
       "temperature": { "min": 0.0, "max": 1.0 },
       "humidity": { "min": -0.15, "max": 0.425 },
       "water": false,
-      "baseHeight": 1.5,
+      "baseHeight": 0.88,
       "heightVariation": 0.75,
       "amplified": true,
       "surfaceBlock": "grass",
