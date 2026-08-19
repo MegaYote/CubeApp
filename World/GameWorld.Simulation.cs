@@ -108,9 +108,12 @@ namespace Cubuild
                     float qx = d.SpinAxisX * s, qy = d.SpinAxisY * s, qz = d.SpinAxisZ * s, qw = c;
                     float nx = qw * d.RotX + qx * d.RotW + qy * d.RotZ - qz * d.RotY;
                     float ny = qw * d.RotY - qx * d.RotZ + qy * d.RotW + qz * d.RotX;
-                    float nz = qw * d.RotZ + qx * d.RotY - qy * d.RotX + qz * d.RotX;
+                    float nz = qw * d.RotZ + qx * d.RotY - qy * d.RotX + qz * d.RotW;
                     float nw = qw * d.RotW - qx * d.RotX - qy * d.RotY - qz * d.RotZ;
-                    d.RotX = nx; d.RotY = ny; d.RotZ = nz; d.RotW = nw;
+                    // Renormalize every step: float drift would otherwise grow the quaternion
+                    // magnitude and shear/stretch the rendered mesh.
+                    float lenInv = 1f / (float)Math.Sqrt(nx * nx + ny * ny + nz * nz + nw * nw);
+                    d.RotX = nx * lenInv; d.RotY = ny * lenInv; d.RotZ = nz * lenInv; d.RotW = nw * lenInv;
                     d.SpinSpeed *= (float)Math.Pow(0.5, dt * 2.0);
                 }
 

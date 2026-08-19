@@ -15,7 +15,7 @@ namespace Cubuild
         /// <summary>Seconds since spawn; drives the pickup grace period and the despawn timer.</summary>
         public float Age;
         /// <summary>Orientation as a unit quaternion (tumbles while airborne).</summary>
-        public float RotX = 1f, RotY, RotZ, RotW; // identity
+        public float RotX, RotY, RotZ, RotW = 1f; // identity (w=1, xyz=0)
         /// <summary>Normalized tumble axis.</summary>
         public float SpinAxisX, SpinAxisY, SpinAxisZ;
         /// <summary>Tumble speed in radians per second (decays with drag, stops on landing).</summary>
