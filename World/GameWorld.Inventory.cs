@@ -337,9 +337,18 @@ namespace Cubuild
             var held = HeldStack;
             if (!held.HasValue || count <= 0) return;
             int drop = Math.Min(count, held.Value.Count);
-            var throwVel = ThrowVelocity();
+            // Base throw direction from the player's facing.
+            double baseYawRad = LocalPlayer.Yaw * Math.PI / 180.0;
             for (int i = 0; i < drop; i++)
             {
+                var rand = _regenRandom;
+                // Nudge the heading by a tiny random amount (~±1.7°) so each item takes a
+                // slightly different arc and they fan out instead of merging mid-flight.
+                double yawRad = baseYawRad + (rand.NextDouble() - 0.5) * 0.06;
+                // Small speed wobble (±4%) so distances vary a touch too.
+                double speed = 5.5 * (1.0 + (rand.NextDouble() - 0.5) * 0.08);
+                double up = 0.35 + (rand.NextDouble() - 0.5) * 0.1;
+                var throwVel = new Point3D(Math.Sin(yawRad) * speed, up, Math.Cos(yawRad) * speed);
                 SpawnItemDrop(held.Value.ItemId, 1,
                     new Point3D(LocalPlayer.Position.X, LocalPlayer.Position.Y, LocalPlayer.Position.Z), throwVel);
             }
