@@ -21,8 +21,19 @@ namespace Cubuild
     public sealed partial class GameWorld : IDisposable
     {
         // ---- world identity / services ----
+        /// <summary>
+        /// Generation version of the CURRENT build. Bump by 1 whenever world generation changes
+        /// in any way: new ores, new structures, terrain algorithm tweaks, biome shifts. Saves
+        /// stamp their own version (WorldSave.GenVersion); worlds stamped with an older version
+        /// warn on load instead of silently mutating when generation changes.
+        /// </summary>
+        public const int GenerationVersion = 1;
         public int Seed { get; private set; }
         public string Name { get; private set; } = "World 1";
+        /// <summary>The generation version this world was originally created with (from its save
+        /// stamp, or <see cref="GenerationVersion"/> for freshly created worlds). Never upgraded
+        /// on save, so a world keeps warning about its true age. 0 = made before versioning.</summary>
+        public int WorldGenVersion { get; set; }
         public ChunkManager Chunks { get; private set; }
         public World.TerrainChunkProvider ChunkProvider { get; private set; }
         public World.SkyChunkProvider SkyChunkProvider { get; private set; }

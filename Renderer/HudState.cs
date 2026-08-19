@@ -113,6 +113,14 @@ namespace Cubuild.Renderer
         /// manual or autosave). 0 = not showing.</summary>
         public float SaveToast;
 
+        /// <summary>Remaining seconds of the "older terrain generation" warning (set when a
+        /// world stamped with an older generation version loads). 0 = not showing.</summary>
+        public float GenWarning;
+        /// <summary>Generation version of the loaded save vs. the current build (debug overlay;
+        /// shows whether unexplored terrain can regenerate differently).</summary>
+        public int WorldGenSaved;
+        public int WorldGenCurrent;
+
         /// <summary>World position + block id of the block currently being mined (for the
         /// shrinking-block overlay). Only valid while MiningProgress > 0.</summary>
         public Vector3 MiningBlockPos;
@@ -168,6 +176,9 @@ namespace Cubuild.Renderer
             MiningBlockId = 0,
             MiningBlockNormal = new Point3D(0, 0, 0),
             SaveToast = 0f,
+            GenWarning = 0f,
+            WorldGenSaved = 0,
+            WorldGenCurrent = 0,
         };
 
         /// <summary>Blocks being mined by zombies this frame — each gets a shrink-cube overlay.</summary>

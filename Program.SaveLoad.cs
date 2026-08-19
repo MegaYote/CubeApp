@@ -34,6 +34,7 @@ namespace Cubuild
         private volatile bool _autosaveInFlight;
         private float _autosaveTimer;
         private float _saveToastTimer;
+        private float _genWarningTimer;
 
         /// <summary>Called every frame while playing. When the interval elapses, snapshots the
         /// world and writes it to disk on a background thread so the game never stalls and
@@ -41,6 +42,7 @@ namespace Cubuild
         private void MaybeAutosave(float deltaSeconds)
         {
             _saveToastTimer = Math.Max(0f, _saveToastTimer - deltaSeconds);
+            _genWarningTimer = Math.Max(0f, _genWarningTimer - deltaSeconds);
             if (World == null || _autosaveInFlight) return;
             _autosaveTimer += deltaSeconds;
             if (_autosaveTimer >= AutosaveIntervalSeconds)
@@ -61,6 +63,7 @@ namespace Cubuild
                 {
                     Name = World.Name,
                     Seed = World.Seed,
+                    GenVersion = World.WorldGenVersion,
                     PlayerX = World.PlayerPosition.X,
                     PlayerY = World.PlayerPosition.Y,
                     PlayerZ = World.PlayerPosition.Z,
@@ -156,6 +159,13 @@ namespace Cubuild
         {
             _loadSkipSpawn = true;
             StartNewWorld(save.Seed, save.Name, (GameMode)save.Mode);
+            // Keep the world's original generation stamp (0 = pre-versioning). When it differs
+            // from the current build, warn - unexplored terrain may regenerate differently.
+            World.WorldGenVersion = save.GenVersion;
+            if (save.GenVersion != GameWorld.GenerationVersion)
+            {
+                _genWarningTimer = 8f;
+            }
             foreach (var c in save.Chunks)
             {
                 World.Chunks.ApplySavedChunk(c.Layer, c.X, c.Z, c.Blocks, c.Meta);

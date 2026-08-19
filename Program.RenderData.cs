@@ -92,6 +92,7 @@ namespace Cubuild
                     NetStatus = netStatus,
                     MultiplayerError = mpError,
                     SaveToast = _saveToastTimer,
+                    WorldGenCurrent = GameWorld.GenerationVersion,
                 };
             }
             var forward = World.GetCameraForward();
@@ -144,6 +145,9 @@ namespace Cubuild
                 HandPoke = _handPokeTimer,
                 HandSwing = _handSwingTimer,
                 SaveToast = _saveToastTimer,
+                GenWarning = _genWarningTimer,
+                WorldGenSaved = World.WorldGenVersion,
+                WorldGenCurrent = GameWorld.GenerationVersion,
             };
         }
 

@@ -31,10 +31,18 @@ namespace Cubuild
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 5;
+        public const int Version = 6;
 
         public string Name = "World 1";
         public int Seed;
+        /// <summary>
+        /// Terrain-generation version this world was originally made with (stamped at creation).
+        /// 0 = made before versioning existed. When this differs from the current build's
+        /// generation version, unexplored terrain may regenerate differently - the game shows a
+        /// warning instead of mutating silently. Never upgraded on save so a world keeps its
+        /// true age.
+        /// </summary>
+        public int GenVersion;
         /// <summary>GameMode int (0 = Creative, 1 = Survival). Older saves default to Creative.</summary>
         public int Mode = (int)GameMode.Creative;
         public double PlayerX, PlayerY, PlayerZ;
@@ -84,6 +92,7 @@ namespace Cubuild
                 w.Write(HasHeldStack);
                 w.Write(HeldItemId);
                 w.Write(HeldCount);
+                w.Write(GenVersion);
 
                 w.Write(Chunks.Count);
                 foreach (var c in Chunks)
@@ -153,6 +162,7 @@ namespace Cubuild
                     save.HeldItemId = reader.ReadInt32();
                     save.HeldCount = reader.ReadInt32();
                 }
+                if (version >= 6) save.GenVersion = reader.ReadInt32();
 
                 int chunkCount = reader.ReadInt32();
                 for (int i = 0; i < chunkCount; i++)

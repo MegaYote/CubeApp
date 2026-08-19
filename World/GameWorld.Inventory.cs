@@ -543,6 +543,7 @@ namespace Cubuild
         public GameWorld(int seed, string name, Func<Renderer.IRenderer?> getRenderer, int chunkRenderRadius, int chunkGenWorkers)
         {
             Seed = seed;
+            WorldGenVersion = GenerationVersion; // fresh world: stamped with the current build
             Name = string.IsNullOrWhiteSpace(name) ? "World 1" : name;
             ChunkRenderRadius = chunkRenderRadius;
             _getRenderer = getRenderer ?? throw new ArgumentNullException(nameof(getRenderer));

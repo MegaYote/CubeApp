@@ -1427,6 +1427,19 @@ namespace Cubuild.Renderer
                 drawList.AddText(toastPos, textColor, toast);
             }
 
+            // Older-generation warning (world was made before terrain versioning, or with an
+            // older generation - unexplored terrain may regenerate differently).
+            if (_hud.GenWarning > 0f)
+            {
+                const string warning = "Older terrain generation: unexplored areas may look different";
+                var warnPos = new Vector2(12, 64);
+                var warnSize = ImGui.CalcTextSize(warning);
+                uint warnBg = ImGui.ColorConvertFloat4ToU32(new Vector4(0.35f, 0.2f, 0f, 0.6f));
+                uint warnColor = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 0.85f, 0.3f, 1f));
+                drawList.AddRectFilled(warnPos - new Vector2(6, 3), warnPos + warnSize + new Vector2(6, 3), warnBg);
+                drawList.AddText(warnPos, warnColor, warning);
+            }
+
             // Hand Editor (F8): tune the first-person hand/held-block pose live, then copy the
             // values line back to the dev. Frees the mouse (Program disables mouse look while
             // open) so the sliders are draggable.
@@ -1474,6 +1487,7 @@ namespace Cubuild.Renderer
                     Line($"FogCam: {_cameraPosition.Value.X:0.0}, {_cameraPosition.Value.Y:0.0}, {_cameraPosition.Value.Z:0.0}  range: {_fogParams[4]:0.0}-{_fogParams[5]:0.0}");
                 Line($"Particles: {_particleCount}");
                 Line($"Seed: {_hud.WorldSeed}");
+                Line($"Gen: saved {_hud.WorldGenSaved} / current {_hud.WorldGenCurrent}");
                 Line($"Fly: {(_hud.FlyMode ? "ON" : "OFF")}");
                 Line($"Fullbright: {(_hud.Fullbright ? "ON" : "OFF")}  [F6]");
                 Line($"Cull: {(_gpuCullEnabled ? "GPU" : "CPU")}  [F7]");                if (!string.IsNullOrEmpty(_hud.NetStatus)) Line($"Net: {_hud.NetStatus}");
