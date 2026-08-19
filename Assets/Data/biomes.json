@@ -60,15 +60,16 @@
     },
     // ---- amplified hills: plains' climate band split in half, so hills and plains
     // appear equally often (first match wins, so hills sits BEFORE plains). Terrain is
-    // extreme amplified-style: high base, REAL peaks (amplified flag) and deep canyon
-    // valleys - big dramatic swings like an amplified Minecraft world.
+    // extreme amplified-style: moderate base (so peaks have headroom under the sky cap),
+    // RAW signed relief (amplified flag) rolling continuously between real peaks and
+    // deep valleys that plunge toward sea level - varied, dramatic, amplified-worlds.
     {
       "id": "hills",
       "displayName": "Hills",
       "temperature": { "min": 0.0, "max": 1.0 },
       "humidity": { "min": -0.15, "max": 0.425 },
       "water": false,
-      "baseHeight": 0.85,
+      "baseHeight": 0.62,
       "heightVariation": 0.75,
       "amplified": true,
       "surfaceBlock": "grass",

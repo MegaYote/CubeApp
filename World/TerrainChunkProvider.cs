@@ -135,9 +135,6 @@ namespace Cubuild.World
                     if (elevation > 1.0) elevation = 1.0;
 
                     double reliefShaped = relief / 1.0;
-                    // Raw relief sign is captured BEFORE shaping: amplified biomes use it so
-                    // terrain swings up to real peaks as well as carving down into valleys.
-                    double reliefSign = reliefShaped < 0.0 ? -1.0 : 1.0;
                     if (reliefShaped < 0.0) reliefShaped = -reliefShaped;
                     reliefShaped = reliefShaped * 2.6 - 2.6;
                     if (reliefShaped < 0.0)
@@ -197,13 +194,17 @@ namespace Cubuild.World
                     blendedAmplified /= weightSum;
 
                     // ---- AMPLIFIED RELIEF ----
-                    // Normal terrain relief only carves downward (reliefShaped <= 0). Amplified
-                    // biomes remap the relief magnitude onto the raw relief's sign: the higher
-                    // the blendedAmplified factor, the more the terrain swings up into real peaks
-                    // and down into deep valleys (amplified-worlds style). Non-amplified biomes
-                    // keep the original valley-only shaping (blendedAmplified ~ 0 => identical).
+                    // Normal terrain relief only carves downward (reliefShaped <= 0) AND its
+                    // shaping saturates near its maximum almost everywhere - remapping that
+                    // saturated signal's sign produced flat mesa plateaus with cliff edges.
+                    // Amplified biomes instead use the RAW signed relief noise: bell-distributed
+                    // and continuous, so terrain rolls smoothly between real peaks and deep
+                    // valleys. Non-amplified biomes keep the original shaping unchanged
+                    // (blendedAmplified ~ 0 => identical behavior).
+                    const double amplifiedGain = 0.5; // field-y of swing per relief unit
                     double reliefMagnitude = -reliefShaped; // 0..~0.26
-                    reliefShaped = reliefMagnitude * (reliefSign * blendedAmplified - (1.0 - blendedAmplified));
+                    reliefShaped = reliefMagnitude * (1.0 - blendedAmplified)
+                        + relief * amplifiedGain * blendedAmplified;
 
                     double centerHeight = blendedBase * 16.0
                         + reliefShaped * (blendedVariation * 16.0);
