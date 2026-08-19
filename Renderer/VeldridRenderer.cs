@@ -288,6 +288,7 @@ namespace Cubuild.Renderer
         private float _handWalkAmount;
         private float _handPunchTime;
         private float _lastHandTime;
+        private float _prevHandSwing;
         private readonly System.Diagnostics.Stopwatch _handClock = System.Diagnostics.Stopwatch.StartNew();
 
         // ---- Tunable hand viewmodel params (adjust in-game via the F3 Hand Editor) ----
@@ -399,6 +400,12 @@ namespace Cubuild.Renderer
         private TextureView? _itemIconAtlasView;
         private IntPtr _itemIconImGuiId;
         private Vector4[]? _itemIconUv;
+        // ImGui binding for the RAW items.png atlas. The flat-sprite slot renderers cut their
+        // tile UVs from the raw atlas dims, so they must sample the raw texture - NOT the rebuilt
+        // 48px icon atlas (_itemIconImGuiId). Using the rebuilt one there mismatched texture and
+        // UV layout, so inventory/crafting slots drew items wrong while the hotbar (IconUv) looked
+        // right.
+        private IntPtr _itemsImGuiId;
         // Terrain atlas bound to ImGui for the title/pause menu's dirt background.
         private IntPtr _terrainImGuiId;
         // Title-screen logo graphic (cubuild.png, embedded).
@@ -781,6 +788,9 @@ namespace Cubuild.Renderer
             BuildIconAtlas();
             // Build the flat item-icon atlas for genuine items (tools, food, gems).
             BuildItemIconAtlas();
+            // Expose the RAW items.png atlas to ImGui for the flat-sprite slot renderers.
+            if (_itemsAtlasView != null && _imguiRenderer != null)
+                _itemsImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _itemsAtlasView);
 
             // Bind the terrain atlas to ImGui so the menus can draw the dirt background.
             if (_imguiRenderer != null && _atlasView != null)
@@ -908,6 +918,7 @@ namespace Cubuild.Renderer
             _transparentPipeline?.Dispose();
             _translucentPipeline?.Dispose();
             if (_iconAtlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_iconAtlasTexture);
+            if (_itemsAtlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_itemsAtlasTexture);
             if (_atlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_atlasTexture);
             if (_logoTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_logoTexture);
             _logoView?.Dispose();

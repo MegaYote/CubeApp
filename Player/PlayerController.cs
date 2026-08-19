@@ -14,7 +14,7 @@ namespace Cubuild
         public Point3D Velocity { get; private set; }
         public bool IsGrounded { get; private set; }
 
-        private const float WalkSpeed = 4.317f;
+        private const float WalkSpeed = 4.0f;
         private const float JumpVelocity = 8.0f;
         private const float Gravity = 24.0f;
         private const float MaxFallSpeed = 36.0f;

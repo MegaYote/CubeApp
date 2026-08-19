@@ -220,7 +220,11 @@ namespace Cubuild
                     if (mobEntity.Hostile)
                     {
                         IMobRenderable? steveTarget = null;
-                        Point3D target = playerPosition;
+                        // Chase the player's BODY CENTER, not the eye. LocalPlayer.Position is the
+                        // eye (EyeHeight above the feet); the mob's own Position is its feet. With
+                        // the 3D attack-range check, aiming at the eye left dy ≈ 1.62 on flat
+                        // ground, so dy² > AttackRange² and the zombie never landed a hit.
+                        Point3D target = new(PlayerBodyCenter.X, PlayerBodyCenter.Y, PlayerBodyCenter.Z);
                         double bestSq = playerAlive ? DistSq(mobEntity.Position, playerPosition) : double.MaxValue;
                         for (int h = 0; h < _mobs.Count; h++)
                         {

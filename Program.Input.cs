@@ -159,6 +159,18 @@ namespace Cubuild
                 {
                     // No mob hit: mining is driven by BreakHeld in StepSimulation, but the click
                     // primes the target so progress starts immediately this frame.
+                    // If there's no block under the crosshair either, this is a punch at the air -
+                    // play the one-shot swing animation (MC punches the air when nothing is targeted).
+                    var airPunch = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
+                    if (!airPunch.HasValue)
+                    {
+                        _handSwingTimer = HandSwingDuration;
+                    }
+                }
+                else
+                {
+                    // A mob was hit: play the same one-shot swing (MC swings on every attack).
+                    _handSwingTimer = HandSwingDuration;
                 }
             }
             if (screen == GameScreen.Playing && mouseLook && World != null && _ignoreInteractFrames == 0 && frameInput.PlaceBlockPressed)

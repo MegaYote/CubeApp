@@ -105,6 +105,9 @@ namespace Cubuild.Renderer
         /// <summary>Remaining seconds of the first-person hand's place-jab animation (set by
         /// Program when a block placement succeeds).</summary>
         public float HandPoke;
+        /// <summary>Remaining seconds of the first-person hand's one-shot punch/swing animation
+        /// (set by Program when the player attacks a mob or punches the air).</summary>
+        public float HandSwing;
 
         /// <summary>World position + block id of the block currently being mined (for the
         /// shrinking-block overlay). Only valid while MiningProgress > 0.</summary>

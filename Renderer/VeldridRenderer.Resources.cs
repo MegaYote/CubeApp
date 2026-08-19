@@ -464,7 +464,18 @@ namespace Cubuild.Renderer
                     return _itemIconUv[rel];
                 }
                 // For blocks with items.json overrides (like sap), they're not in the item atlas
-                // Return zero UV - caller should handle this case by rendering as flat sprite from items.png
+                // Cut their tile straight from the raw items.png atlas (same UV math as the
+                // flat-sprite slot renderers) so they render everywhere, not just in inventory.
+                var tile = ItemRegistry.GetTile(itemId, out _);
+                if (_itemsImGuiId != IntPtr.Zero && tile.Width > 0 && tile.Height > 0)
+                {
+                    texId = _itemsImGuiId;
+                    float atlasW = Math.Max(1f, _itemsAtlasPixelsW);
+                    float atlasH = Math.Max(1f, _itemsAtlasPixelsH);
+                    return new Vector4(
+                        tile.X / atlasW, tile.Y / atlasH,
+                        tile.Width / atlasW, tile.Height / atlasH);
+                }
                 return default;
             }
             // Otherwise use block atlas for blocks
@@ -497,8 +508,8 @@ namespace Cubuild.Renderer
             var tile = ItemRegistry.GetTile(itemId, out _);
             if (tile.Width <= 0 || tile.Height <= 0) return false;
 
-            // Items.png texture
-            texId = _itemIconImGuiId;
+            // Raw items.png texture (UVs below are in raw-atlas space)
+            texId = _itemsImGuiId;
 
             // Items atlas dimensions
             float atlasW = Math.Max(1f, _itemsAtlasPixelsW);
@@ -527,8 +538,8 @@ namespace Cubuild.Renderer
             var tile = ItemRegistry.GetTile(blockId, out _);
             if (tile.Width <= 0 || tile.Height <= 0) return false;
 
-            // Items.png texture
-            texId = _itemIconImGuiId;
+            // Raw items.png texture
+            texId = _itemsImGuiId;
 
             // Items atlas dimensions
             float atlasW = Math.Max(1f, _itemsAtlasPixelsW);

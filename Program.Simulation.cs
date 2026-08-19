@@ -29,6 +29,7 @@ namespace Cubuild
             UpdateNetworking(tickInput, deltaSeconds);
             World.StepSimulation(tickInput, deltaSeconds);
             if (_handPokeTimer > 0f) _handPokeTimer = Math.Max(0f, _handPokeTimer - deltaSeconds);
+            if (_handSwingTimer > 0f) _handSwingTimer = Math.Max(0f, _handSwingTimer - deltaSeconds);
 
             // Death: when health is fully depleted, stop the sim and show the respawn screen.
             if (World.LocalPlayer.Health <= 0)

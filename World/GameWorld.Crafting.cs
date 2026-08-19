@@ -46,14 +46,15 @@ namespace Cubuild
                 {
                     int heldId = held.Value.ItemId;
                     int heldCount = held.Value.Count;
+                    int cap = ItemRegistry.StackSizeOf(heldId);
                     if (gridItem == 0)
                     {
                         CraftingGrid[slot] = (heldId, heldCount);
                         HeldStack = null;
                     }
-                    else if (gridItem == heldId && gridCount < MaxStackSize)
+                    else if (gridItem == heldId && gridCount < cap)
                     {
-                        int add = Math.Min(heldCount, MaxStackSize - gridCount);
+                        int add = Math.Min(heldCount, cap - gridCount);
                         CraftingGrid[slot] = (gridItem, gridCount + add);
                         int nc = heldCount - add;
                         HeldStack = nc > 0 ? (heldId, nc) : null;
@@ -76,7 +77,8 @@ namespace Cubuild
                 if (held.HasValue)
                 {
                     int heldId = held.Value.ItemId;
-                    bool canPlace = gridItem == 0 || (gridItem == heldId && gridCount < MaxStackSize);
+                    int cap = ItemRegistry.StackSizeOf(heldId);
+                    bool canPlace = gridItem == 0 || (gridItem == heldId && gridCount < cap);
                     if (canPlace)
                     {
                         if (gridItem == 0) CraftingGrid[slot] = (heldId, 1);
@@ -111,7 +113,17 @@ namespace Cubuild
                     && held.Value.Count + outCount <= Math.Min(MaxStackSize, ItemRegistry.StackSizeOf(outId)));
             if (!canHold) return false;
 
-            for (int i = 0; i < 4; i++) CraftingGrid[i] = (0, 0);
+            // Consume one of each used grid slot (a matched recipe needs exactly 1 per
+            // non-empty slot), leaving the rest of the stack untouched.
+            for (int i = 0; i < 4; i++)
+            {
+                var g = CraftingGrid[i];
+                if (g.ItemId > 0)
+                {
+                    int nc = g.Count - 1;
+                    CraftingGrid[i] = nc > 0 ? (g.ItemId, nc) : (0, 0);
+                }
+            }
             HeldStack = held.HasValue
                 ? (outId, held.Value.Count + outCount)
                 : (outId, outCount);

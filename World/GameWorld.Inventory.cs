@@ -262,14 +262,15 @@ namespace Cubuild
                 {
                     int heldId = held.Value.ItemId;
                     int heldCount = held.Value.Count;
+                    int cap = ItemRegistry.StackSizeOf(heldId);
                     if (clicked.IsEmpty)
                     {
                         SetSlot(slot, new InventorySlot { ItemId = heldId, Count = heldCount });
                         HeldStack = null;
                     }
-                    else if (clicked.ItemId == heldId && clicked.Count < MaxStackSize)
+                    else if (clicked.ItemId == heldId && clicked.Count < cap)
                     {
-                        int add = Math.Min(heldCount, MaxStackSize - clicked.Count);
+                        int add = Math.Min(heldCount, cap - clicked.Count);
                         clicked.Count += add;
                         SetSlot(slot, clicked);
                         int nc = heldCount - add;
@@ -294,8 +295,9 @@ namespace Cubuild
                 if (held.HasValue)
                 {
                     int heldId = held.Value.ItemId;
+                    int cap = ItemRegistry.StackSizeOf(heldId);
                     bool canPlace = clicked.IsEmpty
-                        || (clicked.ItemId == heldId && clicked.Count < MaxStackSize);
+                        || (clicked.ItemId == heldId && clicked.Count < cap);
                     if (canPlace)
                     {
                         if (clicked.IsEmpty)
@@ -355,15 +357,16 @@ namespace Cubuild
             if (contents.IsEmpty) return;
             int remaining = contents.Count;
             int air = BlockRegistry.AirId;
+            int cap = ItemRegistry.StackSizeOf(contents.ItemId);
 
             if (slot < BagSlotCount)
             {
                 // Bag -> hotbar.
                 for (int i = 0; i < HotbarSlots && remaining > 0; i++)
                 {
-                    if (Hotbar[i] == contents.ItemId && HotbarCounts[i] < MaxStackSize)
+                    if (Hotbar[i] == contents.ItemId && HotbarCounts[i] < cap)
                     {
-                        int add = Math.Min(remaining, MaxStackSize - HotbarCounts[i]);
+                        int add = Math.Min(remaining, cap - HotbarCounts[i]);
                         HotbarCounts[i] += add;
                         remaining -= add;
                     }
@@ -372,7 +375,7 @@ namespace Cubuild
                 {
                     if (Hotbar[i] == air)
                     {
-                        int add = Math.Min(remaining, MaxStackSize);
+                        int add = Math.Min(remaining, cap);
                         Hotbar[i] = contents.ItemId;
                         HotbarCounts[i] = add;
                         remaining -= add;
@@ -384,9 +387,9 @@ namespace Cubuild
                 // Hotbar -> bag.
                 for (int i = 0; i < BagSlotCount && remaining > 0; i++)
                 {
-                    if (_bagSlots[i].ItemId == contents.ItemId && _bagSlots[i].Count < MaxStackSize)
+                    if (_bagSlots[i].ItemId == contents.ItemId && _bagSlots[i].Count < cap)
                     {
-                        int add = Math.Min(remaining, MaxStackSize - _bagSlots[i].Count);
+                        int add = Math.Min(remaining, cap - _bagSlots[i].Count);
                         _bagSlots[i].Count += add;
                         remaining -= add;
                     }
@@ -395,7 +398,7 @@ namespace Cubuild
                 {
                     if (_bagSlots[i].IsEmpty)
                     {
-                        int add = Math.Min(remaining, MaxStackSize);
+                        int add = Math.Min(remaining, cap);
                         _bagSlots[i] = new InventorySlot { ItemId = contents.ItemId, Count = add };
                         remaining -= add;
                     }
@@ -493,7 +496,7 @@ namespace Cubuild
         }
 
         // ---- physics constants (shared with render layer for third-person view) ----
-        public const float WalkSpeed = 4.317f;
+        public const float WalkSpeed = 4.0f;
         public const float FlySpeed = 10.8f;
         public const float JumpVelocity = 8.0f;
         public const float Gravity = 24.0f;

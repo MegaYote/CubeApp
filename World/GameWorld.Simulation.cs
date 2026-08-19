@@ -139,7 +139,10 @@ namespace Cubuild
             // fractional delta so time flows at exactly 20 tps regardless of frame rate.
             // Math.Round(deltaSeconds*20) froze the clock at high FPS (0.333 rounds to 0 every
             // frame), so the sun/moon/stars never rotated.
-            _worldTimeAccumulator += deltaSeconds * 20.0;
+            // Day/night length: the 24000-tick cycle now spans 30 minutes instead of 20
+            // (each of day and night is 5 minutes longer), so the clock ticks at
+            // 24000 / 1800s = 13.3333 ticks/sec.
+            _worldTimeAccumulator += deltaSeconds * (24000.0 / 1800.0);
             long advance = (long)_worldTimeAccumulator;
             WorldTime += advance;
             _worldTimeAccumulator -= advance;

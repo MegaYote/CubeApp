@@ -43,8 +43,14 @@ namespace Cubuild.Renderer
             _lastHandTime = now;
             if (handDt > 0.1f) handDt = 0.1f; // clamp long stalls so a hitch doesn't teleport the arm
             float s = 0f; // combined strike progress
-            if (_hud.MiningProgress > 0f)
+            if (_hud.MiningProgress > 0f || _hud.HandSwing > 0f)
             {
+                // Same punch for mining AND air-punching: HandSwing just feeds the same
+                // _handPunchTime cycle so clicking at nothing plays the identical swing.
+                // A fresh air-punch click (swing went 0 -> >0) restarts the phase so the
+                // punch starts over from the top, exactly like repeatedly clicking a block.
+                if (_hud.HandSwing > 0f && _prevHandSwing <= 0f) _handPunchTime = 0f;
+                _prevHandSwing = _hud.HandSwing;
                 _handPunchTime += handDt;
                 const float cycle = 0.45f;
                 float t = _handPunchTime % cycle;
@@ -54,6 +60,7 @@ namespace Cubuild.Renderer
             else
             {
                 _handPunchTime = 0f;
+                _prevHandSwing = 0f;
             }
             float pokeS = 0f;
             if (_hud.HandPoke > 0f)

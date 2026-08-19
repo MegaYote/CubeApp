@@ -436,19 +436,9 @@ namespace Cubuild.Renderer
                     4f * uiScale, 15f * uiScale, fg, fgTextCol);
             }
 
-            // Cursor cell: display-only copy of the held stack so the design's right box
-            // shows what's in your hand (the floating cursor also follows the mouse).
-            if (_hud.HeldStack.HasValue)
-            {
-                var heldUv = IconUv(_hud.HeldStack.Value.ItemId, out IntPtr heldTex);
-                if (heldTex != IntPtr.Zero)
-                {
-                    var center = artTopLeft + new Vector2(97.5f, 24.5f) * uiScale;
-                    float iconSize = 13f * uiScale;
-                    fg.AddImage(heldTex, center - new Vector2(iconSize * 0.5f, iconSize * 0.5f), center + new Vector2(iconSize * 0.5f, iconSize * 0.5f),
-                        new Vector2(heldUv.X, heldUv.Y), new Vector2(heldUv.X + heldUv.Z, heldUv.Y + heldUv.W));
-                }
-            }
+            // Cursor cell: was a display-only copy of the held stack, but it made the picked
+            // item appear in the design's output-area box until it was put back down. Removed;
+            // the held stack already floats at the mouse cursor like the E-menu.
 
             // ---- player inventory below the panel ----
             // Uses the SAME UI texture as the regular E-menu (inventory.png), placed directly

@@ -184,30 +184,42 @@ namespace Cubuild.Renderer
             int n = _itemDrops.Count;
             if (n == 0 || _itemDropSpritePipeline == null || _spriteVertexBuffer == null) return;
 
+            // Veldrid's UpdateBuffer on a BufferUsage.Dynamic buffer writes the CPU side
+            // immediately (map path), NOT queued into the command list. Updating one shared
+            // instance buffer once per pass would therefore leave every draw reading the LAST
+            // pass's data - so a cube pass (block) plus a sprite pass (item) made the items
+            // render as random blocks. Build ALL passes into one array, upload once, then draw
+            // each pass from its own byte offset within that single instance buffer.
+            int[] passCounts = new int[3];
+            int totalCount = 0;
             for (int pass = 0; pass < 3; pass++)
             {
-                int passCount = 0;
                 for (int i = 0; i < n; i++)
                 {
-                    if (DropPassOf(_itemDrops[i].ItemId) == pass) passCount++;
+                    if (DropPassOf(_itemDrops[i].ItemId) == pass) passCounts[pass]++;
                 }
-                if (passCount == 0) continue;
+                totalCount += passCounts[pass];
+            }
+            if (totalCount == 0) return;
 
-                bool cube = pass == 0;
+            // 11 floats per instance: worldPos (3) + tileRect (4) + rotation quat (4).
+            int totalFloats = totalCount * 11;
+            if (_itemDropInstanceScratch.Length < totalFloats) _itemDropInstanceScratch = new float[totalFloats];
+
+            // Per-pass first-instance offset into the shared scratch array.
+            int[] passStart = new int[3];
+            passStart[0] = 0;
+            passStart[1] = passCounts[0];
+            passStart[2] = passCounts[0] + passCounts[1];
+
+            const float halfScale = ItemDropScale * 0.5f;
+            for (int pass = 0; pass < 3; pass++)
+            {
+                if (passCounts[pass] == 0) continue;
                 bool itemsAtlas = pass == 1;
-                if (!cube && _itemDropSpritePipeline == null) continue;
-                if (cube && (_itemDropPipeline == null || _itemDropVertexBuffer == null)) continue;
-                var textureSet = itemsAtlas ? _itemsTextureSet : _textureSet;
-                if (textureSet == null) continue;
-
                 float atlasW = Math.Max(1f, itemsAtlas ? _itemsAtlasPixelsW : _atlasWidth);
                 float atlasH = Math.Max(1f, itemsAtlas ? _itemsAtlasPixelsH : _atlasHeight);
-
-                // 11 floats per instance: worldPos (3) + tileRect (4) + rotation quat (4).
-                int instFloats = passCount * 11;
-                if (_itemDropInstanceScratch.Length < instFloats) _itemDropInstanceScratch = new float[instFloats];
-                int vf = 0;
-                const float halfScale = ItemDropScale * 0.5f;
+                int vf = passStart[pass] * 11;
                 for (int i = 0; i < n; i++)
                 {
                     var it = _itemDrops[i];
@@ -226,22 +238,37 @@ namespace Cubuild.Renderer
                     _itemDropInstanceScratch[vf++] = it.RotZ;
                     _itemDropInstanceScratch[vf++] = it.RotW;
                 }
+            }
 
-                if (_itemDropInstanceBuffer == null || _itemDropInstanceCapacity < (uint)(instFloats * sizeof(float)))
-                {
-                    _itemDropInstanceBuffer?.Dispose();
-                    _itemDropInstanceBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
-                        Math.Max((uint)(instFloats * sizeof(float)), 512), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
-                    _itemDropInstanceCapacity = Math.Max((uint)(instFloats * sizeof(float)), 512);
-                }
-                _gd.UpdateBuffer(_itemDropInstanceBuffer, 0, _itemDropInstanceScratch);
+            // Buffer sized to the whole scratch array (>= current totalFloats) so the single
+            // UpdateBuffer upload below never writes past the allocation.
+            if (_itemDropInstanceBuffer == null || _itemDropInstanceCapacity < (uint)(_itemDropInstanceScratch.Length * sizeof(float)))
+            {
+                _itemDropInstanceBuffer?.Dispose();
+                _itemDropInstanceBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                    Math.Max((uint)(_itemDropInstanceScratch.Length * sizeof(float)), 512), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+                _itemDropInstanceCapacity = Math.Max((uint)(_itemDropInstanceScratch.Length * sizeof(float)), 512);
+            }
+            _gd.UpdateBuffer(_itemDropInstanceBuffer, 0, _itemDropInstanceScratch);
+
+            for (int pass = 0; pass < 3; pass++)
+            {
+                int passCount = passCounts[pass];
+                if (passCount == 0) continue;
+
+                bool cube = pass == 0;
+                bool itemsAtlas = pass == 1;
+                if (!cube && _itemDropSpritePipeline == null) continue;
+                if (cube && (_itemDropPipeline == null || _itemDropVertexBuffer == null)) continue;
+                var textureSet = itemsAtlas ? _itemsTextureSet : _textureSet;
+                if (textureSet == null) continue;
 
                 cl.SetPipeline(cube ? _itemDropPipeline : _itemDropSpritePipeline);
                 cl.SetGraphicsResourceSet(0, _projViewSet);
                 cl.SetGraphicsResourceSet(1, textureSet);
                 cl.SetGraphicsResourceSet(2, _fogSet);
                 cl.SetVertexBuffer(0, cube ? _itemDropVertexBuffer : _spriteVertexBuffer);
-                cl.SetVertexBuffer(1, _itemDropInstanceBuffer);
+                cl.SetVertexBuffer(1, _itemDropInstanceBuffer, (uint)(passStart[pass] * 11 * sizeof(float)));
                 cl.SetIndexBuffer(cube ? _itemDropIndexBuffer : _spriteIndexBuffer, IndexFormat.UInt16);
                 cl.DrawIndexed(cube ? FallingCubeIndices : 6u, (uint)passCount, 0, 0, 0);
             }

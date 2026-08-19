@@ -141,6 +141,7 @@ namespace Cubuild
                 MiningBlockId = miningBlockId,
                 MiningBlockNormal = miningBlockNormal,
                 HandPoke = _handPokeTimer,
+                HandSwing = _handSwingTimer,
             };
         }
 
