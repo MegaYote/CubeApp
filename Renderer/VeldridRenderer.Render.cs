@@ -82,6 +82,19 @@ namespace Cubuild.Renderer
             cl.Draw(3); // fullscreen triangle (no vertex buffer)
         }
 
+        // Survival-mode vignette: darkens screen edges with a radial gradient. Only drawn when
+        // the player is in survival mode (not creative, not in menus).
+        private void DrawVignette(CommandList cl)
+        {
+            if (_vignettePipeline == null) return;
+            if (_hud.Mode != GameMode.Survival || _hud.ThirdPerson) return;
+            var menu = _hud.Menu;
+            if (menu != null && menu.Screen != GameScreen.Playing) return;
+
+            cl.SetPipeline(_vignettePipeline);
+            cl.Draw(3);
+        }
+
         public void SetHud(HudState hud)
         {
             _hud = hud;
@@ -519,6 +532,7 @@ namespace Cubuild.Renderer
                 cl.SetFullViewport(0);
                 BlitScaled(cl);
             }
+            DrawVignette(cl);
             DrawCrosshair(cl);
 
             _imguiRenderer.Update(1f / 60f, _uiInputSnapshot ?? NullInputSnapshot.Instance);

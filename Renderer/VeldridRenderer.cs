@@ -25,6 +25,7 @@ namespace Cubuild.Renderer
         private Texture _scaleDepthTexture;
         private Framebuffer _scaleFramebuffer;
         private Pipeline _blitPipeline;
+        private Pipeline _vignettePipeline;
         private ResourceLayout _blitLayout;
         private ResourceSet _blitResourceSet;
         // Two blit samplers: linear (smooth upscale) and point/nearest (chunky blocky pixels).
@@ -888,6 +889,7 @@ namespace Cubuild.Renderer
             _scaleFramebuffer?.Dispose();
             _blitResourceSet?.Dispose();
             _blitPipeline?.Dispose();
+            _vignettePipeline?.Dispose();
             _blitLayout?.Dispose();
             _blitSamplerLinear?.Dispose();
             _blitSamplerNearest?.Dispose();

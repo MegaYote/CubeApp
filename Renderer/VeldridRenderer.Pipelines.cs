@@ -700,6 +700,7 @@ _itemDropIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)smallInd
             CreateCloudPipeline(factory);
             CreateCrosshairPipeline(factory);
             CreateBlitPipeline(factory);
+            CreateVignettePipeline(factory);
         }
 
         // Fullscreen blit used by resolution scale < 1: samples the offscreen world texture and
@@ -746,6 +747,49 @@ void main() {
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, false, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
                 ResourceLayouts = new[] { _blitLayout },
+                ShaderSet = shaderSet,
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
+        }
+
+        // Survival-mode vignette: darkens the screen edges via a radial gradient. Drawn as a
+        // fullscreen triangle with multiply blending, no textures or uniforms needed.
+        private void CreateVignettePipeline(ResourceFactory factory)
+        {
+            string vsCode = @"#version 450
+layout(location=0) out vec2 vUV;
+void main() {
+    vec2 pos = vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2));
+    vUV = vec2(pos.x, 1.0 - pos.y);
+    gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+}";
+            string fsCode = @"#version 450
+layout(location=0) in vec2 vUV;
+layout(location=0) out vec4 outColor;
+void main() {
+    vec2 d = vUV - 0.5;
+    float dist = length(d) * 2.0;
+    float vig = pow(dist, 2.5) * 0.4;
+    vig = clamp(vig, 0.0, 1.0);
+    outColor = vec4(0.0, 0.0, 0.0, vig);
+}";
+            var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var fsSpirv = SpirvCompilation.CompileGlslToSpirv(fsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var shaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, vsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main"));
+
+            var shaderSet = new ShaderSetDescription(Array.Empty<VertexLayoutDescription>(), new[] { shaders[0], shaders[1] });
+            _vignettePipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                BlendState = new BlendStateDescription(RgbaFloat.White, false, new BlendAttachmentDescription(
+                    true,
+                    BlendFactor.SourceAlpha, BlendFactor.InverseSourceAlpha, BlendFunction.Add,
+                    BlendFactor.One, BlendFactor.InverseSourceAlpha, BlendFunction.Add)),
+                DepthStencilState = DepthStencilStateDescription.Disabled,
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, false, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = Array.Empty<ResourceLayout>(),
                 ShaderSet = shaderSet,
                 Outputs = _sc.Framebuffer.OutputDescription
             });

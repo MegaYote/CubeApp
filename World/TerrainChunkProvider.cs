@@ -63,6 +63,9 @@ namespace Cubuild.World
         /// occasional flat clay patches on the bottom of any water body.</summary>
         public ClayDiscGenerator ClayDiscs { get; private set; }
 
+        /// <summary>Underground red clay blobs (see RedClayBlobGenerator): sparse stone-replacement pockets.</summary>
+        public RedClayBlobGenerator RedClayBlobs { get; private set; }
+
         /// <summary>A fixed seed-derived set of small, geometrically-perfect brick pyramids
         /// (see RegularPyramidGenerator). Each exists exactly once per world.</summary>
         public RegularPyramidGenerator RegularPyramids { get; private set; }
@@ -125,6 +128,7 @@ namespace Cubuild.World
             Pyramids = new PyramidGenerator(seed);
             RegularPyramids = new RegularPyramidGenerator(seed);
             ClayDiscs = new ClayDiscGenerator(seed);
+            RedClayBlobs = new RedClayBlobGenerator(seed);
         }
 
         public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeight)
@@ -503,6 +507,9 @@ namespace Cubuild.World
 
                 // ---- red clay discs on ocean and lake floors (small flat clay patches) ----
                 ClayDiscs.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
+
+                // ---- underground red clay blobs (sparse stone pockets, backup source) ----
+                RedClayBlobs.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
 
                 // ---- regular pyramids (once-per-world monuments, geometrically perfect) ----
                 RegularPyramids.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight, EstimateSurfaceHeightAt);

@@ -126,6 +126,7 @@ namespace Cubuild
                 SelectedSlot = World.SelectedSlot, WorldSeed = World.Seed,
                 BiomeText = World.ChunkProvider?.BiomeNameAt((int)Math.Floor(World.PlayerPosition.X), (int)Math.Floor(World.PlayerPosition.Z)) ?? string.Empty,
                 Hotbar = World.Hotbar, HighlightWorldQuad = highlightQuad,
+                ThirdPerson = thirdPersonView,
                 Mode = World.Mode, BagSlots = World.BagSlots, HotbarCounts = World.HotbarCounts, HeldStack = World.HeldStack,
                 CraftingSlots = World.CraftingGrid, CraftingResult = World.CraftingResult,
                 PlayerHealth = World.LocalPlayer.Health,

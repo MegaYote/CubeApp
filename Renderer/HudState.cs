@@ -52,6 +52,8 @@ namespace Cubuild.Renderer
 
         /// <summary>Which mode the world is in (Creative = sandbox, Survival = resource loop).</summary>
         public GameMode Mode;
+        /// <summary>True when the camera is behind the player (F5 third-person).</summary>
+        public bool ThirdPerson;
         /// <summary>Survival bag slots (40-slot grid). Empty/ignored in creative.</summary>
         public IReadOnlyList<InventorySlot> BagSlots;
         /// <summary>Per-hotbar-slot counts (parallel to the hotbar block ids).</summary>
