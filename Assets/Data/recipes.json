@@ -15,8 +15,8 @@
   // ============================================================================
 
   "recipes": [
-    // four planks -> 1 workbench
-    { "input": ["planks", "planks", "planks", "planks"], "output": "workbench", "count": 1 },
+    // four treated planks -> 1 carpenter's workbench
+    { "input": ["treated_planks", "treated_planks", "treated_planks", "treated_planks"], "output": "carpenters_workbench", "count": 1 },
 
     // flint + stick -> 1 flint spear
     { "input": ["flint", "stick", "", ""], "output": "flint_spear", "count": 1 },
