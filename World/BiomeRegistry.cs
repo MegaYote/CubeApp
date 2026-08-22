@@ -37,7 +37,7 @@ namespace Cubuild
         /// <summary>Approximate trees per chunk (0 = none).</summary>
         public int TreeDensity { get; }
         /// <summary>Which tree generator this biome uses ("oak", "pine", "round", "tall",
-        /// "dead", "willow", "gnarled", "palm", "cypress").</summary>
+        /// "dead", "willow", "gnarled").</summary>
         public string TreeType { get; }
         /// <summary>Optional second tree style mixed into the biome's forests.</summary>
         public string TreeTypeSecondary { get; }

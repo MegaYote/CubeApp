@@ -769,7 +769,7 @@ layout(location=0) out vec4 outColor;
 void main() {
     vec2 d = vUV - 0.5;
     float dist = length(d) * 2.0;
-    float vig = pow(dist, 2.5) * 0.4;
+    float vig = pow(dist, 2.5) * 0.15;
     vig = clamp(vig, 0.0, 1.0);
     outColor = vec4(0.0, 0.0, 0.0, vig);
 }";

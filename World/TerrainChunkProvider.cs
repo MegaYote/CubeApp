@@ -942,15 +942,7 @@ namespace Cubuild.World
                         // An ancient, gnarled old oak with hanging branch blobs (the hill
                         // forests are ALL old trees - no sapling oaks up there).
                         GenerateBigOakTree(blocks, lx, surfaceY + 1, lz, rand, idWood, idLeaves, idGrass, idDirt, idRedClay);
-                        break;
-                    case "palm":
-                        // A leaning desert palm with a fan of fronds (roots in sand).
-                        GeneratePalmTree(blocks, lx, surfaceY + 1, lz, rand, idWood, idLeaves, idGrass, idDirt, idSand);
-                        break;
-                    case "cypress":
-                        // A slim swamp cypress: flared skirt, narrow tiers, a pointed tip.
-                        GenerateCypressTree(blocks, lx, surfaceY + 1, lz, rand, idWood, idLeaves, idGrass, idDirt);
-                        break;
+break;
                     default:
                         // Oak: small chance a sapling grows into a big, gnarled old tree.
                         if (rand.Next(10) == 0)
@@ -1398,132 +1390,7 @@ namespace Cubuild.World
                     byte b = blocks[idx];
                     if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
                 }
-            }
-            // Ring at top-1: radius 2 with corners cut.
-            for (int dx = -2; dx <= 2; dx++)
-            {
-                for (int dz = -2; dz <= 2; dz++)
-                {
-                    bool isCorner = Math.Abs(dx) == 2 && Math.Abs(dz) == 2;
-                    if (isCorner && rand.Next(3) != 0) continue;
-                    int lx = x + dx;
-                    int lz = z + dz;
-                    if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) continue;
-                    int idx = (lx * 16 + lz) * height + (topY - 1);
-                    byte b = blocks[idx];
-                    if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
-                }
-            }
-// Tiny cap on top.
-            if (topY + 1 < height)
-            {
-                int idx = (x * 16 + z) * height + (topY + 1);
-                byte b = blocks[idx];
-                if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
-            }
-        }
-
-        // A slim swamp cypress: flared skirt, narrow tiers, a pointed tip.
-        private void GenerateCypressTree(byte[] blocks, int x, int baseY, int z, Random rand,
-            byte idWood, byte idLeaves, byte idGrass, byte idDirt)
-        {
-            const int height = ChunkManager.ChunkHeight;
-            int trunkHeight = rand.Next(4) + 7;   // 7..10
-            int topY = baseY + trunkHeight;
-
-            // Clearance: radius 2 through the whole height (skirt + tiers).
-            for (int y = baseY; y <= topY + 1 && y < height; y++)
-            {
-                int radius = y <= baseY + 1 ? 2 : (y >= topY - 1 ? 1 : (y - baseY) % 2 == 0 ? 1 : 0);
-                for (int dx = -radius; dx <= radius; dx++)
-                {
-                    for (int dz = -radius; dz <= radius; dz++)
-                    {
-                        int lx = x + dx;
-                        int lz = z + dz;
-                        if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16 || y < 0 || y >= height) return;
-                        byte b = blocks[(lx * 16 + lz) * height + y];
-                        if (b != 0 && b != idLeaves) return;
-                    }
-                }
-            }
-
-            if (baseY < 1) return;
-            byte ground = blocks[(x * 16 + z) * height + (baseY - 1)];
-            if (ground != idGrass && ground != idDirt) return;
-            if (ground == idGrass) blocks[(x * 16 + z) * height + (baseY - 1)] = idDirt;
-
-            // Skirt: baseY and baseY+1 with radius 2 corners cut.
-            for (int dx = -2; dx <= 2; dx++)
-            {
-                for (int dz = -2; dz <= 2; dz++)
-                {
-                    if (Math.Abs(dx) == 2 && Math.Abs(dz) == 2 && rand.Next(3) != 0) continue;
-                    int lx = x + dx;
-                    int lz = z + dz;
-                    if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) continue;
-                    // baseY
-                    int idx = (lx * 16 + lz) * height + baseY;
-                    byte b = blocks[idx];
-                    if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
-                    // baseY+1
-                    idx = (lx * 16 + lz) * height + (baseY + 1);
-                    b = blocks[idx];
-                    if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
-                }
-            }
-            // Tiers: from baseY+2 to topY-1, alternating full 3x3 and plus-shape.
-            for (int y = baseY + 2; y < topY; y++)
-            {
-                int dy = y - baseY;
-                if (dy % 2 == 0)
-                {
-                    // full 3x3
-                    for (int dx = -1; dx <= 1; dx++)
-                    {
-                        for (int dz = -1; dz <= 1; dz++)
-                        {
-                            int lx = x + dx;
-                            int lz = z + dz;
-                            if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) continue;
-                            int idx = (lx * 16 + lz) * height + y;
-                            byte b = blocks[idx];
-                            if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
-                        }
-                    }
-                }
-                else
-                {
-                    // plus-shape: centre + cardinals.
-                    int[] dirs = { 0, 1, -1 };
-                    foreach (int dz in dirs)
-                    {
-                        foreach (int dx in dirs)
-                        {
-                            if (dx == 0 && dz == 0) continue;
-                            int lx = x + dx;
-                            int lz = z + dz;
-                            if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) continue;
-                            int idx = (lx * 16 + lz) * height + y;
-                            byte b = blocks[idx];
-                            if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
-                        }
-                    }
-                    // centre
-                    {
-                        int idx = (x * 16 + z) * height + y;
-                        byte b = blocks[idx];
-                        if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
-                    }
-                }
-            }
-            // Tip: single leaf at top.
-            if (topY < height)
-            {
-                int idx = (x * 16 + z) * height + topY;
-                byte b = blocks[idx];
-                if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
-            }
+}
         }
 
         // A big, gnarled old oak: a tall trunk with a wide rounded dome canopy plus a few

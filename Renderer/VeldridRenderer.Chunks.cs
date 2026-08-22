@@ -495,8 +495,8 @@ namespace Cubuild.Renderer
         // classic horizon test - a close tall ridge hides a far chunk; a far peak over a near
         // valley does not. Conservative on purpose: we only claim occlusion when the blocker's
         // angular height clearly beats the target's, with a margin, so nothing pops while visible.
-        private const double BlockingMargin = 0.12; // angular margin (radians-ish, slope units)
-        private const int NearSkipChunks = 2;
+        private const double BlockingMargin = 0.35; // angular margin (radians-ish, slope units) - was 0.12, too aggressive
+        private const int NearSkipChunks = 4;
         private bool IsHeightmapOccluded(Cubuild.ChunkCoordinates coord)
         {
             if (_chunkManager == null || !_cameraPosition.HasValue) return false;
