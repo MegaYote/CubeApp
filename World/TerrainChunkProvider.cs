@@ -1617,72 +1617,97 @@ namespace Cubuild.World
             }
         }
 
-        // A conifer for the Paradise foothills: a tall, narrow trunk crowned with a tapered
-        // cone of leaves (rings every other row, shrinking toward the tip). Grows on grass,
-        // dirt, or red clay.
+        // A conifer for the Paradise foothills: tall trunk crowned with a layered cone of
+        // leaves. Cone shape varies per tree — some have tight 1-block steps, others have
+        // wider 2-block tiers. Grows on grass, dirt, or red clay.
         private void GeneratePineTree(byte[] blocks, int x, int baseY, int z, Random rand,
             byte idWood, byte idLeaves)
         {
             const int height = ChunkManager.ChunkHeight;
-            int trunkHeight = rand.Next(4) + 6;   // 6..9 - taller than an oak
+            int trunkHeight = rand.Next(12) + 8;   // 8..19 — no short pines
 
-            // Clearance: trunk column plus the full canopy footprint must be air or leaves.
+            // Each tree picks a step style: 1-block increments (dense) or 2-block tiers (layered).
+            int stepSize = rand.Next(3) == 0 ? 2 : 1;
+
+            // Slender pine profile — narrow base, gentle taper.
+            int baseRadius = 1 + trunkHeight / 5;   // 2..4
+            if (baseRadius > 4) baseRadius = 4;
+
             int topY = baseY + trunkHeight;
-            for (int y = baseY; y <= topY && y < height; y++)
+
+            // Bare trunk at the bottom (no branches), canopy covers the rest to the tip.
+            int bareTrunk = Math.Max(2, trunkHeight / 3);
+            int canopyStart = baseY + bareTrunk;
+            int canopyH = topY - canopyStart;   // always reaches the tip
+
+            // Clearance check: trunk + full canopy footprint must be air or leaves.
+            for (int y = canopyStart; y <= topY && y < height; y++)
             {
-                int radius = 0;
-                if (y == baseY) radius = 0;
-                else if (y >= topY - 2) radius = 2;
-                else radius = 1;
+                int dy = y - canopyStart;
+                int radius = CanopyRadius(dy, canopyH, baseRadius, stepSize);
                 for (int dx = -radius; dx <= radius; dx++)
+                for (int dz = -radius; dz <= radius; dz++)
                 {
-                    for (int dz = -radius; dz <= radius; dz++)
-                    {
-                        int lx = x + dx;
-                        int lz = z + dz;
-                        if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16 || y < 0 || y >= height) return;
-                        byte b = blocks[(lx * 16 + lz) * height + y];
-                        if (b != 0 && b != idLeaves) return;
-                    }
+                    if (dx * dx + dz * dz > radius * radius) continue;
+                    int lx = x + dx, lz = z + dz;
+                    if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16 || y < 0 || y >= height) return;
+                    byte b = blocks[(lx * 16 + lz) * height + y];
+                    if (b != 0 && b != idLeaves) return;
                 }
             }
 
-            // The ground must be grass, dirt, or red clay.
+            // Ground must be plantable.
             if (baseY < 1) return;
             byte ground = blocks[(x * 16 + z) * height + (baseY - 1)];
             if (ground != (byte)BlockRegistry.GetId("grass")
                 && ground != (byte)BlockRegistry.GetId("dirt")
                 && ground != (byte)BlockRegistry.GetId("redclay")) return;
 
-            // Trunk.
-            for (int i = 0; i < trunkHeight; i++)
+            // Trunk — stops 2 blocks below the tip so the canopy covers the top.
+            int trunkLogHeight = trunkHeight - 2;
+            for (int i = 0; i < trunkLogHeight; i++)
             {
                 int y = baseY + i;
-                if (y < 0 || y >= height) break;
+                if (y >= height) break;
                 int idx = (x * 16 + z) * height + y;
-                byte b = blocks[idx];
-                if (b == 0 || b == idLeaves) blocks[idx] = idWood;
+                if (blocks[idx] == 0 || blocks[idx] == idLeaves) blocks[idx] = idWood;
             }
 
-            // Tapered cone canopy: full rings on the lower rows, narrower near the tip.
-            for (int y = topY; y >= baseY + trunkHeight - 5 && y >= 0; y--)
+            // Cone canopy — fully covers the trunk to the tip (no exposed log).
+            // The bottom ~1/3 of the trunk stays bare like a real pine.
+            for (int y = canopyStart; y <= topY && y < height; y++)
             {
-                int belowTop = topY - y;            // 0 at the very top
-                int radius = belowTop == 0 ? 0 : belowTop <= 2 ? 1 : 2;
+                int dy = y - canopyStart;
+                int radius = CanopyRadius(dy, canopyH, baseRadius, stepSize);
+                if (radius < 0) radius = 0;
+
                 for (int dx = -radius; dx <= radius; dx++)
+                for (int dz = -radius; dz <= radius; dz++)
                 {
-                    for (int dz = -radius; dz <= radius; dz++)
-                    {
-                        // Trim corners randomly for a ragged, natural silhouette.
-                        if (Math.Abs(dx) == radius && Math.Abs(dz) == radius && rand.Next(3) != 0) continue;
-                        int lx = x + dx;
-                        int lz = z + dz;
-                        if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) continue;
-                        int idx = (lx * 16 + lz) * height + y;
-                        byte b = blocks[idx];
-                        if (b == 0 || b == idLeaves) blocks[idx] = idLeaves;
-                    }
+                    if (dx * dx + dz * dz > radius * radius) continue;
+                    if (Math.Abs(dx) == radius && Math.Abs(dz) == radius && rand.Next(3) != 0) continue;
+                    int lx = x + dx, lz = z + dz;
+                    if (lx < 0 || lx >= 16 || lz < 0 || lz >= 16) continue;
+                    int idx = (lx * 16 + lz) * height + y;
+                    if (blocks[idx] == 0) blocks[idx] = idLeaves;
                 }
+            }
+        }
+
+        /// <summary>Radius of the pine cone at a given height within the canopy.</summary>
+        private static int CanopyRadius(int dy, int canopyH, int baseR, int step)
+        {
+            if (step == 1)
+            {
+                // Smooth cone: radius = baseR at bottom, shrinks linearly to 0 at top.
+                return (int)(baseR * (canopyH - 1 - dy) / (double)(canopyH - 1));
+            }
+            else
+            {
+                // Stepped cone: each tier is 2 blocks tall, radius drops by 1 per tier.
+                int tier = dy / 2;
+                int maxTier = (canopyH - 1) / 2 + 1;
+                return Math.Max(0, baseR - tier);
             }
         }
 

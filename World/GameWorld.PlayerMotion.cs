@@ -135,25 +135,46 @@ namespace Cubuild
             if (inWater)
             {
                 double submerged = (feetInWater ? 0.25 : 0) + (bodyInWater ? 0.5 : 0) + (headInWater ? 0.25 : 0);
-                var swimSpeed = desiredDirection * (WalkSpeed * 0.42);
-                p.Velocity = new Point3D(swimSpeed.X, p.Velocity.Y, swimSpeed.Z);
-                p.Velocity = new Point3D(
-                    p.Velocity.X,
-                    p.Velocity.Y * Math.Pow(0.96, deltaSeconds * 60.0),
-                    p.Velocity.Z);
-                double waterGravity = Gravity * Math.Max(0.16, 0.42 - submerged * 0.20);
-                p.Velocity = new Point3D(
-                    p.Velocity.X,
-                    p.Velocity.Y - waterGravity * deltaSeconds,
-                    p.Velocity.Z);
-                if (tickInput.MoveUp)
+
+                // Minecraft-faithful: drag applies first to ALL axes, then forces on top.
+                // 0.8 per tick at 20 tps = frame-rate-independent drag.
+                double drag = Math.Pow(0.8, deltaSeconds * 20.0);
+                double vx = p.Velocity.X * drag;
+                double vy = p.Velocity.Y * drag;
+                double vz = p.Velocity.Z * drag;
+
+                // Horizontal: accelerate toward input direction. Much slower when only
+                // wading (feet only) — prevents the surface-glide exploit.
+                if (desiredDirection.X != 0 || desiredDirection.Z != 0)
                 {
-                    double swimLift = bodyInWater ? 0.58 : 0.7;
-                    p.Velocity = new Point3D(
-                        p.Velocity.X,
-                        Math.Max(p.Velocity.Y, JumpVelocity * swimLift),
-                        p.Velocity.Z);
+                    double swimH = bodyInWater ? WalkSpeed * 0.5 : WalkSpeed * 0.15;
+                    double hx = desiredDirection.X * swimH - vx;
+                    double hz = desiredDirection.Z * swimH - vz;
+                    double hDist = Math.Sqrt(hx * hx + hz * hz);
+                    double hAccel = (bodyInWater ? 12.0 : 5.0) * deltaSeconds;
+                    if (hDist <= hAccel) { vx += hx; vz += hz; }
+                    else { double f = hAccel / hDist; vx += hx * f; vz += hz * f; }
                 }
+
+                // Water gravity (Minecraft's 0.02/tick = 4 blocks/sec²).
+                vy -= 4.0 * deltaSeconds;
+
+                // Buoyancy: gentle upward force, but WEAKER than water gravity so the
+                // player sinks when not pressing swim-up. Feels like treading water.
+                vy += submerged * 2.5 * deltaSeconds;
+
+                // Swim up: only when body+ is submerged. Prevents gliding on the surface.
+                // Must HOLD space to stay up — release and you sink.
+                if (tickInput.MoveUp && bodyInWater) vy = Math.Max(vy, 2.0);
+
+                // Swim down: remove any upward velocity and let gravity pull you down.
+                if (tickInput.MoveDown) vy = Math.Min(vy, 0.0);
+
+                // Water terminal velocity.
+                if (vy < -5.0) vy = -5.0;
+                if (vy > 5.0) vy = 5.0;
+
+                p.Velocity = new Point3D(vx, vy, vz);
                 var swimDisplacement = p.Velocity * deltaSeconds;
                 MovePlayerWithCollisions(p, swimDisplacement);
                 double swimHSpeed = Math.Sqrt(p.Velocity.X * p.Velocity.X + p.Velocity.Z * p.Velocity.Z);
@@ -229,8 +250,10 @@ namespace Cubuild
                     p.Grounded = true;
                     // Survival fall damage: impact speed above the threshold hurts (creative is
                     // immune via DamagePlayer). One heart per ~2.5 speed over the threshold.
+                    // No fall damage when landing in water — water cushions the impact.
                     double impactSpeed = -p.Velocity.Y;
-                    if (p == LocalPlayer && impactSpeed > FallDamageThreshold)
+                    if (p == LocalPlayer && impactSpeed > FallDamageThreshold
+                        && !PlayerSampleInWater(p, 0.05))
                     {
                         int damage = Math.Max(1, (int)Math.Round((impactSpeed - FallDamageThreshold) / FallDamageScale));
                         DamagePlayer(damage, DeathCause.Fall);
