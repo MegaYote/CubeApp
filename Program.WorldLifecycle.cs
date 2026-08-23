@@ -15,11 +15,13 @@ namespace Cubuild
 {
     public sealed partial class Program : IDisposable
     {
-        private void StartNewWorld(int seed, string name, GameMode mode = GameMode.Creative)
+        private void StartNewWorld(int seed, string name, GameMode mode = GameMode.Creative, bool isMinecraftMode = false)
         {
+            EnsureRegistries(isMinecraftMode);
             World?.Dispose();
             World = new GameWorld(seed, name, () => gpuRenderer, ChunkRenderRadius, Math.Max(1, Environment.ProcessorCount - 2));
             World.Mode = mode;
+            World.IsMinecraftMode = isMinecraftMode;
             // Creative starts flying; survival starts grounded with an empty hotbar (mine to earn).
             World.FlyMode = mode == GameMode.Creative;
             if (mode == GameMode.Survival)
@@ -96,7 +98,7 @@ namespace Cubuild
                 }
                 else
                 {
-                    StartNewWorld(_pendingSeed, _pendingName, _pendingMode);
+                    StartNewWorld(_pendingSeed, _pendingName, _pendingMode, _pendingIsMinecraftMode);
                 }
                 _pendingName = "";
                 _pendingWorldSave = null;
@@ -311,6 +313,7 @@ namespace Cubuild
                 _pendingSeed = ParseSeed(menu.SeedInput);
                 _pendingName = menu.WorldName;
                 _pendingMode = menu.SelectedMode;
+                _pendingIsMinecraftMode = menu.IsMinecraftMode;
                 _pendingWorldFromSave = false;
                 screen = GameScreen.Loading;
                 menu.Screen = GameScreen.Loading;

@@ -64,6 +64,7 @@ namespace Cubuild
                     Name = World.Name,
                     Seed = World.Seed,
                     GenVersion = World.WorldGenVersion,
+                    IsMinecraftMode = World.IsMinecraftMode,
                     PlayerX = World.PlayerPosition.X,
                     PlayerY = World.PlayerPosition.Y,
                     PlayerZ = World.PlayerPosition.Z,
@@ -158,7 +159,7 @@ namespace Cubuild
         private void LoadWorld(WorldSave save)
         {
             _loadSkipSpawn = true;
-            StartNewWorld(save.Seed, save.Name, (GameMode)save.Mode);
+            StartNewWorld(save.Seed, save.Name, (GameMode)save.Mode, save.IsMinecraftMode);
             // Keep the world's original generation stamp (0 = pre-versioning). When it differs
             // from the current build, warn - unexplored terrain may regenerate differently.
             World.WorldGenVersion = save.GenVersion;

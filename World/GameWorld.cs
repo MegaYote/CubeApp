@@ -92,6 +92,8 @@ namespace Cubuild
         /// die, and place blocks freely; survival players must mine to collect before placing.</summary>
         public GameMode Mode { get; set; } = GameMode.Creative;
         public bool IsCreative => Mode == GameMode.Creative;
+        /// <summary>Minecraft faithful fork flag (persisted in save).</summary>
+        public bool IsMinecraftMode { get; set; }
 
         // ---- survival inventory (slot-based, ported from Cubuild C++) ----
         public const int MaxStackSize = 64;

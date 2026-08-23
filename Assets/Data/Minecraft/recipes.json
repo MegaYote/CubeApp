@@ -1,0 +1,29 @@
+{
+  // Minecraft-faithful 2x2 recipes (approximated for 2x2 grid)
+  // Vanilla MC: log->4 planks, 2 planks vertical ->4 sticks, material+sticks -> tools
+  // This fork maps flint to wood tier: flint_hatchet=wood axe, flint_pickaxe=wood pick, flint_shovel=wood shovel
+  "recipes": [
+    // log -> 4 planks (any slot, rotation covers all positions)
+    { "input": ["log", "", "", ""], "output": "planks", "count": 4 },
+
+    // 2 planks vertical -> 4 sticks (MC: two planks stacked). Rotation covers left/right column.
+    { "input": ["planks", "", "planks", ""], "output": "stick", "count": 4 },
+
+    // flint shovel: flint above stick (MC shovel = 1 material over 2 sticks; 2x2 approx = 1 flint +1 stick vertical)
+    { "input": ["flint", "", "stick", ""], "output": "flint_shovel", "count": 1 },
+
+    // flint pickaxe: 2 flint on top row, 1 stick bottom-left (MC pick = 3 material +2 sticks; 2x2 approx)
+    { "input": ["flint", "flint", "stick", ""], "output": "flint_pickaxe", "count": 1 },
+
+    // flint hatchet: 2 flint +1 stick in L shape (MC axe = 3 material +2 sticks; 2x2 approx)
+    { "input": ["flint", "flint", "stick", "stick"], "output": "flint_hatchet", "count": 1 },
+
+    // flint spear: 1 flint +1 stick (simple)
+    { "input": ["flint", "stick", "", ""], "output": "flint_spear", "count": 1 },
+
+    // keep useful block recipes vanilla-like
+    { "input": ["cobblestone", "cobblestone", "", ""], "output": "cobblestone_slab", "count": 4 },
+    { "input": ["sand", "sand", "", ""], "output": "sand_slab", "count": 4 },
+    { "input": ["planks", "planks", "planks", "planks"], "output": "workbench", "count": 1 }
+  ]
+}

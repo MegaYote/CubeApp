@@ -36,6 +36,8 @@ namespace Cubuild
         public string SeedInput = "";
         /// <summary>The mode chosen on the Create World screen (Creative by default).</summary>
         public GameMode SelectedMode = GameMode.Creative;
+        /// <summary>Minecraft mode toggle on the Create World screen.</summary>
+        public bool IsMinecraftMode;
 
         public bool CreateWorldClicked;
         public bool ResumeClicked;

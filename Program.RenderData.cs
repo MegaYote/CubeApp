@@ -93,6 +93,7 @@ namespace Cubuild
                     MultiplayerError = mpError,
                     SaveToast = _saveToastTimer,
                     WorldGenCurrent = GameWorld.GenerationVersion,
+                    IsMinecraftMode = false,
                 };
             }
             var forward = World.GetCameraForward();
@@ -129,6 +130,7 @@ namespace Cubuild
                 ThirdPerson = thirdPersonView,
                 Mode = World.Mode, BagSlots = World.BagSlots, HotbarCounts = World.HotbarCounts, HeldStack = World.HeldStack,
                 CraftingSlots = World.CraftingGrid, CraftingResult = World.CraftingResult,
+                IsMinecraftMode = World.IsMinecraftMode,
                 PlayerHealth = World.LocalPlayer.Health,
                 DeathCause = World.LocalPlayer.DeathCause,
                 PlayerX = World.PlayerPosition.X,

@@ -31,7 +31,7 @@ namespace Cubuild
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 6;
+        public const int Version = 7;
 
         public string Name = "World 1";
         public int Seed;
@@ -45,6 +45,8 @@ namespace Cubuild
         public int GenVersion;
         /// <summary>GameMode int (0 = Creative, 1 = Survival). Older saves default to Creative.</summary>
         public int Mode = (int)GameMode.Creative;
+        /// <summary>Minecraft mode fork: when true, load Minecraft-faithful blocks/items/recipes.</summary>
+        public bool IsMinecraftMode;
         public double PlayerX, PlayerY, PlayerZ;
         public float Yaw, Pitch;
         public int SelectedSlot;
@@ -93,6 +95,7 @@ namespace Cubuild
                 w.Write(HeldItemId);
                 w.Write(HeldCount);
                 w.Write(GenVersion);
+                w.Write(IsMinecraftMode);
 
                 w.Write(Chunks.Count);
                 foreach (var c in Chunks)
@@ -163,6 +166,7 @@ namespace Cubuild
                     save.HeldCount = reader.ReadInt32();
                 }
                 if (version >= 6) save.GenVersion = reader.ReadInt32();
+                if (version >= 7) save.IsMinecraftMode = reader.ReadBoolean();
 
                 int chunkCount = reader.ReadInt32();
                 for (int i = 0; i < chunkCount; i++)

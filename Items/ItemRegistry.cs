@@ -29,6 +29,7 @@ namespace Cubuild
         private static string[] _placedBlock = Array.Empty<string>();
         private static uint[] _mapColor = Array.Empty<uint>();
         private static bool _loaded;
+        public static bool IsMinecraftMode { get; private set; }
 
         /// <summary>First numeric id that is NOT a block (genuine items start here).</summary>
         public static int ItemIdBase => BlockRegistry.Count;
@@ -58,9 +59,12 @@ namespace Cubuild
 
         /// <summary>Seeds every registered block as an item, then appends genuine items from
         /// items.json (embedded resource first, then loose file next to the exe).</summary>
-        public static void LoadDefault()
+        public static void LoadDefault() => LoadFromFolder("Assets/Data");
+
+        public static void LoadFromFolder(string folder)
         {
-            if (_loaded) return;
+            bool wantsMinecraft = folder.IndexOf("Minecraft", StringComparison.OrdinalIgnoreCase) >= 0;
+            _loaded = false;
             if (!BlockRegistry.Loaded)
                 throw new InvalidOperationException("ItemRegistry.LoadDefault must run after BlockRegistry is loaded.");
 
@@ -88,7 +92,11 @@ namespace Cubuild
                 _byName[def.Id] = i;
             }
 
-            byte[]? bytes = LoadResourceBytes("items.json");
+            byte[]? bytes = LoadResourceBytes(folder, "items.json");
+            bool foundMinecraft = bytes != null && wantsMinecraft;
+            if (bytes == null && wantsMinecraft)
+                bytes = LoadResourceBytes("Assets/Data", "items.json");
+            IsMinecraftMode = foundMinecraft;
             if (bytes != null)
             {
                 // items.json is hand-edited: allow // and /* */ comments + trailing commas
@@ -248,12 +256,15 @@ namespace Cubuild
 
         // ---- Parsers -------------------------------------------------------------
 
-        private static byte[]? LoadResourceBytes(string fileName)
+        private static byte[]? LoadResourceBytes(string fileName) => LoadResourceBytes("Assets/Data", fileName);
+
+        private static byte[]? LoadResourceBytes(string folder, string fileName)
         {
+            string suffix = folder.Replace("/", ".").Replace("\\", ".") + "." + fileName;
             var asm = System.Reflection.Assembly.GetExecutingAssembly();
             foreach (var name in asm.GetManifestResourceNames())
             {
-                if (name.EndsWith(fileName, StringComparison.OrdinalIgnoreCase))
+                if (name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
                 {
                     using var stream = asm.GetManifestResourceStream(name);
                     if (stream != null)
@@ -264,9 +275,14 @@ namespace Cubuild
                     }
                 }
             }
-
-            string path = File.Exists(fileName) ? fileName : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fileName);
-            return File.Exists(path) ? File.ReadAllBytes(path) : null;
+            string folderPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, folder, fileName);
+            if (File.Exists(folderPath)) return File.ReadAllBytes(folderPath);
+            string direct = Path.Combine(folder, fileName);
+            if (File.Exists(direct)) return File.ReadAllBytes(direct);
+            string baseFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fileName);
+            if (File.Exists(baseFile)) return File.ReadAllBytes(baseFile);
+            if (File.Exists(fileName)) return File.ReadAllBytes(fileName);
+            return null;
         }
 
         private static TextureRect ParseTile(string s)

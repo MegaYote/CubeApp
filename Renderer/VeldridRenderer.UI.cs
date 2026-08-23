@@ -755,8 +755,8 @@ namespace Cubuild.Renderer
             }
             else if (m.Screen == GameScreen.CreateWorld)
             {
-                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 150f, size.Y / 2f - 150f), ImGuiCond.Always);
-                ImGui.SetNextWindowSize(new Vector2(300, 300), ImGuiCond.Always);
+                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 150f, size.Y / 2f - 170f), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(300, 340), ImGuiCond.Always);
                 ImGui.Begin("##createworld", windowFlags);
                 ImGui.Text("Create World");
                 ImGui.Spacing();
@@ -781,6 +781,8 @@ namespace Cubuild.Renderer
                 {
                     m.SelectedMode = GameMode.Survival;
                 }
+                ImGui.Spacing();
+                if (ImGui.Button($"Minecraft Mode: {(m.IsMinecraftMode ? "ON" : "OFF")}", new Vector2(220, 28))) m.IsMinecraftMode = !m.IsMinecraftMode;
                 ImGui.Spacing();
                 if (ImGui.Button("Create World", new Vector2(220, 34)))
                 {
@@ -1388,12 +1390,17 @@ namespace Cubuild.Renderer
 
             // E-menu inventory: a grid of every block. Clicking one queues it to Program, which
             // drops it into the selected hotbar slot and closes the menu.
-            if (_hud.InventoryOpen)
+            // In Minecraft mode, E shows the workbench crafting UI directly (so you can craft without a block).
+            if (_hud.IsMinecraftMode && _hud.Mode == GameMode.Survival && _hud.InventoryOpen)
+            {
+                DrawCraftingWindow(displaySize);
+            }
+            else if (_hud.InventoryOpen)
             {
                 DrawInventoryWindow(displaySize);
             }
 
-            // Workbench crafting menu (right-click a workbench block).
+            // Workbench crafting menu (right-click a workbench block) - also shown in normal mode via E in Minecraft mode above.
             if (_hud.CraftingOpen)
             {
                 DrawCraftingWindow(displaySize);

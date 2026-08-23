@@ -45,6 +45,7 @@ namespace Cubuild
         private static int[] _hotbar = Array.Empty<int>();
         public static bool Loaded { get; private set; }
         public static int Count { get; private set; }
+        public static bool IsMinecraftMode { get; private set; }
 
         // ---- Deserialization DTOs ------------------------------------------------
 
@@ -98,22 +99,20 @@ namespace Cubuild
                 "bedrock" => float.PositiveInfinity,
                 "water" => 0f,
                 "grass" or "grass_spreading" or "full_grass" => 0.6f,
-                "dirt" or "gravel" or "redclay" or "sand" => 0.5f,
+                "dirt" or "gravel" or "redclay" or "sand" => 0.7f,
                 "leaves" or "sapling" or "red_flower" or "yellow_flower" or "blue_flower"
                     or "red_mushroom" or "white_mushroom" or "poison_mushroom" or "spikes" or "sap" => 0.2f,
                 "planks" or "treated_planks" or "log" or "bookshelf" or "workbench" or "rottingwood"
                     or "rottingwood_2" or "rottingwood_3" or "rottingwood_4" or "rottingwood_5"
-                    or "rubberblock" or "cage" or "corn_block" => 2f,
-                "stone" or "cobblestone" or "mossycobblestone" or "smoothstone" or "shimmerrock"
-                    or "quartz" or "tiledstone" or "darkstone" => 4f,
-                "bricks" or "bluebrick" or "greenbrick" or "yellowbrick" or "pinkbrick" or "cyanbrick"
-                    or "blackbrick" or "whitebrick" => 4f,
-                "coalore" => 3f,
-                "ironore" => 3f,
-                "goldore" => 3f,
-                "diamondore" or "bluestoneore" or "copperore" => 3f,
-                "iron" or "gold" or "diamond" or "copper" => 5f,
-                "obsidian" => 8f,
+                    or "rubberblock" or "corn_block" or "carpenters_workbench" or "masons_workbench" => 2.8f,
+                "stone" or "cobblestone" or "mossycobblestone" or "darkstone" or "serpentine" => 4.8f,
+                "smoothstone" or "tiledstone" => 5.0f,
+                "ceramic" or "bricks" or "bluebrick" or "greenbrick" or "yellowbrick" or "pinkbrick" or "cyanbrick"
+                    or "blackbrick" or "whitebrick" or "purple_bricks" or "orange_bricks" or "cobble_bricks" or "gray_bricks" or "kiln" or "forge" => 6.5f,
+                "quartz" or "shimmerrock" or "cobbled_quartz" => 7.0f,
+                "coalore" or "ironore" or "goldore" or "diamondore" or "bluestoneore" or "copperore" => 5.0f,
+                "iron" or "gold" or "diamond" or "copper" => 8.0f,
+                "obsidian" => 9f,
                 "glass" => 0.3f,
                 "bomb" => 0f,
                 "sponge" => 0.6f,
@@ -310,20 +309,30 @@ namespace Cubuild
 
         /// <summary>Loads blocks.json the same way other resources load: embedded resource first
         /// (so the self-contained .exe carries it), then a loose file next to the executable.</summary>
-        public static void LoadDefault()
+        public static void LoadDefault() => LoadFromFolder("Assets/Data");
+
+        public static void LoadFromFolder(string folder)
         {
-            byte[]? bytes = LoadResourceBytes("blocks.json");
+            bool wantsMinecraft = folder.IndexOf("Minecraft", StringComparison.OrdinalIgnoreCase) >= 0;
+            byte[]? bytes = LoadResourceBytes(folder, "blocks.json");
+            bool foundMinecraft = bytes != null && wantsMinecraft;
+            if (bytes == null && wantsMinecraft)
+                bytes = LoadResourceBytes("Assets/Data", "blocks.json");
             if (bytes == null)
                 throw new FileNotFoundException("blocks.json not found as an embedded resource or loose file.");
             LoadFromJson(System.Text.Encoding.UTF8.GetString(bytes));
+            IsMinecraftMode = foundMinecraft;
         }
 
-        private static byte[]? LoadResourceBytes(string fileName)
+        private static byte[]? LoadResourceBytes(string fileName) => LoadResourceBytes("Assets/Data", fileName);
+
+        private static byte[]? LoadResourceBytes(string folder, string fileName)
         {
+            string suffix = folder.Replace("/", ".").Replace("\\", ".") + "." + fileName;
             var asm = System.Reflection.Assembly.GetExecutingAssembly();
             foreach (var name in asm.GetManifestResourceNames())
             {
-                if (name.EndsWith(fileName, StringComparison.OrdinalIgnoreCase))
+                if (name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
                 {
                     using var stream = asm.GetManifestResourceStream(name);
                     if (stream != null)
@@ -334,9 +343,15 @@ namespace Cubuild
                     }
                 }
             }
-
-            string path = File.Exists(fileName) ? fileName : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fileName);
-            return File.Exists(path) ? File.ReadAllBytes(path) : null;
+            // loose file fallback
+            string folderPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, folder, fileName);
+            if (File.Exists(folderPath)) return File.ReadAllBytes(folderPath);
+            string direct = Path.Combine(folder, fileName);
+            if (File.Exists(direct)) return File.ReadAllBytes(direct);
+            string baseFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fileName);
+            if (File.Exists(baseFile)) return File.ReadAllBytes(baseFile);
+            if (File.Exists(fileName)) return File.ReadAllBytes(fileName);
+            return null;
         }
 
         // ---- Lookups -------------------------------------------------------------

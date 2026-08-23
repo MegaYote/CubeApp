@@ -65,6 +65,8 @@ namespace Cubuild.Renderer
         public IReadOnlyList<(int ItemId, int Count)> CraftingSlots;
         /// <summary>Live crafting result for the current grid (null = no recipe).</summary>
         public (int ItemId, int Count)? CraftingResult;
+        /// <summary>True when this world was created in Minecraft mode (E shows workbench crafting).</summary>
+        public bool IsMinecraftMode;
 
         /// <summary>Player health 0..10, drives the healthbar heart slice (10 = full heart).</summary>
         public int PlayerHealth;
@@ -165,6 +167,7 @@ namespace Cubuild.Renderer
             HeldStack = null,
             CraftingSlots = Array.Empty<(int ItemId, int Count)>(),
             CraftingResult = null,
+            IsMinecraftMode = false,
             PlayerHealth = 20,
             DeathCause = DeathCause.Unknown,
             HighlightWorldQuad = null,

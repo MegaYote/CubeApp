@@ -61,6 +61,7 @@ namespace Cubuild
         private int _pendingSeed;
         private string _pendingName = "";
         private GameMode _pendingMode;
+        private bool _pendingIsMinecraftMode;
         private bool _loadingScreenShown;       // gate: first frame shows "Loading...", second does work
 
         private float lastFps;
@@ -137,6 +138,26 @@ namespace Cubuild
             RefreshSavedWorlds();
             Sound = new SoundEngine();
             Sound.RegisterAllEmbedded();
+        }
+
+        private static void EnsureRegistries(bool isMinecraftMode)
+        {
+            string folder = isMinecraftMode ? "Assets/Data/Minecraft" : "Assets/Data";
+            if (BlockRegistry.IsMinecraftMode != isMinecraftMode || !BlockRegistry.Loaded)
+            {
+                BlockRegistry.LoadFromFolder(folder);
+                ItemRegistry.LoadFromFolder(folder);
+                RecipeRegistry.LoadFromFolder(folder);
+            }
+            else if (ItemRegistry.IsMinecraftMode != isMinecraftMode || !ItemRegistry.Loaded)
+            {
+                ItemRegistry.LoadFromFolder(folder);
+                RecipeRegistry.LoadFromFolder(folder);
+            }
+            else if (RecipeRegistry.IsMinecraftMode != isMinecraftMode || !RecipeRegistry.Loaded)
+            {
+                RecipeRegistry.LoadFromFolder(folder);
+            }
         }
 
         // ------------------------------------------------------------------

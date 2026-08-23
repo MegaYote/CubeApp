@@ -27,6 +27,7 @@ namespace Cubuild
         private static readonly List<CraftingRecipe> _recipes = new();
         public static bool Loaded { get; private set; }
         public static IReadOnlyList<CraftingRecipe> All => _recipes;
+        public static bool IsMinecraftMode { get; private set; }
 
         private sealed class RecipesFile
         {
@@ -41,11 +42,18 @@ namespace Cubuild
         }
 
         /// <summary>Must run AFTER BlockRegistry and ItemRegistry (ids resolve through both).</summary>
-        public static void LoadDefault()
+        public static void LoadDefault() => LoadFromFolder("Assets/Data");
+
+        public static void LoadFromFolder(string folder)
         {
-            byte[]? bytes = LoadResourceBytes("recipes.json");
+            bool wantsMinecraft = folder.IndexOf("Minecraft", StringComparison.OrdinalIgnoreCase) >= 0;
+            byte[]? bytes = LoadResourceBytes(folder, "recipes.json");
+            bool foundMinecraft = bytes != null && wantsMinecraft;
+            if (bytes == null && wantsMinecraft)
+                bytes = LoadResourceBytes("Assets/Data", "recipes.json");
             if (bytes == null) throw new FileNotFoundException("recipes.json not found as an embedded resource or loose file.");
             LoadFromJson(System.Text.Encoding.UTF8.GetString(bytes));
+            IsMinecraftMode = foundMinecraft;
         }
 
         public static void LoadFromJson(string json)
@@ -121,12 +129,15 @@ namespace Cubuild
         private static bool Cell(string gridId, string patternId)
             => string.IsNullOrEmpty(patternId) ? string.IsNullOrEmpty(gridId) : string.Equals(gridId, patternId, StringComparison.OrdinalIgnoreCase);
 
-        private static byte[]? LoadResourceBytes(string fileName)
+        private static byte[]? LoadResourceBytes(string fileName) => LoadResourceBytes("Assets/Data", fileName);
+
+        private static byte[]? LoadResourceBytes(string folder, string fileName)
         {
+            string suffix = folder.Replace("/", ".").Replace("\\", ".") + "." + fileName;
             var asm = System.Reflection.Assembly.GetExecutingAssembly();
             foreach (var name in asm.GetManifestResourceNames())
             {
-                if (name.EndsWith(fileName, StringComparison.OrdinalIgnoreCase))
+                if (name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
                 {
                     using var stream = asm.GetManifestResourceStream(name);
                     if (stream != null)
@@ -137,9 +148,14 @@ namespace Cubuild
                     }
                 }
             }
-
-            string path = File.Exists(fileName) ? fileName : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fileName);
-            return File.Exists(path) ? File.ReadAllBytes(path) : null;
+            string folderPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, folder, fileName);
+            if (File.Exists(folderPath)) return File.ReadAllBytes(folderPath);
+            string direct = Path.Combine(folder, fileName);
+            if (File.Exists(direct)) return File.ReadAllBytes(direct);
+            string baseFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, fileName);
+            if (File.Exists(baseFile)) return File.ReadAllBytes(baseFile);
+            if (File.Exists(fileName)) return File.ReadAllBytes(fileName);
+            return null;
         }
     }
 }
