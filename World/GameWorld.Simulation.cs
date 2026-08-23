@@ -128,9 +128,12 @@ namespace Cubuild
                     d.SpinSpeed = 0f; // it lands and stops tumbling
                 }
 
-                // If a solid block appears ABOVE the item, push it up.
+                // If a solid block appears ABOVE the item, push it up - but only if actually buried/inside it.
+                // Old code checked column above regardless of gap, so mining up would wrongly teleport
+                // an item that was just touching the underside (with 0.5 gap) to the top of the ceiling.
                 int aboveY = by + 1;
-                if (Chunks.TryGetLoadedBlock(bx, aboveY, bz, out int aboveId) && BlockRegistry.IsSolid(aboveId))
+                bool isInsideAbove = d.Position.Y + 0.01 >= aboveY && d.Position.Y < aboveY + 1;
+                if (isInsideAbove && Chunks.TryGetLoadedBlock(bx, aboveY, bz, out int aboveId) && BlockRegistry.IsSolid(aboveId))
                 {
                     // Find the next empty space above
                     int newY = aboveY + 1;

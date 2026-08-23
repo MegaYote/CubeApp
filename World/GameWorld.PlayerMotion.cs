@@ -147,11 +147,11 @@ namespace Cubuild
                 // wading (feet only) — prevents the surface-glide exploit.
                 if (desiredDirection.X != 0 || desiredDirection.Z != 0)
                 {
-                    double swimH = bodyInWater ? WalkSpeed * 0.5 : WalkSpeed * 0.15;
+                    double swimH = bodyInWater ? WalkSpeed * 0.5 : WalkSpeed * 0.35;
                     double hx = desiredDirection.X * swimH - vx;
                     double hz = desiredDirection.Z * swimH - vz;
                     double hDist = Math.Sqrt(hx * hx + hz * hz);
-                    double hAccel = (bodyInWater ? 12.0 : 5.0) * deltaSeconds;
+                    double hAccel = (bodyInWater ? 12.0 : 8.0) * deltaSeconds;
                     if (hDist <= hAccel) { vx += hx; vz += hz; }
                     else { double f = hAccel / hDist; vx += hx * f; vz += hz * f; }
                 }

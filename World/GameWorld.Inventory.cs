@@ -513,7 +513,7 @@ namespace Cubuild
         public const float WalkSpeed = 4.0f;
         public const float FlySpeed = 10.8f;
         public const float JumpVelocity = 8.0f;
-        public const float Gravity = 24.0f;
+        public const float Gravity = 28.0f;
         public const float MaxFallSpeed = 36.0f;
         /// <summary>Horizontal acceleration (units/s^2) toward the desired walk speed, so movement
         /// ramps in smoothly instead of snapping to full speed instantly.</summary>
