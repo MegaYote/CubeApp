@@ -45,14 +45,14 @@
       "mapColor": "#8B4513",
       "zombieCanBreak": true,
       "zombieBreakSpeed": "Fast",
-      "hardness": 0.7,
+      "hardness": 1.0,
       "toolType": "shovel"
     },
     {
       "id": "stone",
       "displayName": "Stone",
       "texture": "1,0",
-      "hardness": 4.8,
+      "hardness": 3.0,
       "mapColor": "#808080",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -61,7 +61,7 @@
       "id": "cobblestone",
       "displayName": "Cobblestone",
       "texture": "0,1",
-      "hardness": 4.8,
+      "hardness": 3.0,
       "mapColor": "#707070",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -74,14 +74,14 @@
       "mapColor": "#D2C48C",
       "zombieCanBreak": true,
       "zombieBreakSpeed": "Fast",
-      "hardness": 0.7,
+      "hardness": 1.0,
       "toolType": "shovel"
     },
     {
       "id": "planks",
       "displayName": "Planks",
       "texture": "4,0",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "mapColor": "#A07846",
       "zombieCanBreak": true,
       "zombieBreakSpeed": "Medium",
@@ -100,21 +100,21 @@
       "texture": "3,1",
       "gravity": true,
       "mapColor": "#848484",
-      "hardness": 0.7,
+      "hardness": 1.0,
       "toolType": "shovel"
     },
     {
       "id": "obsidian",
       "displayName": "Obsidian",
       "texture": "5,2",
-      "hardness": 50,
+      "hardness": 6.0,
       "mapColor": "#3C2D5A"
     },
     {
       "id": "mossycobblestone",
       "displayName": "Mossy Cobblestone",
       "texture": "4,2",
-      "hardness": 4.8,
+      "hardness": 3.0,
       "mapColor": "#5E6C5E",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -134,7 +134,7 @@
       "displayName": "Bricks",
       "texture": "8,4",
       "mapColor": "#964640",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -144,7 +144,7 @@
       "texture": "4,1",
       "top": "5,1",
       "bottom": "5,1",
-      "hardness": 3.0,
+      "hardness": 1.5,
       "mapColor": "#6B4A28",
       "zombieCanBreak": true,
       "zombieBreakSpeed": "Medium",
@@ -198,7 +198,7 @@
       "displayName": "Ceramic Block",
       "texture": "11,5",
       "mapColor": "#C86A00",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -207,7 +207,7 @@
       "displayName": "Darkstone",
       "texture": "7,0",
       "mapColor": "#333333",
-      "hardness": 4.8,
+      "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -216,7 +216,7 @@
       "displayName": "Blue Brick",
       "texture": "5,4",
       "mapColor": "#5160D0",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -225,7 +225,7 @@
       "displayName": "Green Brick",
       "texture": "6,4",
       "mapColor": "#4AA052",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -234,7 +234,7 @@
       "displayName": "Yellow Brick",
       "texture": "7,4",
       "mapColor": "#E8C446",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -251,7 +251,7 @@
       "displayName": "Rotting Wood",
       "texture": "0,4",
       "mapColor": "#4A4030",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "toolType": "axe"
     },
     {
@@ -259,7 +259,7 @@
       "displayName": "Coal Ore",
       "texture": "2,2",
       "mapColor": "#6C6C6C",
-      "hardness": 5.0,
+      "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -268,7 +268,7 @@
       "displayName": "Iron Ore",
       "texture": "1,2",
       "mapColor": "#A08E7E",
-      "hardness": 5.0,
+      "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -277,7 +277,7 @@
       "displayName": "Gold Ore",
       "texture": "0,2",
       "mapColor": "#8E8670",
-      "hardness": 5.0,
+      "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -286,7 +286,7 @@
       "displayName": "Diamond Ore",
       "texture": "1,3",
       "mapColor": "#828F8F",
-      "hardness": 5.0,
+      "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -295,7 +295,7 @@
       "displayName": "Bluestone Ore",
       "texture": "2,3",
       "mapColor": "#6E7090",
-      "hardness": 5.0,
+      "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -304,7 +304,7 @@
       "displayName": "Copper Ore",
       "texture": "0,3",
       "mapColor": "#827268",
-      "hardness": 5.0,
+      "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -315,7 +315,7 @@
       "top": "6,1",
       "bottom": "6,3",
       "mapColor": "#E8E8E8",
-      "hardness": 8.0,
+      "hardness": 5.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -326,7 +326,7 @@
       "top": "7,1",
       "bottom": "7,3",
       "mapColor": "#F7E040",
-      "hardness": 8.0,
+      "hardness": 5.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -337,7 +337,7 @@
       "top": "8,1",
       "bottom": "8,3",
       "mapColor": "#66E8E0",
-      "hardness": 8.0,
+      "hardness": 5.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -348,7 +348,7 @@
       "top": "4,0",
       "bottom": "4,0",
       "mapColor": "#8A6B45",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "toolType": "axe"
     },
     {
@@ -413,7 +413,7 @@
       "displayName": "Stone Slab",
       "base": "stone",
       "shape": "slab",
-      "hardness": 4.8,
+      "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -422,7 +422,7 @@
       "displayName": "Stone Slab (Top)",
       "base": "stone",
       "shape": "slab_top",
-      "hardness": 4.8,
+      "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -431,7 +431,7 @@
       "displayName": "Stone Stairs",
       "base": "stone",
       "shape": "stairs",
-      "hardness": 4.8,
+      "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -440,7 +440,7 @@
       "displayName": "Planks Slab",
       "base": "planks",
       "shape": "slab",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "toolType": "axe"
     },
     {
@@ -448,7 +448,7 @@
       "displayName": "Planks Slab (Top)",
       "base": "planks",
       "shape": "slab_top",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "toolType": "axe"
     },
     {
@@ -456,7 +456,7 @@
       "displayName": "Planks Stairs",
       "base": "planks",
       "shape": "stairs",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "toolType": "axe"
     },
     {
@@ -464,7 +464,7 @@
       "displayName": "Cobblestone Slab",
       "base": "cobblestone",
       "shape": "slab",
-      "hardness": 4.8,
+      "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -473,7 +473,7 @@
       "displayName": "Cobblestone Slab (Top)",
       "base": "cobblestone",
       "shape": "slab_top",
-      "hardness": 4.8,
+      "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -482,7 +482,7 @@
       "displayName": "Cobblestone Stairs",
       "base": "cobblestone",
       "shape": "stairs",
-      "hardness": 4.8,
+      "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -491,7 +491,7 @@
       "displayName": "Sand Slab",
       "base": "sand",
       "shape": "slab",
-      "hardness": 0.7,
+      "hardness": 1.0,
       "toolType": "shovel"
     },
     {
@@ -499,7 +499,7 @@
       "displayName": "Sand Slab (Top)",
       "base": "sand",
       "shape": "slab_top",
-      "hardness": 0.7,
+      "hardness": 1.0,
       "toolType": "shovel"
     },
     {
@@ -507,7 +507,7 @@
       "displayName": "Sand Stairs",
       "base": "sand",
       "shape": "stairs",
-      "hardness": 0.7,
+      "hardness": 1.0,
       "toolType": "shovel"
     },
     {
@@ -515,7 +515,7 @@
       "displayName": "Dirt Slab",
       "base": "dirt",
       "shape": "slab",
-      "hardness": 0.7,
+      "hardness": 1.0,
       "toolType": "shovel"
     },
     {
@@ -523,7 +523,7 @@
       "displayName": "Dirt Slab (Top)",
       "base": "dirt",
       "shape": "slab_top",
-      "hardness": 0.7,
+      "hardness": 1.0,
       "toolType": "shovel"
     },
     {
@@ -531,7 +531,7 @@
       "displayName": "Dirt Stairs",
       "base": "dirt",
       "shape": "stairs",
-      "hardness": 0.7,
+      "hardness": 1.0,
       "toolType": "shovel"
     },
     {
@@ -539,7 +539,7 @@
       "displayName": "Bricks Slab",
       "base": "bricks",
       "shape": "slab",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -548,7 +548,7 @@
       "displayName": "Bricks Slab (Top)",
       "base": "bricks",
       "shape": "slab_top",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -557,7 +557,7 @@
       "displayName": "Bricks Stairs",
       "base": "bricks",
       "shape": "stairs",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "toolType": "pickaxe",
       "toolRequired": true
     },
@@ -565,7 +565,7 @@
       "id": "smoothstone",
       "displayName": "Smooth Stone",
       "texture": "6,0",
-      "hardness": 5.0,
+      "hardness": 3.5,
       "mapColor": "#A1A2A1",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -574,7 +574,7 @@
       "id": "shimmerrock",
       "displayName": "Shimmerrock",
       "texture": "10,0",
-      "hardness": 7.0,
+      "hardness": 3.5,
       "mapColor": "#060C1D",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -583,7 +583,7 @@
       "id": "quartz",
       "displayName": "Quartz",
       "texture": "11,0",
-      "hardness": 7.0,
+      "hardness": 3.5,
       "mapColor": "#F1EBE2",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -594,7 +594,7 @@
       "texture": "9,2",
       "top": "9,1",
       "bottom": "9,3",
-      "hardness": 8.0,
+      "hardness": 5.0,
       "mapColor": "#FEA749",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -603,7 +603,7 @@
       "id": "treated_planks",
       "displayName": "Treated Planks",
       "texture": "12,8",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "mapColor": "#826941",
       "toolType": "axe"
     },
@@ -611,7 +611,7 @@
       "id": "tiledstone",
       "displayName": "Tiled Stone",
       "texture": "5,3",
-      "hardness": 5.0,
+      "hardness": 3.5,
       "mapColor": "#A3A4A3",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -622,7 +622,7 @@
       "texture": "11,3",
       "top": "11,2",
       "bottom": "11,1",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "mapColor": "#77613C",
       "toolType": "axe"
     },
@@ -630,7 +630,7 @@
       "id": "rottingwood_2",
       "displayName": "Rotting Wood 2",
       "texture": "1,4",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "mapColor": "#4A4030",
       "toolType": "axe"
     },
@@ -638,7 +638,7 @@
       "id": "rottingwood_3",
       "displayName": "Rotting Wood 3",
       "texture": "2,4",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "mapColor": "#4A4030",
       "toolType": "axe"
     },
@@ -646,7 +646,7 @@
       "id": "rottingwood_4",
       "displayName": "Rotting Wood 4",
       "texture": "3,4",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "mapColor": "#4A4030",
       "toolType": "axe"
     },
@@ -654,7 +654,7 @@
       "id": "rottingwood_5",
       "displayName": "Rotting Wood 5",
       "texture": "4,4",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "mapColor": "#4A4030",
       "toolType": "axe"
     },
@@ -662,7 +662,7 @@
       "id": "rubberblock",
       "displayName": "Rubber Block",
       "texture": "10,4",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "mapColor": "#1A0F0D",
       "toolType": "axe"
     },
@@ -671,7 +671,7 @@
       "displayName": "Red Clay",
       "texture": "11,4",
       "gravity": true,
-      "hardness": 0.7,
+      "hardness": 1.0,
       "mapColor": "#FF7239",
       "toolType": "shovel"
     },
@@ -679,7 +679,7 @@
       "id": "pinkbrick",
       "displayName": "Pink Brick",
       "texture": "5,5",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "mapColor": "#E8A0C0",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -688,7 +688,7 @@
       "id": "cyanbrick",
       "displayName": "Cyan Brick",
       "texture": "6,5",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "mapColor": "#40B8C8",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -697,7 +697,7 @@
       "id": "blackbrick",
       "displayName": "Black Brick",
       "texture": "7,5",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "mapColor": "#3A3A3A",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -706,7 +706,7 @@
       "id": "whitebrick",
       "displayName": "White Brick",
       "texture": "8,5",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "mapColor": "#E8E8E8",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -716,7 +716,7 @@
       "displayName": "Corn Block",
       "texture": "10,5",
       "top": "9,5",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "mapColor": "#F8C818",
       "toolType": "axe"
     },
@@ -724,133 +724,133 @@
       "id": "blackcloth",
       "displayName": "Black Cloth",
       "texture": "0,6",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#222222"
     },
     {
       "id": "darkgraycloth",
       "displayName": "Dark Gray Cloth",
       "texture": "1,6",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#555555"
     },
     {
       "id": "graycloth",
       "displayName": "Gray Cloth",
       "texture": "2,6",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#888888"
     },
     {
       "id": "whitecloth",
       "displayName": "White Cloth",
       "texture": "3,6",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#DDDDDD"
     },
     {
       "id": "redcloth",
       "displayName": "Red Cloth",
       "texture": "0,7",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#D22B2B"
     },
     {
       "id": "orangecloth",
       "displayName": "Orange Cloth",
       "texture": "1,7",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#F07A18"
     },
     {
       "id": "yellowcloth",
       "displayName": "Yellow Cloth",
       "texture": "2,7",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#F0D018"
     },
     {
       "id": "limecloth",
       "displayName": "Lime Cloth",
       "texture": "3,7",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#7AD018"
     },
     {
       "id": "greencloth",
       "displayName": "Green Cloth",
       "texture": "4,7",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#2B8A2B"
     },
     {
       "id": "darkgreencloth",
       "displayName": "Dark Green Cloth",
       "texture": "5,7",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#175417"
     },
     {
       "id": "neongreencloth",
       "displayName": "Neon Green Cloth",
       "texture": "6,7",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#3AF03A"
     },
     {
       "id": "lightbluecloth",
       "displayName": "Light Blue Cloth",
       "texture": "7,7",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#7AC8F0"
     },
     {
       "id": "cyancloth",
       "displayName": "Cyan Cloth",
       "texture": "8,7",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#2BD0D0"
     },
     {
       "id": "bluecloth",
       "displayName": "Blue Cloth",
       "texture": "9,7",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#2B3AD0"
     },
     {
       "id": "cobaltcloth",
       "displayName": "Cobalt Cloth",
       "texture": "10,7",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#1A3A9A"
     },
     {
       "id": "darkbluecloth",
       "displayName": "Dark Blue Cloth",
       "texture": "11,7",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#12206A"
     },
     {
       "id": "indigo_cloth",
       "displayName": "Indigo Cloth",
       "texture": "12,7",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#3A2B7A"
     },
     {
       "id": "purple_cloth",
       "displayName": "Purple Cloth",
       "texture": "13,7",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#7A2BD0"
     },
     {
       "id": "magenta_cloth",
       "displayName": "Magenta Cloth",
       "texture": "14,7",
-      "hardness": 0.5,
+      "hardness": 1.0,
       "mapColor": "#D02BD0"
     },
     {
@@ -859,7 +859,7 @@
       "texture": "1,5",
       "shape": "glass",
       "translucent": true,
-      "hardness": 0.8,
+      "hardness": 1.0,
       "mapColor": "#7A7AFF"
     },
     {
@@ -868,7 +868,7 @@
       "texture": "2,5",
       "shape": "glass",
       "translucent": true,
-      "hardness": 0.8,
+      "hardness": 1.0,
       "mapColor": "#FF6A6A"
     },
     {
@@ -877,7 +877,7 @@
       "texture": "3,5",
       "shape": "glass",
       "translucent": true,
-      "hardness": 0.8,
+      "hardness": 1.0,
       "mapColor": "#6AFF6A"
     },
     {
@@ -886,7 +886,7 @@
       "texture": "4,5",
       "shape": "glass",
       "translucent": true,
-      "hardness": 0.8,
+      "hardness": 1.0,
       "mapColor": "#FFF06A"
     },
     {
@@ -894,14 +894,14 @@
       "displayName": "Mosaic Glass",
       "texture": "4,6",
       "shape": "glass",
-      "hardness": 0.8,
+      "hardness": 1.0,
       "mapColor": "#9AD0E8"
     },
     {
       "id": "purple_bricks",
       "displayName": "Purple Bricks",
       "texture": "5,6",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "mapColor": "#7A4AB0",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -910,7 +910,7 @@
       "id": "orange_bricks",
       "displayName": "Orange Bricks",
       "texture": "6,6",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "mapColor": "#E87A2A",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -919,7 +919,7 @@
       "id": "cobble_bricks",
       "displayName": "Cobblestone Bricks",
       "texture": "7,6",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "mapColor": "#7A7A7A",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -928,7 +928,7 @@
       "id": "gray_bricks",
       "displayName": "Gray Bricks",
       "texture": "8,6",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "mapColor": "#9A9A9A",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -937,7 +937,7 @@
       "id": "cobbled_quartz",
       "displayName": "Cobbled Quartz",
       "texture": "15,7",
-      "hardness": 7.0,
+      "hardness": 3.5,
       "mapColor": "#D8D2C8",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -948,7 +948,7 @@
       "texture": "1,8",
       "top": "0,8",
       "bottom": "2,8",
-      "hardness": 1.5,
+      "hardness": 2.0,
       "mapColor": "#E8E8E8"
     },
     {
@@ -957,7 +957,7 @@
       "texture": "1,9",
       "top": "0,9",
       "bottom": "2,9",
-      "hardness": 1.5,
+      "hardness": 2.0,
       "mapColor": "#F0D018"
     },
     {
@@ -966,7 +966,7 @@
       "texture": "1,10",
       "top": "0,10",
       "bottom": "2,10",
-      "hardness": 1.5,
+      "hardness": 2.0,
       "mapColor": "#3A6AF0"
     },
     {
@@ -975,7 +975,7 @@
       "texture": "1,11",
       "top": "0,11",
       "bottom": "2,11",
-      "hardness": 1.5,
+      "hardness": 2.0,
       "mapColor": "#3AB03A"
     },
     {
@@ -984,7 +984,7 @@
       "texture": "1,12",
       "top": "0,12",
       "bottom": "2,12",
-      "hardness": 1.5,
+      "hardness": 2.0,
       "mapColor": "#E03030"
     },
     {
@@ -993,7 +993,7 @@
       "texture": "1,13",
       "top": "0,13",
       "bottom": "2,13",
-      "hardness": 1.5,
+      "hardness": 2.0,
       "mapColor": "#2A2A2A"
     },
     {
@@ -1037,7 +1037,7 @@
       "texture": "14,8",
       "top": "13,8",
       "bottom": "12,8",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "mapColor": "#85613C",
       "toolType": "axe"
     },
@@ -1047,7 +1047,7 @@
       "texture": "10,8",
       "top": "9,8",
       "bottom": "8,8",
-      "hardness": 2.8,
+      "hardness": 1.5,
       "mapColor": "#6E5C40",
       "toolType": "axe"
     },
@@ -1055,7 +1055,7 @@
       "id": "serpentine",
       "displayName": "Serpentine",
       "texture": "15,8",
-      "hardness": 4.8,
+      "hardness": 3.0,
       "mapColor": "#3E8A5A",
       "toolType": "pickaxe",
       "toolRequired": true
@@ -1064,7 +1064,7 @@
       "id": "kiln",
       "texture": "5,8",
       "mapColor": "#FF00FF",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "top": "7,8",
       "bottom": "4,8",
       "side": "6,8",
@@ -1077,7 +1077,7 @@
       "displayName": "Forge",
       "texture": "8,9",
       "mapColor": "#FF00FF",
-      "hardness": 6.5,
+      "hardness": 4.0,
       "top": "10,9",
       "bottom": "8,8",
       "side": "9,9",

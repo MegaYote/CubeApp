@@ -84,7 +84,7 @@ namespace Cubuild
         // ---- Survival mining (Cubuild C++ port) -------------------------------------
         // Hold left click to mine: progress accumulates toward breakTime = BASE_BREAK_TIME *
         // hardness, particles pop every 20%, and the block breaks at progress >= 1.
-        private const float BaseBreakTime = 1.5f;    // seconds for hardness 1.0 (C++ BASE_BREAK_TIME)
+        private const float BaseBreakTime = 2.5f;    // seconds for hardness 1.0
         private const float BreakParticleInterval = 0.2f; // spawn shards every 20% progress
         private const float CreativeBreakInterval = 0.2f; // creative: one instant break per 0.2s (~5/s)
         private (int x, int y, int z)? _miningTarget;
