@@ -67,6 +67,8 @@ namespace Cubuild.Renderer
         public (int ItemId, int Count)? CraftingResult;
         /// <summary>True when this world was created in Minecraft mode (E shows workbench crafting).</summary>
         public bool IsMinecraftMode;
+        /// <summary>Debug text for the sapling being looked at (F3), or empty.</summary>
+        public string SaplingGrowthText;
 
         /// <summary>Player health 0..10, drives the healthbar heart slice (10 = full heart).</summary>
         public int PlayerHealth;
@@ -168,6 +170,7 @@ namespace Cubuild.Renderer
             CraftingSlots = Array.Empty<(int ItemId, int Count)>(),
             CraftingResult = null,
             IsMinecraftMode = false,
+            SaplingGrowthText = string.Empty,
             PlayerHealth = 20,
             DeathCause = DeathCause.Unknown,
             HighlightWorldQuad = null,

@@ -21,6 +21,7 @@ namespace Cubuild
         private readonly FluidSimulation _fluid;
         private readonly GravitySimulation _gravity;
         private readonly GrassSpreadSimulation _grass;
+        private readonly SaplingGrowthSimulation _sapling;
         private readonly Dictionary<ChunkCoordinates, Dictionary<(int x, int y, int z), int>> _pending = new();
         // Min-heap of (dueTick, cell) so TickOnce pops only entries that are actually due instead
         // of scanning the whole _pending tree every tick (FPS roadmap #5). The bucket dict keeps
@@ -29,6 +30,7 @@ namespace Cubuild
         private readonly List<ChunkCoordinates> _emptyBuckets = new();
         private int _tick;
         private double _accumulator;
+        public int CurrentTick => _tick;
 
         public BlockTickScheduler(ChunkManager manager, MeshScheduler meshScheduler)
         {
@@ -37,11 +39,13 @@ namespace Cubuild
             _fluid = new FluidSimulation(manager, this);
             _gravity = new GravitySimulation(manager, this, meshScheduler);
             _grass = new GrassSpreadSimulation(manager, this);
+            _sapling = new SaplingGrowthSimulation(manager, this);
         }
 
         public FluidSimulation Fluid => _fluid;
         public GravitySimulation Gravity => _gravity;
         public GrassSpreadSimulation Grass => _grass;
+        public SaplingGrowthSimulation Sapling => _sapling;
 
         /// <summary>True when a falling block currently occupies the cell (placement should wait).</summary>
         public bool IsCellOccupiedByFalling(int x, int y, int z) => _gravity.IsCellOccupiedByFalling(x, y, z);
@@ -73,12 +77,13 @@ namespace Cubuild
             _queue.Enqueue((due, x, y, z), due);
         }
 
-        /// <summary>Wake nearby water + gravity + grass after any world change (block placed/removed).</summary>
+        /// <summary>Wake nearby water + gravity + grass + saplings after any world change (block placed/removed).</summary>
         public void OnBlockChanged(int x, int y, int z)
         {
             _fluid.OnBlockChanged(x, y, z);
             _gravity.OnBlockChanged(x, y, z);
             _grass.OnBlockChanged(x, y, z);
+            _sapling.OnBlockChanged(x, y, z);
         }
 
         /// <summary>Advance the simulation using real frame time, firing fixed 20 TPS tick steps.</summary>
@@ -122,6 +127,7 @@ namespace Cubuild
                 _gravity.TickBlock(item.x, item.y, item.z);
                 _fluid.TickBlock(item.x, item.y, item.z);
                 _grass.TickBlock(item.x, item.y, item.z);
+                _sapling.TickBlock(item.x, item.y, item.z);
                 processed++;
 
                 // Drop the bucket once empty so _pending never grows with dead chunks.

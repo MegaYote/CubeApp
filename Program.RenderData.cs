@@ -94,12 +94,23 @@ namespace Cubuild
                     SaveToast = _saveToastTimer,
                     WorldGenCurrent = GameWorld.GenerationVersion,
                     IsMinecraftMode = false,
+                    SaplingGrowthText = string.Empty,
                 };
             }
             var forward = World.GetCameraForward();
             var pickResult = World.TryPickBlock(World.PlayerPosition, forward);
             Vector3[]? highlightQuad = null;
             if (pickResult.HasValue) highlightQuad = ComputeHighlightWorldQuad(pickResult.Value);
+            string saplingText = string.Empty;
+            if (pickResult.HasValue && World != null && World.BlockTicks != null)
+            {
+                var r = pickResult.Value.Remove;
+                if (World.Chunks.TryGetLoadedBlock(r.x, r.y, r.z, out var sbid) && sbid == BlockRegistry.GetId("sapling"))
+                {
+                    var info = World.BlockTicks.Sapling.GetGrowthInfo(r.x, r.y, r.z);
+                    if (info != null) saplingText = info;
+                }
+            }
             // Mining overlay only shows on the block actually being mined.
             float miningProgress = 0f;
             Vector3 miningBlockPos = Vector3.Zero;
@@ -131,6 +142,7 @@ namespace Cubuild
                 Mode = World.Mode, BagSlots = World.BagSlots, HotbarCounts = World.HotbarCounts, HeldStack = World.HeldStack,
                 CraftingSlots = World.CraftingGrid, CraftingResult = World.CraftingResult,
                 IsMinecraftMode = World.IsMinecraftMode,
+                SaplingGrowthText = saplingText,
                 PlayerHealth = World.LocalPlayer.Health,
                 DeathCause = World.LocalPlayer.DeathCause,
                 PlayerX = World.PlayerPosition.X,

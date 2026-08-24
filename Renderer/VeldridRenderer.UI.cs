@@ -1508,6 +1508,7 @@ namespace Cubuild.Renderer
                 Line($"Upload: {_hud.UploadMs:0.0} ms");
                 Line($"Render: {_hud.RenderMs:0.0} ms");
                 Line($"Facing: {_hud.FacingText}");
+                if (!string.IsNullOrEmpty(_hud.SaplingGrowthText)) Line(_hud.SaplingGrowthText);
                 if (!string.IsNullOrEmpty(_hud.RenderDistanceText))
                 {
                     Line(_hud.RenderDistanceText);
