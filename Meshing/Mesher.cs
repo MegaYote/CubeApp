@@ -10,7 +10,9 @@ namespace Cubuild
         // cube pass must never emit faces owned by a water block. Neighbouring solid blocks still
         // render their faces toward water through the normal RendersToward rules.
         private static readonly int WaterId = BlockRegistry.GetId("water");
+        private static readonly int LavaId = BlockRegistry.GetId("lava");
         private static readonly TextureRect WaterBaseTile = BlockRegistry.Get("water").AllTexture ?? default;
+        private static readonly TextureRect LavaBaseTile = BlockRegistry.Get("lava").AllTexture ?? default;
 
         private static readonly (int dx, int dy, int dz)[] FaceOffsets =
         {
@@ -279,6 +281,9 @@ namespace Cubuild
             // correct occlusion against water while water gets its own geometry.
             EmitWaterFaces(chunk, chunkLookup, lighting, mesh);
 
+            // Lava pass: same as water but with lava-specific properties.
+            EmitLavaFaces(chunk, chunkLookup, lighting, mesh);
+
             // Cross pass: saplings/flowers/mushrooms render as two crossed billboard quads.
             EmitCrossFaces(chunk, chunkLookup, lighting, mesh);
 
@@ -468,6 +473,148 @@ namespace Cubuild
             // so sampling only the neighbor made the wall render pitch black (invisible), letting
             // the cave walls behind show through untinted ("air pocket" artifact). The top face
             // already uses max(self, above); this keeps side walls consistent with it.
+            int ly = wy - lighting.OriginY;
+            int sideLight = Math.Max(lighting.GetLight(wx, ly, wz), lighting.GetLight(neighborX, ly, neighborZ));
+            double brightness = shade * ChunkLighting.Brightness(sideLight);
+            var blockPos = new Point3D(wx, wy, wz);
+            mesh.Add(new MeshFace(
+                p0, p1, p2, p3,
+                tile, normal, blockPos, (float)brightness, 1, 1, alpha, anchorVBottom: true));
+        }
+
+// ---- Lava pass (same as water but with lava properties) ----
+
+        private static void EmitLavaFaces(Chunk chunk, Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh)
+        {
+            byte[] raw = chunk.RawBlocks;
+            int height = chunk.Height;
+            int depth = chunk.Depth;
+            int width = chunk.Width;
+            float alpha = BlockRegistry.Alpha(LavaId);
+            var sideTile = new TextureRect(LavaBaseTile.X + BlockRegistry.TileSize, LavaBaseTile.Y, LavaBaseTile.Width, LavaBaseTile.Height);
+
+            // First sweep: every NON-TOP lava face (bottoms + walls).
+            for (int x = 0; x < width; x++)
+            {
+                for (int z = 0; z < depth; z++)
+                {
+                    int column = (x * depth + z) * height;
+                    for (int y = 0; y < height; y++)
+                    {
+                        if (raw[column + y] != LavaId) continue;
+
+                        float h00 = GetFluidHeight(lookup, LavaId, chunk.OriginX + x, chunk.OriginY + y, chunk.OriginZ + z);
+                        float h01 = GetFluidHeight(lookup, LavaId, chunk.OriginX + x, chunk.OriginY + y, chunk.OriginZ + z + 1);
+                        float h11 = GetFluidHeight(lookup, LavaId, chunk.OriginX + x + 1, chunk.OriginY + y, chunk.OriginZ + z + 1);
+                        float h10 = GetFluidHeight(lookup, LavaId, chunk.OriginX + x + 1, chunk.OriginY + y, chunk.OriginZ + z);
+                        EmitLavaBottomFace(lookup, lighting, LavaId, chunk.OriginX + x, chunk.OriginY + y, chunk.OriginZ + z,
+                            LavaBaseTile, alpha, mesh);
+                        EmitLavaSideFaces(lookup, lighting, LavaId, chunk.OriginX + x, chunk.OriginY + y, chunk.OriginZ + z,
+                            sideTile, alpha, mesh, h00, h01, h11, h10);
+                    }
+                }
+            }
+            // Second sweep: ALL top faces LAST. Lava doesn't write depth, so face draw order is
+            // what decides lava-over-lava blending; emitting the surface after the walls means
+            // the lava surface always blends over exposed lower faces instead of the far faces
+            // painting over the nearer lava.
+            for (int x = 0; x < width; x++)
+            {
+                for (int z = 0; z < depth; z++)
+                {
+                    int column = (x * depth + z) * height;
+                    for (int y = 0; y < height; y++)
+                    {
+                        if (raw[column + y] != LavaId) continue;
+
+                        float h00 = GetFluidHeight(lookup, LavaId, chunk.OriginX + x, chunk.OriginY + y, chunk.OriginZ + z);
+                        float h01 = GetFluidHeight(lookup, LavaId, chunk.OriginX + x, chunk.OriginY + y, chunk.OriginZ + z + 1);
+                        float h11 = GetFluidHeight(lookup, LavaId, chunk.OriginX + x + 1, chunk.OriginY + y, chunk.OriginZ + z + 1);
+                        float h10 = GetFluidHeight(lookup, LavaId, chunk.OriginX + x + 1, chunk.OriginY + y, chunk.OriginZ + z);
+                        EmitLavaTopFace(lookup, lighting, LavaId, chunk.OriginX + x, chunk.OriginY + y, chunk.OriginZ + z,
+                            LavaBaseTile, sideTile, alpha, mesh, h00, h01, h11, h10);
+                    }
+                }
+            }
+        }
+
+        private static void EmitLavaTopFace(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, int lavaId,
+            int wx, int wy, int wz, TextureRect baseTile, TextureRect sideTile, float alpha, List<MeshFace> mesh,
+            float h00, float h01, float h11, float h10)
+        {
+            if (GetBlockAt(lookup, wx, wy + 1, wz) != LavaId)
+            {
+                var topTile = GetFlowVector(lookup, lavaId, wx, wy, wz) ? sideTile : baseTile;
+                int ly = wy - lighting.OriginY;
+                int topLight = Math.Max(lighting.GetLight(wx, ly, wz), lighting.GetLight(wx, ly + 1, wz));
+                double brightness = 1.0 * ChunkLighting.Brightness(topLight);
+                mesh.Add(new MeshFace(
+                    new Point3D(wx + 0, wy + h00, wz + 0),
+                    new Point3D(wx + 0, wy + h01, wz + 1),
+                    new Point3D(wx + 1, wy + h11, wz + 1),
+                    new Point3D(wx + 1, wy + h10, wz + 0),
+                    topTile, new Point3D(0, 1, 0), new Point3D(wx, wy, wz), (float)brightness, 1, 1, alpha));
+            }
+        }
+
+        private static void EmitLavaBottomFace(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, int lavaId,
+            int wx, int wy, int wz, TextureRect baseTile, float alpha, List<MeshFace> mesh)
+        {
+            int below = GetBlockAt(lookup, wx, wy - 1, wz);
+            if (below != LavaId && (!BlockRegistry.IsSolid(below) || BlockRegistry.IsTransparent(below)))
+            {
+                int ly = wy - lighting.OriginY;
+                double brightness = 0.5 * ChunkLighting.Brightness(lighting.GetLight(wx, ly - 1, wz));
+                mesh.Add(new MeshFace(
+                    new Point3D(wx + 0, wy + 0, wz + 0),
+                    new Point3D(wx + 1, wy + 0, wz + 0),
+                    new Point3D(wx + 1, wy + 0, wz + 1),
+                    new Point3D(wx + 0, wy + 0, wz + 1),
+                    baseTile, new Point3D(0, -1, 0), new Point3D(wx, wy, wz), (float)brightness, 1, 1, alpha));
+            }
+        }
+
+        private static void EmitLavaSideFaces(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, int lavaId,
+            int wx, int wy, int wz, TextureRect sideTile, float alpha, List<MeshFace> mesh,
+            float h00, float h01, float h11, float h10)
+        {
+            EmitLavaSide(lookup, lighting, lavaId, wx, wy, wz, mesh,
+                new Point3D(0, 0, -1), sideTile, alpha, 0.8, wx, wz - 1,
+                new Point3D(wx + 0, wy + 0, wz + 0),
+                new Point3D(wx + 1, wy + 0, wz + 0),
+                new Point3D(wx + 1, wy + h10, wz + 0),
+                new Point3D(wx + 0, wy + h00, wz + 0));
+            EmitLavaSide(lookup, lighting, lavaId, wx, wy, wz, mesh,
+                new Point3D(0, 0, 1), sideTile, alpha, 0.8, wx, wz + 1,
+                new Point3D(wx + 1, wy + 0, wz + 1),
+                new Point3D(wx + 0, wy + 0, wz + 1),
+                new Point3D(wx + 0, wy + h01, wz + 1),
+                new Point3D(wx + 1, wy + h11, wz + 1));
+            EmitLavaSide(lookup, lighting, lavaId, wx, wy, wz, mesh,
+                new Point3D(-1, 0, 0), sideTile, alpha, 0.6, wx - 1, wz,
+                new Point3D(wx + 0, wy + 0, wz + 0),
+                new Point3D(wx + 0, wy + 0, wz + 1),
+                new Point3D(wx + 0, wy + h01, wz + 1),
+                new Point3D(wx + 0, wy + h00, wz + 0));
+            EmitLavaSide(lookup, lighting, lavaId, wx, wy, wz, mesh,
+                new Point3D(1, 0, 0), sideTile, alpha, 0.6, wx + 1, wz,
+                new Point3D(wx + 1, wy + 0, wz + 1),
+                new Point3D(wx + 1, wy + 0, wz + 0),
+                new Point3D(wx + 1, wy + h10, wz + 0),
+                new Point3D(wx + 1, wy + h11, wz + 1));
+        }
+
+        private static void EmitLavaSide(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, int lavaId,
+            int wx, int wy, int wz, List<MeshFace> mesh,
+            Point3D normal, TextureRect tile, float alpha, double shade, int neighborX, int neighborZ,
+            Point3D p0, Point3D p1, Point3D p2, Point3D p3)
+        {
+            int neighbor = GetBlockAt(lookup, neighborX, wy, neighborZ);
+            if (neighbor == LavaId || (BlockRegistry.IsSolid(neighbor) && !BlockRegistry.IsTransparent(neighbor)))
+            {
+                return;
+            }
+
             int ly = wy - lighting.OriginY;
             int sideLight = Math.Max(lighting.GetLight(wx, ly, wz), lighting.GetLight(neighborX, ly, neighborZ));
             double brightness = shade * ChunkLighting.Brightness(sideLight);

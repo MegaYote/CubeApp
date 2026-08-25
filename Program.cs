@@ -86,12 +86,13 @@ namespace Cubuild
         // hardness, particles pop every 20%, and the block breaks at progress >= 1.
         private const float BaseBreakTime = 2.5f;    // seconds for hardness 1.0
         private const float BreakParticleInterval = 0.2f; // spawn shards every 20% progress
-        private const float CreativeBreakInterval = 0.2f; // creative: one instant break per 0.2s (~5/s)
+        private const float CreativeBreakInterval = 0.15f; // delay only when holding, clicks are instant
         private (int x, int y, int z)? _miningTarget;
         private float _miningProgress;
         private int _miningBlockId;
         private float _miningBlockHardness;
         private float _creativeBreakCooldown;
+        private bool _wasCreativeBreakHeld; // track if button was held last frame
         private float _handPokeTimer;
         // One-shot first-person punch when left-clicking the air (no block to mine, no mob
         // to attack). Plays a single swing like Minecraft; mining a block uses MiningProgress

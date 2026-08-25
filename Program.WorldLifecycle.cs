@@ -22,13 +22,18 @@ namespace Cubuild
             World = new GameWorld(seed, name, () => gpuRenderer, ChunkRenderRadius, Math.Max(1, Environment.ProcessorCount - 2));
             World.Mode = mode;
             World.IsMinecraftMode = isMinecraftMode;
-            // Creative starts flying; survival starts grounded with an empty hotbar (mine to earn).
+            // Both modes start with an empty hotbar; creative also gets flying.
             World.FlyMode = mode == GameMode.Creative;
+            for (int i = 0; i < GameWorld.HotbarSlots; i++) World.Hotbar[i] = BlockRegistry.AirId;
+            World.SelectedBlock = BlockRegistry.AirId;
+            World.SelectedSlot = 0;
             if (mode == GameMode.Survival)
             {
-                for (int i = 0; i < GameWorld.HotbarSlots; i++) World.Hotbar[i] = BlockRegistry.AirId;
-                World.SelectedBlock = BlockRegistry.AirId;
-                World.SelectedSlot = 0;
+                // Survival starts grounded; creative gets flying
+            }
+            else
+            {
+                World.FlyMode = true;
             }
             World.ChunkGenerated += OnChunkGenerated;
             World.ChunkUnloaded += OnChunkUnloaded;

@@ -383,9 +383,17 @@ namespace Cubuild.Renderer
         private const int WaterTileY = 14;
         private const int WaterFrameCount = 4;
         private const float WaterCycleSeconds = 8.0f;   // one full 4-frame fade cycle
+
+        // Lava animation: row 15, columns 12-15 (tiles 12,15 through 15,15)
+        private const int LavaTileX = 12;
+        private const int LavaTileY = 15;
+        private const float LavaCycleSeconds = 6.0f;  // slightly faster than water
         private byte[]? _waterFrames;                    // 4 x 16x16 RGBA frames (pristine copy)
         private byte[]? _waterStrip;                     // 64x16 RGBA blended strip for upload
         private readonly System.Diagnostics.Stopwatch _waterClock = new();
+        private byte[]? _lavaFrames;                   // 4 x 16x16 RGBA frames (pristine copy)
+        private byte[]? _lavaStrip;                    // 64x16 RGBA blended strip for upload
+        private readonly System.Diagnostics.Stopwatch _lavaClock = new();
         private Texture? _iconAtlasTexture;
         private TextureView? _iconAtlasView;
         private IntPtr _iconImGuiId;
@@ -727,6 +735,21 @@ namespace Cubuild.Renderer
                         }
                         _waterStrip = new byte[64 * 16 * 4];
                         _waterClock.Restart();
+
+                        // Extract the 4 lava animation frames (16x16 each) from row 15, columns 12-15
+                        _lavaFrames = new byte[WaterFrameCount * 16 * 16 * 4];
+                        for (int f = 0; f < WaterFrameCount; f++)
+                        {
+                            int srcX = (LavaTileX + f) * 16;
+                            int srcY = LavaTileY * 16;
+                            for (int y = 0; y < 16; y++)
+                            {
+                                Array.Copy(image.Data, (srcY + y) * atlasRowBytes + srcX * 4,
+                                    _lavaFrames, (f * 16 + y) * 16 * 4, 16 * 4);
+                            }
+                        }
+                        _lavaStrip = new byte[64 * 16 * 4];
+                        _lavaClock.Restart();
                     }
 
                     var texDesc = TextureDescription.Texture2D((uint)w, (uint)h, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
@@ -1302,6 +1325,7 @@ namespace Cubuild.Renderer
             _viewProjection = viewProj;
             _gd.UpdateBuffer(_projViewBuffer, 0, ref viewProj);
             UpdateWaterAnimation();
+            UpdateLavaAnimation();
             if (_skyMatrixBuffer != null)
                 _gd.UpdateBuffer(_skyMatrixBuffer, 0, ref skyViewProj);
             if (_cloudMatrixBuffer != null)
@@ -1354,6 +1378,50 @@ namespace Cubuild.Renderer
             {
                 _gd.UpdateTexture(_atlasTexture, handle.AddrOfPinnedObject(), (uint)_waterStrip.Length,
                     (uint)(WaterTileX * 16), (uint)(WaterTileY * 16), 0, 64, 16, 1, 0, 0);
+            }
+            finally
+            {
+                handle.Free();
+            }
+        }
+
+        /// <summary>Crossfades the two current lava frames into the atlas strip and re-uploads the
+        /// 64x16 region. Runs once per rendered frame while the atlas exists; the upload is 4KB so
+        /// the per-frame cost is negligible.</summary>
+        private void UpdateLavaAnimation()
+        {
+            if (_lavaFrames == null || _lavaStrip == null || _atlasTexture == null) return;
+
+            double elapsed = _lavaClock.Elapsed.TotalSeconds;
+            double phase = (elapsed / LavaCycleSeconds) * WaterFrameCount; // 0..4 looping
+            int frameA = (int)Math.Floor(phase) % WaterFrameCount;
+            int frameB = (frameA + 1) % WaterFrameCount;
+            float fade = (float)(phase - Math.Floor(phase));
+
+            // Blend frame A -> B. Still lava (tile 12,15) and flowing lava (tile 13,15) share the animation.
+            for (int y = 0; y < 16; y++)
+            {
+                for (int x = 0; x < 16; x++)
+                {
+                    int pixel = y * 16 + x;
+                    int srcABase = (frameA * 256 + pixel) * 4;
+                    int srcBBase = (frameB * 256 + pixel) * 4;
+                    for (int c = 0; c < 4; c++)
+                    {
+                        int a = _lavaFrames[srcABase + c];
+                        int b = _lavaFrames[srcBBase + c];
+                        byte v = (byte)(a + (b - a) * fade);
+                        _lavaStrip[(y * 64 + x) * 4 + c] = v;          // tile 12,15 - still lava
+                        _lavaStrip[(y * 64 + 16 + x) * 4 + c] = v;     // tile 13,15 - flowing lava
+                    }
+                }
+            }
+
+            var handle = System.Runtime.InteropServices.GCHandle.Alloc(_lavaStrip, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try
+            {
+                _gd.UpdateTexture(_atlasTexture, handle.AddrOfPinnedObject(), (uint)_lavaStrip.Length,
+                    (uint)(LavaTileX * 16), (uint)(LavaTileY * 16), 0, 64, 16, 1, 0, 0);
             }
             finally
             {

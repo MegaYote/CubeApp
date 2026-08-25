@@ -108,12 +108,12 @@ namespace Cubuild
 
             if (miningHeld && _ignoreInteractFrames == 0)
             {
-                // Creative: near-instant breaking, but rate-limited so you can actually aim it
-                // (a block every ~0.2s instead of one per frame). Bedrock-like (infinite-hardness)
-                // blocks still can't be broken.
+                // Creative: instant on click, small delay only when HOLDING the button
                 if (World.IsCreative)
                 {
-                    if (_creativeBreakCooldown > 0f)
+                    bool isHeld = tickInput.BreakHeld;
+                    // Only apply cooldown if button was ALREADY held last frame (i.e., holding)
+                    if (isHeld && _wasCreativeBreakHeld && _creativeBreakCooldown > 0f)
                     {
                         _creativeBreakCooldown -= deltaSeconds;
                         _miningTarget = null;
@@ -130,10 +130,22 @@ namespace Cubuild
                             DeleteBlockAt(target.x, target.y, target.z);
                         }
                     }
-                    _creativeBreakCooldown = CreativeBreakInterval;
                     _miningTarget = null;
                     _miningProgress = 0f;
+                    // Reset cooldown only when we actually broke something
+                    if (cpick.HasValue)
+                    {
+                        _creativeBreakCooldown = CreativeBreakInterval;
+                    }
+                    // Track if we're holding for next frame
+                    _wasCreativeBreakHeld = isHeld;
                     return;
+                }
+
+                // Reset hold tracking when not in creative or button released
+                if (!World.IsCreative || !tickInput.BreakHeld)
+                {
+                    _wasCreativeBreakHeld = false;
                 }
 
                 var pick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());

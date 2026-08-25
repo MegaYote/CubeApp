@@ -19,6 +19,7 @@ namespace Cubuild
         private readonly ChunkManager _manager;
         private readonly MeshScheduler _meshScheduler;
         private readonly FluidSimulation _fluid;
+        private readonly LavaSimulation _lava;
         private readonly GravitySimulation _gravity;
         private readonly GrassSpreadSimulation _grass;
         private readonly SaplingGrowthSimulation _sapling;
@@ -37,12 +38,14 @@ namespace Cubuild
             _manager = manager ?? throw new ArgumentNullException(nameof(manager));
             _meshScheduler = meshScheduler ?? throw new ArgumentNullException(nameof(meshScheduler));
             _fluid = new FluidSimulation(manager, this);
+            _lava = new LavaSimulation(manager, this);
             _gravity = new GravitySimulation(manager, this, meshScheduler);
             _grass = new GrassSpreadSimulation(manager, this);
             _sapling = new SaplingGrowthSimulation(manager, this);
         }
 
         public FluidSimulation Fluid => _fluid;
+        public LavaSimulation Lava => _lava;
         public GravitySimulation Gravity => _gravity;
         public GrassSpreadSimulation Grass => _grass;
         public SaplingGrowthSimulation Sapling => _sapling;
@@ -77,10 +80,11 @@ namespace Cubuild
             _queue.Enqueue((due, x, y, z), due);
         }
 
-        /// <summary>Wake nearby water + gravity + grass + saplings after any world change (block placed/removed).</summary>
+        /// <summary>Wake nearby water + gravity + grass + saplings + lava after any world change (block placed/removed).</summary>
         public void OnBlockChanged(int x, int y, int z)
         {
             _fluid.OnBlockChanged(x, y, z);
+            _lava.OnBlockChanged(x, y, z);
             _gravity.OnBlockChanged(x, y, z);
             _grass.OnBlockChanged(x, y, z);
             _sapling.OnBlockChanged(x, y, z);
@@ -126,6 +130,7 @@ namespace Cubuild
 
                 _gravity.TickBlock(item.x, item.y, item.z);
                 _fluid.TickBlock(item.x, item.y, item.z);
+                _lava.TickBlock(item.x, item.y, item.z);
                 _grass.TickBlock(item.x, item.y, item.z);
                 _sapling.TickBlock(item.x, item.y, item.z);
                 processed++;
