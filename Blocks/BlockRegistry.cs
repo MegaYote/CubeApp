@@ -84,6 +84,11 @@ namespace Cubuild
             public bool ZombieCanBreak { get; set; } = false;
             public string? ZombieBreakSpeed { get; set; } = "Medium"; // Slow / Medium / Fast
             public string? Base { get; set; } // inherit texture/top/bottom/side/colour from another block id
+
+            // --- Door properties ---
+            public string? DoorHalf { get; set; } = "bottom"; // "bottom" or "top"
+            public string? DoorHinge { get; set; } = "left";   // "left" or "right"
+            public bool? DoorOpen { get; set; } = false;
         }
 
         /// <summary>Default survival-mining hardness (Cubuild C++ port). Blocks that share an id
@@ -133,14 +138,26 @@ namespace Cubuild
             bool isGlass = string.Equals(shape, "glass", StringComparison.OrdinalIgnoreCase);
             bool isPartial = string.Equals(shape, "slab", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(shape, "slab_top", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(shape, "stairs", StringComparison.OrdinalIgnoreCase);
+                || string.Equals(shape, "stairs", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(shape, "door", StringComparison.OrdinalIgnoreCase);
+
+            bool isDoor = string.Equals(shape, "door", StringComparison.OrdinalIgnoreCase);
 
             dto.Solid ??= !isCross;                                    // cross plants don't collide
             dto.Opaque ??= !(isCross || isCutout || isGlass || isPartial); // anything see-through lets light pass
-            dto.Transparent ??= isCross || isCutout || isGlass;        // hide internal faces between like blocks
+            dto.Transparent ??= isCross || isCutout || isGlass || isDoor; // hide internal faces between like blocks
             dto.Alpha ??= isCross ? 0.95 : 1.0;                        // cross atlas tiles have baked-in background
             dto.Translucent ??= false;
-            dto.Inventory ??= !string.Equals(shape, "slab_top", StringComparison.OrdinalIgnoreCase); // _top halves are placement-only
+            dto.Inventory ??= !string.Equals(shape, "slab_top", StringComparison.OrdinalIgnoreCase)
+                && !isDoor; // _top halves and door tops are placement-only
+
+            // Door-specific defaults
+            if (isDoor)
+            {
+                dto.DoorHalf ??= "bottom";
+                dto.DoorHinge ??= "left";
+                dto.DoorOpen ??= false;
+            }
         }
 
         /// <summary>Recursively copies tiles + map colour from a "base" block so variants like
@@ -222,6 +239,9 @@ namespace Cubuild
                     ToolRequired = dto.ToolRequired,
                     ZombieCanBreak = dto.ZombieCanBreak,
                     ZombieBreakSpeed = ParseZombieBreakSpeed(dto.ZombieBreakSpeed),
+                    DoorHalf = dto.DoorHalf ?? "bottom",
+                    DoorHinge = dto.DoorHinge ?? "left",
+                    DoorOpen = dto.DoorOpen ?? false,
                 };
 
                 // Tiles are parsed here when present; entries with only a "base" get their

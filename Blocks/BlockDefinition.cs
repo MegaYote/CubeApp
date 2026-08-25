@@ -78,11 +78,21 @@ namespace Cubuild
         /// </summary>
         public bool ToolRequired { get; set; } = false;
 
-        /// <summary>Whether zombies can path through this block by breaking it.</summary>
+/// <summary>Whether zombies can path through this block by breaking it.</summary>
         public bool ZombieCanBreak { get; set; } = false;
 
-        /// <summary>How quickly zombies break through this block (Slow/Medium/Fast).</summary>
+        /// <summary>How quickly zombies can break through this block (Slow/Medium/Fast).</summary>
         public ZombieBreakSpeed ZombieBreakSpeed { get; set; } = ZombieBreakSpeed.Medium;
+
+        // --- Door properties ---
+        /// <summary>Which half of the door this block represents: "bottom" or "top".</summary>
+        public string DoorHalf { get; set; } = "bottom";
+
+        /// <summary>Which side the hinge is on: "left" or "right". Determines swing direction.</summary>
+        public string DoorHinge { get; set; } = "left";
+
+        /// <summary>Whether the door is currently open.</summary>
+        public bool DoorOpen { get; set; } = false;
 
         /// <summary>Picks the atlas tile for a given face normal, honouring top/bottom/side overrides.</summary>
         public TextureRect FaceTexture(Point3D normal)
