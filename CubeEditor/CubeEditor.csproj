@@ -10,4 +10,11 @@
     <RootNamespace>CubeEditor</RootNamespace>
   </PropertyGroup>
 
+  <!-- AtlasChecker is its own exe with its own csproj; don't glob its sources into this one. -->
+  <ItemGroup>
+    <Compile Remove="AtlasChecker\**\*" />
+    <EmbeddedResource Remove="AtlasChecker\**\*" />
+    <None Remove="AtlasChecker\**\*" />
+  </ItemGroup>
+
 </Project>
