@@ -179,6 +179,10 @@ namespace Cubuild
             {
                 for (int i = 0; i < GameWorld.HotbarSlots; i++) World.Hotbar[i] = save.Hotbar[i];
             }
+            if (save.HotbarCounts != null && save.HotbarCounts.Length == GameWorld.HotbarSlots)
+            {
+                for (int i = 0; i < GameWorld.HotbarSlots; i++) World.HotbarCounts[i] = save.HotbarCounts[i];
+            }
             World.SetSelectedSlot(Math.Clamp(save.SelectedSlot, 0, GameWorld.HotbarSlots - 1));
             World.RestoreBag(save.Bag);
             World.HeldStack = save.HasHeldStack && save.HeldItemId > 0 && save.HeldCount > 0

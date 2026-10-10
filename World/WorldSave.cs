@@ -51,6 +51,7 @@ namespace Cubuild
         public float Yaw, Pitch;
         public int SelectedSlot;
         public int[] Hotbar = new int[10];
+        public int[] HotbarCounts = new int[10];
         /// <summary>v5: full E-menu bag (4 rows x 10), Minecraft-style inventory persistence.</summary>
         public InventorySlot[] Bag = new InventorySlot[40];
         /// <summary>v5: stack riding the cursor when the inventory closed.</summary>
@@ -81,6 +82,7 @@ namespace Cubuild
                 w.Write(Pitch);
                 w.Write(SelectedSlot);
                 for (int i = 0; i < 10; i++) w.Write(i < Hotbar.Length ? Hotbar[i] : 0);
+                for (int i = 0; i < 10; i++) w.Write(i < HotbarCounts.Length ? HotbarCounts[i] : 0);
 
                 // v5: full player + inventory state (bag, cursor, health, time of day).
                 w.Write(PlayerHealth);
@@ -151,6 +153,8 @@ namespace Cubuild
                 save.SelectedSlot = reader.ReadInt32();
                 save.Hotbar = new int[10];
                 for (int i = 0; i < 10; i++) save.Hotbar[i] = reader.ReadInt32();
+                save.HotbarCounts = new int[10];
+                for (int i = 0; i < 10; i++) save.HotbarCounts[i] = reader.ReadInt32();
 
                 if (version >= 5)
                 {

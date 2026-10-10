@@ -178,6 +178,7 @@ namespace Cubuild
         }
 
         // The host's LAN IPs, so the friend knows what address to type on Join Game.
+        // Prioritizes the IP on the same subnet as the default gateway (actual LAN IP).
         private static string GetLanAddresses()
         {
             try
@@ -190,6 +191,41 @@ namespace Cubuild
                         addrs.Add(ip.ToString());
                     }
                 }
+                if (addrs.Count == 0) addrs.Add("127.0.0.1");
+
+                // Try to find the IP on the same subnet as the default gateway (actual LAN IP)
+                try
+                {
+                    var defaultGateway = System.Net.NetworkInformation.NetworkInterface
+                        .GetAllNetworkInterfaces()
+                        .Where(n => n.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up 
+                                 && n.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback)
+                        .SelectMany(n => n.GetIPProperties().GatewayAddresses)
+                        .Where(g => g.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                        .Select(g => g.Address)
+                        .FirstOrDefault();
+
+                    if (defaultGateway != null)
+                    {
+                        // Find the LAN IP that shares the same subnet as the gateway (assuming /24)
+                        var gatewayBytes = defaultGateway.GetAddressBytes();
+                        var preferred = addrs.FirstOrDefault(ip => 
+                        {
+                            var ipBytes = System.Net.IPAddress.Parse(ip).GetAddressBytes();
+                            return ipBytes[0] == gatewayBytes[0] 
+                                && ipBytes[1] == gatewayBytes[1] 
+                                && ipBytes[2] == gatewayBytes[2];
+                        });
+                        if (preferred != null)
+                        {
+                            // Move preferred to front
+                            addrs.Remove(preferred);
+                            addrs.Insert(0, preferred);
+                        }
+                    }
+                }
+                catch { /* ignore - fall back to all addresses */ }
+
                 if (addrs.Count == 0) addrs.Add("127.0.0.1");
                 return string.Join("/", addrs);
             }
