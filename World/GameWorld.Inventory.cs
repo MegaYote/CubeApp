@@ -116,7 +116,17 @@ namespace Cubuild
         /// the item's own stack size (tools cap at 1): hotbar first (matching then empty), then
         /// the bag.</summary>
         public bool TryAddToInventory(int itemId, int count)
+            => TryAddToInventory(itemId, count, out _);
+
+        /// <summary>
+        /// As the bool overload, but reports how many items were ACTUALLY added via
+        /// <paramref name="added"/>. A bool can't express a partial add: a drop of 64 into an
+        /// inventory with one free slot returns true (something fit) while 63 items are still
+        /// unaccounted for, which is how ground drops used to get silently destroyed.
+        /// </summary>
+        public bool TryAddToInventory(int itemId, int count, out int added)
         {
+            added = 0;
             if (itemId <= 0 || count <= 0) return false;
             int remaining = count;
             int air = BlockRegistry.AirId;
@@ -159,41 +169,75 @@ namespace Cubuild
                     remaining -= add;
                 }
             }
-            return remaining < count;
+            added = count - remaining;
+            return added > 0;
         }
 
         /// <summary>Collects an item, preferring the first hotbar slot that already holds that item,
         /// then the first empty hotbar slot; otherwise it goes into the bag. If the player has
-        /// nothing selected, picking up fills the selected slot so it is usable right away.</summary>
-        public bool CollectItem(int itemId, int count = 1)
+        /// nothing selected, picking up fills the selected slot so it is usable right away.
+        ///
+        /// Returns how many items were actually taken. This can be LESS than
+        /// <paramref name="count"/> when the inventory is full or partly full - callers that
+        /// destroy a source (like the ground-drop magnet) must use this return value to decide
+        /// whether to remove it or shrink it, never just assume everything fitted.</summary>
+        public int CollectItem(int itemId, int count = 1)
         {
-            if (itemId <= 0 || count <= 0) return false;
+            if (itemId <= 0 || count <= 0) return 0;
             int air = BlockRegistry.AirId;
 
+            // A hotbar slot already holding this item is the best merge target.
             for (int i = 0; i < HotbarSlots; i++)
             {
                 if (Hotbar[i] == itemId)
                 {
-                    TryAddToInventory(itemId, count);
-                    return true;
+                    TryAddToInventory(itemId, count, out int added);
+                    return added;
                 }
             }
+            // Otherwise claim an empty hotbar slot so it lands somewhere immediately usable.
             for (int i = 0; i < HotbarSlots; i++)
             {
                 if (Hotbar[i] == air)
                 {
                     Hotbar[i] = itemId;
-                    TryAddToInventory(itemId, count);
+                    TryAddToInventory(itemId, count, out int added);
                     if (SelectedBlock <= 0)
                     {
                         SelectedBlock = itemId;
                         SelectedSlot = i;
                     }
-                    return true;
+                    return added;
                 }
             }
-            TryAddToInventory(itemId, count);
-            return true;
+            TryAddToInventory(itemId, count, out int toBag);
+            return toBag;
+        }
+
+        /// <summary>
+        /// Puts the stack riding the inventory cursor back into the player when a container UI
+        /// closes, so it can't be orphaned on a phantom "held stack" that is neither in the
+        /// inventory nor on the ground. Anything the inventory can't take is dropped at the
+        /// player's feet rather than destroyed.
+        /// </summary>
+        public void ReturnHeldStackToInventory()
+        {
+            if (HeldStack is not { } held) return;
+            int itemId = held.ItemId;
+            int count = held.Count;
+            if (itemId <= 0 || count <= 0) { HeldStack = null; return; }
+
+            HeldStack = null; // clear first so a failed add can't recurse back into the cursor
+            TryAddToInventory(itemId, count, out int added);
+            int leftover = count - added;
+            // Creative is infinite anyway, so overflow is discarded rather than dropped on the
+            // floor - and survival drops don't magnetise in creative, so a spawned one would
+            // just sit there until it despawned.
+            if (leftover > 0 && !IsCreative)
+            {
+                SpawnItemDrop(itemId, leftover, new Point3D(
+                    LocalPlayer.Position.X, LocalPlayer.Position.Y - EyeHeight + 0.4, LocalPlayer.Position.Z));
+            }
         }
 
         // ---- inventory cursor (ported drag logic from the C++ E-menu) ----

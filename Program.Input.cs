@@ -24,6 +24,9 @@ namespace Cubuild
                     // ESC closes the E-menu / crafting menu / biome menu first; only then does it pause.
                     if (inventoryOpen || craftingOpen || biomeMenuOpen)
                     {
+                        // Never leave a stack orphaned on the cursor: return it to the player
+                        // (dropping any overflow) as the container shuts.
+                        World?.ReturnHeldStackToInventory();
                         inventoryOpen = false;
                         craftingOpen = false;
                         biomeMenuOpen = false;
@@ -94,8 +97,19 @@ namespace Cubuild
                 if (frameInput.ToggleInventoryPressed)
                 {
                     inventoryOpen = !inventoryOpen;
-                    if (inventoryOpen) { craftingOpen = false; DisableMouseLook(); }
-                    else EnableMouseLook();
+                    if (inventoryOpen)
+                    {
+                        // Opening the E-menu also shuts the crafting menu - hand the cursor
+                        // stack back rather than stranding it.
+                        if (craftingOpen) World?.ReturnHeldStackToInventory();
+                        craftingOpen = false;
+                        DisableMouseLook();
+                    }
+                    else
+                    {
+                        World?.ReturnHeldStackToInventory();
+                        EnableMouseLook();
+                    }
                 }
                 // Teleport menu is a creative sandbox convenience.
                 if (frameInput.ToggleBiomeMenuPressed && World.IsCreative)

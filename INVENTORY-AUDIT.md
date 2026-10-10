@@ -4,6 +4,9 @@ Audited against `Cubuild` (CubeApp) at commit `19e3903`. This document records a
 work can resume later. Reference this file when continuing — it should stay up to date with
 anything implemented.
 
+**Status:** #1 (hotbar counts), #2 (drop loss on full inventory) and #7 (orphan cursor stack)
+are fixed. #3-#6 and #8-#12 remain open. #4 (durability) is the largest of the remaining.
+
 ---
 
 ## 🔴 Bugs (caused data loss / broken behavior)
@@ -20,16 +23,22 @@ anything implemented.
   - Hotbar shows the icon but no count (`UI.cs:1301` shows count only when `count > 0`).
 - **Fix:** add `HotbarCounts` to `WorldSave`, write it, and restore it in `LoadWorld`.
 
-### 2. Items silently destroyed when the inventory is full (DATA LOSS)
-- **`World\GameWorld.Simulation.cs`** (~40-44, magnet phase) — on arrival calls
-  `CollectItem(d.ItemId, d.Count)` then **unconditionally `_droppedItems.RemoveAt(i)`**.
-- **`World\GameWorld.Inventory.cs`** `CollectItem` (~168-197) — **ignores** `TryAddToInventory`'s
-  return value and always returns `true`.
-- **`Inventory.cs`** `TryAddToInventory` (~118-163) — returns `false` when nothing fits, and
-  returns `true` with `remaining > 0` when only part fits.
-- **Effect:** a drop that can't be collected (fully OR partially) is destroyed/overcounted.
-- **Fix:** `CollectItem` returns the amount actually added; `StepItemDrops` removes the drop only
-  when `remaining == 0` (otherwise leave a reduced-count drop on the ground).
+### 2. ~~Items silently destroyed when the inventory is full~~ ✅ FIXED
+- **Root cause (three layers):**
+  - **`World\GameWorld.Inventory.cs`** — `TryAddToInventory` returned only a `bool`, so a caller
+    could never learn *how many* items were added. A drop of 64 into an inventory with one free
+    slot returned `true` (something fit) while 63 items were unaccounted for.
+  - **`World\GameWorld.Inventory.cs`** — `CollectItem` ignored that return value entirely and
+    always returned `true`.
+  - **`World\GameWorld.Simulation.cs`** — on magnet arrival it called `CollectItem(d.ItemId, d.Count)`
+    then **unconditionally `_droppedItems.RemoveAt(i)`**.
+- **Fix:** `TryAddToInventory` gained an `out int added` overload (the old `bool` signature is
+  kept and delegates to it, so the one other caller is unaffected). `CollectItem` now returns
+  `int` — the number actually pocketed. The magnet only deletes the drop when
+  `added >= d.Count`, otherwise it shrinks the drop (`d.Count -= added`) and leaves it on the
+  ground to retry, so a full inventory costs you nothing.
+- **Note:** with a completely full inventory the drop now hovers at your feet and re-tries on the
+  normal pickup cadence instead of being eaten. That is the intended behaviour.
 
 ### 3. Creative picker never closes the menu after selecting (BUG)
 - **`Renderer\VeldridRenderer.UI.cs`** (~1391-1393) — comment says it "closes the menu" but it
@@ -60,13 +69,15 @@ anything implemented.
 - **Effect:** pressing a number while a menu is open silently changes the selected hotbar slot.
 - **Fix:** gate number keys behind "no menu open", like the scroll wheel.
 
-### 7. Cursor stack floats invisibly after closing the inventory (UX)
-- **`Program\Program.Input.cs`** ~97 — toggling `inventoryOpen` never returns `World.HeldStack`
-  (`GameWorld.Inventory.cs` ~201) to the inventory.
-- **Effect:** pick up 30 dirt, press E to close → the stack is neither dropped nor returned; it
-  floats "on the cursor" invisibly and reappears when reopening the E-menu.
-- **Fix:** closing a container with a carried stack should return it to the player inventory (or
-  drop it if full); at minimum, don't leave a phantom state.
+### 7. ~~Cursor stack floats invisibly after closing the inventory~~ ✅ FIXED
+- **Was:** `Program.Input.cs` toggled `inventoryOpen` without ever returning `World.HeldStack`
+  to the player, so a stack picked up and then hidden with E was neither in the inventory nor on
+  the ground — it reappeared when the menu reopened.
+- **Fix:** new `GameWorld.ReturnHeldStackToInventory()` puts the cursor stack back into the
+  inventory, and spawns any overflow at the player's feet rather than destroying it (skipped
+  entirely in creative, which is infinite). Wired into **all three** container close paths in
+  `Program.Input.cs`: ESC (`~27`), the E toggle (`~97`), and opening the E-menu over the
+  crafting menu.
 
 ---
 

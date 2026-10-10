@@ -39,8 +39,13 @@ namespace Cubuild
                     double dist = Math.Sqrt(hx * hx + hy * hy + hz * hz);
                     if (dist <= 0.25 || d.FlyTime <= 0f)
                     {
-                        CollectItem(d.ItemId, d.Count);
-                        _droppedItems.RemoveAt(i);
+                        // Only destroy the drop for what we actually managed to pocket. A full
+                        // (or partly full) inventory leaves the remainder lying on the ground
+                        // instead of silently eating it; the drop keeps flying and retries as
+                        // slots free up, and despawns normally if the player walks away.
+                        int added = CollectItem(d.ItemId, d.Count);
+                        if (added >= d.Count) _droppedItems.RemoveAt(i);
+                        else if (added > 0) d.Count -= added;
                         continue;
                     }
                     double speed = Math.Min(18.0, 7.0 + (PickupFlyDuration - d.FlyTime) * 40.0);
