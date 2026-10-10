@@ -185,7 +185,20 @@ namespace Cubuild
 
                         while (gpuRenderer.TryTakeInventorySelection(out int invBlock))
                         {
-                            if (World != null && invBlock > 0 && invBlock < ItemRegistry.Count)
+                            if (World == null || invBlock <= 0 || invBlock >= ItemRegistry.Count) continue;
+
+                            if (World.IsCreative)
+                            {
+                                // Creative palette: the pick goes on the CURSOR, not straight into
+                                // a hotbar slot - you then click whichever bag/hotbar cell you
+                                // want it in, exactly like Minecraft's creative screen. Picking a
+                                // second thing while holding one returns the held stack first so
+                                // the previous one isn't orphaned.
+                                if (World.HeldStack.HasValue) World.ReturnHeldStackToInventory();
+                                World.HeldStack = (invBlock,
+                                    Math.Min(GameWorld.MaxStackSize, ItemRegistry.StackSizeOf(invBlock)));
+                            }
+                            else
                             {
                                 World.Hotbar[World.SelectedSlot] = invBlock;
                                 World.HotbarCounts[World.SelectedSlot] = Math.Min(GameWorld.MaxStackSize, ItemRegistry.StackSizeOf(invBlock));
@@ -204,7 +217,6 @@ namespace Cubuild
                                 else if (click.Button == 0) World.TryCraft();
                                 continue;
                             }
-                            if (World.IsCreative) continue;
                             switch (click.Kind)
                             {
                                 case 0: // bag slot (target = slot index 0..39)
@@ -217,7 +229,11 @@ namespace Cubuild
                                     World.QuickMoveSlot(click.Target);
                                     break;
                                 case 2: // clicked outside the window: throw items
-                                    if (click.Button == 0) World.DropFromCursor(int.MaxValue);
+                                    // Creative is infinite, so throwing just discards the stack.
+                                    // Spawning a real drop would litter the floor with items the
+                                    // player can never pick back up (creative drops don't magnetise).
+                                    if (World.IsCreative) World.HeldStack = null;
+                                    else if (click.Button == 0) World.DropFromCursor(int.MaxValue);
                                     else World.DropFromCursor(1);
                                     break;
                             }

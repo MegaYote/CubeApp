@@ -4,8 +4,10 @@ Audited against `Cubuild` (CubeApp) at commit `19e3903`. This document records a
 work can resume later. Reference this file when continuing — it should stay up to date with
 anything implemented.
 
-**Status:** #1 (hotbar counts), #2 (drop loss on full inventory) and #7 (orphan cursor stack)
-are fixed. #3-#6 and #8-#12 remain open. #4 (durability) is the largest of the remaining.
+**Status:** #1 (hotbar counts), #2 (drop loss on full inventory), #7 (orphan cursor stack) and
+#12 (count threshold) are fixed. #3-#6 and #8-#11 remain open. #4 (durability) is the largest of
+the remaining. #3 is now moot by design - the creative palette hands picks to the cursor instead
+of closing the menu, so there is nothing left to close.
 
 ---
 
@@ -109,10 +111,18 @@ are fixed. #3-#6 and #8-#12 remain open. #4 (durability) is the largest of the r
 - **Effect:** hovering an empty bag slot in the no-texture path shows tooltip of item 0 ("Air") and
   renders a trailing "0" count.
 
-### 12. Count-display threshold inconsistent (MINOR)
-- **`UI.cs`** ~347 (E-menu) shows count only when `count > 1 && StackSizeOf > 1`.
-- **`UI.cs`** ~1301 (hotbar HUD) shows count when `count > 0 && StackSizeOf > 1`.
-- A stack of 1 shows "1" in the hotbar but is unlabeled in the E-menu.
+### 12. ~~Count-display threshold inconsistent~~ ✅ FIXED
+- **Was:** `UI.cs` ~347 (E-menu) showed the count only when `count > 1 && StackSizeOf > 1`, but
+  `UI.cs` ~1301 (hotbar HUD) showed it at `count > 0`, so a stack of 1 read "1" on the hotbar but
+  was blank in the menu.
+- **Fix:** the untextured menus now route through one helper, `DrawSlotCountOverlay`, which uses
+  `count > 1 && StackSizeOf > 1` — the same rule the textured E-menu already used.
+
+### 13. Stack counts shoved the slots apart (FIXED along with the creative rework)
+- The fallback slot cells drew the count as a **layout sibling** (`SameLine` + `Text`), which
+  widened the row and pushed neighbouring slots apart instead of staying inside the cell.
+- Now drawn on the foreground draw list at the cell's bottom-right, with a drop shadow so it
+  stays legible over bright icons — matching the textured E-menu.
 
 ---
 

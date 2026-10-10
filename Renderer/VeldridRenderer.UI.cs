@@ -25,14 +25,6 @@ namespace Cubuild.Renderer
             Vector2 snapOrigin = Vector2.Zero;
             float snapStartX = 0f, snapStartY = 0f, snapStepX = 0f, snapStepY = 0f, snapHotbarY = 0f, snapSlotPx = 0f;
 
-            // Full-screen semi-transparent gray overlay â€” dims the game world, hotbar, and
-            // healthbar behind the inventory, exactly the way Minecraft does.
-            // Must be on the Foreground draw list so it paints over the HUD (hotbar/health
-            // are also Foreground), but the panel + slots draw later on the same list on top.
-            var fgOverlay = ImGui.GetForegroundDrawList();
-            uint dimCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.10f, 0.10f, 0.10f, 0.65f));
-            fgOverlay.AddRectFilled(Vector2.Zero, displaySize, dimCol);
-
             float winW, winH;
             if (textured)
             {
@@ -49,6 +41,26 @@ namespace Cubuild.Renderer
             }
             float winX = (displaySize.X - winW) / 2f;
             float winY = Math.Max(30f, (displaySize.Y - winH) / 2f); // centered, like the crafting menu
+
+            // Full-screen semi-transparent gray overlay - dims the game world, hotbar, and
+            // healthbar behind the inventory, exactly the way Minecraft does.
+            //
+            // This has to be TWO passes. ImGui paints Background < Window < Foreground, and the
+            // HUD (hotbar/health) lives on Foreground. A single Foreground dim therefore also
+            // covers the inventory window itself, greying out the very panel you're using - which
+            // is what the untextured creative palette hit. So:
+            //   1. Background pass  -> dims the world, sits under every window
+            //   2. Foreground pass -> re-dims ONLY the region outside the window rect, putting
+            //                           the HUD back in shade without touching the panel.
+            uint dimCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.10f, 0.10f, 0.10f, 0.65f));
+            ImGui.GetBackgroundDrawList().AddRectFilled(Vector2.Zero, displaySize, dimCol);
+
+            var fgOverlay = ImGui.GetForegroundDrawList();
+            fgOverlay.AddRectFilled(Vector2.Zero, new Vector2(displaySize.X, winY), dimCol);                        // above
+            fgOverlay.AddRectFilled(new Vector2(0f, winY + winH), displaySize, dimCol);                              // below
+            fgOverlay.AddRectFilled(new Vector2(0f, winY), new Vector2(winX, winY + winH), dimCol);                   // left
+            fgOverlay.AddRectFilled(new Vector2(winX + winW, winY), displaySize, dimCol);                             // right
+
             ImGui.SetNextWindowPos(new Vector2(winX, winY), ImGuiCond.Always);
             ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
             ImGuiWindowFlags flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
@@ -61,7 +73,7 @@ namespace Cubuild.Renderer
             ImGui.Begin("##inventory", flags);
             ImGui.Text(survival
                 ? "Left: pick/place   Right: half/drop 1   Shift: move   Outside: throw"
-                : "Inventory - click a block to put it in the selected hotbar slot");
+                : "Creative - click a block to hold it, then click a hotbar slot");
 
             if (textured)
             {
@@ -139,6 +151,17 @@ namespace Cubuild.Renderer
             else
             {
                 int perRow = Math.Max(1, (int)(winW / 64f));
+                // Creative palette. Clicking an entry does NOT shove it into the selected hotbar
+                // slot - it goes on the CURSOR (like Minecraft's creative screen), and you then
+                // click whichever bag or hotbar cell you want it in. That needs real slots on
+                // screen, so the player's hotbar is drawn underneath the palette. Only the 10
+                // hotbar slots: creative has infinite everything, so a 4-row bag is pure clutter.
+                float cell = 48f, cellStep = 52f;
+                float slotsH = cellStep + 26f;
+                float paletteH = Math.Max(60f, winH - 48f - slotsH - 8f);
+                ImGui.BeginChild("##palette", new Vector2(0f, paletteH));
+                perRow = Math.Max(1, (int)((ImGui.GetContentRegionAvail().X - 2f) / cellStep));
+                int drawn = 0;
                 // Blocks (isometric cube icons)...
                 for (int id = 1; id < BlockRegistry.Count; id++)
                 {
@@ -154,7 +177,11 @@ namespace Cubuild.Renderer
                     }
                     if (ImGui.IsItemHovered()) ImGui.SetTooltip(name);
                     ImGui.PopID();
-                    if (id % perRow != 0) ImGui.SameLine();
+                    // Spacing must match cellStep EXACTLY (not the default SameLine gap),
+                    // otherwise perRow computes columns that then overflow the window's right
+                    // edge and get clipped instead of wrapping onto the next scrollable row.
+                    if (++drawn % perRow == 0) ImGui.NewLine();
+                    else ImGui.SameLine(0, cellStep - cell);
                 }
                 // ...then genuine items (flat sprites from the items atlas).
                 for (int id = ItemRegistry.ItemIdBase; id < ItemRegistry.Count; id++)
@@ -172,7 +199,19 @@ namespace Cubuild.Renderer
                     }
                     if (ImGui.IsItemHovered()) ImGui.SetTooltip(name);
                     ImGui.PopID();
-                    if (id % perRow != 0) ImGui.SameLine();
+                    if (++drawn % perRow == 0) ImGui.NewLine();
+                    else ImGui.SameLine(0, cellStep - cell);
+                }
+                ImGui.EndChild();
+
+                ImGui.TextUnformatted("Hotbar - click a slot to place the held stack");
+                // Just the 10 hotbar slots, so a cursor-held stack has somewhere to land.
+                for (int i = 0; i < 10; i++)
+                {
+                    int bid = (_hud.Hotbar != null && i < _hud.Hotbar.Count) ? _hud.Hotbar[i] : 0;
+                    int count = (_hud.HotbarCounts != null && i < _hud.HotbarCounts.Count) ? _hud.HotbarCounts[i] : 0;
+                    DrawInventorySlotCell($"chb{i}", bid, count, 1, i);
+                    if (i != 9) ImGui.SameLine(0, 4);
                 }
             }
 
@@ -183,11 +222,13 @@ namespace Cubuild.Renderer
                 ImGui.PopStyleVar(); // WindowPadding
             }
 
-            if (survival)
+            // Applies to creative too: the cursor stack and click-to-throw both matter once the
+            // creative palette can hand you a stack to drag around.
             {
                 // Clicks OUTSIDE the window rect throw items: left = whole stack, right = one.
                 // (Checked against the window rect, not hover flags, so clicks on the hotbar row
-                // inside the window never count as outside.)
+                // inside the window never count as outside.) Creative included - throwing a
+                // creative stack away should discard it, which the main loop handles.
                 var mousePos = ImGui.GetMousePos();
                 bool insideWindow = mousePos.X >= winX && mousePos.X <= winX + winW
                     && mousePos.Y >= winY && mousePos.Y <= winY + winH;
@@ -256,8 +297,7 @@ namespace Cubuild.Renderer
                 }
                 if (ItemRegistry.StackSizeOf(itemId) > 1)
                 {
-                    ImGui.SameLine(0, 4);
-                    ImGui.Text(count.ToString());
+                    DrawSlotCountOverlay(itemId, count);
                 }
             }
             else
@@ -279,8 +319,7 @@ namespace Cubuild.Renderer
                     }
                     if (ItemRegistry.StackSizeOf(itemId) > 1)
                     {
-                        ImGui.SameLine(0, 4);
-                        ImGui.Text(count.ToString());
+                        DrawSlotCountOverlay(itemId, count);
                     }
                 }
                 else
@@ -297,7 +336,28 @@ namespace Cubuild.Renderer
             ImGui.PopID();
         }
 
-        // Positioned slot cell for the textured E-menu: an invisible click target (window layer)
+        /// <summary>
+        /// Draws a stack count in the bottom-right corner INSIDE the slot the previous widget
+        /// occupied. It must be a draw-list overlay rather than a SameLine + Text sibling: a
+        /// sibling becomes part of the layout, widens the row, and pushes the neighbouring
+        /// slots apart instead of staying contained in the cell.
+        ///
+        /// Also the single place the "show a count?" rule lives for the untextured menus, which
+        /// is what the textured E-menu already does (and fixes audit bug #12, where the
+        /// fallback grid showed counts at &gt;0 while the textured one hid them at 1).
+        /// </summary>
+        private static void DrawSlotCountOverlay(int itemId, int count)
+        {
+            if (count <= 1 || ItemRegistry.StackSizeOf(itemId) <= 1) return;
+
+            var fg = ImGui.GetForegroundDrawList();
+            var pos = ImGui.GetItemRectMax() - new Vector2(18f, 17f);
+            uint ink = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 1f));
+            uint shadow = ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.85f));
+            string text = count.ToString();
+            fg.AddText(pos + new Vector2(1f, 1f), shadow, text); // drop shadow, for bright icons
+            fg.AddText(pos, ink, text);
+        }
         // whose item icon + count are drawn on the Foreground draw list so they sit on top of
         // the screen-wide dim overlay.
         private void DrawInventorySlotCellAt(string id, int itemId, int count, int kind, int target, float slotPx, ImDrawListPtr fg, uint fgTextCol)
