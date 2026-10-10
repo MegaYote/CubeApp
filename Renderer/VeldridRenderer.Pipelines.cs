@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Numerics;
 using ImGuiNET;
@@ -603,94 +603,6 @@ _spriteVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)quadVerts
             _spriteIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)quadIndices.Length * sizeof(ushort), BufferUsage.IndexBuffer));
             _gd.UpdateBuffer(_spriteIndexBuffer, 0, quadIndices);
 
-            // ---- held-item prism -------------------------------------------------
-            // A dedicated extruded card for FIRST-PERSON held items only, so the flat quad
-            // above stays untouched for the world-space dropped-item sprites that share it.
-            //
-            // Six faces: the front shows the sprite proper, while each of the four side walls
-            // samples a single EDGE COLUMN/ROW of the sprite (u pinned to 0 or 1, v pinned to 0
-            // or 1). That makes the thickness follow the sprite's own silhouette - and because
-            // the shader discards texels below alpha 0.5, an antialiased pickaxe head grows a
-            // matching chunky edge instead of a rectangular slab. Classic extruded pixel art.
-            //
-            // Back-face culling plus correct outward winding makes this solid without a depth
-            // buffer, exactly like the held-block cube.
-            {
-                const float h = 0.5f;      // half width/height of the card
-                // Thickness is EXACTLY one pixel of the 16x16 sprite. Minecraft sets
-                // `float var16 = 1.0F / 16.0F` in ItemRenderer.renderItemInFirstPerson and
-                // offsets the back plane by it, so the sandwich is 1/16 deep - not the ~1/6
-                // this started at, which read as a slab rather than a blocky edge.
-                const float thick = 1.0f / 32.0f; // half of 1/16 -> total depth 1/16 of the width
-                const float uvMax = 0.999f;
-
-                // face order: front(+Z), back(-Z), left(-X), right(+X), top(+Y), bottom(-Y)
-                var prismFaces = new (float[] c, float[] n, float[] uv, float shade)[]
-                {
-                    (new[] { -h,-h, thick,  h,-h, thick,  h, h, thick,  -h, h, thick }, new[] { 0f,0f, 1f },
-                        new[] { 0f,0f, uvMax,0f, uvMax,uvMax, 0f,uvMax }, 1.00f),
-                    (new[] { -h, h,-thick,  h, h,-thick,  h,-h,-thick,  -h,-h,-thick }, new[] { 0f,0f,-1f },
-                        new[] { 0f,uvMax, uvMax,uvMax, uvMax,0f, 0f,0f }, 0.45f),
-(new[] { -h,-h,-thick, -h, h,-thick, -h, h, thick, -h,-h, thick }, new[] { -1f,0f,0f },
-                        new[] { 0.02f,0f, 0.02f,uvMax, 0.02f,uvMax, 0.02f,0f }, 0.62f),
-                    (new[] {  h,-h, thick,  h, h, thick,  h, h,-thick,  h,-h,-thick }, new[] { 1f,0f,0f },
-                        new[] { 0.98f,0f, 0.98f,uvMax, 0.98f,uvMax, 0.98f,0f }, 0.62f),
-                    (new[] { -h, h, thick,  h, h, thick,  h, h,-thick, -h, h,-thick }, new[] { 0f,1f,0f },
-                        new[] { 0f,0.02f, uvMax,0.02f, uvMax,0.02f, 0f,0.02f }, 0.88f),
-                    (new[] { -h,-h,-thick,  h,-h,-thick,  h,-h, thick, -h,-h, thick }, new[] { 0f,-1f,0f },
-                        new[] { 0f,0.98f, uvMax,0.98f, uvMax,0.98f, 0f,0.98f }, 0.45f),
-                };
-
-                var prismVerts = new float[6 * 4 * (3 + 2 + 4)];
-                int pv = 0;
-                foreach (var face in prismFaces)
-                {
-                    var c = face.c;
-                    // Same outward-winding correction the cubes use, so FaceCullMode.Back
-                    // behaves identically no matter which way the source corners were wound.
-                    var p0 = new Point3D(c[0], c[1], c[2]);
-                    var p1 = new Point3D(c[3], c[4], c[5]);
-                    var p2 = new Point3D(c[6], c[7], c[8]);
-                    var e1 = p1 - p0;
-                    var e2 = p2 - p0;
-                    var cross = new Point3D(e1.Y * e2.Z - e1.Z * e2.Y, e1.Z * e2.X - e1.X * e2.Z, e1.X * e2.Y - e1.Y * e2.X);
-                    var n = face.n;
-                    double d = cross.X * n[0] + cross.Y * n[1] + cross.Z * n[2];
-                    bool flip = d < 0;
-
-                    for (int k = 0; k < 4; k++)
-                    {
-                        int src = flip ? new[] { 0, 3, 2, 1 }[k] : k;
-                        prismVerts[pv++] = c[src * 3 + 0];
-                        prismVerts[pv++] = c[src * 3 + 1];
-                        prismVerts[pv++] = c[src * 3 + 2];
-                        prismVerts[pv++] = face.uv[src * 2 + 0];
-                        prismVerts[pv++] = face.uv[src * 2 + 1];
-                        prismVerts[pv++] = face.shade; prismVerts[pv++] = face.shade;
-                        prismVerts[pv++] = face.shade; prismVerts[pv++] = 1f;
-                    }
-                }
-                _heldItemPrismVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)prismVerts.Length * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
-                _gd.UpdateBuffer(_heldItemPrismVertexBuffer, 0, prismVerts);
-                // Keep a pristine copy: the per-frame Minecraft matrix is applied to these on
-                // the CPU, so the untransformed geometry has to survive somewhere.
-                _heldItemPrismBase = (float[])prismVerts.Clone();
-                _heldItemPrismScratch = new float[prismVerts.Length];
-
-                var prismIndices = new ushort[6 * 6];
-                for (int face = 0; face < 6; face++)
-                {
-                    int fv = face * 4, di = face * 6;
-                    prismIndices[di + 0] = (ushort)(fv + 0);
-                    prismIndices[di + 1] = (ushort)(fv + 1);
-                    prismIndices[di + 2] = (ushort)(fv + 2);
-                    prismIndices[di + 3] = (ushort)(fv + 0);
-                    prismIndices[di + 4] = (ushort)(fv + 2);
-                    prismIndices[di + 5] = (ushort)(fv + 3);
-                }
-                _heldItemPrismIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)prismIndices.Length * sizeof(ushort), BufferUsage.IndexBuffer));
-                _gd.UpdateBuffer(_heldItemPrismIndexBuffer, 0, prismIndices);
-            }
                 var smallIndices = new ushort[FallingCubeIndices];
                 int si = 0;
                 for (int face = 0; face < 6; face++)
@@ -1130,138 +1042,6 @@ void main() { vUV = aUV; vColor = aColor; gl_Position = projView * vec4(aPositio
             _handProjBuffer = factory.CreateBuffer(new BufferDescription(64, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
             _handProjSet = factory.CreateResourceSet(new ResourceSetDescription(_projViewLayout, _handProjBuffer));
 
-            // Held-block pipeline: camera-space projection + block atlas, NO world fog and no
-            // mining-cell discard. The block sits in front of the eye so it must always render its
-            // true texture - the item-drop pipeline's fog math (world-space) goes garbage on
-            // camera-space coords and could wash the block out to the fog colour.
-            string heldVsCode = @"#version 450
-layout(location=0) in vec3 aCorner;
-layout(location=1) in vec2 aLocalUV;
-layout(location=2) in vec4 aShade;
-layout(location=3) in vec3 iWorldPos;
-layout(location=4) in vec4 iTileRect;
-layout(location=5) in vec4 iRot;
-layout(location=0) out vec2 vLocalUV;
-layout(location=1) out vec4 vTileRect;
-layout(location=2) out vec4 vColor;
-layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
-void main() {
-    vec3 local = aCorner - vec3(0.15);
-    vec3 qv = iRot.xyz;
-    vec3 t = 2.0 * cross(qv, local);
-    vec3 rotated = local + iRot.w * t + cross(qv, t);
-    vec3 camPos = rotated + iWorldPos;
-    vLocalUV = aLocalUV;
-    vTileRect = iTileRect;
-    vColor = aShade;
-    gl_Position = projView * vec4(camPos, 1.0);
-}";
-            string heldFsCode = @"#version 450
-layout(location=0) in vec2 vLocalUV;
-layout(location=1) in vec4 vTileRect;
-layout(location=2) in vec4 vColor;
-layout(set=1, binding=0) uniform sampler2D uAtlas;
-layout(location=0) out vec4 outColor;
-void main() {
-    vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
-    vec4 tex = texture(uAtlas, atlasUV);
-    outColor = vec4(tex.rgb * vColor.rgb, vColor.a);
-}";
-            var heldVsSpirv = SpirvCompilation.CompileGlslToSpirv(heldVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
-            var heldFsSpirv = SpirvCompilation.CompileGlslToSpirv(heldFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
-            var heldShaders = factory.CreateFromSpirv(
-                new ShaderDescription(ShaderStages.Vertex, heldVsSpirv.SpirvBytes, "main"),
-                new ShaderDescription(ShaderStages.Fragment, heldFsSpirv.SpirvBytes, "main"));
-            var heldCubeLayout = new VertexLayoutDescription(
-                new VertexElementDescription("aCorner", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
-                new VertexElementDescription("aLocalUV", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float2),
-                new VertexElementDescription("aShade", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
-            var heldInstLayout = new VertexLayoutDescription(
-                new VertexElementDescription("iWorldPos", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
-                new VertexElementDescription("iTileRect", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4),
-                new VertexElementDescription("iRot", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
-            heldInstLayout.InstanceStepRate = 1;
-            _heldBlockPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
-            {
-                BlendState = BlendStateDescription.SingleOverrideBlend,
-                DepthStencilState = DepthStencilStateDescription.Disabled,
-                // The held block is a closed cube with correct outward winding, so back-face
-                // culling makes it solid without needing depth (which would conflict with the
-                // world's depth buffer under the camera-space projection).
-                RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
-                PrimitiveTopology = PrimitiveTopology.TriangleList,
-                ResourceLayouts = new[] { _projViewLayout, _textureLayout },
-                ShaderSet = new ShaderSetDescription(new[] { heldCubeLayout, heldInstLayout }, new[] { heldShaders[0], heldShaders[1] }),
-                Outputs = _sc.Framebuffer.OutputDescription
-            });
-
-            // Held genuine items: an extruded card riding the fist, tilted in 3D the same way
-            // the held-block cube is, so a flat sprite reads as a solid object instead of a
-            // sticker. The card's geometry (front + four silhouette-following side walls +
-            // back) lives in _heldItemPrismVertexBuffer, built in CreateModelPipeline.
-            // Same 11-float instance data as the cube: center + tile rect + rotation.
-            {
-                string heldSpriteVsCode = @"#version 450
-layout(location=0) in vec3 aCorner;
-layout(location=1) in vec2 aLocalUV;
-layout(location=2) in vec4 aShade;
-layout(location=3) in vec3 iWorldPos;
-layout(location=4) in vec4 iTileRect;
-layout(location=5) in vec4 iRot;
-layout(location=0) out vec2 vLocalUV;
-layout(location=1) out vec4 vTileRect;
-layout(location=2) out vec4 vColor;
-layout(set=0, binding=0) uniform ProjectionView { mat4 proj; };
-void main() {
-    // Minecraft's matrix (applied on the CPU) already carries the real scale
-    // (S(0.4) * S(1.5) = 0.6) AND the anchor placement, so the shader must not scale
-    // again - doing so shrank the item and pulled its translation toward the origin.
-    vec3 local = aCorner;
-    // Apply the hold-angle quaternion - the old flat-sprite path ignored iRot entirely and
-    // offset the quad in xy only, which is why held items looked like flat stickers.
-    vec3 qv = iRot.xyz;
-    vec3 t = 2.0 * cross(qv, local);
-    vec3 rotated = local + iRot.w * t + cross(qv, t);
-    vec3 camPos = rotated + iWorldPos;
-    vLocalUV = aLocalUV;
-    vTileRect = iTileRect;
-    vColor = aShade;
-    gl_Position = proj * vec4(camPos, 1.0);
-}";
-                var heldSpriteVsSpirv = SpirvCompilation.CompileGlslToSpirv(heldSpriteVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
-                // Held sprites must also cut out transparent texels (alpha < 0.5) - otherwise the
-                // transparent art pixels render as black over the world.
-                string heldSpriteFsCode = @"#version 450
-layout(location=0) in vec2 vLocalUV;
-layout(location=1) in vec4 vTileRect;
-layout(location=2) in vec4 vColor;
-layout(set=1, binding=0) uniform sampler2D uAtlas;
-layout(location=0) out vec4 outColor;
-void main() {
-    vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
-    vec4 tex = texture(uAtlas, atlasUV);
-    if (tex.a < 0.5) discard;
-    outColor = vec4(tex.rgb * vColor.rgb, 1.0);
-}";
-                var heldSpriteFsSpirv = SpirvCompilation.CompileGlslToSpirv(heldSpriteFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
-                var heldSpriteShaders = factory.CreateFromSpirv(
-                    new ShaderDescription(ShaderStages.Vertex, heldSpriteVsSpirv.SpirvBytes, "main"),
-                    new ShaderDescription(ShaderStages.Fragment, heldSpriteFsSpirv.SpirvBytes, "main"));
-                _heldBlockSpritePipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
-                {
-                    BlendState = BlendStateDescription.SingleOverrideBlend,
-                    DepthStencilState = DepthStencilStateDescription.Disabled,
-                    // Closed extruded card with correct outward winding, so back-face culling
-                    // makes it solid. This matters more here than for the cube: the blend state
-                    // is alpha-blended and depth is off, so drawing both the front and back of
-                    // the card would double-blend its silhouette edges.
-                    RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
-                    PrimitiveTopology = PrimitiveTopology.TriangleList,
-                    ResourceLayouts = new[] { _projViewLayout, _textureLayout },
-                    ShaderSet = new ShaderSetDescription(new[] { heldCubeLayout, heldInstLayout }, new[] { heldSpriteShaders[0], heldSpriteShaders[1] }),
-                    Outputs = _sc.Framebuffer.OutputDescription
-                });
-            }
 
             // Size from the actual hand mesh (24 verts / 36 indices for the arm cube) - the mesh
             // is built in LoadPlayerResources which runs before this.
@@ -1269,7 +1049,6 @@ void main() {
                 (uint)Math.Max(_handMesh.Length * sizeof(float), 512), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
             _handIndexBuffer = factory.CreateBuffer(new BufferDescription(
                 (uint)Math.Max(_handIndices.Length * sizeof(ushort), 128), BufferUsage.IndexBuffer));
-            _heldBlockBuffer = factory.CreateBuffer(new BufferDescription(11 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
 
             if (_duckView != null && _duckSampler != null)
             {

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Numerics;
 using ImGuiNET;
@@ -278,11 +278,8 @@ namespace Cubuild.Renderer
         private DeviceBuffer? _handIndexBuffer;
         private DeviceBuffer? _handProjBuffer;
         private ResourceSet? _handProjSet;
-        private Pipeline? _heldBlockPipeline; // no-fog camera-space pipeline for the held block
         private float[] _handMesh = Array.Empty<float>(); // pos3 + uv2 + shade4 per vertex, shoulder at origin
         private ushort[] _handIndices = Array.Empty<ushort>();
-        private DeviceBuffer? _heldBlockBuffer; // instance data for the block held in the hand
-        private readonly float[] _heldBlockScratch = new float[11];
         private bool _firstPersonCamera;
         private float _handSwingPhase;
         private float _handWalkPhase;
@@ -299,12 +296,6 @@ namespace Cubuild.Renderer
         private float _handSz = -0.623f;       // shoulder anchor Z (forward)
         private float _handBasePitch = -0.678f; // idle arm pitch
         private float _handBaseYaw = 0.010f;   // idle arm yaw (toward center)
-        // Held-block anchor is INDEPENDENT of the arm pose (camera space), so tuning one never
-        // moves the other; the block still rides the shared punch/bob/sway animation.
-        private float _heldBlockX = 0.648f;
-        private float _heldBlockY = -0.345f;
-        private float _heldBlockZ = -0.412f;
-        private float _heldBlockSize = 0.289f; // held block cube size
         private uint _playerIndexCapacity;
         private IReadOnlyList<Cubuild.DuckInstance> _playerInstances = Array.Empty<Cubuild.DuckInstance>();
         private float[] _playerVertexScratch = Array.Empty<float>();
@@ -543,24 +534,9 @@ namespace Cubuild.Renderer
         // Genuine items (2D sprites from items.png) drop as camera-facing flat quads instead of
         // tumbling cubes; held genuine items render as a camera-space flat sprite on the fist.
         private Pipeline? _itemDropSpritePipeline;
-        private Pipeline? _heldBlockSpritePipeline;
         private Pipeline? _itemDropShadowPipeline;
 private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + shade(4)
     private DeviceBuffer? _spriteIndexBuffer;   // 6 indices
-    private DeviceBuffer? _heldItemPrismVertexBuffer; // held-item card: 24 verts, corner(3) + uv(2) + shade(4)
-    private DeviceBuffer? _heldItemPrismIndexBuffer;   // 36 indices
-    // Pristine copy of the prism vertex data, so the per-frame Minecraft transform matrix can be
-    // applied to it on the CPU without rebuilding the geometry each frame.
-    private float[] _heldItemPrismBase = Array.Empty<float>();
-    private float[] _heldItemPrismScratch = Array.Empty<float>();
-    // Where the flat item sits in the fist, in the arm's pivot-relative space, plus its size and
-    // screen-facing tilt. The arm mesh spans roughly x -1..3, y -10..2 about the shoulder pivot,
-    // so the fist end sits near the low-y extreme.
-    private float _heldItemGripX = 0.6f;
-    private float _heldItemGripY = -8.5f;
-    private float _heldItemGripZ = 0.0f;
-    private float _heldItemScale = 0.55f;
-    private float _heldItemSpin = -0.5f;
         // Shadow pipeline for item drops
         private DeviceBuffer? _shadowVertexBuffer;
         private DeviceBuffer? _shadowIndexBuffer;
