@@ -378,9 +378,13 @@ namespace Cubuild.Renderer
                 }
                 _gd.UpdateBuffer(_heldItemPrismVertexBuffer, 0, dst);
 
-                _heldBlockScratch[0] = blockX;
-                _heldBlockScratch[1] = blockY;
-                _heldBlockScratch[2] = blockZ;
+                // Minecraft's matrix already positions the item (it carries its own anchor
+                // translate, 0.7k/-0.65k/-0.9k). Adding Cubuild's _heldBlockX/Y/Z on top
+                // double-positions it and shoves it off-screen, so for the 1:1 item path the
+                // instance origin is zero and MC's stack is the sole placement.
+                _heldBlockScratch[0] = 0f;
+                _heldBlockScratch[1] = 0f;
+                _heldBlockScratch[2] = 0f;
                 _heldBlockScratch[3] = tr.X / atlasW;
                 _heldBlockScratch[4] = tr.Y / atlasH;
                 _heldBlockScratch[5] = tr.Width / atlasW;

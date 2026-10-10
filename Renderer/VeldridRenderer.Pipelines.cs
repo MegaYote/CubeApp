@@ -1213,9 +1213,10 @@ layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
 layout(set=0, binding=0) uniform ProjectionView { mat4 proj; };
 void main() {
-    // Uniform scale keeps the card's proportions; the geometry is x/y in [-0.5,0.5] and
-    // z in [-0.085,0.085], so this yields a card 0.44 across and ~0.075 thick.
-    vec3 local = aCorner * 0.44;
+    // Minecraft's matrix (applied on the CPU) already carries the real scale
+    // (S(0.4) * S(1.5) = 0.6) AND the anchor placement, so the shader must not scale
+    // again - doing so shrank the item and pulled its translation toward the origin.
+    vec3 local = aCorner;
     // Apply the hold-angle quaternion - the old flat-sprite path ignored iRot entirely and
     // offset the quad in xy only, which is why held items looked like flat stickers.
     vec3 qv = iRot.xyz;
