@@ -189,6 +189,35 @@ namespace Cubuild.Renderer
         // Draws the hotbar-selected ITEM held at the first-person fist: a small cube using the
         // item-drop pipeline (block atlas OR items atlas for genuine items) with the camera-space
         // hand projection, so it rides the arm and punches with it.
+        /// <summary>
+        /// The held flat-item resting orientation, copied from Minecraft's
+        /// ItemRenderer.renderItemInFirstPerson: 45 deg about Y unconditionally, then in the
+        /// flat-item branch 50 deg about Y and 335 deg about Z. GL post-multiplies, so the net
+        /// vertex transform is R_z(335) * R_y(95).
+        ///
+        /// Returns a quaternion in the (x, y, z, w) order the held-item shader consumes. The
+        /// previous code could only ever fill x and y, which is why the item was tilting on the
+        /// wrong axis - Minecraft's pose has no X component at all, it is Y and Z.
+        /// </summary>
+        private static void ComposeMinecraftHoldRotation(out float x, out float y, out float z, out float w)
+        {
+            const float yawDeg = 45f + 50f;   // the two Y rotations compose into one
+            const float rollDeg = 335f;       // the Z rotation
+
+            double hy = yawDeg * Math.PI / 180.0 * 0.5;
+            double hr = rollDeg * Math.PI / 180.0 * 0.5;
+
+            // q_y = (0, sin(hy), 0, cos(hy)) as (x,y,z,w); q_r = (0, 0, sin(hr), cos(hr)).
+            double yx = 0, yy = Math.Sin(hy), yz = 0, yw = Math.Cos(hy);
+            double rx = 0, ry = 0, rz = Math.Sin(hr), rw = Math.Cos(hr);
+
+            // q = q_r * q_y  (q_y applied to the vertex first, matching GL order).
+            x = (float)(rw * yx + yw * rx + (ry * yz - rz * yy));
+            y = (float)(rw * yy + yw * ry + (rz * yx - rx * yz));
+            z = (float)(rw * yz + yw * rz + (rx * yy - ry * yx));
+            w = (float)(rw * yw - (rx * yx + ry * yy + rz * yz));
+        }
+
         private void DrawHeldBlock(CommandList cl, float blockX, float blockY, float blockZ)
         {
             if (_heldBlockPipeline == null || _heldBlockBuffer == null || _itemDropVertexBuffer == null) return;
@@ -213,14 +242,22 @@ namespace Cubuild.Renderer
             float cyq = (float)Math.Cos(holdYaw * 0.5f), syq = (float)Math.Sin(holdYaw * 0.5f);
             float cxq = (float)Math.Cos(holdPitch * 0.5f), sxq = (float)Math.Sin(holdPitch * 0.5f);
 
-// Genuine items render as a shallow extruded CARD, tilted at the same hold angle
-            // the held-block cube uses (hy ~ -0.611, hx ~ -0.349), so a flat sprite reads as
-            // a solid 3D object in the fist.
+// Genuine items render as a shallow extruded CARD, oriented to match Minecraft.
             //
-            // This used to draw the shared unit quad TWICE - once at blockZ - thickness and
-            // once at blockZ - with an identity quaternion. With depth testing off and
-            // culling off, that produced a faint double-image ghost, not thickness: the
-            // sprite was never rotated and never had any side geometry.
+            // From ItemRenderer.renderItemInFirstPerson (the 1.6 decompile kept as Cubuild
+            // reference material):
+            //     GL11.glRotatef(45.0F,  0, 1, 0);        <- unconditional, outside the swing block
+            //     ... flat-item branch only:
+            //     GL11.glRotatef(50.0F,  0, 1, 0);
+            //     GL11.glRotatef(335.0F, 0, 0, 1);
+            // GL rotations POST-multiply the current matrix, so the net transform applied to
+            // the vertex is R_z(335) * R_y(50) * R_y(45) == R_z(335) * R_y(95). Only lines
+            // further up (the -20/-20/-80 triple) are swing-dependent; the resting pose is
+            // this constant tilt, which is why a vanilla held tool reads as a solid object
+            // rather than a sprite pasted on the screen.
+            //
+            // This previously used the held-BLOCK cube's angle (~-70 deg Y, -40 deg X), which
+            // tilts on the wrong axis entirely: Minecraft's is Y and Z with no X component.
             if (fromItems)
             {
                 if (_heldBlockSpritePipeline == null || _heldItemPrismVertexBuffer == null
@@ -233,12 +270,11 @@ namespace Cubuild.Renderer
                 _heldBlockScratch[4] = tr.Y / atlasH;
                 _heldBlockScratch[5] = tr.Width / atlasW;
                 _heldBlockScratch[6] = tr.Height / atlasH;
-                // Same hold angle as the held-block cube below, so items and blocks sit
-                // identically in the hand. Previously this was identity (0,0,0,1).
-                _heldBlockScratch[7] = sxq * cyq;
-                _heldBlockScratch[8] = cxq * syq;
-                _heldBlockScratch[9] = sxq * syq;
-                _heldBlockScratch[10] = cxq * cyq;
+                ComposeMinecraftHoldRotation(out float mx, out float my, out float mz, out float mw);
+                _heldBlockScratch[7] = mx;
+                _heldBlockScratch[8] = my;
+                _heldBlockScratch[9] = mz;
+                _heldBlockScratch[10] = mw;
                 _gd.UpdateBuffer(_heldBlockBuffer, 0, _heldBlockScratch);
 
                 cl.SetPipeline(_heldBlockSpritePipeline);
