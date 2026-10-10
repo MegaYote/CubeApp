@@ -670,8 +670,12 @@ _spriteVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)quadVerts
                         prismVerts[pv++] = face.shade; prismVerts[pv++] = 1f;
                     }
                 }
-                _heldItemPrismVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)prismVerts.Length * sizeof(float), BufferUsage.VertexBuffer));
+                _heldItemPrismVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)prismVerts.Length * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
                 _gd.UpdateBuffer(_heldItemPrismVertexBuffer, 0, prismVerts);
+                // Keep a pristine copy: the per-frame Minecraft matrix is applied to these on
+                // the CPU, so the untransformed geometry has to survive somewhere.
+                _heldItemPrismBase = (float[])prismVerts.Clone();
+                _heldItemPrismScratch = new float[prismVerts.Length];
 
                 var prismIndices = new ushort[6 * 6];
                 for (int face = 0; face < 6; face++)

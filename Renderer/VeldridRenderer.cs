@@ -549,6 +549,10 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
     private DeviceBuffer? _spriteIndexBuffer;   // 6 indices
     private DeviceBuffer? _heldItemPrismVertexBuffer; // held-item card: 24 verts, corner(3) + uv(2) + shade(4)
     private DeviceBuffer? _heldItemPrismIndexBuffer;   // 36 indices
+    // Pristine copy of the prism vertex data, so the per-frame Minecraft transform matrix can be
+    // applied to it on the CPU without rebuilding the geometry each frame.
+    private float[] _heldItemPrismBase = Array.Empty<float>();
+    private float[] _heldItemPrismScratch = Array.Empty<float>();
         // Shadow pipeline for item drops
         private DeviceBuffer? _shadowVertexBuffer;
         private DeviceBuffer? _shadowIndexBuffer;

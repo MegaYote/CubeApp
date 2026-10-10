@@ -147,7 +147,7 @@ namespace Cubuild.Renderer
             float blockZ = _heldBlockZ + tz;
 
             // A selected hotbar block replaces the hand and uses the same motion.
-            if (holdingBlock) DrawHeldBlock(cl, blockX, blockY, blockZ, swingF, env);
+            if (holdingBlock) DrawHeldBlock(cl, blockX, blockY, blockZ, s);
 
             // The hand renders with depth OFF (it must always draw over the world), so the arm's
             // six faces need explicit back-to-front ordering - otherwise a hidden face can paint
@@ -207,8 +207,8 @@ namespace Cubuild.Renderer
         ///     glRotatef(335,  0, 0, 1)                 <- resting, flat-item branch
         /// with f  = sin(s*s*PI) and f1 = sin(sqrt(s)*PI), s = swing progress.
         ///
-        /// GL post-multiplies, so composing left-to-right in application order gives the chain
-        /// qz(335) * qy(95) * qx(-80*f1) * qz(-20*f1) * qy(-20*f).
+        /// GL post-multiplies, so composing in application order gives
+        /// qy(-70) * qx(-40) * qx(-80*f1) * qz(-20*f1) * qy(-20*f).
         ///
         /// The swing triple is what Cubuild was missing entirely: the arm animated, but the held
         /// item only ever inherited the shared translation offsets, so it never rotated at all.
@@ -237,8 +237,15 @@ namespace Cubuild.Renderer
                 else oz = s;
             }
 
-            Axis(2, 335.0, out double ax, out double ay, out double az, out double aw);       // resting Z
-            Axis(1, 95.0, out double bx, out double by, out double bz, out double bw);         // resting Y
+            // RESTING pose. Minecraft's literal 95 deg Y / 335 deg Z does not transplant:
+            // those degrees are applied inside a transform stack that also carries the camera
+            // pitch/yaw and rotateArm, which Cubuild's held-item path has no equivalent for.
+            // Taken verbatim the card ends up nearly edge-on with its front normal pointing
+            // AWAY from the camera (-X), so you see the mirrored back face - upside down in one
+            // axis, flipped in the other. These are the magnitudes that actually frame a readable
+            // 3/4 view here; the swing below is Minecraft's exactly.
+            Axis(1, -70.0, out double ax, out double ay, out double az, out double aw);   // yaw
+            Axis(0, -40.0, out double bx, out double by, out double bz, out double bw);   // pitch
             Mul(ax, ay, az, aw, bx, by, bz, bw, out double x1, out double y1, out double z1, out double w1);
             Axis(0, -80.0 * swingF1, out bx, out by, out bz, out bw);
             Mul(x1, y1, z1, w1, bx, by, bz, bw, out double x2, out double y2, out double z2, out double w2);
@@ -250,8 +257,66 @@ namespace Cubuild.Renderer
             x = (float)fx; y = (float)fy; z = (float)fz; w = (float)fw;
         }
 
+        /// <summary>
+        /// Minecraft's COMPLETE first-person transform for a held flat item, as a matrix.
+        ///
+        /// Reproduces ItemRenderer.renderItemInFirstPerson (1.6 decompile) operation for
+        /// operation, in the order OpenGL applies them (each call post-multiplies, so the LAST
+        /// call acts on the vertex FIRST). The scales and translates matter as much as the
+        /// angles - they are sandwiched BETWEEN the rotations, so they cannot be folded into a
+        /// single rotation. That is why transplanting the angles alone never lined up:
+        ///
+        ///   T(swing)                       if swinging
+        ///   T(0.7k, -0.65k - (1-e)*0.6, -0.9k)     k = 0.8, e = equip progress
+        ///   Ry(45)                         resting
+        ///   Ry(-20f) Rz(-20f1) Rx(-80f1)   SWING
+        ///   S(0.4)                         base scale
+        ///   T(0, -0.3, 0)
+        ///   S(1.5)
+        ///   Ry(50) Rz(335)                 resting
+        ///   T(-15/16, -1/16, 0)            recentres the 0..1 quad on the pivot
+        ///
+        /// with f = sin(s*s*PI), f1 = sin(sqrt(s)*PI), s = swing progress 0..1.
+        /// </summary>
+        private static Matrix4x4 BuildMinecraftHeldItemMatrix(float swing, float equip, out float f, out float f1)
+        {
+            double sp = Math.Max(swing, 0f);
+            f = (float)Math.Sin(sp * sp * Math.PI);
+            f1 = (float)Math.Sin(Math.Sqrt(sp) * Math.PI);
+
+            var m = Matrix4x4.Identity;
+
+            if (sp > 0f)
+            {
+                // Note the middle term: sin(sqrt(s) * PI * 2), a different harmonic again.
+                float yBob = (float)Math.Sin(Math.Sqrt(sp) * Math.PI * 2.0);
+                m *= Matrix4x4.CreateTranslation(-f1 * 0.3f, yBob * 0.4f, -f * 0.4f);
+            }
+
+            const float k = 0.8f;
+            m *= Matrix4x4.CreateTranslation(0.7f * k, -0.65f * k - (1f - equip) * 0.6f, -0.9f * k);
+            m *= Matrix4x4.CreateRotationY(MathHelper45);
+
+            if (sp > 0f)
+            {
+                m *= Matrix4x4.CreateRotationY(-20f * f * MathF.PI / 180f);
+                m *= Matrix4x4.CreateRotationZ(-20f * f1 * MathF.PI / 180f);
+                m *= Matrix4x4.CreateRotationX(-80f * f1 * MathF.PI / 180f);
+            }
+
+            m *= Matrix4x4.CreateScale(0.4f);
+            m *= Matrix4x4.CreateTranslation(0f, -0.3f, 0f);
+            m *= Matrix4x4.CreateScale(1.5f);
+            m *= Matrix4x4.CreateRotationY(50f * MathF.PI / 180f);
+            m *= Matrix4x4.CreateRotationZ(335f * MathF.PI / 180f);
+            m *= Matrix4x4.CreateTranslation(-15f / 16f, -1f / 16f, 0f);
+            return m;
+        }
+
+        private const float MathHelper45 = 45f * MathF.PI / 180f;
+
         private void DrawHeldBlock(CommandList cl, float blockX, float blockY, float blockZ,
-            float swingF = 0f, float swingF1 = 0f)
+            float swing = 0f)
         {
             if (_heldBlockPipeline == null || _heldBlockBuffer == null || _itemDropVertexBuffer == null) return;
             var hotbar = _hud.Hotbar;
@@ -294,7 +359,24 @@ namespace Cubuild.Renderer
             if (fromItems)
             {
                 if (_heldBlockSpritePipeline == null || _heldItemPrismVertexBuffer == null
-                    || _heldItemPrismIndexBuffer == null) return;
+                    || _heldItemPrismIndexBuffer == null || _heldItemPrismBase.Length == 0) return;
+
+                // Minecraft's entire stack, applied to the prism on the CPU so every translate
+                // and scale lands in the right place between the rotations. The shader only
+                // projects and samples, so iRot stays identity.
+                var mc = BuildMinecraftHeldItemMatrix(swing, 1f, out float mf, out float mf1);
+                float[] src = _heldItemPrismBase;
+                float[] dst = _heldItemPrismScratch;
+                for (int v = 0; v * 9 < src.Length; v++)
+                {
+                    int o = v * 9;
+                    var p = Vector4.Transform(
+                        new Vector4(src[o], src[o + 1], src[o + 2], 0f), mc);
+                    dst[o] = p.X;
+                    dst[o + 1] = p.Y;
+                    dst[o + 2] = p.Z;
+                }
+                _gd.UpdateBuffer(_heldItemPrismVertexBuffer, 0, dst);
 
                 _heldBlockScratch[0] = blockX;
                 _heldBlockScratch[1] = blockY;
@@ -303,11 +385,11 @@ namespace Cubuild.Renderer
                 _heldBlockScratch[4] = tr.Y / atlasH;
                 _heldBlockScratch[5] = tr.Width / atlasW;
                 _heldBlockScratch[6] = tr.Height / atlasH;
-                ComposeMinecraftHoldRotation(swingF, swingF1, out float mx, out float my, out float mz, out float mw);
-                _heldBlockScratch[7] = mx;
-                _heldBlockScratch[8] = my;
-                _heldBlockScratch[9] = mz;
-                _heldBlockScratch[10] = mw;
+                // identity - the matrix above already did the rotation
+                _heldBlockScratch[7] = 0f;
+                _heldBlockScratch[8] = 0f;
+                _heldBlockScratch[9] = 0f;
+                _heldBlockScratch[10] = 1f;
                 _gd.UpdateBuffer(_heldBlockBuffer, 0, _heldBlockScratch);
 
                 cl.SetPipeline(_heldBlockSpritePipeline);
