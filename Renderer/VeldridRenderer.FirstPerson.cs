@@ -73,6 +73,10 @@ namespace Cubuild.Renderer
             // The punch: the fist STRETCHES FORWARD (deep toward the block) and rises toward the
             // crosshair, with a moderate forward pitch on the arm. Then it swings back to rest.
             float env = (float)Math.Sin(Math.Sqrt(Math.Max(s, 0f)) * Math.PI);
+            // Minecraft uses a SECOND envelope for the swing: f = sin(s*s*PI), alongside
+            // f1 = sin(sqrt(s)*PI) which is exactly `env` above. Both drive the held item's
+            // rotation; Cubuild previously animated only the arm.
+            float swingF = (float)Math.Sin(Math.Max(s, 0f) * Math.Max(s, 0f) * Math.PI);
             float pitch = basePitch + idle - env * 0.6f;
             float yaw = baseYaw + env * 0.3f;
             float roll = env * 0.2f;
@@ -143,7 +147,7 @@ namespace Cubuild.Renderer
             float blockZ = _heldBlockZ + tz;
 
             // A selected hotbar block replaces the hand and uses the same motion.
-            if (holdingBlock) DrawHeldBlock(cl, blockX, blockY, blockZ);
+            if (holdingBlock) DrawHeldBlock(cl, blockX, blockY, blockZ, swingF, env);
 
             // The hand renders with depth OFF (it must always draw over the world), so the arm's
             // six faces need explicit back-to-front ordering - otherwise a hidden face can paint
@@ -190,35 +194,64 @@ namespace Cubuild.Renderer
         // item-drop pipeline (block atlas OR items atlas for genuine items) with the camera-space
         // hand projection, so it rides the arm and punches with it.
         /// <summary>
-        /// The held flat-item resting orientation, copied from Minecraft's
-        /// ItemRenderer.renderItemInFirstPerson: 45 deg about Y unconditionally, then in the
-        /// flat-item branch 50 deg about Y and 335 deg about Z. GL post-multiplies, so the net
-        /// vertex transform is R_z(335) * R_y(95).
+        /// The held flat-item orientation as a quaternion in the (x, y, z, w) order the shader
+        /// consumes (it uses iRot.xyz as a raw axis, so any rotation works).
         ///
-        /// Returns a quaternion in the (x, y, z, w) order the held-item shader consumes. The
-        /// previous code could only ever fill x and y, which is why the item was tilting on the
-        /// wrong axis - Minecraft's pose has no X component at all, it is Y and Z.
+        /// Minecraft's ItemRenderer.renderItemInFirstPerson builds this from, applied to the
+        /// vertex in order:
+        ///     glRotatef( 45,  0, 1, 0)                 <- resting, unconditional
+        ///     glRotatef(-20 * f,   0, 1, 0)             <- SWING
+        ///     glRotatef(-20 * f1,  0, 0, 1)             <- SWING
+        ///     glRotatef(-80 * f1,  1, 0, 0)             <- SWING
+        ///     glRotatef( 50,  0, 1, 0)                 <- resting, flat-item branch
+        ///     glRotatef(335,  0, 0, 1)                 <- resting, flat-item branch
+        /// with f  = sin(s*s*PI) and f1 = sin(sqrt(s)*PI), s = swing progress.
+        ///
+        /// GL post-multiplies, so composing left-to-right in application order gives the chain
+        /// qz(335) * qy(95) * qx(-80*f1) * qz(-20*f1) * qy(-20*f).
+        ///
+        /// The swing triple is what Cubuild was missing entirely: the arm animated, but the held
+        /// item only ever inherited the shared translation offsets, so it never rotated at all.
         /// </summary>
-        private static void ComposeMinecraftHoldRotation(out float x, out float y, out float z, out float w)
+        private static void ComposeMinecraftHoldRotation(float swingF, float swingF1,
+            out float x, out float y, out float z, out float w)
         {
-            const float yawDeg = 45f + 50f;   // the two Y rotations compose into one
-            const float rollDeg = 335f;       // the Z rotation
+            // q = a * b, quaternions as scalars (x, y, z, w).
+            void Mul(double ax, double ay, double az, double aw,
+                     double bx, double by, double bz, double bw,
+                     out double rx, out double ry, out double rz, out double rw)
+            {
+                rx = aw * bx + ax * bw + (ay * bz - az * by);
+                ry = aw * by + ay * bw + (az * bx - ax * bz);
+                rz = aw * bz + az * bw + (ax * by - ay * bx);
+                rw = aw * bw - (ax * bx + ay * by + az * bz);
+            }
 
-            double hy = yawDeg * Math.PI / 180.0 * 0.5;
-            double hr = rollDeg * Math.PI / 180.0 * 0.5;
+            static void Axis(int axis, double deg, out double ox, out double oy, out double oz, out double ow)
+            {
+                double h = deg * Math.PI / 180.0 * 0.5;
+                double s = Math.Sin(h), c = Math.Cos(h);
+                ox = 0; oy = 0; oz = 0; ow = c;
+                if (axis == 0) ox = s;
+                else if (axis == 1) oy = s;
+                else oz = s;
+            }
 
-            // q_y = (0, sin(hy), 0, cos(hy)) as (x,y,z,w); q_r = (0, 0, sin(hr), cos(hr)).
-            double yx = 0, yy = Math.Sin(hy), yz = 0, yw = Math.Cos(hy);
-            double rx = 0, ry = 0, rz = Math.Sin(hr), rw = Math.Cos(hr);
+            Axis(2, 335.0, out double ax, out double ay, out double az, out double aw);       // resting Z
+            Axis(1, 95.0, out double bx, out double by, out double bz, out double bw);         // resting Y
+            Mul(ax, ay, az, aw, bx, by, bz, bw, out double x1, out double y1, out double z1, out double w1);
+            Axis(0, -80.0 * swingF1, out bx, out by, out bz, out bw);
+            Mul(x1, y1, z1, w1, bx, by, bz, bw, out double x2, out double y2, out double z2, out double w2);
+            Axis(2, -20.0 * swingF1, out bx, out by, out bz, out bw);
+            Mul(x2, y2, z2, w2, bx, by, bz, bw, out double x3, out double y3, out double z3, out double w3);
+            Axis(1, -20.0 * swingF, out bx, out by, out bz, out bw);
+            Mul(x3, y3, z3, w3, bx, by, bz, bw, out double fx, out double fy, out double fz, out double fw);
 
-            // q = q_r * q_y  (q_y applied to the vertex first, matching GL order).
-            x = (float)(rw * yx + yw * rx + (ry * yz - rz * yy));
-            y = (float)(rw * yy + yw * ry + (rz * yx - rx * yz));
-            z = (float)(rw * yz + yw * rz + (rx * yy - ry * yx));
-            w = (float)(rw * yw - (rx * yx + ry * yy + rz * yz));
+            x = (float)fx; y = (float)fy; z = (float)fz; w = (float)fw;
         }
 
-        private void DrawHeldBlock(CommandList cl, float blockX, float blockY, float blockZ)
+        private void DrawHeldBlock(CommandList cl, float blockX, float blockY, float blockZ,
+            float swingF = 0f, float swingF1 = 0f)
         {
             if (_heldBlockPipeline == null || _heldBlockBuffer == null || _itemDropVertexBuffer == null) return;
             var hotbar = _hud.Hotbar;
@@ -270,7 +303,7 @@ namespace Cubuild.Renderer
                 _heldBlockScratch[4] = tr.Y / atlasH;
                 _heldBlockScratch[5] = tr.Width / atlasW;
                 _heldBlockScratch[6] = tr.Height / atlasH;
-                ComposeMinecraftHoldRotation(out float mx, out float my, out float mz, out float mw);
+                ComposeMinecraftHoldRotation(swingF, swingF1, out float mx, out float my, out float mz, out float mw);
                 _heldBlockScratch[7] = mx;
                 _heldBlockScratch[8] = my;
                 _heldBlockScratch[9] = mz;
