@@ -4,10 +4,9 @@ Audited against `Cubuild` (CubeApp) at commit `19e3903`. This document records a
 work can resume later. Reference this file when continuing — it should stay up to date with
 anything implemented.
 
-**Status:** #1 (hotbar counts), #2 (drop loss on full inventory), #7 (orphan cursor stack) and
-#12 (count threshold) are fixed. #3-#6 and #8-#11 remain open. #4 (durability) is the largest of
-the remaining. #3 is now moot by design - the creative palette hands picks to the cursor instead
-of closing the menu, so there is nothing left to close.
+**Status:** #1, #2, #5, #6, #7, #10a, #11, #12 are fixed. #4 (durability), #8 (hotbar tooltips),
+#9 (drop merging) and #10b (crafting conveniences) remain open; #4 is by far the largest.
+#3 is moot by design — the creative palette hands picks to the cursor instead of closing the menu.
 
 ---
 
@@ -59,17 +58,19 @@ of closing the menu, so there is nothing left to close.
 - **Fix:** implement durability per item stack, show a durability indicator on the icon/tooltip,
   break at 0 (empty the slot), and remove the per-slot `_sealantUses` hack.
 
-### 5. "Selected: air" on the HUD when the slot is empty (BUG/UX)
-- **`Program\Program.RenderData.cs`** ~136 — `$"Selected: {ItemRegistry.GetName(World.SelectedBlock)}"`.
-  When the selected slot is empty, `SelectedBlock` is air (id 0), so it prints "Selected: air".
-- **Fix:** show nothing / "(none)" when the item is air.
+### 5. ~~"Selected: air" on the HUD when the slot is empty~~ ✅ FIXED
+- **Was:** `Program.RenderData.cs` built `$"Selected: {ItemRegistry.GetName(World.SelectedBlock)}"`.
+  An empty hotbar slot leaves `SelectedBlock` at 0, which is air, so the HUD read "Selected: air".
+- **Fix:** guards on `SelectedBlock > 0` and falls back to `"Selected: -"`, matching the existing
+  fallback text on the line above.
 
-### 6. Number keys (1-0) work while a menu is open (BUG)
-- **`Input\InputProcessor.cs`** ~295-324 — keys 1-0 map to `selectedSlot`.
-- **`Program\Program.Input.cs`** ~127 — calls `World.SetSelectedSlot(...)` UNGUARDED by
-  `inventoryOpen`/`craftingOpen`, unlike the scroll wheel (guarded at ~147-149).
-- **Effect:** pressing a number while a menu is open silently changes the selected hotbar slot.
-- **Fix:** gate number keys behind "no menu open", like the scroll wheel.
+### 6. ~~Number keys (1-0) work while a menu is open~~ ✅ FIXED
+- **Was:** `Program.Input.cs` called `World.SetSelectedSlot(...)` unguarded, unlike the scroll
+  wheel which was already gated — so pressing a number with the E-menu open silently swapped the
+  selection behind the panel.
+- **Fix:** the number keys now carry the same guard as the scroll wheel
+  (`screen == Playing && mouseLook && !inventoryOpen && !craftingOpen && !biomeMenuOpen &&
+  !handEditorOpen`). The scroll guard was also missing `craftingOpen`; added.
 
 ### 7. ~~Cursor stack floats invisibly after closing the inventory~~ ✅ FIXED
 - **Was:** `Program.Input.cs` toggled `inventoryOpen` without ever returning `World.HeldStack`
@@ -97,19 +98,19 @@ of closing the menu, so there is nothing left to close.
 - **Effect:** 64 thrown items sit as 64 separate tumbling cubes (perf + visual noise).
 - **Fix:** coalesce same-type drops within a short radius into one stack (count = sum).
 
-### 10. No shift-click in the crafting grid / no "move all" / no double-click spread (MISSING)
-- **`Renderer\VeldridRenderer.UI.cs`** `DrawCraftingCellAt` (~558-591) — only enqueues kinds `4`/`5`
-  on left/right; no shift-click. `QuickMoveSlot` exists for inventory (`Inventory.cs` ~367-424) and
-  inventory cells do handle shift (`UI.cs` ~249,272,292,312).
-- Right-clicking the result well (`UI.cs` ~563-564) is enqueued, but `MainLoop.cs` ~201-205 only
-  acts on `click.Button == 0` for kind 5, so a craft-result right-click is silently dropped.
+### 10. Crafting grid conveniences — PARTIALLY FIXED
+- **~~10a. Craft-result right-click was silently dropped~~ ✅ FIXED.** `UI.cs` enqueued the
+  right-click on the result well, but `MainLoop.cs` only acted on `click.Button == 0` for that
+  action kind, so it reached the handler and got discarded. Now both buttons craft.
+- **10b. Still open:** no shift-click in the crafting grid, no "move all", no double-click spread.
+  Right-clicking a grid cell works (half/drop-one) and the inventory already has shift-click via
+  `QuickMoveSlot`, so this is a consistency gap rather than a missing concept.
 
-### 11. Empty-slot tooltip shows "Air" in the fallback path (BUG, minor)
-- **`Renderer\VeldridRenderer.UI.cs`** ~255 and ~278 — `DrawInventorySlotCell` calls
-  `ItemRegistry.Get(itemId).DisplayName` WITHOUT an `itemId > 0` guard (the textured
-  `DrawInventorySlotCellAt` at ~320 DOES guard).
-- **Effect:** hovering an empty bag slot in the no-texture path shows tooltip of item 0 ("Air") and
-  renders a trailing "0" count.
+### 11. ~~Empty-slot tooltip shows "Air"~~ ✅ FIXED
+- **Was:** `VeldridRenderer.UI.cs` ~255 and ~278 called `ItemRegistry.Get(itemId).DisplayName`
+  with no `itemId > 0` guard, so hovering an empty bag slot in the untextured path toasted "Air"
+  and drew a trailing `0`. The textured path (~L381) already guarded.
+- **Fix:** both untextured branches now guard on `itemId > 0`.
 
 ### 12. ~~Count-display threshold inconsistent~~ ✅ FIXED
 - **Was:** `UI.cs` ~347 (E-menu) showed the count only when `count > 1 && StackSizeOf > 1`, but

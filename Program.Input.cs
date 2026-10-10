@@ -138,7 +138,15 @@ namespace Cubuild
                 if (frameInput.DamageSelfPressed && World.IsCreative) World.DamagePlayer(1, DeathCause.DebugSelf);
             }
             if (frameInput.ToggleThirdPersonPressed) thirdPersonView = !thirdPersonView;
-            if (frameInput.SelectedSlot.HasValue && World != null) World.SetSelectedSlot(frameInput.SelectedSlot.Value);
+            // Number keys, like the scroll wheel, must not silently change the selected slot while a
+            // menu is open - otherwise pressing 3 to dismiss nothing just swaps your hotbar
+            // selection behind the panel.
+            if (frameInput.SelectedSlot.HasValue && World != null
+                && screen == GameScreen.Playing && mouseLook
+                && !inventoryOpen && !craftingOpen && !biomeMenuOpen && !handEditorOpen)
+            {
+                World.SetSelectedSlot(frameInput.SelectedSlot.Value);
+            }
             // Q: throw one item - from the hovered inventory slot, else the cursor, else the
             // selected hotbar stack (MC survival behavior).
             if (frameInput.DropItemPressed && World != null && screen == GameScreen.Playing)
@@ -160,7 +168,7 @@ namespace Cubuild
             // open the wheel goes to ImGui instead).
             if (frameInput.HotbarScroll != 0 && World != null
                 && screen == GameScreen.Playing && mouseLook
-                && !inventoryOpen && !biomeMenuOpen && !handEditorOpen)
+                && !inventoryOpen && !craftingOpen && !biomeMenuOpen && !handEditorOpen)
             {
                 int slots = GameWorld.HotbarSlots;
                 int next = (World.SelectedSlot + frameInput.HotbarScroll) % slots;

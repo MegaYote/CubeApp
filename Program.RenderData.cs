@@ -133,7 +133,11 @@ namespace Cubuild
                 MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                 EntityMs = World.LastEntityMs, EntityCount = World.Entities.MobCount,
                 FacingText = $"{GetCompassDirection(World.PlayerYaw)} ({GameWorld.NormalizeYaw(World.PlayerYaw):0.0} deg)",
-                SelectedBlockText = $"Selected: {ItemRegistry.GetName(World.SelectedBlock)}",
+                // Item 0 is air, so an empty hotbar slot would otherwise read "Selected: air".
+                // Matches the "Selected: -" fallback used above.
+                SelectedBlockText = World.SelectedBlock > 0
+                    ? $"Selected: {ItemRegistry.GetName(World.SelectedBlock)}"
+                    : "Selected: -",
                 RenderDistanceText = $"Render dist: {RenderDistanceName} ({ChunkRenderRadius})",
                 SelectedSlot = World.SelectedSlot, WorldSeed = World.Seed,
                 BiomeText = World.ChunkProvider?.BiomeNameAt((int)Math.Floor(World.PlayerPosition.X), (int)Math.Floor(World.PlayerPosition.Z)) ?? string.Empty,

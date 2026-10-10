@@ -293,7 +293,9 @@ namespace Cubuild.Renderer
                 if (ImGui.IsItemHovered())
                 {
                     _hoveredInventorySlot = unified;
-                    ImGui.SetTooltip(ItemRegistry.Get(itemId).DisplayName);
+                    // itemId 0 is air: without this guard an empty slot toasts "Air" and
+                    // renders a stray "0" count. The textured path already guards (see ~L381).
+                    if (itemId > 0) ImGui.SetTooltip(ItemRegistry.Get(itemId).DisplayName);
                 }
                 if (ItemRegistry.StackSizeOf(itemId) > 1)
                 {
@@ -315,7 +317,7 @@ namespace Cubuild.Renderer
                     if (ImGui.IsItemHovered())
                     {
                         _hoveredInventorySlot = unified;
-                        ImGui.SetTooltip(ItemRegistry.Get(itemId).DisplayName);
+                        if (itemId > 0) ImGui.SetTooltip(ItemRegistry.Get(itemId).DisplayName);
                     }
                     if (ItemRegistry.StackSizeOf(itemId) > 1)
                     {
@@ -324,9 +326,15 @@ namespace Cubuild.Renderer
                 }
                 else
                 {
-                    ImGui.ImageButton($"##{id}", _iconImGuiId, new Vector2(48, 48),
-                        new Vector2(0, 0), new Vector2(1, 1),
-                        new Vector4(0.12f, 0.12f, 0.12f, 1f), new Vector4(0.3f, 0.3f, 0.3f, 1f));
+                    // No icon texture for this item. Draw a plain empty cell with an
+                    // invisible hit target on top. This used to be an ImageButton with UV
+                    // (0,0)-(1,1), which squashed the ENTIRE 48px block-icon atlas into a
+                    // single cell instead of showing a blank slot.
+                    var cellMin = ImGui.GetCursorScreenPos();
+                    ImGui.InvisibleButton($"##{id}", new Vector2(48, 48));
+                    var fgCell = ImGui.GetForegroundDrawList();
+                    fgCell.AddRectFilled(cellMin, cellMin + new Vector2(48, 48),
+                        ImGui.ColorConvertFloat4ToU32(new Vector4(0.12f, 0.12f, 0.12f, 1f)));
                     if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && shift) _inventoryClicks.Enqueue((3, unified, 0));
                     else if (ImGui.IsItemClicked(ImGuiMouseButton.Left)) _inventoryClicks.Enqueue((kind, unified, 0));
                     if (ImGui.IsItemClicked(ImGuiMouseButton.Right)) _inventoryClicks.Enqueue((kind, unified, 1));

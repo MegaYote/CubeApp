@@ -214,7 +214,9 @@ namespace Cubuild
                             if (click.Kind == 4 || click.Kind == 5)
                             {
                                 if (click.Kind == 4) World.CraftingClickSlot(click.Target, click.Button == 1);
-                                else if (click.Button == 0) World.TryCraft();
+                                // The result well used to act only on left click, so right-click
+                                // was enqueued by the UI and then silently thrown away here.
+                                else World.TryCraft();
                                 continue;
                             }
                             switch (click.Kind)
