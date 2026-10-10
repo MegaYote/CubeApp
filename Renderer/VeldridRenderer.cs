@@ -545,8 +545,10 @@ namespace Cubuild.Renderer
         private Pipeline? _itemDropSpritePipeline;
         private Pipeline? _heldBlockSpritePipeline;
         private Pipeline? _itemDropShadowPipeline;
-        private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + shade(4)
-        private DeviceBuffer? _spriteIndexBuffer;   // 6 indices
+private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + shade(4)
+    private DeviceBuffer? _spriteIndexBuffer;   // 6 indices
+    private DeviceBuffer? _heldItemPrismVertexBuffer; // held-item card: 24 verts, corner(3) + uv(2) + shade(4)
+    private DeviceBuffer? _heldItemPrismIndexBuffer;   // 36 indices
         // Shadow pipeline for item drops
         private DeviceBuffer? _shadowVertexBuffer;
         private DeviceBuffer? _shadowIndexBuffer;

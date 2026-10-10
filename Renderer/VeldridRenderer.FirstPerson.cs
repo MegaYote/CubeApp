@@ -206,46 +206,48 @@ namespace Cubuild.Renderer
             float atlasH = Math.Max(1f, fromItems ? _itemsAtlasPixelsH : _atlasHeight);
             float blockSize = _heldBlockSize; // held block reads big up close
 
-// Genuine items render as a slightly thick card (sprite with depth) at the
-// Minecraft hold angle: tilted back ~45°, rotated ~45° around Y.
-// Thickness = 1/16th of item visual size (1 pixel in 16x16 texture space).
+            // The hold angle, shared by BOTH paths so a held item and a held block sit
+            // identically in the fist. A 3/4 view tilted toward the camera: ~-70 deg Y and
+            // -40 deg X once the axis-angle -> quaternion halving is applied.
+            const float holdYaw = -0.611f, holdPitch = -0.349f;
+            float cyq = (float)Math.Cos(holdYaw * 0.5f), syq = (float)Math.Sin(holdYaw * 0.5f);
+            float cxq = (float)Math.Cos(holdPitch * 0.5f), sxq = (float)Math.Sin(holdPitch * 0.5f);
+
+// Genuine items render as a shallow extruded CARD, tilted at the same hold angle
+            // the held-block cube uses (hy ~ -0.611, hx ~ -0.349), so a flat sprite reads as
+            // a solid 3D object in the fist.
+            //
+            // This used to draw the shared unit quad TWICE - once at blockZ - thickness and
+            // once at blockZ - with an identity quaternion. With depth testing off and
+            // culling off, that produced a faint double-image ghost, not thickness: the
+            // sprite was never rotated and never had any side geometry.
             if (fromItems)
             {
-                if (_heldBlockSpritePipeline == null || _spriteVertexBuffer == null || _spriteIndexBuffer == null) return;
+                if (_heldBlockSpritePipeline == null || _heldItemPrismVertexBuffer == null
+                    || _heldItemPrismIndexBuffer == null) return;
 
-                // Use the sprite pipeline with the item atlas. Draw as a thick card
-                // at the Minecraft hold angle by rotating the sprite vertices.
-                // The sprite vertex buffer is a unit quad. We'll rotate it on the CPU
-                // to the Minecraft hold angle and draw with slight thickness.
-                // For simplicity, use the sprite pipeline with the pre-rotated quad (10° Y)
-                // and draw with slight Z offset for thickness.
-                if (_heldBlockSpritePipeline == null || _spriteVertexBuffer == null || _spriteIndexBuffer == null) return;
-
-                // Draw back face first (further from camera), then front face on top (closer).
-                float thickness = blockSize / 16.0f; // 1 pixel in 16x16 texture space
-                float backZ = blockZ - thickness; // further from camera (more negative Z)
                 _heldBlockScratch[0] = blockX;
                 _heldBlockScratch[1] = blockY;
-                _heldBlockScratch[2] = backZ;
+                _heldBlockScratch[2] = blockZ;
                 _heldBlockScratch[3] = tr.X / atlasW;
                 _heldBlockScratch[4] = tr.Y / atlasH;
                 _heldBlockScratch[5] = tr.Width / atlasW;
                 _heldBlockScratch[6] = tr.Height / atlasH;
-                _heldBlockScratch[7] = 0f; _heldBlockScratch[8] = 0f; _heldBlockScratch[9] = 0f; _heldBlockScratch[10] = 1f;
+                // Same hold angle as the held-block cube below, so items and blocks sit
+                // identically in the hand. Previously this was identity (0,0,0,1).
+                _heldBlockScratch[7] = sxq * cyq;
+                _heldBlockScratch[8] = cxq * syq;
+                _heldBlockScratch[9] = sxq * syq;
+                _heldBlockScratch[10] = cxq * cyq;
                 _gd.UpdateBuffer(_heldBlockBuffer, 0, _heldBlockScratch);
 
                 cl.SetPipeline(_heldBlockSpritePipeline);
                 cl.SetGraphicsResourceSet(0, _handProjSet);   // camera-space projection
                 if (_itemsTextureSet != null) cl.SetGraphicsResourceSet(1, _itemsTextureSet); // items atlas
-                cl.SetVertexBuffer(0, _spriteVertexBuffer);
+                cl.SetVertexBuffer(0, _heldItemPrismVertexBuffer);
                 cl.SetVertexBuffer(1, _heldBlockBuffer);
-                cl.SetIndexBuffer(_spriteIndexBuffer, IndexFormat.UInt16);
-                cl.DrawIndexed(6, 1, 0, 0, 0);
-
-                // Now draw front face at the visual position (on top, closer to camera)
-                _heldBlockScratch[2] = blockZ;
-                _gd.UpdateBuffer(_heldBlockBuffer, 0, _heldBlockScratch);
-                cl.DrawIndexed(6, 1, 0, 0, 0);
+                cl.SetIndexBuffer(_heldItemPrismIndexBuffer, IndexFormat.UInt16);
+                cl.DrawIndexed(36, 1, 0, 0, 0); // 6 faces of the extruded card, one pass
                 return;
             }
 
@@ -257,10 +259,8 @@ namespace Cubuild.Renderer
             _heldBlockScratch[4] = tr.Y / atlasH;
             _heldBlockScratch[5] = tr.Width / atlasW;
             _heldBlockScratch[6] = tr.Height / atlasH;
-            // Fixed orientation: a 3/4 view tilted toward the camera (rotate ~-35 deg Y, -20 deg X).
-            float hy = -0.611f, hx = -0.349f;
-            float cyq = (float)Math.Cos(hy * 0.5f), syq = (float)Math.Sin(hy * 0.5f);
-            float cxq = (float)Math.Cos(hx * 0.5f), sxq = (float)Math.Sin(hx * 0.5f);
+            // Fixed orientation: the same 3/4 view tilted toward the camera, shared with the
+            // held-item path above via holdYaw/holdPitch.
             _heldBlockScratch[7] = sxq * cyq;
             _heldBlockScratch[8] = cxq * syq;
             _heldBlockScratch[9] = sxq * syq;

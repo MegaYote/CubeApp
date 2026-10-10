@@ -597,11 +597,94 @@ void main() {
                     quadVerts[qv++] = quadUvs[c * 2 + 1];
                     quadVerts[qv++] = 1f; quadVerts[qv++] = 1f; quadVerts[qv++] = 1f; quadVerts[qv++] = 1f;
                 }
-                _spriteVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)quadVerts.Length * sizeof(float), BufferUsage.VertexBuffer));
-                _gd.UpdateBuffer(_spriteVertexBuffer, 0, quadVerts);
-                var quadIndices = new ushort[] { 0, 1, 2, 0, 2, 3 };
-                _spriteIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)quadIndices.Length * sizeof(ushort), BufferUsage.IndexBuffer));
-                _gd.UpdateBuffer(_spriteIndexBuffer, 0, quadIndices);
+_spriteVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)quadVerts.Length * sizeof(float), BufferUsage.VertexBuffer));
+            _gd.UpdateBuffer(_spriteVertexBuffer, 0, quadVerts);
+            var quadIndices = new ushort[] { 0, 1, 2, 0, 2, 3 };
+            _spriteIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)quadIndices.Length * sizeof(ushort), BufferUsage.IndexBuffer));
+            _gd.UpdateBuffer(_spriteIndexBuffer, 0, quadIndices);
+
+            // ---- held-item prism -------------------------------------------------
+            // A dedicated extruded card for FIRST-PERSON held items only, so the flat quad
+            // above stays untouched for the world-space dropped-item sprites that share it.
+            //
+            // Six faces: the front shows the sprite proper, while each of the four side walls
+            // samples a single EDGE COLUMN/ROW of the sprite (u pinned to 0 or 1, v pinned to 0
+            // or 1). That makes the thickness follow the sprite's own silhouette - and because
+            // the shader discards texels below alpha 0.5, an antialiased pickaxe head grows a
+            // matching chunky edge instead of a rectangular slab. Classic extruded pixel art.
+            //
+            // Back-face culling plus correct outward winding makes this solid without a depth
+            // buffer, exactly like the held-block cube.
+            {
+                const float h = 0.5f;      // half width/height of the card
+                const float thick = 0.085f; // half depth -> total depth 0.17, ~1/6 of the width
+                const float edgeLo = 0.01f; // inset from the tile border so point sampling can
+                const float edgeHi = 0.99f; // never bleed the neighbouring atlas tile
+                const float uvMax = 0.999f;
+
+                // face order: front(+Z), back(-Z), left(-X), right(+X), top(+Y), bottom(-Y)
+                var prismFaces = new (float[] c, float[] n, float[] uv, float shade)[]
+                {
+                    (new[] { -h,-h, thick,  h,-h, thick,  h, h, thick,  -h, h, thick }, new[] { 0f,0f, 1f },
+                        new[] { 0f,0f, uvMax,0f, uvMax,uvMax, 0f,uvMax }, 1.00f),
+                    (new[] { -h, h,-thick,  h, h,-thick,  h,-h,-thick,  -h,-h,-thick }, new[] { 0f,0f,-1f },
+                        new[] { 0f,uvMax, uvMax,uvMax, uvMax,0f, 0f,0f }, 0.45f),
+                    (new[] { -h,-h,-thick, -h, h,-thick, -h, h, thick, -h,-h, thick }, new[] { -1f,0f,0f },
+                        new[] { edgeLo,0f, edgeLo,uvMax, edgeLo,uvMax, edgeLo,0f }, 0.62f),
+                    (new[] {  h,-h, thick,  h, h, thick,  h, h,-thick,  h,-h,-thick }, new[] { 1f,0f,0f },
+                        new[] { edgeHi,0f, edgeHi,uvMax, edgeHi,uvMax, edgeHi,0f }, 0.62f),
+                    (new[] { -h, h, thick,  h, h, thick,  h, h,-thick, -h, h,-thick }, new[] { 0f,1f,0f },
+                        new[] { 0f,edgeLo, uvMax,edgeLo, uvMax,edgeLo, 0f,edgeLo }, 0.88f),
+                    (new[] { -h,-h,-thick,  h,-h,-thick,  h,-h, thick, -h,-h, thick }, new[] { 0f,-1f,0f },
+                        new[] { 0f,edgeHi, uvMax,edgeHi, uvMax,edgeHi, 0f,edgeHi }, 0.45f),
+                };
+
+                var prismVerts = new float[6 * 4 * (3 + 2 + 4)];
+                int pv = 0;
+                foreach (var face in prismFaces)
+                {
+                    var c = face.c;
+                    // Same outward-winding correction the cubes use, so FaceCullMode.Back
+                    // behaves identically no matter which way the source corners were wound.
+                    var p0 = new Point3D(c[0], c[1], c[2]);
+                    var p1 = new Point3D(c[3], c[4], c[5]);
+                    var p2 = new Point3D(c[6], c[7], c[8]);
+                    var e1 = p1 - p0;
+                    var e2 = p2 - p0;
+                    var cross = new Point3D(e1.Y * e2.Z - e1.Z * e2.Y, e1.Z * e2.X - e1.X * e2.Z, e1.X * e2.Y - e1.Y * e2.X);
+                    var n = face.n;
+                    double d = cross.X * n[0] + cross.Y * n[1] + cross.Z * n[2];
+                    bool flip = d < 0;
+
+                    for (int k = 0; k < 4; k++)
+                    {
+                        int src = flip ? new[] { 0, 3, 2, 1 }[k] : k;
+                        prismVerts[pv++] = c[src * 3 + 0];
+                        prismVerts[pv++] = c[src * 3 + 1];
+                        prismVerts[pv++] = c[src * 3 + 2];
+                        prismVerts[pv++] = face.uv[src * 2 + 0];
+                        prismVerts[pv++] = face.uv[src * 2 + 1];
+                        prismVerts[pv++] = face.shade; prismVerts[pv++] = face.shade;
+                        prismVerts[pv++] = face.shade; prismVerts[pv++] = 1f;
+                    }
+                }
+                _heldItemPrismVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)prismVerts.Length * sizeof(float), BufferUsage.VertexBuffer));
+                _gd.UpdateBuffer(_heldItemPrismVertexBuffer, 0, prismVerts);
+
+                var prismIndices = new ushort[6 * 6];
+                for (int face = 0; face < 6; face++)
+                {
+                    int fv = face * 4, di = face * 6;
+                    prismIndices[di + 0] = (ushort)(fv + 0);
+                    prismIndices[di + 1] = (ushort)(fv + 1);
+                    prismIndices[di + 2] = (ushort)(fv + 2);
+                    prismIndices[di + 3] = (ushort)(fv + 0);
+                    prismIndices[di + 4] = (ushort)(fv + 2);
+                    prismIndices[di + 5] = (ushort)(fv + 3);
+                }
+                _heldItemPrismIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)prismIndices.Length * sizeof(ushort), BufferUsage.IndexBuffer));
+                _gd.UpdateBuffer(_heldItemPrismIndexBuffer, 0, prismIndices);
+            }
                 var smallIndices = new ushort[FallingCubeIndices];
                 int si = 0;
                 for (int face = 0; face < 6; face++)
@@ -1106,10 +1189,11 @@ void main() {
                 Outputs = _sc.Framebuffer.OutputDescription
             });
 
-            // Held genuine items: a flat camera-space sprite riding the fist (screen-aligned,
-            // like the hotbar icon), instead of the tilted cube. Same 11-float instance data
-            // (center + tile rect + rotation; rotation unused). Half-size baked: 0.22 -> 0.44
-            // world units, so the flat sprite reads about as big as the 0.289 held cube.
+            // Held genuine items: an extruded card riding the fist, tilted in 3D the same way
+            // the held-block cube is, so a flat sprite reads as a solid object instead of a
+            // sticker. The card's geometry (front + four silhouette-following side walls +
+            // back) lives in _heldItemPrismVertexBuffer, built in CreateModelPipeline.
+            // Same 11-float instance data as the cube: center + tile rect + rotation.
             {
                 string heldSpriteVsCode = @"#version 450
 layout(location=0) in vec3 aCorner;
@@ -1123,9 +1207,15 @@ layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
 layout(set=0, binding=0) uniform ProjectionView { mat4 proj; };
 void main() {
-    // Camera space is already axis-aligned with the camera: offset the quad in xy only.
-    vec3 local = aCorner * 0.22;
-    vec3 camPos = iWorldPos + vec3(local.xy, 0.0);
+    // Uniform scale keeps the card's proportions; the geometry is x/y in [-0.5,0.5] and
+    // z in [-0.085,0.085], so this yields a card 0.44 across and ~0.075 thick.
+    vec3 local = aCorner * 0.44;
+    // Apply the hold-angle quaternion - the old flat-sprite path ignored iRot entirely and
+    // offset the quad in xy only, which is why held items looked like flat stickers.
+    vec3 qv = iRot.xyz;
+    vec3 t = 2.0 * cross(qv, local);
+    vec3 rotated = local + iRot.w * t + cross(qv, t);
+    vec3 camPos = rotated + iWorldPos;
     vLocalUV = aLocalUV;
     vTileRect = iTileRect;
     vColor = aShade;
@@ -1154,8 +1244,11 @@ void main() {
                 {
                     BlendState = BlendStateDescription.SingleOverrideBlend,
                     DepthStencilState = DepthStencilStateDescription.Disabled,
-                    // Closed quad with correct outward winding, cull off so it never vanishes.
-                    RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                    // Closed extruded card with correct outward winding, so back-face culling
+                    // makes it solid. This matters more here than for the cube: the blend state
+                    // is alpha-blended and depth is off, so drawing both the front and back of
+                    // the card would double-blend its silhouette edges.
+                    RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                     PrimitiveTopology = PrimitiveTopology.TriangleList,
                     ResourceLayouts = new[] { _projViewLayout, _textureLayout },
                     ShaderSet = new ShaderSetDescription(new[] { heldCubeLayout, heldInstLayout }, new[] { heldSpriteShaders[0], heldSpriteShaders[1] }),
