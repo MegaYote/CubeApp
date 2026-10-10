@@ -617,9 +617,11 @@ _spriteVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)quadVerts
             // buffer, exactly like the held-block cube.
             {
                 const float h = 0.5f;      // half width/height of the card
-                const float thick = 0.085f; // half depth -> total depth 0.17, ~1/6 of the width
-                const float edgeLo = 0.01f; // inset from the tile border so point sampling can
-                const float edgeHi = 0.99f; // never bleed the neighbouring atlas tile
+                // Thickness is EXACTLY one pixel of the 16x16 sprite. Minecraft sets
+                // `float var16 = 1.0F / 16.0F` in ItemRenderer.renderItemInFirstPerson and
+                // offsets the back plane by it, so the sandwich is 1/16 deep - not the ~1/6
+                // this started at, which read as a slab rather than a blocky edge.
+                const float thick = 1.0f / 32.0f; // half of 1/16 -> total depth 1/16 of the width
                 const float uvMax = 0.999f;
 
                 // face order: front(+Z), back(-Z), left(-X), right(+X), top(+Y), bottom(-Y)
@@ -629,14 +631,14 @@ _spriteVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)quadVerts
                         new[] { 0f,0f, uvMax,0f, uvMax,uvMax, 0f,uvMax }, 1.00f),
                     (new[] { -h, h,-thick,  h, h,-thick,  h,-h,-thick,  -h,-h,-thick }, new[] { 0f,0f,-1f },
                         new[] { 0f,uvMax, uvMax,uvMax, uvMax,0f, 0f,0f }, 0.45f),
-                    (new[] { -h,-h,-thick, -h, h,-thick, -h, h, thick, -h,-h, thick }, new[] { -1f,0f,0f },
-                        new[] { edgeLo,0f, edgeLo,uvMax, edgeLo,uvMax, edgeLo,0f }, 0.62f),
+(new[] { -h,-h,-thick, -h, h,-thick, -h, h, thick, -h,-h, thick }, new[] { -1f,0f,0f },
+                        new[] { 0.02f,0f, 0.02f,uvMax, 0.02f,uvMax, 0.02f,0f }, 0.62f),
                     (new[] {  h,-h, thick,  h, h, thick,  h, h,-thick,  h,-h,-thick }, new[] { 1f,0f,0f },
-                        new[] { edgeHi,0f, edgeHi,uvMax, edgeHi,uvMax, edgeHi,0f }, 0.62f),
+                        new[] { 0.98f,0f, 0.98f,uvMax, 0.98f,uvMax, 0.98f,0f }, 0.62f),
                     (new[] { -h, h, thick,  h, h, thick,  h, h,-thick, -h, h,-thick }, new[] { 0f,1f,0f },
-                        new[] { 0f,edgeLo, uvMax,edgeLo, uvMax,edgeLo, 0f,edgeLo }, 0.88f),
+                        new[] { 0f,0.02f, uvMax,0.02f, uvMax,0.02f, 0f,0.02f }, 0.88f),
                     (new[] { -h,-h,-thick,  h,-h,-thick,  h,-h, thick, -h,-h, thick }, new[] { 0f,-1f,0f },
-                        new[] { 0f,edgeHi, uvMax,edgeHi, uvMax,edgeHi, 0f,edgeHi }, 0.45f),
+                        new[] { 0f,0.98f, uvMax,0.98f, uvMax,0.98f, 0f,0.98f }, 0.45f),
                 };
 
                 var prismVerts = new float[6 * 4 * (3 + 2 + 4)];
