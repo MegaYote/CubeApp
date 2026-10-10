@@ -578,6 +578,20 @@ namespace Cubuild.Renderer
             // for this icon camera (+X,+Y,-Z). Force it so every stair icon looks the same classic
             // way instead of whichever placement-facing the mesh happens to use.
             if (BlockRegistry.IsStair(blockId)) chunk.SetMeta(8, 8, 8, 1);
+            if (BlockRegistry.IsDoor(blockId))
+            {
+                // Doors are two cells tall and thin - meshing a lone half would give the menu a
+                // sliver. Build the full closed pair (meta 0 = north facing, left hinge) so the
+                // E-menu icon shows a recognisable shut door.
+                int other = BlockRegistry.DoorOtherHalfId(blockId);
+                if (other >= 0)
+                {
+                    if (BlockRegistry.IsDoorTop(blockId)) { chunk[8, 8, 8] = other; chunk[8, 9, 8] = blockId; }
+                    else { chunk[8, 8, 8] = blockId; chunk[8, 9, 8] = other; }
+                }
+                chunk.SetMeta(8, 8, 8, 0);
+                chunk.SetMeta(8, 9, 8, 0);
+            }
             var faces = Mesher.GenerateMesh(chunk);
 
             // Isometric projection matching the classic MC/Cubuild icon (48px cell). The block

@@ -358,6 +358,13 @@ namespace Cubuild
                     _ => new[] { (0.0, 0.0, 0.0, 1.0, 1.0, 0.5), (0.0, 0.0, 0.5, 1.0, 0.5, 1.0) },
                 };
             }
+            if (BlockRegistry.IsDoor(id))
+            {
+                // Same panel bounds the mesher draws, so what you see is what you collide with.
+                // An open door is a thin strip pinned to its hinge, leaving the doorway walkable.
+                BlockRegistry.GetDoorBounds(meta, out double dx0, out double dz0, out double dx1, out double dz1);
+                return new[] { (dx0, 0.0, dz0, dx1, 1.0, dz1) };
+            }
             if (BlockRegistry.IsCross(id))
             {
                 // Wall torches (meta 1-4): raised like the render (0.2) and hugging the wall

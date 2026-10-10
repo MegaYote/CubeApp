@@ -175,18 +175,37 @@ namespace Cubuild
             }
             if (screen == GameScreen.Playing && mouseLook && World != null && _ignoreInteractFrames == 0 && frameInput.PlaceBlockPressed)
             {
-                // Right-click on a workbench opens the crafting menu; anywhere else places.
-                if (World.TryPickWorkbench(World.PlayerPosition, World.GetCameraForward(), out _))
+// Right-click on a workbench opens the crafting menu; on a door it swings the door;
+            // anywhere else places the selected block.
+            if (World.TryPickWorkbench(World.PlayerPosition, World.GetCameraForward(), out _))
                 {
                     craftingOpen = true;
                     inventoryOpen = false;
                     DisableMouseLook();
+                }
+                else if (TryToggleDoorUnderCrosshair())
+                {
+                    _handSwingTimer = HandSwingDuration;
+                    _handPokeTimer = 0.3f;
                 }
                 else
                 {
                     PlaceSelectedBlock();
                 }
             }
+        }
+
+        /// <summary>
+        /// Right-clicking a door swings it. Returns true when a door was toggled so the caller
+        /// can skip block placement. Mirrors GameWorld.TryPickWorkbench: pick the targeted cell,
+        /// then hand it to the world to flip.
+        /// </summary>
+        private bool TryToggleDoorUnderCrosshair()
+        {
+            var pick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
+            if (!pick.HasValue) return false;
+            var pos = pick.Value.Remove;
+            return World.TryToggleDoor(pos.x, pos.y, pos.z);
         }
 
         private void CycleRenderDistance()

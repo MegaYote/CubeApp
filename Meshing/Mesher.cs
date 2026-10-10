@@ -818,6 +818,17 @@ namespace Cubuild
                         {
                             EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0, 0.5, 0, 1, 1, 1);
                         }
+                        else if (BlockRegistry.IsDoor(id))
+                        {
+                            // Doors are two-cell vertical panels: each half fills its own cell's
+                            // full height and shares the same X/Z panel bounds. Orientation,
+                            // hinge side and open/closed all come from the meta byte.
+                            int meta = chunk.GetMeta(x, y, z);
+                            BlockRegistry.GetDoorBounds(meta, out double dx0, out double dz0, out double dx1, out double dz1);
+                            // Cutout (-1) so the door's glass panes show the sky/room behind them
+                            // via the atlas PNG's own alpha rather than being blended opaque.
+                            EmitBox(lookup, lighting, mesh, wx, wy, wz, id, dx0, 0, dz0, dx1, 1, dz1, -1f);
+                        }
                         else // stairs - facing from metadata, two boxes
                         {
                             int meta = chunk.GetMeta(x, y, z);
@@ -848,6 +859,15 @@ namespace Cubuild
 
         private static void EmitBox(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh,
             int wx, int wy, int wz, int blockId, double minX, double minY, double minZ, double maxX, double maxY, double maxZ)
+            => EmitBox(lookup, lighting, mesh, wx, wy, wz, blockId, minX, minY, minZ, maxX, maxY, maxZ, 1f);
+
+        /// <summary>
+        /// As <see cref="EmitBox(Dictionary{ChunkCoordinates,Chunk},ChunkLighting,List{MeshFace},int,int,int,int,double,double,double,double,double,double)"/>,
+        /// but with an explicit render alpha. Negative values are sentinels understood by the
+        /// renderer's pass bucketing (-1 = cutout, i.e. honour the atlas PNG's per-pixel alpha).
+        /// </summary>
+        private static void EmitBox(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh,
+            int wx, int wy, int wz, int blockId, double minX, double minY, double minZ, double maxX, double maxY, double maxZ, float alpha)
         {
             var def = BlockRegistry.GetById(blockId);
             for (int i = 0; i < FaceOffsets.Length; i++)
@@ -898,7 +918,7 @@ namespace Cubuild
                 }
 
                 var src = def.FaceTexture(normal);
-                mesh.Add(new MeshFace(p0, p1, p2, p3, src, normal, new Point3D(wx, wy, wz), (float)brightness, 1, 1, 1f));
+                mesh.Add(new MeshFace(p0, p1, p2, p3, src, normal, new Point3D(wx, wy, wz), (float)brightness, 1, 1, alpha));
             }
         }
 

@@ -180,6 +180,7 @@ namespace Cubuild
             {
                 var c = kv.Value;
                 byte[] raw = c.RawBlocks;
+                byte[] rawMeta = c.RawMeta;
                 int baseLX = kv.Key.X * chunkSize - minX;
                 int baseLZ = kv.Key.Z * chunkSize - minZ;
                 for (int x = 0; x < chunkSize; x++)
@@ -194,7 +195,7 @@ namespace Cubuild
                         for (int y = bandLo; y <= fillTop; y++)
                         {
                             int id = raw[src + y];
-                            byte o = LightOpacity(id);
+                            byte o = LightOpacity(id, rawMeta[src + y]);
                             opacity[dst + y] = o;
                             if (o != 0 && y > hm) hm = y;
                             // Record block light emission (torches, glowstone, ...). Seeded into
@@ -245,9 +246,21 @@ namespace Cubuild
 
         private static byte LightOpacity(int id)
         {
+            return LightOpacity(id, 0);
+        }
+
+        /// <summary>
+        /// Per-cell light attenuation. <paramref name="meta"/> is needed for doors, whose
+        /// opacity depends on state: a closed door seals the cell (Minecraft behaviour), an
+        /// open one is just a panel swung aside so light passes through. Lighting is rebuilt
+        /// on every remesh, so toggling a door re-lights the region for free.
+        /// </summary>
+        private static byte LightOpacity(int id, byte meta)
+        {
             if (id == BlockRegistry.AirId) return 0;
             if (id == _idWater) return 3;
             if (id == _idLeaves) return 1;
+            if (BlockRegistry.IsDoor(id)) return BlockRegistry.IsDoorOpen(meta) ? (byte)0 : (byte)255;
             if (!BlockRegistry.IsOpaque(id)) return 0;
             if (BlockRegistry.IsCross(id)) return 0;
             if (BlockRegistry.IsPartialShape(id)) return 0;

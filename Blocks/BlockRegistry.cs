@@ -31,6 +31,7 @@ namespace Cubuild
         private static bool[] _slab = Array.Empty<bool>();
         private static bool[] _slabTop = Array.Empty<bool>();
         private static bool[] _stair = Array.Empty<bool>();
+        private static bool[] _door = Array.Empty<bool>();
         private static bool[] _inventory = Array.Empty<bool>();
         private static bool[] _placeable = Array.Empty<bool>();
         private static bool[] _gravity = Array.Empty<bool>();
@@ -287,6 +288,7 @@ namespace Cubuild
             _slab = new bool[Count];
             _slabTop = new bool[Count];
             _stair = new bool[Count];
+            _door = new bool[Count];
             _inventory = new bool[Count];
             _placeable = new bool[Count];
             _gravity = new bool[Count];
@@ -313,6 +315,7 @@ namespace Cubuild
                 _slab[i] = string.Equals(defs[i].Shape, "slab", StringComparison.OrdinalIgnoreCase);
                 _slabTop[i] = string.Equals(defs[i].Shape, "slab_top", StringComparison.OrdinalIgnoreCase);
                 _stair[i] = string.Equals(defs[i].Shape, "stairs", StringComparison.OrdinalIgnoreCase);
+            _door[i] = string.Equals(defs[i].Shape, "door", StringComparison.OrdinalIgnoreCase);
                 _gravity[i] = defs[i].Gravity;
             }
 
@@ -393,7 +396,8 @@ namespace Cubuild
         public static bool IsSlab(int id) => id > 0 && id < Count && _slab[id];
         public static bool IsSlabTop(int id) => id > 0 && id < Count && _slabTop[id];
         public static bool IsStair(int id) => id > 0 && id < Count && _stair[id];
-        public static bool IsPartialShape(int id) => id > 0 && id < Count && (_slab[id] || _slabTop[id] || _stair[id]);
+        public static bool IsDoor(int id) => id > 0 && id < Count && _door[id];
+        public static bool IsPartialShape(int id) => id > 0 && id < Count && (_slab[id] || _slabTop[id] || _stair[id] || _door[id]);
         public static bool IsInInventory(int id) => id >= 0 && id < Count && _inventory[id];
         public static bool IsPlaceable(int id) => id > 0 && id < Count && _placeable[id];
         public static bool IsGravity(int id) => id > 0 && id < Count && _gravity[id];
@@ -404,6 +408,152 @@ namespace Cubuild
         public static string ToolTypeOf(int id) => id > 0 && id < Count ? _toolType[id] : "";
         /// <summary>True when the matching tool is required for this block to drop an item.</summary>
         public static bool ToolRequiredOf(int id) => id > 0 && id < Count && _toolRequired[id];
+
+        // ---- Doors ---------------------------------------------------------------
+        //
+        // A door occupies TWO cells (bottom + top half) and its per-instance state lives in
+        // the existing per-cell meta byte, packed as:
+        //
+        //   bits 0-1 : facing  (0=North/-Z, 1=East/+X, 2=South/+Z, 3=West/-X)
+        //   bit  2   : hinge side (0 = low side of the width axis, 1 = high side)
+        //   bit  3   : open      (0 = closed, 1 = open / swung 90 degrees)
+        //
+        // NOTE: this facing encoding is NOT the same as StairFacingMeta's (which uses
+        // 0=East, 1=West, 2=South, 3=North). Use DoorFacingFromNormal when converting a
+        // raycast face normal, and never feed a StairFacingMeta result in directly.
+        // Meta is already persisted to the save file and shipped over the network, so doors
+        // need no format change.
+
+        public const double DoorThickness = 3.0 / 16.0; // 0.1875 - matches Minecraft's door panel
+
+        public const int DoorFacingMask = 0x3;
+        public const int DoorHingeBit = 0x4;
+        public const int DoorOpenBit = 0x8;
+
+        /// <summary>Which way the door's panel faces: 0=North(-Z), 1=East(+X), 2=South(+Z), 3=West(-X).</summary>
+        public static int DoorFacing(int meta) => meta & DoorFacingMask;
+        /// <summary>True when the hinge is on the high side of the door's width axis.</summary>
+        public static bool DoorRightHinge(int meta) => (meta & DoorHingeBit) != 0;
+        public static bool IsDoorOpen(int meta) => (meta & DoorOpenBit) != 0;
+
+        /// <summary>Packs door state into a meta byte.</summary>
+        public static byte MakeDoorMeta(int facing, bool rightHinge, bool open)
+            => (byte)((facing & DoorFacingMask)
+                      | (rightHinge ? DoorHingeBit : 0)
+                      | (open ? DoorOpenBit : 0));
+
+        /// <summary>True when the two meta bytes describe the same door orientation (open state aside).</summary>
+        public static bool DoorOrientationMatches(int a, int b) => (a & ~DoorOpenBit) == (b & ~DoorOpenBit);
+
+        /// <summary>
+        /// The cell-relative AABB of one door half's panel. Closed doors sit flush against the
+        /// wall on the facing side, spanning the full width of the cell; open doors swing 90
+        /// degrees about their hinge edge and so run perpendicular to the closed orientation.
+        /// Both halves use the same X/Z bounds (the door is a straight vertical panel).
+        /// </summary>
+        public static void GetDoorBounds(int meta, out double minX, out double minZ, out double maxX, out double maxZ)
+        {
+            const double t = DoorThickness;
+            int facing = DoorFacing(meta);
+            bool high = DoorRightHinge(meta);
+            bool open = IsDoorOpen(meta);
+
+            // facings 0 (N) and 2 (S) have their panel normal along Z, so their width axis is X.
+            // facings 1 (E) and 3 (W) have their panel normal along X, so their width axis is Z.
+            bool widthOnX = facing == 0 || facing == 2;
+
+            if (open)
+            {
+                // Swung perpendicular: thin along the width axis, pinned to the hinge edge.
+                if (widthOnX)
+                {
+                    minX = high ? 1.0 - t : 0.0;
+                    maxX = high ? 1.0 : t;
+                    minZ = 0.0;
+                    maxZ = 1.0;
+                }
+                else
+                {
+                    minZ = high ? 1.0 - t : 0.0;
+                    maxZ = high ? 1.0 : t;
+                    minX = 0.0;
+                    maxX = 1.0;
+                }
+            }
+            else
+            {
+                // Closed: thin along the facing axis, full width across it.
+                if (widthOnX)
+                {
+                    minX = 0.0;
+                    maxX = 1.0;
+                    minZ = (facing == 0) ? 0.0 : 1.0 - t; // north -> -Z edge, south -> +Z edge
+                    maxZ = (facing == 0) ? t : 1.0;
+                }
+                else
+                {
+                    minZ = 0.0;
+                    maxZ = 1.0;
+                    minX = (facing == 3) ? 0.0 : 1.0 - t; // west -> -X edge, east -> +X edge
+                    maxX = (facing == 3) ? t : 1.0;
+                }
+            }
+        }
+
+        /// <summary>True when the block id is the top half of a door (as opposed to the bottom).</summary>
+        public static bool IsDoorTop(int id) => IsDoor(id) && _defs[id].DoorHalf == "top";
+
+        /// <summary>
+        /// The other half of a door pair, given either half's id. Doors are declared as a
+        /// "&lt;material&gt;_door_bottom" / "&lt;material&gt;_door_top" pair; this resolves the
+        /// counterpart by name. Returns -1 when the id isn't a door or has no partner.
+        /// </summary>
+        public static int DoorOtherHalfId(int id)
+        {
+            if (!IsDoor(id)) return -1;
+            string name = _defs[id].Id;
+            string suffix = IsDoorTop(id) ? "_top" : "_bottom";
+            if (!name.EndsWith(suffix, StringComparison.Ordinal)) return -1;
+            string otherName = name[..^suffix.Length] + (IsDoorTop(id) ? "_bottom" : "_top");
+            for (int i = 1; i < Count; i++)
+            {
+                if (string.Equals(_defs[i].Id, otherName, StringComparison.Ordinal) && IsDoor(i)) return i;
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// The door facing for a raycast face normal. The normal points from the wall toward
+        /// the free cell the door will occupy, so the door faces back along -normal: clicking
+        /// a wall's east face puts a west-facing door in the cell to its east.
+        /// </summary>
+        public static int DoorFacingFromNormal(Point3D normal)
+        {
+            if (normal.X > 0) return 3; // wall to the west -> door faces west
+            if (normal.X < 0) return 1; // wall to the east  -> door faces east
+            if (normal.Z > 0) return 0; // wall to the south -> door faces north
+            return 2;                   // wall to the north -> door faces south
+        }
+
+        /// <summary>The world-space direction the closed panel's thin axis points (unit, one of +-X/+-Z).</summary>
+        public static Point3D DoorFacingDirection(int facing) => facing switch
+        {
+            0 => new Point3D(0, 0, -1),
+            1 => new Point3D(1, 0, 0),
+            2 => new Point3D(0, 0, 1),
+            _ => new Point3D(-1, 0, 0),
+        };
+
+        /// <summary>
+        /// Minecraft's hinge rule, simplified: the hinge goes on the side of the doorway the
+        /// player is standing on, so the door swings away from them and leaves the opening clear.
+        /// The hinge must sit on the door's width axis, which is X for north/south-facing
+        /// doors and Z for east/west-facing ones.
+        /// </summary>
+        public static bool DoorHingeOnHighSide(int facing, double playerX, double playerZ, int cellX, int cellZ)
+            => facing == 0 || facing == 2
+                ? playerX > cellX + 0.5
+                : playerZ > cellZ + 0.5;
 
         public static bool ZombieCanBreakOf(int id) => id > 0 && id < Count && _zombieCanBreak[id];
 

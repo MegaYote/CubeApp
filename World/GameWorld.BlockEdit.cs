@@ -41,6 +41,20 @@ namespace Cubuild
             removedBlockId = 0;
             if (!Chunks.TryGetLoadedBlock(x, y, z, out removedBlockId)) return false;
             if (!Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId)) return false;
+
+            // A door is two cells, so breaking either half must remove both - otherwise you'd
+            // leave a floating top half. The partner is cleared without dropping anything; the
+            // normal drop path below yields exactly one door, whichever half you hit.
+            int doorPartnerY = 0;
+            if (BlockRegistry.IsDoor(removedBlockId))
+            {
+                doorPartnerY = BlockRegistry.IsDoorTop(removedBlockId) ? y - 1 : y + 1;
+                Chunks.TrySetBlock(x, doorPartnerY, z, BlockRegistry.AirId);
+                BlockTicks?.OnBlockChanged(x, doorPartnerY, z);
+                BlockEdited?.Invoke(x, doorPartnerY, z, 0, 0);
+                Mesher.RequestImmediateRemesh(new ChunkCoordinates(
+                    ChunkManager.LayerForWorldY(doorPartnerY), WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            }
             // Survival: mining a block drops a physical item you have to collect - no teleporting
             // into the inventory. Leaves drop a sapling 1-in-10, otherwise nothing; gravel
             // drops flint 1-in-10 (like Minecraft) and otherwise drops itself. Stone mined
@@ -50,6 +64,8 @@ namespace Cubuild
             // multiple items, unlike every other drop.
             int dropId = removedBlockId;
             int dropCount = 1;
+            // Either half of a door yields the bottom-half item, which is the one that places.
+            if (BlockRegistry.IsDoor(removedBlockId)) dropId = DoorBottomIdFor(removedBlockId);
             if (chop == WoodChopKind.Hatchet && dropId == _idLog)
             {
                 dropId = _idPlanks;
@@ -314,6 +330,12 @@ var place = pickResult.Value.Place;
             if (BlockTicks != null && BlockTicks.IsCellOccupiedByFalling(place.x, place.y, place.z))
             {
                 return false;
+            }
+
+            // Doors span two cells, so they get their own dedicated placement path (below).
+            if (BlockRegistry.IsDoor(blockToPlace))
+            {
+                return TryPlaceDoor(p, place, normal, blockToPlace, spendId);
             }
 
             if (BlockRegistry.IsSlab(blockToPlace) || BlockRegistry.IsSlabTop(blockToPlace))
@@ -594,6 +616,142 @@ var place = pickResult.Value.Place;
             if (Math.Abs(dirX) > Math.Abs(dirZ))
                 return dirX > 0 ? 0 : 1;
             return dirZ > 0 ? 2 : 3;
+        }
+
+        /// <summary>The top-half block id paired with a door bottom-half id, or -1 if there is none.</summary>
+        private static int DoorTopIdFor(int doorBottomId)
+            => BlockRegistry.IsDoorTop(doorBottomId) ? doorBottomId : BlockRegistry.DoorOtherHalfId(doorBottomId);
+
+        /// <summary>
+        /// Places a door as a bottom+top cell pair. Facing comes from the clicked wall's face
+        /// normal (the door faces back along -normal, closing flush against that wall), the
+        /// hinge goes on the player's side of the doorway so it swings away from them, and both
+        /// halves share one meta byte so toggling only has to write the same value twice.
+        /// </summary>
+        private bool TryPlaceDoor(PlayerState p, (int x, int y, int z) place, Point3D normal,
+            int doorBottomId, int spendId)
+        {
+            int doorTopId = DoorTopIdFor(doorBottomId);
+            if (doorTopId < 0) return false;
+
+            // A door is two blocks tall, so the cell above the bottom half must be free too.
+            int topY = place.y + 1;
+
+            // Both cells must be genuinely loaded and empty (or replaceable fluid). TryGetLoadedBlock
+            // returning false means the chunk isn't resident, which must not read as "empty".
+            foreach (int y in new[] { place.y, topY })
+            {
+                if (!Chunks.TryGetLoadedBlock(place.x, y, place.z, out int occ)) return false;
+                if (occ != BlockRegistry.AirId && !IsReplaceableFluid(occ)) return false;
+            }
+
+            // Floor/ceiling placement (normal.Y != 0) means there's no wall to flush against, so
+            // fall back to the direction the player is looking.
+            int facing = normal.Y != 0 ? DoorFacingForFloorPlacement(p) : BlockRegistry.DoorFacingFromNormal(normal);
+
+            // The door needs something to attach to: a solid cell directly behind the closed panel.
+            var wallDir = BlockRegistry.DoorFacingDirection(facing);
+            int wallX = place.x + (int)wallDir.X;
+            int wallZ = place.z + (int)wallDir.Z;
+            bool wallSolid = Chunks.TryGetLoadedBlock(wallX, place.y, wallZ, out int wallId)
+                             && wallId != BlockRegistry.AirId && BlockRegistry.IsSolid(wallId);
+            // Falling back to the floor: Minecraft also lets you stand a door on top of a block.
+            bool floorSolid = Chunks.TryGetLoadedBlock(place.x, place.y - 1, place.z, out int floorId)
+                              && floorId != BlockRegistry.AirId && BlockRegistry.IsSolid(floorId);
+            if (!wallSolid && !floorSolid) return false;
+
+            bool highHinge = BlockRegistry.DoorHingeOnHighSide(facing, p.Position.X, p.Position.Z, place.x, place.z);
+            byte meta = BlockRegistry.MakeDoorMeta(facing, highHinge, open: false);
+
+            // Neither half may intersect the player (the collision resolver never depenetrates,
+            // so intersecting here would trap them inside a closed door).
+            if (WouldBlockIntersectPlayer(p, place.x, place.y, place.z, doorBottomId, meta)) return false;
+            if (WouldBlockIntersectPlayer(p, place.x, topY, place.z, doorTopId, meta)) return false;
+
+            if (!Chunks.TrySetBlock(place.x, place.y, place.z, doorBottomId, meta)) return false;
+            if (!Chunks.TrySetBlock(place.x, topY, place.z, doorTopId, meta))
+            {
+                // Roll back so a half-placed door can never exist.
+                Chunks.TrySetBlock(place.x, place.y, place.z, BlockRegistry.AirId, 0);
+                return false;
+            }
+
+            if (!IsCreative) TryConsumeFromInventory(spendId, 1);
+            BlockTicks?.OnBlockChanged(place.x, place.y, place.z);
+            BlockTicks?.OnBlockChanged(place.x, topY, place.z);
+            int layer = ChunkManager.LayerForWorldY(place.y);
+            var coord = new ChunkCoordinates(layer, WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));
+            Mesher.RequestImmediateRemesh(coord);
+            // Both halves are announced so a host's clients build the same door.
+            BlockEdited?.Invoke(place.x, place.y, place.z, doorBottomId, meta);
+            BlockEdited?.Invoke(place.x, topY, place.z, doorTopId, meta);
+            return true;
+        }
+
+        /// <summary>Facing for a door placed on a floor/ceiling: it looks back at the player.</summary>
+        private static int DoorFacingForFloorPlacement(PlayerState p)
+        {
+            float yawRad = p.Yaw * (float)Math.PI / 180f;
+            double dirX = Math.Sin(yawRad);
+            double dirZ = Math.Cos(yawRad);
+            // Door faces the opposite way to the player's look direction.
+            if (Math.Abs(dirX) > Math.Abs(dirZ)) return dirX > 0 ? 1 : 3;
+            return dirZ > 0 ? 0 : 2;
+        }
+
+        /// <summary>The bottom-half block id paired with a door top-half id, or -1 if there is none.</summary>
+        private static int DoorBottomIdFor(int doorTopId)
+            => BlockRegistry.IsDoorTop(doorTopId) ? BlockRegistry.DoorOtherHalfId(doorTopId) : doorTopId;
+
+        /// <summary>Flips the open bit on a door and both of its halves. Returns false when the targeted
+        /// block isn't part of a door. Used by right-click (see Program.Input) and by clients
+        /// replaying the host's edit.
+        /// </summary>
+        public bool TryToggleDoor(int x, int y, int z, bool allowTrap = false)
+        {
+            if (!Chunks.TryGetLoadedBlockAndMeta(x, y, z, out int id, out byte meta)) return false;
+            if (!BlockRegistry.IsDoor(id)) return false;
+
+            // Resolve the paired half from whichever half was clicked, so this works for any
+            // door material rather than a hardcoded oak.
+            bool clickedTop = BlockRegistry.IsDoorTop(id);
+            int doorTopId = clickedTop ? id : DoorTopIdFor(id);
+            int doorBottomId = clickedTop ? DoorBottomIdFor(id) : id;
+            if (doorTopId < 0 || doorBottomId < 0) return false;
+
+            bool open = BlockRegistry.IsDoorOpen(meta);
+            // Don't slam a door shut on top of the player - the collision resolver would leave
+            // them stuck inside it with no way out. allowTrap is set for remote/replayed edits,
+            // where the local player isn't the one standing in the doorway.
+            if (!open && !allowTrap && WouldDoorTrapPlayer(x, y, z, doorBottomId, meta)) return false;
+
+            byte toggled = (byte)(meta ^ BlockRegistry.DoorOpenBit);
+            int bottomY = clickedTop ? y - 1 : y;
+            int topY = bottomY + 1;
+
+            if (!Chunks.TrySetBlock(x, bottomY, z, doorBottomId, toggled)) return false;
+            if (!Chunks.TrySetBlock(x, topY, z, doorTopId, toggled)) return false;
+
+            BlockTicks?.OnBlockChanged(x, bottomY, z);
+            BlockTicks?.OnBlockChanged(x, topY, z);
+            int layer = ChunkManager.LayerForWorldY(bottomY);
+            var coord = new ChunkCoordinates(layer, WorldToChunkCoord(x), WorldToChunkCoord(z));
+            Mesher.RequestImmediateRemesh(coord);
+            BlockEdited?.Invoke(x, bottomY, z, doorBottomId, toggled);
+            BlockEdited?.Invoke(x, topY, z, doorTopId, toggled);
+            return true;
+        }
+
+        /// <summary>
+        /// True when closing the door would leave the local player standing inside the closed
+        /// panel. The collision resolver only rejects steps, it never pushes the player out, so
+        /// a door allowed to close over them would trap them with no way to escape.
+        /// </summary>
+        private bool WouldDoorTrapPlayer(int x, int y, int z, int doorBottomId, byte meta)
+        {
+            int bottomY = BlockRegistry.IsDoorTop(doorBottomId) ? y - 1 : y;
+            return WouldBlockIntersectPlayer(LocalPlayer, x, bottomY, z, doorBottomId, meta)
+                || WouldBlockIntersectPlayer(LocalPlayer, x, bottomY + 1, z, doorBottomId, meta);
         }
 
         // Computes the face rectangle (minX,minY,minZ,maxX,maxY,maxZ) for a fluid block
