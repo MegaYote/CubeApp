@@ -1536,6 +1536,17 @@ namespace Cubuild.Renderer
                 ImGui.SliderFloat("blockY (down)", ref _heldBlockY, -0.8f, 0.1f);
                 ImGui.SliderFloat("blockZ (forward)", ref _heldBlockZ, -1.2f, -0.3f);
                 ImGui.SliderFloat("blockSize", ref _heldBlockSize, 0.2f, 0.6f);
+
+            // Flat 2D item held in the fist. It rides the arm's own transform, so these only
+            // position it within the hand and size/tilt the card - the swing, punch, bob and
+            // sway all come free from the arm.
+            ImGui.Separator();
+            ImGui.TextUnformatted("Held 2D item (in fist)");
+            ImGui.SliderFloat("grip x", ref _heldItemGripX, -3.0f, 3.0f);
+            ImGui.SliderFloat("grip y", ref _heldItemGripY, -12.0f, 2.0f);
+            ImGui.SliderFloat("grip z", ref _heldItemGripZ, -3.0f, 3.0f);
+            ImGui.SliderFloat("item size", ref _heldItemScale, 0.1f, 2.0f);
+            ImGui.SliderFloat("item tilt", ref _heldItemSpin, -3.2f, 3.2f);
                 ImGui.Separator();
                 string copyLine = string.Format(
                     "handScale={0:0.###}f, sx={1:0.###}f, sy={2:0.###}f, sz={3:0.###}f, basePitch={4:0.###}f, baseYaw={5:0.###}f, heldBlockX={6:0.###}f, heldBlockY={7:0.###}f, heldBlockZ={8:0.###}f, heldBlockSize={9:0.###}f",

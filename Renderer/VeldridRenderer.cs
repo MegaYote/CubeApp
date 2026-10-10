@@ -553,6 +553,14 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
     // applied to it on the CPU without rebuilding the geometry each frame.
     private float[] _heldItemPrismBase = Array.Empty<float>();
     private float[] _heldItemPrismScratch = Array.Empty<float>();
+    // Where the flat item sits in the fist, in the arm's pivot-relative space, plus its size and
+    // screen-facing tilt. The arm mesh spans roughly x -1..3, y -10..2 about the shoulder pivot,
+    // so the fist end sits near the low-y extreme.
+    private float _heldItemGripX = 0.6f;
+    private float _heldItemGripY = -8.5f;
+    private float _heldItemGripZ = 0.0f;
+    private float _heldItemScale = 0.55f;
+    private float _heldItemSpin = -0.5f;
         // Shadow pipeline for item drops
         private DeviceBuffer? _shadowVertexBuffer;
         private DeviceBuffer? _shadowIndexBuffer;

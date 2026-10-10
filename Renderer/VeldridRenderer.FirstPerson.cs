@@ -108,51 +108,49 @@ namespace Cubuild.Renderer
                 }
             }
 
+// The arm ALWAYS draws. A held item no longer replaces it - it is placed in the fist
+            // and rides the arm's own transform, so there is a single source of truth for
+            // first-person pose instead of a second, independent stack that has to be kept
+            // in sync with this one.
             float[] verts = new float[_handMesh.Length];
-            if (!holdingBlock)
             {
                 for (int i = 0; i < _handMesh.Length; i += 9)
-            {
-                // Flip the arm so it points UP from the shoulder, then rotate pitch -> yaw -> roll
-                // around the shoulder (origin) for the chop, then place + sweep toward the block.
-                float x = _handMesh[i] * handScale;
-                float y = _handMesh[i + 1] * handScale;
-                float z = _handMesh[i + 2] * handScale;
-                float xf = -x;
-                float yf = -y;
-                float zf = z;
-                float y1 = yf * cp - zf * sp;
-                float z1 = yf * sp + zf * cp;
-                float x2 = xf * cy + z1 * syy;
-                float z2 = -xf * syy + z1 * cy;
-                float x3 = x2 * cr - y1 * sr;
-                float y3 = x2 * sr + y1 * cr;
-                verts[i] = x3 + sx + tx + handSway;
-                verts[i + 1] = y3 + sy + ty + handBob;
-                verts[i + 2] = z2 + sz + tz;
-                verts[i + 3] = _handMesh[i + 3];
-                verts[i + 4] = _handMesh[i + 4];
-                verts[i + 5] = _handMesh[i + 5];
-                verts[i + 6] = _handMesh[i + 6];
-                verts[i + 7] = _handMesh[i + 7];
-                verts[i + 8] = _handMesh[i + 8];
-            }
+                {
+                    // Flip the arm so it points UP from the shoulder, then rotate pitch -> yaw -> roll
+                    // around the shoulder (origin) for the chop, then place + sweep toward the block.
+                    float x = _handMesh[i] * handScale;
+                    float y = _handMesh[i + 1] * handScale;
+                    float z = _handMesh[i + 2] * handScale;
+                    float xf = -x;
+                    float yf = -y;
+                    float zf = z;
+                    float y1 = yf * cp - zf * sp;
+                    float z1 = yf * sp + zf * cp;
+                    float x2 = xf * cy + z1 * syy;
+                    float z2 = -xf * syy + z1 * cy;
+                    float x3 = x2 * cr - y1 * sr;
+                    float y3 = x2 * sr + y1 * cr;
+                    verts[i] = x3 + sx + tx + handSway;
+                    verts[i + 1] = y3 + sy + ty + handBob;
+                    verts[i + 2] = z2 + sz + tz;
+                    verts[i + 3] = _handMesh[i + 3];
+                    verts[i + 4] = _handMesh[i + 4];
+                    verts[i + 5] = _handMesh[i + 5];
+                    verts[i + 6] = _handMesh[i + 6];
+                    verts[i + 7] = _handMesh[i + 7];
+                    verts[i + 8] = _handMesh[i + 8];
+                }
                 _gd.UpdateBuffer(_handVertexBuffer, 0, verts);
-            } // end if (!holdingBlock)
+            }
 
-            // The held block has its own anchor (independent of the arm pose) and rides the same
-            // punch/bob/sway motion.
-            float blockX = _heldBlockX + tx + handSway;
-            float blockY = _heldBlockY + ty + handBob;
-            float blockZ = _heldBlockZ + tz;
-
-            // A selected hotbar block replaces the hand and uses the same motion.
-            if (holdingBlock) DrawHeldBlock(cl, blockX, blockY, blockZ, s);
+            // The held item is drawn in the fist, transformed by the SAME pitch/yaw/roll chain
+            // as the arm above, so it moves with the hand for free.
+            if (holdingBlock) DrawHeldItemInHand(cl, cp, sp, cy, syy, cr, sr,
+                sx + tx + handSway, sy + ty + handBob, sz + tz);
 
             // The hand renders with depth OFF (it must always draw over the world), so the arm's
             // six faces need explicit back-to-front ordering - otherwise a hidden face can paint
             // over a visible one where they overlap on screen and a face looks invisible.
-            if (!holdingBlock)
             {
                 float[] faceZ = new float[6];
                 for (int f = 0; f < 6; f++)
@@ -315,6 +313,96 @@ namespace Cubuild.Renderer
 
         private const float MathHelper45 = 45f * MathF.PI / 180f;
 
+        /// <summary>
+        /// Draws the selected hotbar item positioned in the fist, riding the ARM's transform.
+        ///
+        /// The prism's vertices are offset to <c>_heldItemGrip</c> (a point in the same
+        /// pivot-relative space the arm mesh uses), then pushed through the identical
+        /// pitch -> yaw -> roll chain and shoulder placement the arm vertices just went
+        /// through. Because both use one transform, the item stays in the hand through the
+        /// swing, punch, bob and sway with no duplicated math to drift out of sync.
+        /// </summary>
+        private void DrawHeldItemInHand(CommandList cl,
+            float cp, float sp, float cy, float syy, float cr, float sr,
+            float ox, float oy, float oz)
+        {
+            if (_heldBlockSpritePipeline == null || _heldItemPrismVertexBuffer == null
+                || _heldItemPrismIndexBuffer == null || _heldItemPrismBase.Length == 0) return;
+            var hotbar = _hud.Hotbar;
+            if (hotbar == null) return;
+            int selected = _hud.SelectedSlot;
+            if (selected < 0 || selected >= hotbar.Count) return;
+            int bid = hotbar[selected];
+            if (bid <= 0) return;
+
+            bool fromItems;
+            var tr = ItemRegistry.GetTile(bid, out fromItems);
+            if (tr.Width <= 0) return;
+
+            float atlasW = Math.Max(1f, fromItems ? _itemsAtlasPixelsW : _atlasWidth);
+            float atlasH = Math.Max(1f, fromItems ? _itemsAtlasPixelsH : _atlasHeight);
+
+            // Blocks keep their existing cube path; only flat 2D items ride the arm.
+            if (!fromItems) { DrawHeldBlock(cl, _heldBlockX + ox, _heldBlockY + oy, _heldBlockZ + oz); return; }
+            if (_itemsTextureSet == null) return;
+
+            float gx = _heldItemGripX, gy = _heldItemGripY, gz = _heldItemGripZ;
+            float itemScale = _heldItemScale;
+            float spin = _heldItemSpin;
+
+            float[] src = _heldItemPrismBase;
+            float[] dst = _heldItemPrismScratch;
+            for (int v = 0; v * 9 < src.Length; v++)
+            {
+                int o = v * 9;
+                // Local: scale the card, spin it about Z (screen-facing tilt), then offset to the
+                // grip point in the arm's pivot-relative space.
+                float x = src[o] * itemScale;
+                float y = src[o + 1] * itemScale;
+                float z = src[o + 2] * itemScale;
+                float cs = MathF.Cos(spin), sn = MathF.Sin(spin);
+                float xs = x * cs - y * sn;
+                float ys = x * sn + y * cs;
+                x = xs + gx; y = ys + gy; z = z + gz;
+
+                // Exactly the arm's chain: flip, pitch, yaw, roll.
+                float xf = -x;
+                float yf = -y;
+                float zf = z;
+                float y1 = yf * cp - zf * sp;
+                float z1 = yf * sp + zf * cp;
+                float x2 = xf * cy + z1 * syy;
+                float z2 = -xf * syy + z1 * cy;
+                float x3 = x2 * cr - y1 * sr;
+                float y3 = x2 * sr + y1 * cr;
+
+                dst[o] = x3 + ox;
+                dst[o + 1] = y3 + oy;
+                dst[o + 2] = z2 + oz;
+            }
+            _gd.UpdateBuffer(_heldItemPrismVertexBuffer, 0, dst);
+
+            // iWorldPos is zero - the transform above already placed the verts in camera space.
+            _heldBlockScratch[0] = 0f;
+            _heldBlockScratch[1] = 0f;
+            _heldBlockScratch[2] = 0f;
+            _heldBlockScratch[3] = tr.X / atlasW;
+            _heldBlockScratch[4] = tr.Y / atlasH;
+            _heldBlockScratch[5] = tr.Width / atlasW;
+            _heldBlockScratch[6] = tr.Height / atlasH;
+            _heldBlockScratch[7] = 0f; _heldBlockScratch[8] = 0f;
+            _heldBlockScratch[9] = 0f; _heldBlockScratch[10] = 1f;
+            _gd.UpdateBuffer(_heldBlockBuffer, 0, _heldBlockScratch);
+
+            cl.SetPipeline(_heldBlockSpritePipeline);
+            cl.SetGraphicsResourceSet(0, _handProjSet);
+            cl.SetGraphicsResourceSet(1, _itemsTextureSet);
+            cl.SetVertexBuffer(0, _heldItemPrismVertexBuffer);
+            cl.SetVertexBuffer(1, _heldBlockBuffer);
+            cl.SetIndexBuffer(_heldItemPrismIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed(36, 1, 0, 0, 0);
+        }
+
         private void DrawHeldBlock(CommandList cl, float blockX, float blockY, float blockZ,
             float swing = 0f)
         {
@@ -364,14 +452,21 @@ namespace Cubuild.Renderer
                 // Minecraft's entire stack, applied to the prism on the CPU so every translate
                 // and scale lands in the right place between the rotations. The shader only
                 // projects and samples, so iRot stays identity.
+                //
+                // System.Numerics is ROW-vector convention - Vector4.Transform(v, M) computes
+                // v*M, which equals M-transpose*v in OpenGL's COLUMN convention. Passing the
+                // matrix straight through therefore applied the INVERSE of Minecraft's whole
+                // transform: every rotation ran backwards and every translation landed wrong,
+                // which is why the item vanished. Transpose first so this is a true M*v.
                 var mc = BuildMinecraftHeldItemMatrix(swing, 1f, out float mf, out float mf1);
+                var mcT = Matrix4x4.Transpose(mc);
                 float[] src = _heldItemPrismBase;
                 float[] dst = _heldItemPrismScratch;
                 for (int v = 0; v * 9 < src.Length; v++)
                 {
                     int o = v * 9;
                     var p = Vector4.Transform(
-                        new Vector4(src[o], src[o + 1], src[o + 2], 0f), mc);
+                        new Vector4(src[o], src[o + 1], src[o + 2], 0f), mcT);
                     dst[o] = p.X;
                     dst[o + 1] = p.Y;
                     dst[o + 2] = p.Z;
