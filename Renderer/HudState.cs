@@ -25,6 +25,20 @@ namespace Cubuild.Renderer
         public bool InventoryOpen;
         /// <summary>Workbench crafting menu open (right-click a workbench block).</summary>
         public bool CraftingOpen;
+        /// <summary>Kiln/furnace screen open (right-click a kiln or forge).</summary>
+        public bool SmeltOpen;
+        /// <summary>Kiln input stack (item waiting to smelt).</summary>
+        public (int ItemId, int Count)? SmeltInput;
+        /// <summary>Kiln fuel stack.</summary>
+        public (int ItemId, int Count)? SmeltFuel;
+        /// <summary>Kiln output stack.</summary>
+        public (int ItemId, int Count)? SmeltOutput;
+        /// <summary>Kiln smelt progress, 0..1.</summary>
+        public float SmeltProgress;
+        /// <summary>Kiln fuel burn progress, 0..1 (for the flame gauge).</summary>
+        public float SmeltBurnProgress;
+        /// <summary>Preview of what the kiln input will produce (null = it can't smelt).</summary>
+        public int SmeltOutputPreview;
         public bool BiomeMenuOpen;
         public bool HandEditorOpen;
         public bool FlyMode;
@@ -61,8 +75,12 @@ namespace Cubuild.Renderer
         /// <summary>The stack riding the cursor while the inventory is open (survival drag/drop).</summary>
         public (int ItemId, int Count)? HeldStack;
 
-        /// <summary>Workbench crafting grid, row-major 2x2 (4 slots). Empty/ignored unless CraftingOpen.</summary>
-        public IReadOnlyList<(int ItemId, int Count)> CraftingSlots;
+/// <summary>Workbench crafting grid, row-major 3x3 (9 slots). Empty/ignored unless CraftingOpen.</summary>
+    public IReadOnlyList<(int ItemId, int Count)> CraftingSlots;
+    /// <summary>Active crafting box: 2 in the pack's E-menu, 3 at a table.</summary>
+    public int CraftingGridSize;
+    /// <summary>Which table block opened the menu (0 = none); selects the panel art.</summary>
+    public int CraftingTableId;
         /// <summary>Live crafting result for the current grid (null = no recipe).</summary>
         public (int ItemId, int Count)? CraftingResult;
         /// <summary>True when this world was created in Minecraft mode (E shows workbench crafting).</summary>
@@ -168,6 +186,7 @@ namespace Cubuild.Renderer
             HotbarCounts = Array.Empty<int>(),
             HeldStack = null,
             CraftingSlots = Array.Empty<(int ItemId, int Count)>(),
+    CraftingGridSize = 2,
             CraftingResult = null,
             IsMinecraftMode = false,
             SaplingGrowthText = string.Empty,

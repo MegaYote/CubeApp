@@ -111,6 +111,7 @@ namespace Cubuild
         private bool inventoryOpen;
         /// <summary>Workbench crafting menu open (right-click a workbench block while playing).</summary>
         private bool craftingOpen;
+        private bool smeltOpen;
         private bool handEditorOpen;
         private bool biomeMenuOpen;
 

@@ -33,6 +33,8 @@ namespace Cubuild
         private static readonly int _idCobblestone = BlockRegistry.GetId("cobblestone");
         private static readonly int _idPlanks = BlockRegistry.GetId("planks");
         private static readonly int _idWorkbench = BlockRegistry.GetId("workbench");
+        private static readonly int _idCarpentersWorkbench = BlockRegistry.GetId("carpenters_workbench");
+        private static readonly int _idMasonsWorkbench = BlockRegistry.GetId("masons_workbench");
         private static readonly int _idObsidian = BlockRegistry.GetId("obsidian");
         // Flint is a GENUINE item (items.json), not a block - resolve through the item registry.
         private static readonly int _idFlint = ItemRegistry.GetId("flint");
@@ -241,6 +243,23 @@ namespace Cubuild
         }
 
         // ---- inventory cursor (ported drag logic from the C++ E-menu) ----
+        /// <summary>
+        /// Puts a stack back in the bag, spilling any overflow on the floor at the player's
+        /// feet. Used when a container (the crafting grid) hands items back - same rules as
+        /// <see cref="ReturnHeldStackToInventory"/>, so nothing is ever silently destroyed.
+        /// </summary>
+        public void GiveOrDrop(int itemId, int count)
+        {
+            if (itemId <= 0 || count <= 0) return;
+            TryAddToInventory(itemId, count, out int added);
+            int leftover = count - added;
+            if (leftover > 0 && !IsCreative)
+            {
+                SpawnItemDrop(itemId, leftover, new Point3D(
+                    LocalPlayer.Position.X, LocalPlayer.Position.Y - EyeHeight + 0.4, LocalPlayer.Position.Z));
+            }
+        }
+
         /// <summary>The stack riding the mouse cursor while the inventory is open.</summary>
         public (int ItemId, int Count)? HeldStack { get; set; }
 

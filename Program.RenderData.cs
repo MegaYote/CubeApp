@@ -129,7 +129,7 @@ namespace Cubuild
             }
             return new HudState
             {
-                ShowDebug = showFps, InventoryOpen = inventoryOpen, CraftingOpen = craftingOpen, BiomeMenuOpen = biomeMenuOpen, HandEditorOpen = handEditorOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
+                ShowDebug = showFps, InventoryOpen = inventoryOpen, CraftingOpen = craftingOpen, SmeltOpen = smeltOpen, BiomeMenuOpen = biomeMenuOpen, HandEditorOpen = handEditorOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
                 MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                 EntityMs = World.LastEntityMs, EntityCount = World.Entities.MobCount,
                 FacingText = $"{GetCompassDirection(World.PlayerYaw)} ({GameWorld.NormalizeYaw(World.PlayerYaw):0.0} deg)",
@@ -145,6 +145,10 @@ namespace Cubuild
                 ThirdPerson = thirdPersonView,
                 Mode = World.Mode, BagSlots = World.BagSlots, HotbarCounts = World.HotbarCounts, HeldStack = World.HeldStack,
                 CraftingSlots = World.CraftingGrid, CraftingResult = World.CraftingResult,
+      CraftingGridSize = World.CraftingSize, CraftingTableId = World.CraftingTableId,
+      SmeltInput = World.SmeltInput, SmeltFuel = World.SmeltFuel, SmeltOutput = World.SmeltOutput,
+      SmeltProgress = World.SmeltProgress, SmeltBurnProgress = World.SmeltBurnProgress,
+      SmeltOutputPreview = World.SmeltRecipeForInput?.OutputItemId ?? 0,
                 IsMinecraftMode = World.IsMinecraftMode,
                 SaplingGrowthText = saplingText,
                 PlayerHealth = World.LocalPlayer.Health,

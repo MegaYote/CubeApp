@@ -47,6 +47,42 @@
     { "input": ["cobblestone", "cobblestone", "", ""], "output": "cobblestone_slab", "count": 4 },
 
     // two sand -> 4 sand slabs
-    { "input": ["sand", "sand", "", ""], "output": "sand_slab", "count": 4 }
+    { "input": ["sand", "sand", "", ""], "output": "sand_slab", "count": 4 },
+
+    // ---- 3x3 recipes (need a crafting table) ----------------------------------
+    // Four planks -> workbench
+    { "input": ["planks", "planks", "", "planks", "planks", "", "", "", ""], "output": "workbench", "count": 1 },
+
+    // Minecraft's exact tool shapes: 3 material over 2 sticks (pickaxe), 3+2 (axe),
+    // 1+2 (shovel), 2+1 (sword stand-in)
+    { "input": ["flint", "flint", "flint", "", "stick", "", "", "stick", ""], "output": "flint_pickaxe", "count": 1 },
+    { "input": ["flint", "flint", "", "flint", "stick", "", "", "stick", ""], "output": "flint_hatchet", "count": 1 },
+    { "input": ["", "flint", "", "", "stick", "", "", "stick", ""], "output": "flint_shovel", "count": 1 },
+    { "input": ["", "flint", "", "", "flint", "", "", "stick", ""], "output": "flint_spear", "count": 1 },
+
+    // 8 cobblestone ring -> kiln (Minecraft's furnace shape)
+    { "input": ["cobblestone", "cobblestone", "cobblestone", "cobblestone", "", "cobblestone", "cobblestone", "cobblestone", "cobblestone"], "output": "kiln", "count": 1 },
+
+    // coal or charcoal over a stick -> 4 torches
+    { "input": ["coal", "", "stick", ""], "output": "torch", "count": 4 },
+    { "input": ["charcoal", "", "stick", ""], "output": "torch", "count": 4 },
+
+    // 6 planks in a 2x3 column -> 3 doors
+    { "input": ["planks", "planks", "", "planks", "planks", "", "planks", "planks", ""], "output": "oak_door_bottom", "count": 3 }
+  ],
+
+  // ============================================================================
+  // KILN / FURNACE: input -> output, seconds per item.
+  // ============================================================================
+  "smelting": [
+    { "input": "coalore",     "output": "coal",     "time": 10 },
+    { "input": "ironore",     "output": "iron",     "time": 10 },
+    { "input": "goldore",     "output": "gold",     "time": 10 },
+    { "input": "diamondore",  "output": "diamond",  "time": 10 },
+    { "input": "copperore",   "output": "copper",   "time": 10 },
+    { "input": "cobblestone", "output": "stone",    "time": 10 },
+    { "input": "sand",        "output": "glass",    "time": 10 },
+    { "input": "log",         "output": "charcoal", "time": 10 },
+    { "input": "redclay",     "output": "bricks",   "time": 10 }
   ]
 }

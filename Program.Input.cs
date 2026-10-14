@@ -22,13 +22,17 @@ namespace Cubuild
                 if (screen == GameScreen.Playing)
                 {
                     // ESC closes the E-menu / crafting menu / biome menu first; only then does it pause.
-                    if (inventoryOpen || craftingOpen || biomeMenuOpen)
+                    if (inventoryOpen || craftingOpen || smeltOpen || biomeMenuOpen)
                     {
                         // Never leave a stack orphaned on the cursor: return it to the player
-                        // (dropping any overflow) as the container shuts.
+                        // (dropping any overflow) as the container shuts. The crafting
+                        // grid is drained too, so nothing can be stranded in a cell.
                         World?.ReturnHeldStackToInventory();
+                        World?.RefundCraftingGrid();
+                        World?.CloseSmelter();
                         inventoryOpen = false;
                         craftingOpen = false;
+                        smeltOpen = false;
                         biomeMenuOpen = false;
                         EnableMouseLook();
                     }
@@ -53,7 +57,7 @@ namespace Cubuild
             }
             // Clicking while a menu-style overlay is open must NOT re-capture the mouse - the
             // E-menu / crafting / biome menu are only closed by E/ESC now.
-            if (screen == GameScreen.Playing && !mouseLook && !handEditorOpen && !inventoryOpen && !craftingOpen && !biomeMenuOpen
+            if (screen == GameScreen.Playing && !mouseLook && !handEditorOpen && !inventoryOpen && !craftingOpen && !smeltOpen && !biomeMenuOpen
                 && (frameInput.BreakBlockPressed || frameInput.PlaceBlockPressed))
             {
                 EnableMouseLook();
@@ -100,8 +104,11 @@ namespace Cubuild
                     if (inventoryOpen)
                     {
                         // Opening the E-menu also shuts the crafting menu - hand the cursor
-                        // stack back rather than stranding it.
-                        if (craftingOpen) World?.ReturnHeldStackToInventory();
+                        // stack back rather than stranding it, and drop back to 2x2.
+                        if (craftingOpen) { World?.ReturnHeldStackToInventory(); World?.RefundCraftingGrid(); }
+                        if (smeltOpen) { World?.ReturnHeldStackToInventory(); World?.CloseSmelter(); }
+                        smeltOpen = false;
+                        World?.SetCraftingSize(2);
                         craftingOpen = false;
                         DisableMouseLook();
                     }
@@ -143,7 +150,7 @@ namespace Cubuild
             // selection behind the panel.
             if (frameInput.SelectedSlot.HasValue && World != null
                 && screen == GameScreen.Playing && mouseLook
-                && !inventoryOpen && !craftingOpen && !biomeMenuOpen && !handEditorOpen)
+                && !inventoryOpen && !craftingOpen && !smeltOpen && !biomeMenuOpen && !handEditorOpen)
             {
                 World.SetSelectedSlot(frameInput.SelectedSlot.Value);
             }
@@ -168,7 +175,7 @@ namespace Cubuild
             // open the wheel goes to ImGui instead).
             if (frameInput.HotbarScroll != 0 && World != null
                 && screen == GameScreen.Playing && mouseLook
-                && !inventoryOpen && !craftingOpen && !biomeMenuOpen && !handEditorOpen)
+                && !inventoryOpen && !craftingOpen && !smeltOpen && !biomeMenuOpen && !handEditorOpen)
             {
                 int slots = GameWorld.HotbarSlots;
                 int next = (World.SelectedSlot + frameInput.HotbarScroll) % slots;
@@ -198,11 +205,21 @@ namespace Cubuild
             if (screen == GameScreen.Playing && mouseLook && World != null && _ignoreInteractFrames == 0 && frameInput.PlaceBlockPressed)
             {
 // Right-click on a workbench opens the crafting menu; on a door it swings the door;
-            // anywhere else places the selected block.
+            // on a kiln/forge it opens the smelter; anywhere else places the selected block.
             if (World.TryPickWorkbench(World.PlayerPosition, World.GetCameraForward(), out _))
-                {
-                    craftingOpen = true;
+    {
+        // A table opens the full 3x3 box, like Minecraft's crafting screen.
+        World.SetCraftingSize(3);
+        craftingOpen = true;
                     inventoryOpen = false;
+                    DisableMouseLook();
+                }
+                else if (World.TryPickSmelter(World.PlayerPosition, World.GetCameraForward(), out _))
+                {
+                    World.OpenSmelter();
+                    smeltOpen = true;
+                    inventoryOpen = false;
+                    craftingOpen = false;
                     DisableMouseLook();
                 }
                 else if (TryToggleDoorUnderCrosshair())

@@ -22,12 +22,14 @@ namespace Cubuild
             if (screen == GameScreen.Paused || screen != GameScreen.Playing && screen != GameScreen.Dead) return;
             if (World == null) return;
             // Menu overlays free the mouse; don't move, mine, or place while they're open.
-            if (handEditorOpen || inventoryOpen || craftingOpen || biomeMenuOpen)
+            if (handEditorOpen || inventoryOpen || craftingOpen || smeltOpen || biomeMenuOpen)
             {
                 tickInput = new TickInputState(false, false, false, false, false, false, false, false, false, Vector2.Zero);
             }
             UpdateNetworking(tickInput, deltaSeconds);
             World.StepSimulation(tickInput, deltaSeconds);
+            // The kiln keeps cooking while its screen is open (it only runs while you're at it).
+            if (smeltOpen) World.TickSmelter(deltaSeconds);
             if (_handPokeTimer > 0f) _handPokeTimer = Math.Max(0f, _handPokeTimer - deltaSeconds);
             if (_handSwingTimer > 0f) _handSwingTimer = Math.Max(0f, _handSwingTimer - deltaSeconds);
 

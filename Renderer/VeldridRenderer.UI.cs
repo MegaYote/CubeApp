@@ -419,6 +419,197 @@ namespace Cubuild.Renderer
             ImGui.PopID();
         }
 
+        /// <summary>
+        /// Draws the player bag + hotbar strip beneath a container panel, reusing the E-menu's
+        /// inventory.png and its exact slot geometry (design px: bag (5+18c, 6+18r), hotbar
+        /// (5+18i, 88), cell 16x16 with a 1px border inset) and click kinds 0 = bag,
+        /// 1 = hotbar - so the cursor stack drags freely between the panel and the bag.
+        /// </summary>
+        private void DrawInventoryStripBelow(Vector2 origin, float uiScale, Vector2 contentScreen,
+            ImDrawListPtr fg, uint fgTextCol)
+        {
+            float slotPx = 16f * uiScale;
+            float borderPx = 1f * uiScale;
+            float invTop = origin.Y;
+            if (_inventoryImGuiId != IntPtr.Zero)
+            {
+                var invTopLeft = contentScreen + new Vector2(origin.X, invTop);
+                fg.AddImage(_inventoryImGuiId, invTopLeft, invTopLeft + new Vector2(190f, 111f) * uiScale, Vector2.Zero, Vector2.One);
+                for (int row = 0; row < 4; row++)
+                {
+                    for (int col = 0; col < 10; col++)
+                    {
+                        int slot = row * 10 + col;
+                        var contents = _hud.BagSlots != null && slot < _hud.BagSlots.Count
+                            ? _hud.BagSlots[slot] : default;
+                        var pos = new Vector2(origin.X + (5f + col * 18f) * uiScale + borderPx,
+                            invTop + (6f + row * 18f) * uiScale + borderPx);
+                        ImGui.SetCursorPos(pos);
+                        DrawInventorySlotCellAt($"cbg{slot}", contents.ItemId, contents.Count, 0, slot,
+                            slotPx, fg, fgTextCol);
+                    }
+                }
+                for (int i = 0; i < 10; i++)
+                {
+                    int bid = _hud.Hotbar != null && i < _hud.Hotbar.Count ? _hud.Hotbar[i] : 0;
+                    int count = _hud.HotbarCounts != null && i < _hud.HotbarCounts.Count ? _hud.HotbarCounts[i] : 0;
+                    var pos = new Vector2(origin.X + (5f + i * 18f) * uiScale + borderPx,
+                        invTop + 88f * uiScale + borderPx);
+                    ImGui.SetCursorPos(pos);
+                    DrawInventorySlotCellAt($"chb{i}", bid, count, 1, i, slotPx, fg, fgTextCol);
+                }
+            }
+            else
+            {
+                // No texture: plain grey cells so the menu is still usable.
+                float stepX = 18f * uiScale, stepY = 18f * uiScale;
+                uint slotBorder = ImGui.ColorConvertFloat4ToU32(new Vector4(0.55f, 0.58f, 0.62f, 0.9f));
+                uint slotFill = ImGui.ColorConvertFloat4ToU32(new Vector4(0.13f, 0.16f, 0.19f, 1f));
+                for (int row = 0; row < 4; row++)
+                {
+                    for (int col = 0; col < 10; col++)
+                    {
+                        int slot = row * 10 + col;
+                        var contents = _hud.BagSlots != null && slot < _hud.BagSlots.Count
+                            ? _hud.BagSlots[slot] : default;
+                        var pos = new Vector2(origin.X + col * stepX, invTop + row * stepY);
+                        DrawCraftingInvCell($"cbg{slot}", contents.ItemId, contents.Count, pos, 0, slot,
+                            slotPx, 3f, slotFill, slotBorder, contentScreen, fg, fgTextCol);
+                    }
+                }
+                for (int i = 0; i < 10; i++)
+                {
+                    int bid = _hud.Hotbar != null && i < _hud.Hotbar.Count ? _hud.Hotbar[i] : 0;
+                    int count = _hud.HotbarCounts != null && i < _hud.HotbarCounts.Count ? _hud.HotbarCounts[i] : 0;
+                    var pos = new Vector2(origin.X + i * stepX, invTop + 4f * stepY + 12f);
+                    DrawCraftingInvCell($"chb{i}", bid, count, pos, 1, i,
+                        slotPx, 3f, slotFill, slotBorder, contentScreen, fg, fgTextCol);
+                }
+            }
+        }
+
+        // Kiln / furnace screen. There is no kiln GUI art in the assets yet, so this is a plain
+        // mockup drawn with rectangles and the standard slot cell: input and fuel on the left,
+        // a flame gauge between them, the smelt progress arrow, and the output on the right.
+        // Layout is in design pixels at the same 3x scale as the other panels.
+        private void DrawSmeltWindow(Vector2 displaySize)
+        {
+            const float uiScale = 3.0f;
+            const float panelW = 176f, panelH = 86f;
+
+            // The inventory strip below the panel, same as the crafting window.
+            const float invW = 190f * uiScale;
+            float winW = Math.Max(invW, panelW * uiScale);
+            float winH = panelH * uiScale + 24f + 111f * uiScale + 24f;
+            float winX = (displaySize.X - winW) / 2f;
+            float winY = Math.Max(30f, (displaySize.Y - winH) / 2f);
+            Vector2 panelOffset = new((winW - panelW * uiScale) * 0.5f, 0f);
+
+            var fgOverlay = ImGui.GetForegroundDrawList();
+            uint dimCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.10f, 0.10f, 0.10f, 0.65f));
+            fgOverlay.AddRectFilled(Vector2.Zero, displaySize, dimCol);
+
+            ImGui.SetNextWindowPos(new Vector2(winX, winY), ImGuiCond.Always);
+            ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
+            ImGuiWindowFlags flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
+                | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar
+                | ImGuiWindowFlags.NoBackground;
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+            ImGui.Begin("##smelt", flags);
+            var contentScreen = ImGui.GetCursorScreenPos();
+            var fg = ImGui.GetForegroundDrawList();
+            uint fgTextCol = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 1f));
+
+            var panelTopLeft = contentScreen + panelOffset;
+            uint panelCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.33f, 0.34f, 0.34f, 1f));
+            uint cellCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.20f, 0.21f, 0.21f, 1f));
+            uint slotCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.12f, 0.13f, 0.13f, 1f));
+            fg.AddRect(panelTopLeft, panelTopLeft + new Vector2(panelW, panelH) * uiScale, panelCol, 4f * uiScale);
+
+            // Cell design coords: input top-left, fuel below it, output to the right.
+            var inputCell = new Vector2(8, 8);
+            var fuelCell = new Vector2(8, 44);
+            var outCell = new Vector2(140, 26);
+            var cellSize = new Vector2(18, 18);
+            foreach (var c in new[] { inputCell, fuelCell, outCell })
+            {
+                fg.AddRectFilled(panelTopLeft + c * uiScale, panelTopLeft + (c + cellSize) * uiScale, cellCol);
+            }
+
+            // Flame gauge: burns down as the fuel unit is consumed.
+            float burn = Math.Clamp(_hud.SmeltBurnProgress, 0f, 1f);
+            if (burn > 0f)
+            {
+                var flameBase = panelTopLeft + new Vector2(62, 44) * uiScale;
+                var flameSize = new Vector2(14, 18) * uiScale;
+                uint flameCol = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 0.62f, 0.13f, 1f));
+                fg.AddRectFilled(flameBase + new Vector2(0, flameSize.Y * (1f - burn)), flameBase + flameSize, flameCol);
+            }
+            fg.AddRect(panelTopLeft + new Vector2(62, 44) * uiScale, panelTopLeft + new Vector2(76, 62) * uiScale,
+                ImGui.ColorConvertFloat4ToU32(new Vector4(0.10f, 0.10f, 0.10f, 1f)), 2f * uiScale);
+
+            // Smelt progress arrow pointing at the output.
+            float prog = Math.Clamp(_hud.SmeltProgress, 0f, 1f);
+            if (prog > 0f)
+            {
+                var barA = panelTopLeft + new Vector2(86, 32) * uiScale;
+                var barB = panelTopLeft + new Vector2(130, 38) * uiScale;
+                uint fillCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.85f, 0.85f, 0.85f, 1f));
+                var filled = barA + (barB - barA) * prog;
+                fg.AddRectFilled(barA, filled, fillCol);
+            }
+
+            // "Flame" / arrow labels so the mockup reads clearly.
+            fg.AddText(panelTopLeft + new Vector2(8, 30) * uiScale, ImGui.ColorConvertFloat4ToU32(new Vector4(0.9f, 0.9f, 0.9f, 1f)), "INPUT");
+            fg.AddText(panelTopLeft + new Vector2(8, 66) * uiScale, ImGui.ColorConvertFloat4ToU32(new Vector4(0.9f, 0.9f, 0.9f, 1f)), "FUEL");
+            fg.AddText(panelTopLeft + new Vector2(138, 48) * uiScale, ImGui.ColorConvertFloat4ToU32(new Vector4(0.9f, 0.9f, 0.9f, 1f)), "OUT");
+            fg.AddText(panelTopLeft + new Vector2(86, 22) * uiScale, ImGui.ColorConvertFloat4ToU32(new Vector4(0.75f, 0.75f, 0.75f, 1f)), "S M E L T");
+
+            // The three cells. Click kinds: 6 = kiln slot (0 input, 1 fuel, 2 output).
+            var inStack = _hud.SmeltInput ?? (0, 0);
+            var fuelStack = _hud.SmeltFuel ?? (0, 0);
+            var outStack = _hud.SmeltOutput ?? (0, 0);
+            DrawSmeltCellAt("sin", inStack.ItemId, inStack.Count, inputCell, cellSize, 0, uiScale, panelOffset, fg, fgTextCol);
+            DrawSmeltCellAt("sfue", fuelStack.ItemId, fuelStack.Count, fuelCell, cellSize, 1, uiScale, panelOffset, fg, fgTextCol);
+            DrawSmeltCellAt("sout", outStack.ItemId, outStack.Count, outCell, cellSize, 2, uiScale, panelOffset, fg, fgTextCol);
+
+            // Ghost preview of what the input will become, drawn in the empty output well.
+            if (outStack.ItemId == 0 && _hud.SmeltOutputPreview > 0)
+            {
+                int prev = _hud.SmeltOutputPreview;
+                var rmin = panelTopLeft + outCell * uiScale;
+                var rmax = rmin + cellSize * uiScale;
+                if (TryGetFlatSpriteUv(prev, out var puv, out IntPtr ptex) && ptex != IntPtr.Zero)
+                {
+                    fg.AddImage(ptex, rmin + new Vector2(2, 2) * uiScale, rmax - new Vector2(2, 2) * uiScale,
+                        new Vector2(puv.X, puv.Y), new Vector2(puv.X + puv.Z, puv.Y + puv.W));
+                }
+                else
+                {
+                    var uv = IconUv(prev, out IntPtr tex);
+                    if (tex != IntPtr.Zero)
+                        fg.AddImage(tex, rmin + new Vector2(2, 2) * uiScale, rmax - new Vector2(2, 2) * uiScale,
+                            new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W));
+                }
+            }
+
+            DrawInventoryStripBelow(panelOffset + new Vector2(0f, panelH * uiScale + 24f), uiScale, contentScreen, fg, fgTextCol);
+            ImGui.End();
+            ImGui.PopStyleVar();
+        }
+
+        /// <summary>Draws one kiln cell with its icon and click target.</summary>
+        private void DrawSmeltCellAt(string id, int itemId, int count, Vector2 cell, Vector2 cellSize,
+            int target, float uiScale, Vector2 panelOffset, ImDrawListPtr fg, uint fgTextCol)
+        {
+            var topLeft = ImGui.GetWindowPos() + panelOffset + cell * uiScale;
+            var screenMin = topLeft;
+            var screenMax = screenMin + cellSize * uiScale;
+            ImGui.SetCursorPos(panelOffset + cell * uiScale);
+            DrawCraftingCellAt(id, itemId, count, screenMin, screenMax, 6, target,
+                1f * uiScale, 16f * uiScale, fg, fgTextCol);
+        }
+
         // Workbench crafting menu: the user's 111x49 design scaled 3x to match the
         // survival E-menu's uiScale (DrawInventoryWindow uses 3.0f). Layout (design px):
         //   2x2 grid cells at (7,7),(24,7),(7,25),(24,25), each 16x17
@@ -432,11 +623,19 @@ namespace Cubuild.Renderer
         // kind 5 = result. Program maps them to GameWorld.CraftingClickSlot / TryCraft.
         private void DrawCraftingWindow(Vector2 displaySize)
         {
+            // The mason's bench is the only station that gets the copper panel art.
+            int _masonsWorkbenchId = BlockRegistry.GetId("masons_workbench");
             // Same scale as the survival E-menu (3x) so both panels feel identical.
             const float uiScale = 3.0f;
-            const float imgW = 111f, imgH = 49f;
+            // A table shows the 3x3 panel (129x66), the pack shows the 2x2 one (111x49).
+            bool big = _hud.CraftingGridSize >= 3;
+            float imgW = big ? 129f : 111f;
+            float imgH = big ? 66f : 49f;
+            // The mason's bench gets the copper panel; every other table the stone one.
+            IntPtr panelTex = !big ? _craftingImGuiId
+                : (_hud.CraftingTableId == _masonsWorkbenchId ? _masonryCraftingImGuiId : _bigCraftingImGuiId);
             // Inventory section below the panel uses the E-menu texture (190x111 design),
-            // which is wider than the crafting art (111x49); the art floats centered above it.
+            // which is wider than the crafting art; the art floats centered above it.
             const float invW = 190f * uiScale;
             float winW = invW;
             float winH = imgH * uiScale + 24f + 111f * uiScale + 24f;
@@ -464,26 +663,29 @@ namespace Cubuild.Renderer
             // The panel art (or a plain fallback if the texture is missing), centered
             // horizontally above the inventory section.
             var artTopLeft = contentScreen + artOffset;
-            if (_craftingImGuiId != IntPtr.Zero)
+            if (panelTex != IntPtr.Zero)
             {
-                fg.AddImage(_craftingImGuiId, artTopLeft, artTopLeft + new Vector2(imgW * uiScale, imgH * uiScale), Vector2.Zero, Vector2.One);
+                fg.AddImage(panelTex, artTopLeft, artTopLeft + new Vector2(imgW * uiScale, imgH * uiScale), Vector2.Zero, Vector2.One);
             }
             else
             {
                 uint panelCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.33f, 0.34f, 0.34f, 1f));
                 uint cellCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.20f, 0.21f, 0.21f, 1f));
-                fg.AddRectFilled(artTopLeft, artTopLeft + new Vector2(46f * uiScale, 49f * uiScale), panelCol);
-                fg.AddRectFilled(artTopLeft + new Vector2(73f * uiScale, 9f * uiScale), artTopLeft + new Vector2(109f * uiScale, 39f * uiScale), panelCol);
-                fg.AddRectFilled(artTopLeft + new Vector2(7f * uiScale, 7f * uiScale), artTopLeft + new Vector2(40f * uiScale, 42f * uiScale), cellCol);
-                fg.AddRectFilled(artTopLeft + new Vector2(79f * uiScale, 16f * uiScale), artTopLeft + new Vector2(104f * uiScale, 33f * uiScale), cellCol);
+                fg.AddRectFilled(artTopLeft, artTopLeft + new Vector2(imgW, imgH) * uiScale, panelCol);
+                // The grid box, then the result well beside it.
+                fg.AddRectFilled(artTopLeft + new Vector2(7f, 7f) * uiScale, artTopLeft + new Vector2(big ? 58f : 40f, big ? 60f : 42f) * uiScale, cellCol);
+                var well = big ? new Vector2(105, 25) : new Vector2(79, 16);
+                fg.AddRectFilled(artTopLeft + well * uiScale, artTopLeft + (well + new Vector2(big ? 17f : 25f, 17f)) * uiScale, cellCol);
             }
 
-            // 2x2 grid cells.
-            var gridPos = new[] { new Vector2(7, 7), new Vector2(24, 7), new Vector2(7, 25), new Vector2(24, 25) };
+            // Grid cells. Both panels share the same 18px design pitch starting at (7,7):
+            // the 2x2 art uses the first two columns/rows, the 3x3 adds a third.
+            int cols = big ? 3 : 2;
+            int gridSlots = cols * cols;
             var gridSize = new Vector2(16, 17);
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < gridSlots; i++)
             {
-                var cell = gridPos[i];
+                var cell = new Vector2(7 + (i % cols) * 17, 7 + (i / cols) * 18);
                 var screenMin = artTopLeft + cell * uiScale;
                 var screenMax = screenMin + gridSize * uiScale;
                 (int ItemId, int Count) contents = _hud.CraftingSlots != null && i < _hud.CraftingSlots.Count
@@ -495,9 +697,11 @@ namespace Cubuild.Renderer
 
             // Result well: shows the crafted product; left click crafts.
             {
-                var screenMin = artTopLeft + new Vector2(79, 16) * uiScale;
-                var screenMax = screenMin + new Vector2(11, 17) * uiScale;
-                ImGui.SetCursorPos(artOffset + new Vector2(79, 16) * uiScale);
+                var well = big ? new Vector2(105, 25) : new Vector2(79, 16);
+                var wellSize = big ? new Vector2(16, 16) : new Vector2(11, 17);
+                var screenMin = artTopLeft + well * uiScale;
+                var screenMax = screenMin + wellSize * uiScale;
+                ImGui.SetCursorPos(artOffset + well * uiScale);
                 int resId = _hud.CraftingResult?.ItemId ?? 0;
                 int resCount = _hud.CraftingResult?.Count ?? 0;
                 DrawCraftingCellAt("cres", resId, resCount, screenMin, screenMax, 5, 0,
@@ -509,68 +713,7 @@ namespace Cubuild.Renderer
             // the held stack already floats at the mouse cursor like the E-menu.
 
             // ---- player inventory below the panel ----
-            // Uses the SAME UI texture as the regular E-menu (inventory.png), placed directly
-            // beneath the crafting art. Its painted bag/hotbar slots get invisible buttons at
-            // the exact E-menu coordinates (design px: bag (5+18c, 6+18r), hotbar (5+18i, 88),
-            // cell 16x16, 1px border inset) and the same click kinds (0 = bag, 1 = hotbar).
-            float slotPx = 16f * uiScale;
-            float borderPx = 1f * uiScale;
-            float invTop = imgH * uiScale + 24f;
-            if (_inventoryImGuiId != IntPtr.Zero)
-            {
-                var invTopLeft = contentScreen + new Vector2(0f, invTop);
-                fg.AddImage(_inventoryImGuiId, invTopLeft, invTopLeft + new Vector2(190f, 111f) * uiScale, Vector2.Zero, Vector2.One);
-                for (int row = 0; row < 4; row++)
-                {
-                    for (int col = 0; col < 10; col++)
-                    {
-                        int slot = row * 10 + col;
-                        var contents = _hud.BagSlots != null && slot < _hud.BagSlots.Count
-                            ? _hud.BagSlots[slot] : default;
-                        var pos = new Vector2((5f + col * 18f) * uiScale + borderPx,
-                            invTop + (6f + row * 18f) * uiScale + borderPx);
-                        ImGui.SetCursorPos(pos);
-                        DrawInventorySlotCellAt($"cbg{slot}", contents.ItemId, contents.Count, 0, slot,
-                            slotPx, fg, fgTextCol);
-                    }
-                }
-                for (int i = 0; i < 10; i++)
-                {
-                    int bid = _hud.Hotbar != null && i < _hud.Hotbar.Count ? _hud.Hotbar[i] : 0;
-                    int count = _hud.HotbarCounts != null && i < _hud.HotbarCounts.Count ? _hud.HotbarCounts[i] : 0;
-                    var pos = new Vector2((5f + i * 18f) * uiScale + borderPx,
-                        invTop + 88f * uiScale + borderPx);
-                    ImGui.SetCursorPos(pos);
-                    DrawInventorySlotCellAt($"chb{i}", bid, count, 1, i, slotPx, fg, fgTextCol);
-                }
-            }
-            else
-            {
-                // No texture: plain grey cells so the menu is still usable.
-                float stepX = 18f * uiScale, stepY = 18f * uiScale;
-                uint slotBorder = ImGui.ColorConvertFloat4ToU32(new Vector4(0.55f, 0.58f, 0.62f, 0.9f));
-                uint slotFill = ImGui.ColorConvertFloat4ToU32(new Vector4(0.13f, 0.16f, 0.19f, 1f));
-                for (int row = 0; row < 4; row++)
-                {
-                    for (int col = 0; col < 10; col++)
-                    {
-                        int slot = row * 10 + col;
-                        var contents = _hud.BagSlots != null && slot < _hud.BagSlots.Count
-                            ? _hud.BagSlots[slot] : default;
-                        var pos = new Vector2(col * stepX, invTop + row * stepY);
-                        DrawCraftingInvCell($"cbg{slot}", contents.ItemId, contents.Count, pos, 0, slot,
-                            slotPx, 3f, slotFill, slotBorder, contentScreen, fg, fgTextCol);
-                    }
-                }
-                for (int i = 0; i < 10; i++)
-                {
-                    int bid = _hud.Hotbar != null && i < _hud.Hotbar.Count ? _hud.Hotbar[i] : 0;
-                    int count = _hud.HotbarCounts != null && i < _hud.HotbarCounts.Count ? _hud.HotbarCounts[i] : 0;
-                    var pos = new Vector2(i * stepX, invTop + 4f * stepY + 12f);
-                    DrawCraftingInvCell($"chb{i}", bid, count, pos, 1, i,
-                        slotPx, 3f, slotFill, slotBorder, contentScreen, fg, fgTextCol);
-                }
-            }
+            DrawInventoryStripBelow(new Vector2(0f, imgH * uiScale + 24f), uiScale, contentScreen, fg, fgTextCol);
 
             ImGui.End();
             ImGui.PopStyleVar(); // WindowPadding
@@ -1472,6 +1615,12 @@ namespace Cubuild.Renderer
             if (_hud.CraftingOpen)
             {
                 DrawCraftingWindow(displaySize);
+            }
+
+            // Kiln / furnace screen (right-click a kiln or forge).
+            if (_hud.SmeltOpen)
+            {
+                DrawSmeltWindow(displaySize);
             }
 
             // Biome teleport menu (B key).

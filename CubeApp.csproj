@@ -42,6 +42,9 @@
     <EmbeddedResource Include="Assets\Data\spawns.json" />
     <!-- Workbench crafting menu background (user's UI design). -->
     <EmbeddedResource Include="Assets\Textures\crafting.png" />
+    <!-- 3x3 crafting-table panels (129x66): the stone table and the copper mason's bench. -->
+    <EmbeddedResource Include="Assets\Textures\bigcrafting.png" />
+    <EmbeddedResource Include="Assets\Textures\masonrycrafting.png" />
     <!-- Title-screen logo graphic. -->
     <EmbeddedResource Include="Assets\Textures\cubuild.png" />
     <!-- Healthbar sprite sheet (10 slice-countdown hearts + extras; top-left = full heart). -->

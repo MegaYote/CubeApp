@@ -1,29 +1,94 @@
 {
-  // Minecraft-faithful 2x2 recipes (approximated for 2x2 grid)
-  // Vanilla MC: log->4 planks, 2 planks vertical ->4 sticks, material+sticks -> tools
-  // This fork maps flint to wood tier: flint_hatchet=wood axe, flint_pickaxe=wood pick, flint_shovel=wood shovel
-  "recipes": [
-    // log -> 4 planks (any slot, rotation covers all positions)
-    { "input": ["log", "", "", ""], "output": "planks", "count": 4 },
+  // ============================================================================
+  // recipes.json — MINECRAFT MODE
+  //
+  // Crafting recipes. A recipe is 2x2 when it lists 4 (or fewer) inputs, and 3x3 when it
+  // lists 9. The 3x3 ones need a crafting table; the 2x2 ones work anywhere, including the
+  // pack. Matching is Minecraft-shaped: the pattern may sit at any offset that fits and
+  // may be rotated or mirrored, so you don't have to line it up perfectly.
+  //   "." in the comments below is an empty cell.
+  //
+  // The "smelting" array at the bottom drives the kiln (right-click a kiln or forge).
+  // Fuel burn times are built in (coal/charcoal/planks/log/sapling/stick).
+  // ============================================================================
 
-    // 2 planks vertical -> 4 sticks (MC: two planks stacked). Rotation covers left/right column.
+  "recipes": [
+    // ---- basics (2x2 - craftable in the pack) -------------------------------
+    // log -> 4 planks
+    { "input": ["log", "", "", ""], "output": "planks", "count": 4 },
+    // 2 planks stacked -> 4 sticks
     { "input": ["planks", "", "planks", ""], "output": "stick", "count": 4 },
 
-    // flint shovel: flint above stick (MC shovel = 1 material over 2 sticks; 2x2 approx = 1 flint +1 stick vertical)
-    { "input": ["flint", "", "stick", ""], "output": "flint_shovel", "count": 1 },
+    // ---- the crafting table (3x3, but the 2x2 shape fits a 2x2 grid) -------
+    // 4 planks in a square -> workbench
+    { "input": ["planks", "planks", "planks", "planks"], "output": "workbench", "count": 1 },
 
-    // flint pickaxe: 2 flint on top row, 1 stick bottom-left (MC pick = 3 material +2 sticks; 2x2 approx)
-    { "input": ["flint", "flint", "stick", ""], "output": "flint_pickaxe", "count": 1 },
+    // ---- flint tools (3x3, Minecraft's exact tool shapes) ----------------
+    // Pickaxe: 3 flint over 2 sticks down the middle
+    { "input": ["flint", "flint", "flint", "", "stick", "", "", "stick", ""], "output": "flint_pickaxe", "count": 1 },
+    // Axe: 2 flint + a stick on the left, then a stick below
+    { "input": ["flint", "flint", "", "flint", "stick", "", "", "stick", ""], "output": "flint_hatchet", "count": 1 },
+    // Shovel: 1 flint over 2 sticks
+    { "input": ["", "flint", "", "", "stick", "", "", "stick", ""], "output": "flint_shovel", "count": 1 },
+    // Spear (this pack's sword stand-in): 2 flint over a stick
+    { "input": ["", "flint", "", "", "flint", "", "", "stick", ""], "output": "flint_spear", "count": 1 },
 
-    // flint hatchet: 2 flint +1 stick in L shape (MC axe = 3 material +2 sticks; 2x2 approx)
-    { "input": ["flint", "flint", "stick", "stick"], "output": "flint_hatchet", "count": 1 },
+    // ---- light (2x2) ------------------------------------------------------
+    // coal/charcoal over a stick -> 4 torches, like Minecraft
+    { "input": ["coal", "", "stick", ""], "output": "torch", "count": 4 },
+    { "input": ["charcoal", "", "stick", ""], "output": "torch", "count": 4 },
+    // sap makes the longer-burning variant (it never burns out on its own)
+    { "input": ["sap", "", "stick", ""], "output": "sap_torch", "count": 2 },
 
-    // flint spear: 1 flint +1 stick (simple)
-    { "input": ["flint", "stick", "", ""], "output": "flint_spear", "count": 1 },
+    // ---- the kiln (3x3) - 8 cobblestone ring, Minecraft's furnace shape --
+    { "input": ["cobblestone", "cobblestone", "cobblestone", "cobblestone", "", "cobblestone", "cobblestone", "cobblestone", "cobblestone"], "output": "kiln", "count": 1 },
 
-    // keep useful block recipes vanilla-like
-    { "input": ["cobblestone", "cobblestone", "", ""], "output": "cobblestone_slab", "count": 4 },
-    { "input": ["sand", "sand", "", ""], "output": "sand_slab", "count": 4 },
-    { "input": ["planks", "planks", "planks", "planks"], "output": "workbench", "count": 1 }
+    // ---- door (3x3) - 6 planks in a 2x3 column -> 3 doors ----------------
+    { "input": ["planks", "planks", "", "planks", "planks", "", "planks", "planks", ""], "output": "oak_door_bottom", "count": 3 },
+
+    // ---- slabs (3x3) - 3 in a row -> 6 slabs, Minecraft's ratio -----------
+    { "input": ["stone", "stone", "stone", "", "", "", "", "", ""], "output": "stone_slab", "count": 6 },
+    { "input": ["cobblestone", "cobblestone", "cobblestone", "", "", "", "", "", ""], "output": "cobblestone_slab", "count": 6 },
+    { "input": ["planks", "planks", "planks", "", "", "", "", "", ""], "output": "planks_slab", "count": 6 },
+    { "input": ["sand", "sand", "sand", "", "", "", "", "", ""], "output": "sand_slab", "count": 6 },
+    { "input": ["dirt", "dirt", "dirt", "", "", "", "", "", ""], "output": "dirt_slab", "count": 6 },
+    { "input": ["bricks", "bricks", "bricks", "", "", "", "", "", ""], "output": "bricks_slab", "count": 6 },
+
+    // ---- stairs (3x3) - 3 stacked + 1 alongside -> 4 stairs --------------
+    { "input": ["stone", "stone", "stone", "stone", "", "", "", "", ""], "output": "stone_stairs", "count": 4 },
+    { "input": ["cobblestone", "cobblestone", "cobblestone", "cobblestone", "", "", "", "", ""], "output": "cobblestone_stairs", "count": 4 },
+    { "input": ["planks", "planks", "planks", "planks", "", "", "", "", ""], "output": "planks_stairs", "count": 4 },
+    { "input": ["sand", "sand", "sand", "sand", "", "", "", "", ""], "output": "sand_stairs", "count": 4 },
+    { "input": ["dirt", "dirt", "dirt", "dirt", "", "", "", "", ""], "output": "dirt_stairs", "count": 4 },
+    { "input": ["bricks", "bricks", "bricks", "bricks", "", "", "", "", ""], "output": "bricks_stairs", "count": 4 },
+
+    // ---- clay / brick (2x2) ----------------------------------------------
+    { "input": ["redclay", "redclay", "redclay", "redclay"], "output": "bricks", "count": 1 },
+
+    // ---- a bucket (3x3) - Minecraft's iron-bucket shape, in planks -------
+    // (Iron needs the kiln, and iron ingots aren't craft material here, so this
+    //  stays the pack's own bucket recipe.)
+    { "input": ["planks", "", "planks", "planks", "planks", "planks", "", "planks", ""], "output": "bucket", "count": 1 },
+    { "input": ["sap", "", "water_bucket", ""], "output": "wood_sealant_bucket", "count": 1 }
+  ],
+
+  // ============================================================================
+  // KILN / FURNACE. input -> output, in seconds per item. This is the ore
+  // progression: mine the ore (pickaxe required), then smelt it into its ingot.
+  // ============================================================================
+  "smelting": [
+    { "input": "coalore",     "output": "coal",            "time": 10 },
+    { "input": "ironore",     "output": "iron",            "time": 10 },
+    { "input": "goldore",     "output": "gold",            "time": 10 },
+    { "input": "diamondore",  "output": "diamond",         "time": 10 },
+    { "input": "copperore",   "output": "copper",          "time": 10 },
+    { "input": "cobblestone", "output": "stone",           "time": 10 },
+    { "input": "sand",        "output": "glass",           "time": 10 },
+    { "input": "log",         "output": "charcoal",        "time": 10 },
+    { "input": "stone",       "output": "smoothstone",     "time": 10 },
+    { "input": "redclay",     "output": "bricks",          "time": 10 },
+    { "input": "ceramic",     "output": "bricks",          "time": 10 },
+    { "input": "mossycobblestone", "output": "cobblestone", "time": 10 },
+    { "input": "sapling",     "output": "charcoal",        "time": 10 }
   ]
 }

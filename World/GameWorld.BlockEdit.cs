@@ -93,9 +93,16 @@ namespace Cubuild
                 dropId = RollLeafDrop(flintBonus: true, naturalDecay: false);
             }
             else if (dropId == _idGravel) dropId = _regenRandom.Next(10) == 0 ? _idFlint : _idGravel;
+            // Minecraft mode: vanilla stone drops cobblestone, never itself. The tool gate
+            // below then removes it entirely unless a pickaxe is held.
+            else if (dropId == _idStone && IsMinecraftMode) dropId = _idCobblestone;
             else if (dropId == _idStone && SelectedBlock <= 0) dropId = _regenRandom.Next(10) == 0 ? _idGravel : 0;
             // Obsidian yields nothing - it's too hard to extract anything from it
             else if (dropId == _idObsidian) dropId = 0;
+            // Minecraft tool gate: a block flagged toolRequired only yields its drop while a
+            // tool of the matching type is held. Bare hands - or the wrong tool - still break
+            // the block, it just gives nothing back, exactly like vanilla survival.
+            if (dropId > 0 && !CanHarvest(removedBlockId, SelectedBlock)) dropId = 0;
             if (!IsCreative && dropId > 0)
             {
                 SpawnItemDrop(dropId, dropCount, new Point3D(x + 0.5, y + 0.5, z + 0.5));
@@ -118,6 +125,24 @@ namespace Cubuild
             BreakUnsupportedWallTorches(x, y, z);
 
             return true;
+        }
+
+        /// <summary>
+        /// Minecraft's "correct tool" rule: can the block actually be harvested while holding
+        /// <paramref name="heldItemId"/>? A block that opts into <c>toolRequired</c> only drops
+        /// when the held item is a tool whose <c>toolType</c> matches the block's (a pickaxe for
+        /// the stone family and every ore, an axe for wood, a shovel for soil). Holding a block
+        /// or the wrong tool is not enough - and an empty hand never satisfies a requirement.
+        /// The block still BREAKS either way; only the drop is withheld, like vanilla.
+        /// </summary>
+        public static bool CanHarvest(int blockId, int heldItemId)
+        {
+            if (!BlockRegistry.ToolRequiredOf(blockId)) return true;
+            string required = BlockRegistry.ToolTypeOf(blockId);
+            if (string.IsNullOrEmpty(required)) return true;   // required, but no type named -> any tool
+            string held = ItemRegistry.ToolTypeOf(heldItemId);
+            return !string.IsNullOrEmpty(held)
+                && string.Equals(held, required, StringComparison.OrdinalIgnoreCase);
         }
 
         // ---- leaf decay (Minecraft-style) ----

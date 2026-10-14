@@ -31,28 +31,44 @@ namespace Cubuild.Renderer
             }
         }
 
+        // Loads a crafting panel art file into the given GPU slots. Returns false (leaving the
+        // handles zero) when the file is missing or unreadable, so callers can fall back to
+        // plain ImGui-drawn slots.
+        private bool LoadCraftingPanel(string fileName, out Texture? texture, out TextureView? view, out IntPtr imguiId)
+        {
+            texture = null; view = null; imguiId = IntPtr.Zero;
+            try
+            {
+                byte[]? bytes = LoadImageBytes(fileName);
+                if (bytes == null) return false;
+                var image = StbImageSharp.ImageResult.FromMemory(bytes, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                var texDesc = TextureDescription.Texture2D((uint)image.Width, (uint)image.Height, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
+                texture = _gd.ResourceFactory.CreateTexture(texDesc);
+                _gd.UpdateTexture(texture, image.Data, 0, 0, 0, (uint)image.Width, (uint)image.Height, 1, 0, 0);
+                view = _gd.ResourceFactory.CreateTextureView(texture);
+                if (_imguiRenderer != null)
+                    imguiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, view);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         // Loads the workbench crafting menu background (user's 111x49 design) and exposes it to
         // ImGui so the crafting window can paint it as its panel.
         private void LoadCraftingTexture()
         {
-            try
-            {
-                byte[]? bytes = LoadImageBytes("crafting.png");
-                if (bytes == null) return;
-                var image = StbImageSharp.ImageResult.FromMemory(bytes, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
-                var texDesc = TextureDescription.Texture2D((uint)image.Width, (uint)image.Height, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
-                _craftingTexture = _gd.ResourceFactory.CreateTexture(texDesc);
-                _gd.UpdateTexture(_craftingTexture, image.Data, 0, 0, 0, (uint)image.Width, (uint)image.Height, 1, 0, 0);
-                _craftingView = _gd.ResourceFactory.CreateTextureView(_craftingTexture);
-                if (_imguiRenderer != null)
-                {
-                    _craftingImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _craftingView);
-                }
-            }
-            catch
+            if (!LoadCraftingPanel("crafting.png", out _craftingTexture, out _craftingView, out _craftingImGuiId))
             {
                 // ignore; the crafting menu falls back to plain ImGui slots
             }
+
+            // The 3x3 table panels. Either may be absent; the window then draws the 3x3 grid
+            // with plain rectangles instead.
+            LoadCraftingPanel("bigcrafting.png", out _bigCraftingTexture, out _bigCraftingView, out _bigCraftingImGuiId);
+            LoadCraftingPanel("masonrycrafting.png", out _masonryCraftingTexture, out _masonryCraftingView, out _masonryCraftingImGuiId);
         }
 
         // Loads the embedded title-screen logo and exposes it to ImGui.

@@ -219,6 +219,12 @@ namespace Cubuild
                                 else World.TryCraft();
                                 continue;
                             }
+                            // Kiln cells: 0 = input, 1 = fuel, 2 = output (collect).
+                            if (click.Kind == 6)
+                            {
+                                World.SmeltClickSlot(click.Target, click.Button == 1);
+                                continue;
+                            }
                             switch (click.Kind)
                             {
                                 case 0: // bag slot (target = slot index 0..39)

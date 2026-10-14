@@ -429,6 +429,14 @@ namespace Cubuild.Renderer
         private Texture? _craftingTexture;
         private TextureView? _craftingView;
         private IntPtr _craftingImGuiId;
+        // The 3x3 table panel (129x66) from bigcrafting.png, and the same layout in copper from
+        // masonrycrafting.png. One of these is shown instead of the 2x2 art at a crafting table.
+        private Texture? _bigCraftingTexture;
+        private TextureView? _bigCraftingView;
+        private IntPtr _bigCraftingImGuiId;
+        private Texture? _masonryCraftingTexture;
+        private TextureView? _masonryCraftingView;
+        private IntPtr _masonryCraftingImGuiId;
         // Healthbar sprite sheet (healthbar.png): 13px hearts on a 15px grid. The top-left sprite
         // (index 0) is the FULL heart - the one shown until the slice-countdown sprites are wired.
         private Texture? _healthbarTexture;
