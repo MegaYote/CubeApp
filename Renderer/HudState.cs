@@ -83,7 +83,7 @@ namespace Cubuild.Renderer
     public int CraftingTableId;
         /// <summary>Live crafting result for the current grid (null = no recipe).</summary>
         public (int ItemId, int Count)? CraftingResult;
-        /// <summary>True when this world was created in Minecraft mode (E shows workbench crafting).</summary>
+        /// <summary>True for a Classic (Minecraft-faithful) world - E then shows workbench crafting.</summary>
         public bool IsMinecraftMode;
         /// <summary>Debug text for the sapling being looked at (F3), or empty.</summary>
         public string SaplingGrowthText;

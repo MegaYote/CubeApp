@@ -997,8 +997,23 @@ namespace Cubuild.Renderer
                     m.SelectedMode = GameMode.Survival;
                 }
                 ImGui.Spacing();
-                if (ImGui.Button($"Minecraft Mode: {(m.IsMinecraftMode ? "ON" : "OFF")}", new Vector2(220, 28))) m.IsMinecraftMode = !m.IsMinecraftMode;
-                ImGui.Spacing();
+                // Classic vs Complex is a SURVIVAL concept only - both are full crafting/
+                // progression packs, and in Creative you just get everything anyway, so the
+                // choice would be meaningless there. Shown only while Survival is selected.
+                if (m.SelectedMode == GameMode.Survival)
+                {
+                    ImGui.Text("Survival pack");
+                    if (ImGui.RadioButton("Classic", m.IsMinecraftMode))
+                    {
+                        m.IsMinecraftMode = true;
+                    }
+                    ImGui.SameLine();
+                    if (ImGui.RadioButton("Complex", !m.IsMinecraftMode))
+                    {
+                        m.IsMinecraftMode = false;
+                    }
+                    ImGui.Spacing();
+                }
                 if (ImGui.Button("Create World", new Vector2(220, 34)))
                 {
                     m.CreateWorldClicked = true;
@@ -1605,7 +1620,7 @@ namespace Cubuild.Renderer
 
             // E-menu inventory: a grid of every block. Clicking one queues it to Program, which
             // drops it into the selected hotbar slot and closes the menu.
-            // In Minecraft mode, E shows the workbench crafting UI directly (so you can craft without a block).
+            // In Classic mode, E shows the workbench crafting UI directly (so you can craft without a block).
             if (_hud.IsMinecraftMode && _hud.Mode == GameMode.Survival && _hud.InventoryOpen)
             {
                 DrawCraftingWindow(displaySize);
@@ -1615,7 +1630,7 @@ namespace Cubuild.Renderer
                 DrawInventoryWindow(displaySize);
             }
 
-            // Workbench crafting menu (right-click a workbench block) - also shown in normal mode via E in Minecraft mode above.
+            // Workbench crafting menu (right-click a workbench block) - also shown in Complex mode via E in Classic mode above.
             if (_hud.CraftingOpen)
             {
                 DrawCraftingWindow(displaySize);

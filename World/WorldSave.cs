@@ -45,7 +45,8 @@ namespace Cubuild
         public int GenVersion;
         /// <summary>GameMode int (0 = Creative, 1 = Survival). Older saves default to Creative.</summary>
         public int Mode = (int)GameMode.Creative;
-        /// <summary>Minecraft mode fork: when true, load Minecraft-faithful blocks/items/recipes.</summary>
+        /// <summary>Classic pack fork: when true, load Minecraft-faithful blocks/items/recipes
+    /// (shown as "Classic" in the menu); false is the default "Complex" pack.</summary>
         public bool IsMinecraftMode;
         public double PlayerX, PlayerY, PlayerZ;
         public float Yaw, Pitch;
