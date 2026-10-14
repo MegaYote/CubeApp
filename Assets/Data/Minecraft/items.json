@@ -49,6 +49,11 @@
     { "id": "sap",              "displayName": "Sap",              "category": "misc",     "itemTile": "10,2", "stackSize": 64, "placedBlock": "", "mapColor": "#442200" },
 
     // ----- fuel & materials (items.png row 2, cols 12-15) ------------------------------
+    // ----- boat (Minecraft progression) -----------------------------------------
+    // Launched into water with a right-click, boarded with another. The icon is a plain
+    // plank sheet (items.png tile 1,4) since there is no boat sprite in the atlas yet.
+    { "id": "boat",             "displayName": "Boat",           "category": "misc",     "itemTile": "1,4",  "stackSize": 1,  "mapColor": "#96602F" },
+
     { "id": "quartz_shard",     "displayName": "Quartz Shard",     "category": "gemstone", "itemTile": "12,2", "stackSize": 64, "mapColor": "#F1EBE2" },
     { "id": "charcoal",         "displayName": "Charcoal",         "category": "misc",     "itemTile": "13,2", "stackSize": 64, "mapColor": "#2B2B2B" },
     { "id": "charcoal_fragment","displayName": "Charcoal Fragment","category": "misc",     "itemTile": "14,2", "stackSize": 64, "mapColor": "#3A3A3A" },

@@ -130,6 +130,13 @@ namespace Cubuild
 
         /// <summary>Model lookup key used by the renderer; defaults to the lowercase class name.</summary>
         public virtual string MobTypeName => GetType().Name.ToLowerInvariant();
+
+        /// <summary>
+        /// False for vehicles that must not be shoved around by mob separation. A boat under a
+        /// player has to stay where the player steers it, and letting wandering mobs ram it
+        /// would feel awful. Ordinary mobs keep the default true.
+        /// </summary>
+        public virtual bool ParticipatesInSeparation => true;
         float IMobRenderable.WalkPhase => _walkPhase;
         float IMobRenderable.WalkAmount => _walkAmount;
         float IMobRenderable.AnimTime => _animClock;

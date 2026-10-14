@@ -1,0 +1,151 @@
+using System;
+
+namespace Cubuild
+{
+    /// <summary>
+    /// Boats: launching, boarding, steering and the camera while riding.
+    ///
+    /// A boat is an ENTITY, not a block, so sailing never writes to the world grid (no chunk
+    /// remeshes, no network block traffic) and crossing an ocean costs the same as walking.
+    /// While occupied the player's own movement is suspended and their eye is pinned to the
+    /// hull, so the boat - not the player - is what actually moves.
+    /// </summary>
+    public sealed partial class GameWorld : IDisposable
+    {
+        private static readonly int _boatItemId = ItemRegistry.GetId("boat");
+        private static readonly int _idWater = BlockRegistry.GetId("water");
+
+        /// <summary>The boat the local player is currently riding, or null.</summary>
+        public BoatEntity? Riding { get; private set; }
+
+        /// <summary>Distance from the seat to the rider's eyes, so you look out over the bow.</summary>
+        private const double BoatSeatEyeHeight = 1.15;
+
+        /// <summary>How far the crosshair may reach to grab a boat.</summary>
+        private const double BoatReach = 3.5;
+
+        public bool IsRiding => Riding != null;
+
+        // ---- placing and boarding -------------------------------------------------
+
+        /// <summary>
+        /// True when the boat item is selected. Checked before the normal block-place path so
+        /// right-clicking a boat never tries to put a "boat block" into the world.
+        /// </summary>
+        public bool HoldingBoat => SelectedBlock == _boatItemId;
+
+        /// <summary>
+        /// Handles a right-click while the boat item is in hand. Aiming at water launches a
+        /// boat on the surface; aiming at nothing usable (dry land) does nothing. Returns true
+        /// when the click was consumed so the caller skips block placement.
+        /// </summary>
+        public bool TryLaunchBoat(Point3D origin, Point3D direction)
+        {
+            if (!HoldingBoat) return false;
+            var pick = TryPickFluid(origin, direction, _idWater);
+            if (!pick.HasValue) return false;
+
+            // Spawn on the top face of the water cell that was hit.
+            var cell = pick.Value.Remove;
+            var spawn = new Point3D(cell.x + 0.5, cell.y + 1.0, cell.z + 0.5);
+            if (Entities.AddMobAt("boat", spawn, LocalPlayer.Yaw))
+            {
+                TryConsumeFromInventory(_boatItemId, 1);
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Boards the boat under the crosshair, or steps out of the one being ridden. Returns
+        /// true when it consumed the click.
+        /// </summary>
+        public bool ToggleBoatUnderCrosshair(Point3D origin, Point3D direction)
+        {
+            if (Riding != null) { DismountBoat(); return true; }
+
+            // An empty hand (or anything) right-clicks a boat to board it - like Minecraft.
+            var boat = FindBoatUnderCrosshair(origin, direction);
+            if (boat == null) return false;
+            MountBoat(boat);
+            return true;
+        }
+
+        /// <summary>The nearest boat within <see cref="BoatReach"/> of the crosshair ray.</summary>
+        private BoatEntity? FindBoatUnderCrosshair(Point3D origin, Point3D direction)
+        {
+            BoatEntity? best = null;
+            double bestDist = BoatReach;
+            foreach (var mob in Entities.Mobs)
+            {
+                if (mob is not BoatEntity boat) continue;
+                double dx = boat.Position.X - origin.X;
+                double dy = boat.Position.Y + boat.Height * 0.5 - origin.Y;
+                double dz = boat.Position.Z - origin.Z;
+                double along = dx * direction.X + dy * direction.Y + dz * direction.Z;
+                if (along < 0 || along > BoatReach) continue;
+                double perp = Math.Sqrt(Math.Max(0, dx * dx + dy * dy + dz * dz - along * along));
+                // Generous radius - the hull is wider than the ray is precise.
+                if (perp < 1.4 && along < bestDist) { bestDist = along; best = boat; }
+            }
+            return best;
+        }
+
+        public void MountBoat(BoatEntity boat)
+        {
+            DismountBoat();
+            Riding = boat;
+            boat.Occupied = true;
+            // Face the boat the way the player was already looking, so steering feels immediate.
+            if (Math.Abs(boat.Yaw) > 0.001f) LocalPlayer.Yaw = boat.Yaw;
+        }
+
+        public void DismountBoat()
+        {
+            if (Riding is { } b)
+            {
+                b.Occupied = false;
+                // Step the player off to the side so they don't end up inside the hull.
+                double sx = b.Position.X + Math.Cos(b.Yaw) * 1.1;
+                double sz = b.Position.Z - Math.Sin(b.Yaw) * 1.1;
+                double feetY = b.Position.Y + 0.2;
+                LocalPlayer.Position = new Point3D(sx, feetY + EyeHeight, sz);
+                Riding = null;
+            }
+        }
+
+        // ---- per-tick riding ------------------------------------------------------
+
+        /// <summary>
+        /// Moves the boat the player is steering and pins the player's eye to the hull. Called
+        /// instead of StepPlayer while mounted.
+        /// </summary>
+        public void StepRiding(TickInputState tickInput, float deltaSeconds)
+        {
+            if (Riding is not { } boat) { StepPlayer(LocalPlayer, tickInput, deltaSeconds); return; }
+
+            // Steering axes, relative to the boat's own heading.
+            float fwd = (tickInput.MoveForward ? 1f : 0f) - (tickInput.MoveBackward ? 1f : 0f);
+            float strafe = (tickInput.MoveRight ? 1f : 0f) - (tickInput.MoveLeft ? 1f : 0f);
+
+            // A/D steer the hull; W/S drive it forward/back.
+            if (Math.Abs(strafe) > 0.01f)
+                boat.Yaw -= strafe * 1.9f * deltaSeconds;
+            boat.SteerForward = fwd;
+            boat.SteerStrafe = 0f;   // turning is handled by yaw, not lateral thrust
+
+            // Keep the boat alive even though the normal sim path is skipped for the player.
+            boat.Update(deltaSeconds, Chunks);
+
+            // Pin the rider to the hull. Eye = hull feet + seat height.
+            LocalPlayer.Position = new Point3D(
+                boat.Position.X,
+                boat.Position.Y + BoatSeatEyeHeight,
+                boat.Position.Z);
+        }
+
+        /// <summary>True when this cell is water - used to keep launches on the surface.</summary>
+        private bool IsWaterCell(int x, int y, int z)
+            => Chunks.TryGetLoadedBlock(x, y, z, out int id) && id == _idWater;
+    }
+}

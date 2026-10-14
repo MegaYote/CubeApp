@@ -25,6 +25,12 @@ namespace Cubuild
         private readonly System.Diagnostics.Stopwatch _entityWatch = new();
         public float LastUpdateMs { get; private set; }
         public int MobCount => _mobs.Count;
+        /// <summary>
+        /// The live entity list, read-only. Lets gameplay code locate a specific entity by
+        /// type - e.g. finding the boat under the crosshair so the player can board it.
+        /// The list mutates during iteration, so callers should break out, not remove.
+        /// </summary>
+        public IReadOnlyList<IMobRenderable> Mobs => _mobs;
         // World->skylightSubtracted (0 day .. 11 night) for the monster darkness gate.
         private Func<int>? _skylightSubtractedFn;
 
@@ -212,6 +218,9 @@ namespace Cubuild
                 mob = new Coyote(position, yaw);
             else if (mobId == "steve")
                 mob = new SteveMob(position, yaw);
+            else if (mobId == "boat")
+                // Player-launched vehicle, not a spawned mob: no brain, floats, steered by a rider.
+                mob = new BoatEntity(position, yaw);
             else
             {
                 var def = MobRegistry.Get(mobId);
@@ -411,12 +420,12 @@ namespace Cubuild
 
             for (int i = 0; i < count; i++)
             {
-                if (_mobs[i] is not MobEntity a || a.IsDead) continue;
+                if (_mobs[i] is not MobEntity a || a.IsDead || !a.ParticipatesInSeparation) continue;
                 double ax = a.Position.X, ay = a.Position.Y, az = a.Position.Z;
 
                 for (int j = i + 1; j < count; j++)
                 {
-                    if (_mobs[j] is not MobEntity b || b.IsDead) continue;
+                    if (_mobs[j] is not MobEntity b || b.IsDead || !b.ParticipatesInSeparation) continue;
                     double dx = ax - b.Position.X, dz = az - b.Position.Z;
                     double dy = ay - b.Position.Y;
                     double distXZSq = dx * dx + dz * dz;
@@ -476,6 +485,10 @@ namespace Cubuild
 
         private bool ShouldDespawn(MobEntity mob, Point3D playerPosition)
         {
+            // Boats are player property, not spawns. They must survive being parked for days, so
+            // they ignore both distance and idle despawn; they come back with the world instead.
+            if (mob is BoatEntity) return false;
+
             // Horizontal-only, mirroring the spawn gate and the 48-block restore radius: a mob
             // deep below the player is only as far away as its horizontal distance. Vertical
             // separation alone must never despawn cave mobs (it would undo the spawn gate fix).
@@ -794,6 +807,14 @@ namespace Cubuild
                 var mob = new SteveMob(pos, m.Yaw);
                 mob.RestoreState(pos, m.Yaw, m.Health);
                 _mobs.Add(mob);
+            }
+            else if (m.Type == "boat")
+            {
+                // Boats have no MobRegistry entry, so without this branch they would fall
+                // through to the generic path below and be silently dropped on load.
+                var boat = new BoatEntity(pos, m.Yaw);
+                boat.RestoreState(pos, m.Yaw, m.Health);
+                _mobs.Add(boat);
             }
             else
             {

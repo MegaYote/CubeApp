@@ -46,6 +46,11 @@
     // ---- door (3x3) - 6 planks in a 2x3 column -> 3 doors ----------------
     { "input": ["planks", "planks", "", "planks", "planks", "", "planks", "planks", ""], "output": "oak_door_bottom", "count": 3 },
 
+    // ---- boat (3x3) - 5 planks in a hull shape, Minecraft's boat recipe ----
+    // Three planks across the deck, then a plank down the keel. Rotation/mirroring means
+    // any facing of the hull works.
+    { "input": ["planks", "planks", "planks", "", "planks", "", "", "planks", ""], "output": "boat", "count": 1 },
+
     // ---- slabs (3x3) - 3 in a row -> 6 slabs, Minecraft's ratio -----------
     { "input": ["stone", "stone", "stone", "", "", "", "", "", ""], "output": "stone_slab", "count": 6 },
     { "input": ["cobblestone", "cobblestone", "cobblestone", "", "", "", "", "", ""], "output": "cobblestone_slab", "count": 6 },
