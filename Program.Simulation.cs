@@ -145,9 +145,18 @@ _wasCreativeBreakHeld = breakHeldNow;
                                 if (World.Chunks.TryGetLoadedBlock(target.x, target.y, target.z, out int id)
                                     && !float.IsPositiveInfinity(BlockRegistry.HardnessOf(id)))
                                 {
-                                    LogCreativeBreak(breakHeldNow, freshBreakPress, (nowMs - _lastCreativeBreakMs) / 1000f, target.x, target.y, target.z);
-                                    DeleteBlockAt(target.x, target.y, target.z);
                                     _lastCreativeBreakMs = nowMs;
+
+                                    // Belt and braces: a failure mid-break must never escalate
+                                    // into a cascade of blocks behind the one you aimed at.
+                                    try
+                                    {
+                                        DeleteBlockAt(target.x, target.y, target.z);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        try { File.AppendAllText("creative_break_error.log", ex + Environment.NewLine); } catch { }
+                                    }
                                 }
                             }
                             else if (!freshBreakPress)
@@ -277,19 +286,7 @@ _wasCreativeBreakHeld = breakHeldNow;
         // block was removed. chop forwards to the world so a hatchet chop strips the log
         // into 1-4 planks (or planks into sticks), and a flint chop turns a log into a
         // workbench instead of the normal log drop.
-        // TEMP DIAGNOSTIC: log every creative break with its input state so a single
-// hold-and-click reveals whether the press edge is re-firing. Delete once diagnosed.
-private static void LogCreativeBreak(bool held, bool fresh, float cooldown, int x, int y, int z)
-{
-    try
-    {
-        File.AppendAllText("creative_break.log",
-            $"{DateTime.Now:HH:mm:ss.fff} held={held} fresh={fresh} cooldown={cooldown:F3} at=({x},{y},{z}){Environment.NewLine}");
-    }
-    catch { }
-}
-
-private bool DeleteBlockAt(int x, int y, int z, GameWorld.WoodChopKind chop = GameWorld.WoodChopKind.None)
+        private bool DeleteBlockAt(int x, int y, int z, GameWorld.WoodChopKind chop = GameWorld.WoodChopKind.None)
         {
             if (World == null) return false;
             if (!World.TryBreakBlockAt(x, y, z, out int removedBlockId, chop)) return false;

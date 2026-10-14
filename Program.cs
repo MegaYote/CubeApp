@@ -99,18 +99,15 @@ namespace Cubuild
         // hardness, particles pop every 20%, and the block breaks at progress >= 1.
         private const float BaseBreakTime = 2.5f;    // seconds for hardness 1.0
         private const float BreakParticleInterval = 0.2f; // spawn shards every 20% progress
-        // Creative breaking fires on the press edge AND repeats while held, like vanilla
-        // Minecraft - but throttled so it is aimable instead of machine-gunning.
-        //
-        // The throttle is an ABSOLUTE TIMESTAMP of the last break, not a countdown float. The
-        // float version logged cooldown=0.000 on every repeat, i.e. the value was not surviving
-        // between frames, so repeats fired every tick and one click tunnelled down the line
-        // breaking everything behind it. Comparing "now - lastBreak >= interval" has no
-        // accumulating state to lose, and a long frame hitch can never eat more than one gap.
         // Vanilla Minecraft's real creative rule (minecraft.wiki/w/Creative): continuously HOLDING
-        // destroy breaks one block every 6 game ticks = 0.30s. Rapid CLICKING bypasses that
-        // cooldown entirely and breaks as fast as you click. So the throttle gates the
-        // hold-to-repeat path only, never a discrete click.
+        // destroy breaks one block every 6 game ticks = 0.30s, and rapid CLICKING bypasses
+        // that cooldown entirely. So the throttle gates the hold-to-repeat path only, never a
+        // discrete click.
+        //
+        // The throttle is an ABSOLUTE TIMESTAMP of the last break, and it is committed BEFORE
+        // the break runs (see the note in UpdateMining). Assigning a countdown float AFTER the
+        // break call left the throttle unwritten whenever that call threw, so one click chained
+        // breaks down the ray and removed every block behind the one you aimed at.
         private const float CreativeBreakInterval = 0.30f;
         private long _lastCreativeBreakMs = long.MinValue / 2;
         private (int x, int y, int z)? _miningTarget;
