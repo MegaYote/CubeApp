@@ -99,12 +99,20 @@ namespace Cubuild
         // hardness, particles pop every 20%, and the block breaks at progress >= 1.
         private const float BaseBreakTime = 2.5f;    // seconds for hardness 1.0
         private const float BreakParticleInterval = 0.2f; // spawn shards every 20% progress
-        // Creative breaking fires on the press edge AND repeats while held, matching vanilla
-        // Minecraft (which does hold-to-break - that rapid carving is why it feels too fast
-        // at 1:1). CreativeBreakInterval is the throttle: it turns vanilla's machine-gun into
-        // something you can steer. Bump it for a slower dig, drop it toward 0 for vanilla feel.
-        private const float CreativeBreakInterval = 0.40f;
-        private float _creativeBreakCooldown;
+        // Creative breaking fires on the press edge AND repeats while held, like vanilla
+        // Minecraft - but throttled so it is aimable instead of machine-gunning.
+        //
+        // The throttle is an ABSOLUTE TIMESTAMP of the last break, not a countdown float. The
+        // float version logged cooldown=0.000 on every repeat, i.e. the value was not surviving
+        // between frames, so repeats fired every tick and one click tunnelled down the line
+        // breaking everything behind it. Comparing "now - lastBreak >= interval" has no
+        // accumulating state to lose, and a long frame hitch can never eat more than one gap.
+        // Vanilla Minecraft's real creative rule (minecraft.wiki/w/Creative): continuously HOLDING
+        // destroy breaks one block every 6 game ticks = 0.30s. Rapid CLICKING bypasses that
+        // cooldown entirely and breaks as fast as you click. So the throttle gates the
+        // hold-to-repeat path only, never a discrete click.
+        private const float CreativeBreakInterval = 0.30f;
+        private long _lastCreativeBreakMs = long.MinValue / 2;
         private (int x, int y, int z)? _miningTarget;
         private float _miningProgress;
         private int _miningBlockId;

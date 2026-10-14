@@ -129,7 +129,14 @@ _wasCreativeBreakHeld = breakHeldNow;
                     // always responsive and holding gives a steady, aimable cadence.
                     if (World.IsCreative)
                     {
-                        if (freshBreakPress)
+                        long nowMs = Environment.TickCount64;
+                        long gapMs = (long)(CreativeBreakInterval * 1000f);
+
+                        // A fresh press always breaks instantly; a held button repeats only
+                        // once the interval has genuinely elapsed since the last break.
+                        bool allowBreak = freshBreakPress || (breakHeldNow && nowMs - _lastCreativeBreakMs >= gapMs);
+
+                        if (allowBreak)
                         {
                             var cpick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
                             if (cpick.HasValue)
@@ -138,37 +145,16 @@ _wasCreativeBreakHeld = breakHeldNow;
                                 if (World.Chunks.TryGetLoadedBlock(target.x, target.y, target.z, out int id)
                                     && !float.IsPositiveInfinity(BlockRegistry.HardnessOf(id)))
                                 {
+                                    LogCreativeBreak(breakHeldNow, freshBreakPress, (nowMs - _lastCreativeBreakMs) / 1000f, target.x, target.y, target.z);
                                     DeleteBlockAt(target.x, target.y, target.z);
-                                    _creativeBreakCooldown = CreativeBreakInterval;
+                                    _lastCreativeBreakMs = nowMs;
                                 }
                             }
-                        }
-                        else if (breakHeldNow)
-                        {
-                            // Holding: repeat once the interval has elapsed.
-                            if (_creativeBreakCooldown > 0f)
+                            else if (!freshBreakPress)
                             {
-                                _creativeBreakCooldown -= deltaSeconds;
-                            }
-                            else
-                            {
-                                var rcpick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
-                                if (rcpick.HasValue)
-                                {
-                                    var rtarget = rcpick.Value.Remove;
-                                    if (World.Chunks.TryGetLoadedBlock(rtarget.x, rtarget.y, rtarget.z, out int rid)
-                                        && !float.IsPositiveInfinity(BlockRegistry.HardnessOf(rid)))
-                                    {
-                                        DeleteBlockAt(rtarget.x, rtarget.y, rtarget.z);
-                                        _creativeBreakCooldown = CreativeBreakInterval;
-                                    }
-                                    else
-                                    {
-                                        // Aimed at something unbreakable: wait out the interval
-                                        // instead of retrying every frame.
-                                        _creativeBreakCooldown = CreativeBreakInterval;
-                                    }
-                                }
+                                // Holding at nothing: still consume the interval so we do not
+                                // retry the ray every frame.
+                                _lastCreativeBreakMs = nowMs;
                             }
                         }
                         _miningTarget = null;
@@ -291,7 +277,19 @@ _wasCreativeBreakHeld = breakHeldNow;
         // block was removed. chop forwards to the world so a hatchet chop strips the log
         // into 1-4 planks (or planks into sticks), and a flint chop turns a log into a
         // workbench instead of the normal log drop.
-        private bool DeleteBlockAt(int x, int y, int z, GameWorld.WoodChopKind chop = GameWorld.WoodChopKind.None)
+        // TEMP DIAGNOSTIC: log every creative break with its input state so a single
+// hold-and-click reveals whether the press edge is re-firing. Delete once diagnosed.
+private static void LogCreativeBreak(bool held, bool fresh, float cooldown, int x, int y, int z)
+{
+    try
+    {
+        File.AppendAllText("creative_break.log",
+            $"{DateTime.Now:HH:mm:ss.fff} held={held} fresh={fresh} cooldown={cooldown:F3} at=({x},{y},{z}){Environment.NewLine}");
+    }
+    catch { }
+}
+
+private bool DeleteBlockAt(int x, int y, int z, GameWorld.WoodChopKind chop = GameWorld.WoodChopKind.None)
         {
             if (World == null) return false;
             if (!World.TryBreakBlockAt(x, y, z, out int removedBlockId, chop)) return false;
