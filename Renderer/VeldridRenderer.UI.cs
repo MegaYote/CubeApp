@@ -205,7 +205,6 @@ namespace Cubuild.Renderer
                 float slotsH = cellStep + 26f;
                 float paletteH = Math.Max(60f, winH - 48f - slotsH - 8f);
                 ImGui.BeginChild("##palette", new Vector2(0f, paletteH));
-                perRow = Math.Max(1, (int)((ImGui.GetContentRegionAvail().X - 2f) / cellStep));
                 int drawn = 0;
                 // Blocks (isometric cube icons), grouped by category so related blocks sit
                 // together instead of being scattered through declaration order.
@@ -231,6 +230,13 @@ namespace Cubuild.Renderer
                         ImGui.TextUnformatted(cat);
                         ImGui.NewLine();
                     }
+                    // Wrap on the REAL remaining width instead of a precomputed column count. The
+                    // rendered cell pitch does not match the cellStep constant (ImGui scales
+                    // the spacing), so perRow over-counted the columns and the surplus cells
+                    // were laid out past the child window's clip rect, where ImGui silently
+                    // drops them. That is what made anything landing in the last column -
+                    // the minecart - invisible.
+                    if (drawn > 0 && ImGui.GetContentRegionAvail().X < cellStep) ImGui.NewLine();
                     var uv = _blockIconUv[id];
                     string name = BlockRegistry.GetById(id).DisplayName;
                     ImGui.PushID(id);
@@ -242,11 +248,10 @@ namespace Cubuild.Renderer
                     }
                     if (ImGui.IsItemHovered()) ImGui.SetTooltip(name);
                     ImGui.PopID();
-                    // Spacing must match cellStep EXACTLY (not the default SameLine gap),
-                    // otherwise perRow computes columns that then overflow the window's right
-                    // edge and get clipped instead of wrapping onto the next scrollable row.
-                    if (++drawn % perRow == 0) ImGui.NewLine();
-                    else ImGui.SameLine(0, cellStep - cell);
+                    drawn++;
+                    // Spacing must match cellStep EXACTLY (not the default SameLine gap), so
+                    // the pitch stays uniform and the wrap test above stays accurate.
+                    ImGui.SameLine(0, cellStep - cell);
                 }
                 // ...then genuine items (flat sprites from the items atlas).
                 for (int id = ItemRegistry.ItemIdBase; id < ItemRegistry.Count; id++)
@@ -254,6 +259,8 @@ namespace Cubuild.Renderer
                     if (!ItemRegistry.IsInInventory(id)) continue;
                     var uv = IconUv(id, out IntPtr iconTex);
                     if (iconTex == IntPtr.Zero) continue;
+                    // Same real-width wrap as the block loop above.
+                    if (drawn > 0 && ImGui.GetContentRegionAvail().X < cellStep) ImGui.NewLine();
                     string name = ItemRegistry.Get(id).DisplayName;
                     ImGui.PushID(id);
                     if (ImGui.ImageButton($"##itemicon{id}", iconTex, new Vector2(48, 48),
@@ -264,8 +271,8 @@ namespace Cubuild.Renderer
                     }
                     if (ImGui.IsItemHovered()) ImGui.SetTooltip(name);
                     ImGui.PopID();
-                    if (++drawn % perRow == 0) ImGui.NewLine();
-                    else ImGui.SameLine(0, cellStep - cell);
+                    drawn++;
+                    ImGui.SameLine(0, cellStep - cell);
                 }
                 ImGui.EndChild();
 

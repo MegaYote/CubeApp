@@ -52,53 +52,101 @@ namespace Cubuild
                && id == RailId;
 
         /// <summary>
-        /// The rail cell this cart belongs to, or null when it is off-track. A cart is "on"
-        /// the rail layer at its own Y, so it slides along regardless of terrain.
+        /// The rail cell this cart belongs to, or false when it is off-track. A cart is "on"
+        /// the rail layer at its own Y, so it slides along regardless of terrain. Reports the
+        /// rail's ACTUAL Y, not the cart's: the two differ whenever the cart is sitting on top
+        /// of the rail slab, and using the cart's Y put the ride height a full block too high.
+        /// One block up and one block down are both accepted so a cart can climb a rise or
+        /// drop off a ledge instead of grinding to a halt at every step in the ground.
         /// </summary>
-        private static bool TryFindRail(ChunkManager cm, CartEntity c, out int rx, out int rz)
+        private static bool TryFindRail(ChunkManager cm, double px, double py, double pz, out int rx, out int ry, out int rz)
         {
-            int bx = (int)Math.Floor(c.Position.X);
-            int by = (int)Math.Floor(c.Position.Y + 0.25);
-            int bz = (int)Math.Floor(c.Position.Z);
-            // A cart sits slightly above the rail block, so accept the cell below too.
-            if (IsRail(cm, bx, by, bz) || IsRail(cm, bx, by - 1, bz))
+            int bx = (int)Math.Floor(px);
+            int cy = (int)Math.Floor(py + 0.25);
+            int bz = (int)Math.Floor(pz);
+            for (int dy = 0; dy >= -1; dy--)
             {
-                rx = bx; rz = bz; return true;
+                if (IsRail(cm, bx, cy + dy, bz)) { rx = bx; ry = cy + dy; rz = bz; return true; }
             }
-            rx = rz = 0; return false;
+            if (IsRail(cm, bx, cy + 1, bz)) { rx = bx; ry = cy + 1; rz = bz; return true; }
+            rx = ry = rz = 0; return false;
+        }
+
+        private static bool TryFindRail(ChunkManager cm, CartEntity c, out int rx, out int ry, out int rz)
+            => TryFindRail(cm, c.Position.X, c.Position.Y, c.Position.Z, out rx, out ry, out rz);
+
+        // Travel directions. The opposite of direction i is (i + 2) % 4, so a straight pair is
+        // i and i+2. Yaw is the engine's sense - movement is (sin(yaw), cos(yaw)) - so the yaw
+        // that points along direction i is atan2(DirX[i], DirZ[i]).
+        private static readonly int[] DirX = { 1, 0, -1, 0 };
+        private static readonly int[] DirZ = { 0, 1, 0, -1 };
+
+        /// <summary>Cardinal direction index the current yaw is pointing along.</summary>
+        private static int DirFromYaw(float yaw)
+        {
+            double x = Math.Sin(yaw), z = Math.Cos(yaw);
+            if (Math.Abs(x) >= Math.Abs(z)) return x >= 0 ? 0 : 2;
+            return z >= 0 ? 1 : 3;
         }
 
         /// <summary>
-        /// Heading, derived from which of the four cardinal neighbours also hold a rail. With
-        /// exactly one connection it points that way (dead end); with two it bisects them;
-        /// with none it keeps its current heading so a nudged cart doesn't spin wildly.
+        /// Snaps the cart's heading onto a real rail connection and returns the direction it
+        /// settled on, or -1 when this cell has no rail neighbours at all.
+        ///
+        /// The previous version averaged the connected neighbours into one vector, which was
+        /// wrong in both interesting cases. A straight track cancels to zero (rails at -X and
+        /// +X give dx = 1-1 = 0), so the cart kept whatever heading it happened to hold and
+        /// would drive perpendicular straight off the rails; and a corner produced a 45-degree
+        /// diagonal that cut through empty space where there is no track. Treating the
+        /// connected set as discrete exits fixes both: the cart takes the exit closest to
+        /// where it is actually travelling - straight on when the track continues, otherwise
+        /// the 90-degree turn.
         /// </summary>
-        private static float ComputeHeading(ChunkManager cm, int bx, int by, int bz, float current)
+        private static int SnapHeadingToRail(ChunkManager cm, int bx, int by, int bz, ref float yaw, float travelSign)
         {
-            bool hasRail(int dx, int dz) =>
-                IsRail(cm, bx + dx + 0.5, by, bz + dz + 0.5) || IsRail(cm, bx + dx + 0.5, by - 1, bz + dz + 0.5);
+            int mask = 0;
+            for (int i = 0; i < 4; i++)
+            {
+                int nx = bx + DirX[i], nz = bz + DirZ[i];
+                if (IsRail(cm, nx, by, nz) || IsRail(cm, nx, by - 1, nz) || IsRail(cm, nx, by + 1, nz))
+                    mask |= 1 << i;
+            }
+            if (mask == 0) return -1;
 
-            bool nx = hasRail(-1, 0), px = hasRail(1, 0);
-            bool nz = hasRail(0, -1), pz = hasRail(0, 1);
+            int facing = DirFromYaw(yaw);
+            int travel = travelSign < 0f ? (facing + 2) % 4 : facing;
 
-            double dx = (px ? 1 : 0) - (nx ? 1 : 0);
-            double dz = (pz ? 1 : 0) - (nz ? 1 : 0);
-            if (dx == 0 && dz == 0) return current;               // isolated or a closed loop
-            return (float)Math.Atan2(dx, dz);                       // matches the engine's yaw sense
+            if ((mask & (1 << travel)) == 0)
+            {
+                int best = -1;
+                double bestDot = -2.0;
+                for (int i = 0; i < 4; i++)
+                {
+                    if ((mask & (1 << i)) == 0) continue;
+                    // +1 = straight on, 0 = a 90-degree turn, -1 = doubling back.
+                    double dot = DirX[i] * DirX[travel] + DirZ[i] * DirZ[travel];
+                    if (dot > bestDot) { bestDot = dot; best = i; }
+                }
+                if (best < 0) return -1;
+                travel = best;
+            }
+            yaw = (float)Math.Atan2(DirX[travel], DirZ[travel]);
+            return travel;
         }
 
         public override void Update(float dt, ChunkManager manager)
         {
             if (IsDead) return;
 
-            bool onRail = TryFindRail(manager, this, out int bx, out int bz);
+            bool onRail = TryFindRail(manager, this, out int bx, out int ry, out int bz);
 
             if (onRail)
             {
-                int by = (int)Math.Floor(Position.Y + 0.25);
-                Yaw = ComputeHeading(manager, bx, by, bz, Yaw);
+                int by = ry;   // the RAIL's Y, not the cart's
 
-                // Drive: W/S throttle forward/back along the current heading.
+                // Drive: W/S throttle forward/back along the current heading. This runs BEFORE
+                // the heading snap so the snap can see this tick's signed speed and know whether
+                // the cart is rolling forwards or being shoved backwards.
                 if (Occupied)
                 {
                     if (_driveFwd != 0f)
@@ -117,19 +165,37 @@ namespace Cubuild
                     Speed -= Math.Sign(Speed) * Math.Min(Math.Abs(Speed), CoastDecay * dt);
                 }
 
-                // Advance along the heading, axis by axis so walls stop the cart cleanly.
-                if (Math.Abs(Speed) > 0.001f)
+                // Lock the heading onto a real rail connection. Rails are NOT solid, so the
+                // wall test cannot by itself keep a cart on the track - before this existed the
+                // cart only noticed it had left the rails on the FOLLOWING tick, by which
+                // point it was already flying off in whatever direction it was pointing.
+                float snappedYaw = Yaw;
+                int dir = SnapHeadingToRail(manager, bx, by, bz, ref snappedYaw, Speed >= 0f ? 1f : -1f);
+                Yaw = snappedYaw;
+
+                if (dir < 0)
                 {
-                    double mx = Math.Sin(Yaw) * Speed * dt;
-                    double mz = Math.Cos(Yaw) * Speed * dt;
-                    if (!IntersectsSolid(manager, Position.X + mx, Position.Y, Position.Z))
-                        Position = new Point3D(Position.X + mx, Position.Y, Position.Z);
-                    else
-                        Speed = 0f;
-                    if (!IntersectsSolid(manager, Position.X, Position.Y, Position.Z + mz))
-                        Position = new Point3D(Position.X, Position.Y, Position.Z + mz);
-                    else
-                        Speed = 0f;
+                    // Dead end: nothing continues from this cell, so stop rather than drift off.
+                    Speed = 0f;
+                }
+                else if (Math.Abs(Speed) > 0.001f)
+                {
+                    // Sub-step so a fast cart cannot skip clean over a corner cell in one tick,
+                    // and so the rail test below applies to every step and not just the end.
+                    double total = Speed * dt;
+                    int steps = Math.Max(1, (int)Math.Ceiling(Math.Abs(total) / 0.05));
+                    if (steps > 96) steps = 96;
+                    double inc = total / steps;
+                    for (int s = 0; s < steps; s++)
+                    {
+                        double nx = Position.X + DirX[dir] * inc;
+                        double nz = Position.Z + DirZ[dir] * inc;
+                        if (IntersectsSolid(manager, nx, Position.Y, nz)) { Speed = 0f; break; }
+                        // The destination cell must still be track. This is the containment
+                        // that was missing entirely before.
+                        if (!TryFindRail(manager, nx, Position.Y, nz, out _, out _, out _)) { Speed = 0f; break; }
+                        Position = new Point3D(nx, Position.Y, nz);
+                    }
                 }
 
                 // Sit on top of the rail surface rather than sinking through it.
