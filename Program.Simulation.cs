@@ -110,47 +110,40 @@ namespace Cubuild
 
             if (miningHeld && _ignoreInteractFrames == 0)
             {
-// Creative: one break per action, deliberately.
-                    //
-                    // Two separate timers, because "click" and "hold" want different things:
-                    //   - A fresh PRESS breaks immediately (clicking must feel instant) and then
-                    //     arms CreativeHoldDelay as a dead zone. A brief click therefore always
-                    //     breaks exactly ONE block and can never chain into a burst - which is
-                    //     what made a "barely click" appear to shred several blocks.
-                    //   - Only once the button has been HELD past that dead zone do repeats begin,
-                    //     one every CreativeBreakInterval, so holding is controllable and you
-                    //     can still line the ray up between blocks.
+// Creative: exactly Minecraft's behaviour - one instant break per CLICK, and holding the
+                    // button does nothing further. Vanilla creative has no hold-to-repeat: you
+                    // click each block you want gone. That is what makes it controllable, and it
+                    // removes the whole "held button shredded half the hillside" problem instead
+                    // of just throttling it.
                     if (World.IsCreative)
                     {
                         bool held = tickInput.BreakHeld;
                         bool freshPress = held && !_wasCreativeBreakHeld;
+                        _wasCreativeBreakHeld = held;
 
-                        if (held && !freshPress && _creativeBreakCooldown > 0f)
+                        if (freshPress)
                         {
-                            // Still inside the dead zone / between repeats: do nothing at all.
-                            _creativeBreakCooldown -= deltaSeconds;
-                            _miningTarget = null;
-                            _miningProgress = 0f;
-                            _wasCreativeBreakHeld = held;
-                            return;
-                        }
-
-                        var cpick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
-                        if (cpick.HasValue)
-                        {
-                            var target = cpick.Value.Remove;
-                            if (World.Chunks.TryGetLoadedBlock(target.x, target.y, target.z, out int id)
-                                && !float.IsPositiveInfinity(BlockRegistry.HardnessOf(id)))
+                            var cpick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
+                            if (cpick.HasValue)
                             {
-                                DeleteBlockAt(target.x, target.y, target.z);
-                                _creativeBreakCooldown = freshPress ? CreativeHoldDelay : CreativeBreakInterval;
+                                var target = cpick.Value.Remove;
+                                if (World.Chunks.TryGetLoadedBlock(target.x, target.y, target.z, out int id)
+                                    && !float.IsPositiveInfinity(BlockRegistry.HardnessOf(id)))
+                                {
+                                    DeleteBlockAt(target.x, target.y, target.z);
+                                }
                             }
                         }
                         _miningTarget = null;
                         _miningProgress = 0f;
-                        _wasCreativeBreakHeld = held;
                         return;
                     }
+
+                // Reset hold tracking when not in creative or button released
+                if (!World.IsCreative || !tickInput.BreakHeld)
+                {
+                    _wasCreativeBreakHeld = false;
+                }
 
                 var pick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
                 if (pick.HasValue)
