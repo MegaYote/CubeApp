@@ -12,22 +12,39 @@ namespace Cubuild.Renderer
         // Creative palette grouping. blocks.json has no category field (only items.json does), so
         // these are derived from the id and block flags. Purely presentational - it only
         // decides draw order and where the header rows go, nothing else depends on it.
+        private static readonly string[] PaletteCategoryOrder =
+        {
+            "Stone & Dirt", "Wood", "Bricks & Tiles", "Colours", "Glass",
+            "Ores", "Slabs & Stairs", "Doors", "Decorations", "Torches", "Utility",
+        };
+
+        private static int CategoryRank(string cat)
+        {
+            int i = Array.IndexOf(PaletteCategoryOrder, cat);
+            return i < 0 ? PaletteCategoryOrder.Length : i;
+        }
+
         private static string PaletteCategory(int id)
         {
-            string name = BlockRegistry.GetById(id).Id;
-            if (name.EndsWith("_slab") || name.EndsWith("_slab_top")
-                || name.EndsWith("_stairs")) return "Slabs & Stairs";
-            if (name.Contains("door")) return "Doors";
-            if (name.EndsWith("ore")) return "Ores";
+            string n = BlockRegistry.GetById(id).Id;
+            if (n.EndsWith("_slab") || n.EndsWith("_slab_top") || n.EndsWith("_stairs"))
+                return "Slabs & Stairs";
+            if (n.Contains("door")) return "Doors";
+            if (n.Contains("torch")) return "Torches";
+            // Utility: stations and gadgets rather than building material.
+            if (n == "workbench" || n == "carpenters_workbench" || n == "masons_workbench"
+                || n == "kiln" || n == "forge" || n == "bomb") return "Utility";
+            // Full blocks of a mined metal read alongside the ores they come from.
+            if (n == "copper" || n == "iron" || n == "gold" || n == "diamond") return "Ores";
+            if (n.EndsWith("ore")) return "Ores";
             if (BlockRegistry.IsGlass(id)) return "Glass";
-            if (BlockRegistry.IsCross(id)) return "Plants";
-            if (name.Contains("torch")) return "Torches";
-            if (name == "log" || name == "planks" || name == "leaves" || name == "sapling"
-                || name == "rottingwood" || name == "bookshelf" || name == "sap") return "Wood";
-            if (name.Contains("brick") || name == "bricks" || name == "tile"
-                || name == "tiledstone") return "Bricks & Tiles";
-            if (name.Contains("cloth") || name.Contains("plastic") || name.Contains("carpet")
-                || name == "wool") return "Colours";
+            if (BlockRegistry.IsCross(id)) return "Decorations";
+            // Wood covers plain logs, the treated plank variants, and every rottingwood stage.
+            if (n == "log" || n == "planks" || n == "treated_planks" || n == "leaves"
+                || n == "sapling" || n == "sap" || n == "bookshelf"
+                || n == "rottingwood" || n.StartsWith("rottingwood_")) return "Wood";
+            if (n.Contains("brick") || n == "bricks" || n == "tiledstone") return "Bricks & Tiles";
+            if (n.Contains("cloth") || n.Contains("plastic") || n == "wool") return "Colours";
             return "Stone & Dirt";
         }
 
@@ -191,8 +208,9 @@ namespace Cubuild.Renderer
                     if (BlockRegistry.IsInInventory(id)) blockIds.Add(id);
                 blockIds.Sort((a, b) =>
                 {
-                    int c = string.CompareOrdinal(PaletteCategory(a), PaletteCategory(b));
-                    return c != 0 ? c : string.CompareOrdinal(
+                    int ra = CategoryRank(PaletteCategory(a)), rb = CategoryRank(PaletteCategory(b));
+                    if (ra != rb) return ra.CompareTo(rb);
+                    return string.CompareOrdinal(
                         BlockRegistry.GetById(a).DisplayName, BlockRegistry.GetById(b).DisplayName);
                 });
 
