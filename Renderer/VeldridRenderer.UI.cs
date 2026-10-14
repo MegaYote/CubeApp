@@ -9,6 +9,28 @@ namespace Cubuild.Renderer
 {
     public sealed partial class VeldridRenderer : IRenderer, IDisposable
     {
+        // Creative palette grouping. blocks.json has no category field (only items.json does), so
+        // these are derived from the id and block flags. Purely presentational - it only
+        // decides draw order and where the header rows go, nothing else depends on it.
+        private static string PaletteCategory(int id)
+        {
+            string name = BlockRegistry.GetById(id).Id;
+            if (name.EndsWith("_slab") || name.EndsWith("_slab_top")
+                || name.EndsWith("_stairs")) return "Slabs & Stairs";
+            if (name.Contains("door")) return "Doors";
+            if (name.EndsWith("ore")) return "Ores";
+            if (BlockRegistry.IsGlass(id)) return "Glass";
+            if (BlockRegistry.IsCross(id)) return "Plants";
+            if (name.Contains("torch")) return "Torches";
+            if (name == "log" || name == "planks" || name == "leaves" || name == "sapling"
+                || name == "rottingwood" || name == "bookshelf" || name == "sap") return "Wood";
+            if (name.Contains("brick") || name == "bricks" || name == "tile"
+                || name == "tiledstone") return "Bricks & Tiles";
+            if (name.Contains("cloth") || name.Contains("plastic") || name.Contains("carpet")
+                || name == "wool") return "Colours";
+            return "Stone & Dirt";
+        }
+
         private void DrawInventoryWindow(Vector2 displaySize)
         {
             if (_iconImGuiId == IntPtr.Zero || _blockIconUv == null) return;
@@ -162,10 +184,29 @@ namespace Cubuild.Renderer
                 ImGui.BeginChild("##palette", new Vector2(0f, paletteH));
                 perRow = Math.Max(1, (int)((ImGui.GetContentRegionAvail().X - 2f) / cellStep));
                 int drawn = 0;
-                // Blocks (isometric cube icons)...
+                // Blocks (isometric cube icons), grouped by category so related blocks sit
+                // together instead of being scattered through declaration order.
+                var blockIds = new List<int>();
                 for (int id = 1; id < BlockRegistry.Count; id++)
+                    if (BlockRegistry.IsInInventory(id)) blockIds.Add(id);
+                blockIds.Sort((a, b) =>
                 {
-                    if (!BlockRegistry.IsInInventory(id)) continue;
+                    int c = string.CompareOrdinal(PaletteCategory(a), PaletteCategory(b));
+                    return c != 0 ? c : string.CompareOrdinal(
+                        BlockRegistry.GetById(a).DisplayName, BlockRegistry.GetById(b).DisplayName);
+                });
+
+                string lastCategory = "";
+                foreach (int id in blockIds)
+                {
+                    string cat = PaletteCategory(id);
+                    if (cat != lastCategory)
+                    {
+                        if (drawn > 0) ImGui.NewLine();
+                        lastCategory = cat;
+                        ImGui.TextUnformatted(cat);
+                        ImGui.NewLine();
+                    }
                     var uv = _blockIconUv[id];
                     string name = BlockRegistry.GetById(id).DisplayName;
                     ImGui.PushID(id);
