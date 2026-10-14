@@ -12,8 +12,34 @@ namespace Cubuild
     /// </summary>
     public sealed partial class GameWorld : IDisposable
     {
-        private static readonly int _boatItemId = ItemRegistry.GetId("boat");
-        private static readonly int _idWater = BlockRegistry.GetId("water");
+        // Resolved LAZILY and defensively. ItemRegistry.GetId is a dictionary indexer that THROWS on
+        // an unknown name, and the boat item only exists in the Classic (Minecraft) pack - a
+        // static readonly initialiser would therefore throw TypeInitializationException for
+        // every GameWorld created in the default pack, and 0 if it silently resolved.
+        private static int _boatItemIdCache = -1;
+        private static int BoatItemId
+        {
+            get
+            {
+                if (_boatItemIdCache < 0)
+                    _boatItemIdCache = ItemRegistry.TryGet("boat", out var d) ? d.NumericId : 0;
+                return _boatItemIdCache;
+            }
+            // The registry is swapped wholesale on a gamemode change, so the cached id must be
+            // dropped with it or Classic's id would leak into a default-pack world.
+            set => _boatItemIdCache = value;
+        }
+
+        private static int _idWater = -1;
+        private static int WaterBlockId
+        {
+            get
+            {
+                if (_idWater < 0) _idWater = BlockRegistry.GetId("water");
+                return _idWater;
+            }
+            set => _idWater = value;
+        }
 
         /// <summary>The boat the local player is currently riding, or null.</summary>
         public BoatEntity? Riding { get; private set; }
@@ -32,7 +58,7 @@ namespace Cubuild
         /// True when the boat item is selected. Checked before the normal block-place path so
         /// right-clicking a boat never tries to put a "boat block" into the world.
         /// </summary>
-        public bool HoldingBoat => SelectedBlock == _boatItemId;
+        public bool HoldingBoat => SelectedBlock == BoatItemId;
 
         /// <summary>
         /// Handles a right-click while the boat item is in hand. Aiming at water launches a
@@ -42,7 +68,7 @@ namespace Cubuild
         public bool TryLaunchBoat(Point3D origin, Point3D direction)
         {
             if (!HoldingBoat) return false;
-            var pick = TryPickFluid(origin, direction, _idWater);
+            var pick = TryPickFluid(origin, direction, WaterBlockId);
             if (!pick.HasValue) return false;
 
             // Spawn on the top face of the water cell that was hit.
@@ -50,7 +76,7 @@ namespace Cubuild
             var spawn = new Point3D(cell.x + 0.5, cell.y + 1.0, cell.z + 0.5);
             if (Entities.AddMobAt("boat", spawn, LocalPlayer.Yaw))
             {
-                TryConsumeFromInventory(_boatItemId, 1);
+                TryConsumeFromInventory(BoatItemId, 1);
                 return true;
             }
             return false;
@@ -146,6 +172,6 @@ namespace Cubuild
 
         /// <summary>True when this cell is water - used to keep launches on the surface.</summary>
         private bool IsWaterCell(int x, int y, int z)
-            => Chunks.TryGetLoadedBlock(x, y, z, out int id) && id == _idWater;
+            => Chunks.TryGetLoadedBlock(x, y, z, out int id) && id == WaterBlockId;
     }
 }
