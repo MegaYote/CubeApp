@@ -110,18 +110,20 @@ namespace Cubuild
 
             if (miningHeld && _ignoreInteractFrames == 0)
             {
-                // Creative: instant on click, small delay only when HOLDING the button
-                if (World.IsCreative)
-                {
-                    bool isHeld = tickInput.BreakHeld;
-                    // Only apply cooldown if button was ALREADY held last frame (i.e., holding)
-                    if (isHeld && _wasCreativeBreakHeld && _creativeBreakCooldown > 0f)
+// Creative: rate-limited so breaking never feels machine-gun. The cooldown used to
+                    // apply ONLY while the button was already held, which meant holding was
+                    // throttled but clicking repeatedly broke a block every single click with no
+                    // limit at all. Now every break - hold or re-click - waits out the interval.
+                    if (World.IsCreative)
                     {
-                        _creativeBreakCooldown -= deltaSeconds;
-                        _miningTarget = null;
-                        _miningProgress = 0f;
-                        return;
-                    }
+                        bool isHeld = tickInput.BreakHeld;
+                        if (_creativeBreakCooldown > 0f)
+                        {
+                            _creativeBreakCooldown -= deltaSeconds;
+                            _miningTarget = null;
+                            _miningProgress = 0f;
+                            return;
+                        }
                     var cpick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
                     if (cpick.HasValue)
                     {

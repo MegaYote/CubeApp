@@ -99,7 +99,7 @@ namespace Cubuild
         // hardness, particles pop every 20%, and the block breaks at progress >= 1.
         private const float BaseBreakTime = 2.5f;    // seconds for hardness 1.0
         private const float BreakParticleInterval = 0.2f; // spawn shards every 20% progress
-        private const float CreativeBreakInterval = 0.15f; // delay only when holding, clicks are instant
+        private const float CreativeBreakInterval = 0.25f; // minimum gap between creative breaks
         private (int x, int y, int z)? _miningTarget;
         private float _miningProgress;
         private int _miningBlockId;
