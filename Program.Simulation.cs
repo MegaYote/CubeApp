@@ -110,47 +110,47 @@ namespace Cubuild
 
             if (miningHeld && _ignoreInteractFrames == 0)
             {
-// Creative: rate-limited so breaking never feels machine-gun. The cooldown used to
-                    // apply ONLY while the button was already held, which meant holding was
-                    // throttled but clicking repeatedly broke a block every single click with no
-                    // limit at all. Now every break - hold or re-click - waits out the interval.
+// Creative: one break per action, deliberately.
+                    //
+                    // Two separate timers, because "click" and "hold" want different things:
+                    //   - A fresh PRESS breaks immediately (clicking must feel instant) and then
+                    //     arms CreativeHoldDelay as a dead zone. A brief click therefore always
+                    //     breaks exactly ONE block and can never chain into a burst - which is
+                    //     what made a "barely click" appear to shred several blocks.
+                    //   - Only once the button has been HELD past that dead zone do repeats begin,
+                    //     one every CreativeBreakInterval, so holding is controllable and you
+                    //     can still line the ray up between blocks.
                     if (World.IsCreative)
                     {
-                        bool isHeld = tickInput.BreakHeld;
-                        if (_creativeBreakCooldown > 0f)
+                        bool held = tickInput.BreakHeld;
+                        bool freshPress = held && !_wasCreativeBreakHeld;
+
+                        if (held && !freshPress && _creativeBreakCooldown > 0f)
                         {
+                            // Still inside the dead zone / between repeats: do nothing at all.
                             _creativeBreakCooldown -= deltaSeconds;
                             _miningTarget = null;
                             _miningProgress = 0f;
+                            _wasCreativeBreakHeld = held;
                             return;
                         }
-                    var cpick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
-                    if (cpick.HasValue)
-                    {
-                        var target = cpick.Value.Remove;
-                        if (World.Chunks.TryGetLoadedBlock(target.x, target.y, target.z, out int id)
-                            && !float.IsPositiveInfinity(BlockRegistry.HardnessOf(id)))
-                        {
-                            DeleteBlockAt(target.x, target.y, target.z);
-                        }
-                    }
-                    _miningTarget = null;
-                    _miningProgress = 0f;
-                    // Reset cooldown only when we actually broke something
-                    if (cpick.HasValue)
-                    {
-                        _creativeBreakCooldown = CreativeBreakInterval;
-                    }
-                    // Track if we're holding for next frame
-                    _wasCreativeBreakHeld = isHeld;
-                    return;
-                }
 
-                // Reset hold tracking when not in creative or button released
-                if (!World.IsCreative || !tickInput.BreakHeld)
-                {
-                    _wasCreativeBreakHeld = false;
-                }
+                        var cpick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
+                        if (cpick.HasValue)
+                        {
+                            var target = cpick.Value.Remove;
+                            if (World.Chunks.TryGetLoadedBlock(target.x, target.y, target.z, out int id)
+                                && !float.IsPositiveInfinity(BlockRegistry.HardnessOf(id)))
+                            {
+                                DeleteBlockAt(target.x, target.y, target.z);
+                                _creativeBreakCooldown = freshPress ? CreativeHoldDelay : CreativeBreakInterval;
+                            }
+                        }
+                        _miningTarget = null;
+                        _miningProgress = 0f;
+                        _wasCreativeBreakHeld = held;
+                        return;
+                    }
 
                 var pick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
                 if (pick.HasValue)
