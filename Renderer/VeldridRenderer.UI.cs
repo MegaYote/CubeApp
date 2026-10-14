@@ -688,11 +688,16 @@ namespace Cubuild.Renderer
                 var cell = new Vector2(7 + (i % cols) * 17, 7 + (i / cols) * 18);
                 var screenMin = artTopLeft + cell * uiScale;
                 var screenMax = screenMin + gridSize * uiScale;
-                (int ItemId, int Count) contents = _hud.CraftingSlots != null && i < _hud.CraftingSlots.Count
-                    ? _hud.CraftingSlots[i] : (0, 0);
+                // Translate the visible cell into the 3-wide backing grid. On a 2x2 panel
+                // this is not identity - without it the bottom-left cell would point at the
+                // wrong slot (and land outside the box, refusing the click entirely).
+                int gridIndex = GameWorld.DisplaySlotToGrid(i, cols);
+                (int ItemId, int Count) contents = _hud.CraftingSlots != null && gridIndex >= 0
+                    && gridIndex < _hud.CraftingSlots.Count
+                    ? _hud.CraftingSlots[gridIndex] : (0, 0);
                 ImGui.SetCursorPos(artOffset + cell * uiScale);
                 DrawCraftingCellAt($"cg{i}", contents.ItemId, contents.Count, screenMin, screenMax,
-                    4, i, 1f * uiScale, 16f * uiScale, fg, fgTextCol);
+                    4, gridIndex, 1f * uiScale, 16f * uiScale, fg, fgTextCol);
             }
 
             // Result well: shows the crafted product; left click crafts.

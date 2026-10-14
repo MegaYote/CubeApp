@@ -58,6 +58,22 @@ namespace Cubuild
             return x < size && y < size;
         }
 
+        /// <summary>
+        /// Maps a VISIBLE cell (0..size*size-1, reading the panel left-to-right, top-to-bottom)
+        /// onto its flat index in the 3-wide <see cref="CraftingGrid"/>. On a 3x3 table the two
+        /// coincide, but on the 2x2 pack grid they do not: the visible bottom-left cell is
+        /// display index 2, which in a 3-wide layout is the top-RIGHT of row 0. Without this
+        /// translation that cell would resolve outside the 2x2 box and refuse every click.
+        /// </summary>
+        public static int DisplaySlotToGrid(int displayIndex, int size)
+        {
+            if (size >= 3) return displayIndex;
+            if (size <= 1) return displayIndex == 0 ? 0 : -1;
+            int x = displayIndex & 1;
+            int y = displayIndex >> 1;
+            return y * 3 + x;
+        }
+
         /// <summary>Dumps every grid stack back into the bag - called when the menu closes.</summary>
         public void RefundCraftingGrid()
         {
