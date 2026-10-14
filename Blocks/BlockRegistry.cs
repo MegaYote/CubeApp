@@ -32,6 +32,7 @@ namespace Cubuild
         private static bool[] _slabTop = Array.Empty<bool>();
         private static bool[] _stair = Array.Empty<bool>();
         private static bool[] _door = Array.Empty<bool>();
+    private static bool[] _rail = Array.Empty<bool>();
         private static bool[] _inventory = Array.Empty<bool>();
         private static bool[] _placeable = Array.Empty<bool>();
         private static bool[] _gravity = Array.Empty<bool>();
@@ -289,6 +290,7 @@ namespace Cubuild
             _slabTop = new bool[Count];
             _stair = new bool[Count];
             _door = new bool[Count];
+        _rail = new bool[Count];
             _inventory = new bool[Count];
             _placeable = new bool[Count];
             _gravity = new bool[Count];
@@ -316,6 +318,7 @@ namespace Cubuild
                 _slabTop[i] = string.Equals(defs[i].Shape, "slab_top", StringComparison.OrdinalIgnoreCase);
                 _stair[i] = string.Equals(defs[i].Shape, "stairs", StringComparison.OrdinalIgnoreCase);
             _door[i] = string.Equals(defs[i].Shape, "door", StringComparison.OrdinalIgnoreCase);
+        _rail[i] = string.Equals(defs[i].Shape, "rail", StringComparison.OrdinalIgnoreCase);
                 _gravity[i] = defs[i].Gravity;
             }
 
@@ -405,7 +408,12 @@ namespace Cubuild
         public static bool IsSlabTop(int id) => id > 0 && id < Count && _slabTop[id];
         public static bool IsStair(int id) => id > 0 && id < Count && _stair[id];
         public static bool IsDoor(int id) => id > 0 && id < Count && _door[id];
-        public static bool IsPartialShape(int id) => id > 0 && id < Count && (_slab[id] || _slabTop[id] || _stair[id] || _door[id]);
+
+        /// <summary>Rail: a flat slab lying on the floor of its cell, one sixteenth high.</summary>
+        /// <summary>How tall a rail block stands, in blocks. One sixteenth, like Minecraft.</summary>
+        public const double RailHeight = 1.0 / 16.0;
+        public static bool IsRail(int id) => id > 0 && id < Count && _rail[id];
+        public static bool IsPartialShape(int id) => id > 0 && id < Count && (_slab[id] || _slabTop[id] || _stair[id] || _door[id] || _rail[id]);
         public static bool IsInInventory(int id) => id >= 0 && id < Count && _inventory[id];
         public static bool IsPlaceable(int id) => id > 0 && id < Count && _placeable[id];
         public static bool IsGravity(int id) => id > 0 && id < Count && _gravity[id];

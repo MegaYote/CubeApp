@@ -818,7 +818,14 @@ namespace Cubuild
                         {
                             EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0, 0.5, 0, 1, 1, 1);
                         }
-                        else if (BlockRegistry.IsDoor(id))
+                        else if (BlockRegistry.IsRail(id))
+                              {
+                              // Rails lie flat on the floor of their cell, one sixteenth of a block
+                              // high, rather than filling it. Cutout (-1) so the transparent parts of
+                              // the rail texture show the ground underneath instead of black.
+                              EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0, 0, 0, 1, BlockRegistry.RailHeight, 1, -1f);
+                              }
+                              else if (BlockRegistry.IsDoor(id))
                         {
                             // Doors are two-cell vertical panels: each half fills its own cell's
                             // full height and shares the same X/Z panel bounds. Orientation,

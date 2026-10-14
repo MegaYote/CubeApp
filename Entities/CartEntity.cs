@@ -133,19 +133,19 @@ namespace Cubuild
                 }
 
                 // Sit on top of the rail surface rather than sinking through it.
-                double railTop = by + 0.0;
-                if (Position.Y < railTop + 0.05)
+                double railTop = by + BlockRegistry.RailHeight;
+                if (Position.Y < railTop + 0.02)
                 {
-                    Position = new Point3D(Position.X, railTop + 0.05, Position.Z);
+                    Position = new Point3D(Position.X, railTop + 0.02, Position.Z);
                     _velY = 0;
                 }
                 else
                 {
                     _velY -= Gravity * dt;
                     Position = new Point3D(Position.X, Position.Y + _velY * dt, Position.Z);
-                    if (Position.Y < railTop + 0.05)
+                    if (Position.Y < railTop + 0.02)
                     {
-                        Position = new Point3D(Position.X, railTop + 0.05, Position.Z);
+                        Position = new Point3D(Position.X, railTop + 0.02, Position.Z);
                         _velY = 0;
                     }
                 }
