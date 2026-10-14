@@ -104,6 +104,12 @@ namespace Cubuild.Renderer
             ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
             ImGuiWindowFlags flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
                 | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar;
+            // Creative lists every block (130 of them) and THEN every item, so the content
+            // always overflows this fixed-size window. With NoScrollbar the items sat below the
+            // fold with no visual cue that there was anything down there - which made the
+            // boat and minecart look like they were missing entirely. Give creative a real
+            // scrollbar; the survival inventory is exactly sized and keeps it off.
+            if (!textured) flags &= ~ImGuiWindowFlags.NoScrollbar;
             if (textured)
             {
                 flags |= ImGuiWindowFlags.NoBackground;
