@@ -40,12 +40,22 @@ namespace Cubuild
         /// <summary>Seconds of heat left in the current fuel unit.</summary>
         public float SmeltBurnTime { get; private set; }
 
+        /// <summary>
+        /// The fuel item CURRENTLY burning, which outlives the stack it came from: consuming
+        /// the last coal pops SmeltFuel to null, but the coal is still lit for its remaining
+        /// burn seconds. The flame gauge must read this, not SmeltFuel, or it blanks at the
+        /// exact moment the fuel is running out.
+        /// </summary>
+        public int SmeltActiveFuelId { get; private set; }
+
         /// <summary>0..1 progress through the current item being smelted.</summary>
         public float SmeltProgress { get; private set; }
 
         /// <summary>0..1 progress through the current fuel unit (for the flame gauge).</summary>
         public float SmeltBurnProgress
-            => SmeltFuel is { } f ? Math.Clamp(1f - SmeltBurnTime / Math.Max(0.001f, SmeltRegistry.FuelSeconds(f.ItemId)), 0f, 1f) : 0f;
+            => SmeltActiveFuelId > 0 && SmeltBurnTime > 0f
+                ? Math.Clamp(SmeltBurnTime / SmeltRegistry.FuelSeconds(SmeltActiveFuelId), 0f, 1f)
+                : 0f;
 
         /// <summary>What the current input would produce, or null when it can't smelt.</summary>
         public SmeltRecipe? SmeltRecipeForInput => SmeltInput is { } i ? SmeltRegistry.Find(i.ItemId) : null;
@@ -62,6 +72,7 @@ namespace Cubuild
             if (SmeltFuel is { } f) GiveOrDrop(f.ItemId, f.Count);
             SmeltInput = null;
             SmeltFuel = null;
+            SmeltActiveFuelId = 0;
             SmeltBurnTime = 0f;
             SmeltProgress = 0f;
             SmeltOpen = false;
@@ -113,7 +124,7 @@ namespace Cubuild
                     HeldStack = (c2.ItemId, c2.Count);
                     if (isInput) SmeltInput = null; else SmeltFuel = null;
                     // Pulling fuel out before it's spent discards the unused burn time.
-                    if (!isInput) { SmeltBurnTime = 0f; }
+                    if (!isInput) { SmeltBurnTime = 0f; SmeltActiveFuelId = 0; }
                 }
             }
             else
@@ -135,7 +146,7 @@ namespace Cubuild
                     // Right-click takes one item back onto the cursor.
                     if (isInput) SmeltInput = (c3.ItemId, c3.Count - 1); else SmeltFuel = (c3.ItemId, c3.Count - 1);
                     HeldStack = (c3.ItemId, 1);
-                    if (!isInput && SmeltFuel!.Value.Count == 0) { SmeltBurnTime = 0f; }
+                    if (!isInput && SmeltFuel!.Value.Count == 0) { SmeltBurnTime = 0f; SmeltActiveFuelId = 0; }
                 }
             }
         }
@@ -164,14 +175,25 @@ namespace Cubuild
             if (!SmeltOpen || dt <= 0f) return;
 
             var recipe = SmeltRecipeForInput;
-            if (recipe == null) { SmeltProgress = 0f; return; }
+            if (recipe == null)
+            {
+                // Nothing to smelt. Extinguish rather than freezing the gauge: without this the
+                // flame stayed part-lit forever, claiming fuel was burning while none was,
+                // because the early return skipped the burn/clear steps below.
+                SmeltActiveFuelId = 0;
+                SmeltBurnTime = 0f;
+                SmeltProgress = 0f;
+                return;
+            }
 
             // Light the next fuel unit when the previous one is spent.
             if (SmeltBurnTime <= 0f)
             {
+                SmeltActiveFuelId = 0;
                 if (SmeltFuel is { ItemId: > 0 } f && SmeltRegistry.FuelSeconds(f.ItemId) > 0f)
                 {
                     SmeltBurnTime = SmeltRegistry.FuelSeconds(f.ItemId);
+                    SmeltActiveFuelId = f.ItemId;
                     SmeltFuel = (f.ItemId, f.Count - 1);
                     if (SmeltFuel.Value.Count <= 0) SmeltFuel = null;
                 }
@@ -184,18 +206,18 @@ namespace Cubuild
 
             float spend = Math.Min(dt, SmeltBurnTime);
             SmeltBurnTime -= spend;
+            if (SmeltBurnTime <= 0f) SmeltActiveFuelId = 0;
             SmeltProgress += spend / recipe.Time;
 
-            while (SmeltProgress >= 1f)
+            // At most one item finishes per tick, which keeps the output stack a clean 1:1
+            // with the input and avoids a burst of completions on a long frame.
+            if (SmeltProgress >= 1f)
             {
-                SmeltProgress -= 1f;
                 SmeltProgress = 0f;
                 // Only one product at a time can stack, same as a real furnace output slot.
                 if (SmeltOutput is { } o && o.ItemId != recipe.OutputItemId)
-                {
-                    SmeltProgress = 0f;         // output is blocked - wait for it to be taken
-                    return;
-                }
+                    return;                     // output is blocked - wait for it to be taken
+
                 if (SmeltOutput is { } o2)
                 {
                     int cap = ItemRegistry.StackSizeOf(recipe.OutputItemId);
@@ -211,7 +233,6 @@ namespace Cubuild
                     int left = inp.Count - 1;
                     SmeltInput = left > 0 ? (inp.ItemId, left) : null;
                 }
-                if (SmeltInput == null) return;  // ran out of input, stop here
             }
         }
     }

@@ -523,7 +523,6 @@ namespace Cubuild.Renderer
             var panelTopLeft = contentScreen + panelOffset;
             uint panelCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.33f, 0.34f, 0.34f, 1f));
             uint cellCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.20f, 0.21f, 0.21f, 1f));
-            uint slotCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.12f, 0.13f, 0.13f, 1f));
             fg.AddRect(panelTopLeft, panelTopLeft + new Vector2(panelW, panelH) * uiScale, panelCol, 4f * uiScale);
 
             // Cell design coords: input top-left, fuel below it, output to the right.
@@ -593,7 +592,7 @@ namespace Cubuild.Renderer
                 }
             }
 
-            DrawInventoryStripBelow(panelOffset + new Vector2(0f, panelH * uiScale + 24f), uiScale, contentScreen, fg, fgTextCol);
+            DrawInventoryStripBelow(new Vector2(0f, panelH * uiScale + 24f), uiScale, contentScreen, fg, fgTextCol);
             ImGui.End();
             ImGui.PopStyleVar();
         }
