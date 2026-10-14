@@ -297,11 +297,8 @@ namespace Cubuild
             "cavesound1", "cavesound2", "cavesound3", "cavesound4",
             "cavesound5", "cavesound6", "cavesound7",
         };
-        // Cached lighting region around the player, rebuilt only on chunk-crossing (like the
-        // mining-light cache) so the darkness gate never runs a full 3x3 flood fill per frame.
-        private ChunkLighting? _caveLighting;
-        private int _caveLightChunkX = int.MinValue;
-        private int _caveLightChunkZ = int.MinValue;
+        // The old cached-region lighting (keyed on chunk X/Z but not the chunk LAYER) is gone;
+        // see PlayerIsInCaveDarkness for why it leaked daylight cave noises while flying.
         private void UpdateCaveAmbience(float deltaSeconds)
         {
             if (Sound == null || World == null) return;
@@ -309,13 +306,9 @@ namespace Cubuild
             Sound.UpdateListener((float)World.PlayerPosition.X, (float)World.PlayerPosition.Y, (float)World.PlayerPosition.Z);
             Sound.Update();
 
-            // Gate on darkness, not depth. The block light at the player's feet must be < 7.
-            if (!TryGetPlayerLight(out int light))
-            {
-                _caveAmbienceTimer = 0f;
-                return;
-            }
-            if (light >= 7)
+            // Gate on being enclosed AND dark. Flying above the terrain sees the sky, so this
+            // stays false regardless of the cached-region bug that used to leak through.
+            if (!PlayerIsInCaveDarkness())
             {
                 _caveAmbienceTimer = 0f;
                 return;
@@ -355,46 +348,35 @@ namespace Cubuild
             }
         }
 
-        // Samples the block light at the player's feet using a cached lighting region. Rebuilds
-        // the ChunkLighting only when the player crosses into a new chunk (expensive otherwise).
-        private bool TryGetPlayerLight(out int light)
+        /// <summary>
+        /// True when the player is genuinely enclosed and dark enough for cave ambience.
+        ///
+        /// This used to sample a hand-rolled ChunkLighting region cached on (chunkX, chunkZ)
+        /// only - but NOT on the chunk LAYER. Flying is vertical movement, so climbing
+        /// crossed layers while (cx, cz) stayed identical and the cache kept serving a region
+        /// belonging to a different Y layer, reading the wrong column's light. That is what
+        /// let cave noises play in broad daylight while flying around above the terrain.
+        ///
+        /// ChunkManager already answers this correctly and cheaply: GetSkyLightEstimate walks
+        /// the column upward and reports sky exposure, and GetSpawnLight falls back to the
+        /// baked block-light grid when shaded. Both are already used by the mob spawner.
+        /// </summary>
+        private bool PlayerIsInCaveDarkness()
         {
-            light = 15;
             var pos = World.PlayerPosition;
             int bx = (int)Math.Floor(pos.X);
             int by = (int)Math.Floor(pos.Y);
             int bz = (int)Math.Floor(pos.Z);
-            int layer = ChunkManager.LayerForWorldY(by);
-            int cx = (int)Math.Floor(pos.X / (double)ChunkManager.ChunkSize);
-            int cz = (int)Math.Floor(pos.Z / (double)ChunkManager.ChunkSize);
 
-            if (_caveLighting == null || cx != _caveLightChunkX || cz != _caveLightChunkZ)
-            {
-                _caveLightChunkX = cx;
-                _caveLightChunkZ = cz;
-                var region = new Dictionary<ChunkCoordinates, Chunk>();
-                for (int dx = -1; dx <= 1; dx++)
-                {
-                    for (int dz = -1; dz <= 1; dz++)
-                    {
-                        var key = new ChunkCoordinates(layer, cx + dx, cz + dz);
-                        if (World.Chunks.TryGetLoadedChunk(key, out var c)) region[key] = c;
-                    }
-                }
-                if (region.Count == 0) return false;
-                try
-                {
-                    _caveLighting = new ChunkLighting(region, ChunkManager.ChunkSize, ChunkManager.HeightForLayer(layer));
-                }
-                catch
-                {
-                    return false;
-                }
-            }
+            // Outdoors means "sees the sky", at any time of day. Passing 0 here is deliberate:
+            // we only want to know whether the sky reaches this column, not how dim it is.
+            // At night that returns 15 - nightLevel, which is still > 0, so open air at night
+            // is excluded too - cave drips outside would be just as wrong as in daylight.
+            if (World.Chunks.GetSkyLightEstimate(bx, by, bz, 0) > 0) return false;
 
-            int ly = by - _caveLighting.OriginY;
-            light = _caveLighting.GetLight(bx, ly, bz);
-            return true;
+            // Enclosed. Now it genuinely is a light question: torch-lit rooms and lit
+            // passages stay quiet, only unlit darkness drips.
+            return World.Chunks.GetSpawnLight(bx, by, bz, _lastSkylightSubtracted) < 7;
         }
 
         private void ApplyLookInput(Vector2 lookDelta)
