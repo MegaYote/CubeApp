@@ -390,6 +390,13 @@ namespace Cubuild.Renderer
         private IntPtr _iconImGuiId;
         private const int IconCellSize = 48;
         private Vector4[]? _blockIconUv;
+        // Registry generation the two icon atlases were built from. The block and item tables
+        // are swapped wholesale when the gamemode's Minecraft flag changes, and the two packs
+        // disagree at MOST numeric ids - so a stale atlas silently shows the wrong block
+        // (Minecraft's log lands on the default pack's oak_door_top, and so on). Comparing
+        // these cheap counters detects that.
+        private int _iconAtlasBlockGeneration = -1;
+        private int _iconAtlasItemGeneration = -1;
         // Items atlas pixels + flat 2D icons for genuine items (tools, food, gems). Genuine
         // items get their items.png tile copied straight into a second icon atlas, so the
         // hotbar/inventory can show the real flat sprite instead of a block mesh.
@@ -815,6 +822,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             BuildIconAtlas();
             // Build the flat item-icon atlas for genuine items (tools, food, gems).
             BuildItemIconAtlas();
+            _iconAtlasBlockGeneration = BlockRegistry.LoadGeneration;
+            _iconAtlasItemGeneration = ItemRegistry.LoadGeneration;
             // Expose the RAW items.png atlas to ImGui for the flat-sprite slot renderers.
             if (_itemsAtlasView != null && _imguiRenderer != null)
                 _itemsImGuiId = _imguiRenderer.GetOrCreateImGuiBinding(_gd.ResourceFactory, _itemsAtlasView);

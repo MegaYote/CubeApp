@@ -328,7 +328,15 @@ namespace Cubuild
             }
 
             Loaded = true;
+            // Bumped on every successful load. Switching mode swaps the whole block table
+            // (the two packs disagree at most numeric ids), so anything that CACHES data
+            // derived from block ids - notably the software-rendered inventory icon atlas -
+            // must compare this to know its copy is stale.
+            LoadGeneration++;
         }
+
+        /// <summary>Increments each time the registry is (re)loaded. See <see cref="LoadGeneration"/>.</summary>
+        public static int LoadGeneration { get; private set; }
 
         /// <summary>Loads blocks.json the same way other resources load: embedded resource first
         /// (so the self-contained .exe carries it), then a loose file next to the executable.</summary>

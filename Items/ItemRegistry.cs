@@ -211,7 +211,15 @@ namespace Cubuild
                 }
             }
             _loaded = true;
+            LoadGeneration++;
         }
+
+        /// <summary>
+        /// Increments each time the registry is (re)loaded. Caches keyed by item id (the flat
+        /// item-icon atlas, for one) must compare this to detect that their copy is stale after
+        /// a mode switch.
+        /// </summary>
+        public static int LoadGeneration { get; private set; }
 
         /// <summary>Resolves a stack id to the block it PLACES, or -1 when the item has no block
         /// behavior (tools, food, gemstones). Block-items place themselves.</summary>

@@ -434,6 +434,7 @@ namespace Cubuild.Renderer
                 cl.SetFramebuffer(_sc.Framebuffer);
                 cl.SetFullViewport(0);
                 cl.ClearColorTarget(0, new RgbaFloat(0.12f, 0.12f, 0.14f, 1f));
+                EnsureIconAtlasesCurrent();
                 _imguiRenderer.Update(1f / 60f, _uiInputSnapshot ?? NullInputSnapshot.Instance);
                 BuildHudUi();
                 _imguiRenderer.Render(_gd, cl);
@@ -535,6 +536,9 @@ namespace Cubuild.Renderer
             DrawVignette(cl);
             DrawCrosshair(cl);
 
+            // Rebuild the icon atlases if the registries were swapped (gamemode change). Two
+            // integer compares on the common path; the rebuild only runs on an actual switch.
+            EnsureIconAtlasesCurrent();
             _imguiRenderer.Update(1f / 60f, _uiInputSnapshot ?? NullInputSnapshot.Instance);
             BuildHudUi();
             _imguiRenderer.Render(_gd, cl);

@@ -363,6 +363,45 @@ namespace Cubuild.Renderer
         // then exposes it to ImGui for the hotbar/inventory. Uses separate horizontal (a) and
         // vertical (b) half-extents so the cube is a chunky ~1.5:1 ratio (like MC), showing the
         // top face as a diamond and the front-left/right faces as the two lower parallelograms.
+        /// <summary>
+        /// Rebuilds the inventory icon atlases if the block/item registries have been swapped
+        /// since they were last built (which happens whenever a world is started in the other
+        /// gamemode). Cheap to call every frame: it is two integer compares unless something
+        /// actually changed, and the rebuild itself is a no-op when the generations match.
+        /// </summary>
+        public void EnsureIconAtlasesCurrent()
+        {
+            if (_gd == null || _imguiRenderer == null) return;
+            int blockGen = BlockRegistry.LoadGeneration;
+            int itemGen = ItemRegistry.LoadGeneration;
+            if (blockGen == _iconAtlasBlockGeneration && itemGen == _iconAtlasItemGeneration) return;
+
+            DisposeIconAtlases();
+            BuildIconAtlas();
+            BuildItemIconAtlas();
+            _iconAtlasBlockGeneration = blockGen;
+            _iconAtlasItemGeneration = itemGen;
+        }
+
+        /// <summary>Releases the two icon atlases so they can be rebuilt without leaking.</summary>
+        private void DisposeIconAtlases()
+        {
+            if (_iconAtlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_iconAtlasTexture);
+            if (_itemsAtlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_itemsAtlasTexture);
+            _iconAtlasTexture?.Dispose();
+            _itemsAtlasTexture?.Dispose();
+            _iconAtlasView?.Dispose();
+            _itemsAtlasView?.Dispose();
+            _iconAtlasTexture = null;
+            _itemsAtlasTexture = null;
+            _iconAtlasView = null;
+            _itemsAtlasView = null;
+            _blockIconUv = null;
+            _itemIconUv = null;
+            _iconImGuiId = IntPtr.Zero;
+            _itemsImGuiId = IntPtr.Zero;
+        }
+
         private void BuildIconAtlas()
         {
             if (_atlasRgba.Length == 0) return;
