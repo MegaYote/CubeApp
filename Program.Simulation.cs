@@ -108,6 +108,16 @@ namespace Cubuild
         }
         bool miningHeld = tickInput.BreakHeld || chopKind != GameWorld.WoodChopKind.None;
 
+// Track the break-button press edge ONCE PER FRAME, BEFORE the miningHeld gate.
+//
+// This must not live inside `if (miningHeld)`: on the release frame miningHeld is
+// false, so the block would be skipped and the flag would never reset. It would
+// latch true forever, every later press would look like a held button, and creative
+// breaking would silently stop working for the rest of the session.
+bool breakHeldNow = tickInput.BreakHeld;
+bool freshBreakPress = breakHeldNow && !_wasCreativeBreakHeld;
+_wasCreativeBreakHeld = breakHeldNow;
+
             if (miningHeld && _ignoreInteractFrames == 0)
             {
 // Creative: exactly Minecraft's behaviour - one instant break per CLICK, and holding the
@@ -117,11 +127,7 @@ namespace Cubuild
                     // of just throttling it.
                     if (World.IsCreative)
                     {
-                        bool held = tickInput.BreakHeld;
-                        bool freshPress = held && !_wasCreativeBreakHeld;
-                        _wasCreativeBreakHeld = held;
-
-                        if (freshPress)
+                        if (freshBreakPress)
                         {
                             var cpick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
                             if (cpick.HasValue)
@@ -138,12 +144,6 @@ namespace Cubuild
                         _miningProgress = 0f;
                         return;
                     }
-
-                // Reset hold tracking when not in creative or button released
-                if (!World.IsCreative || !tickInput.BreakHeld)
-                {
-                    _wasCreativeBreakHeld = false;
-                }
 
                 var pick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
                 if (pick.HasValue)
