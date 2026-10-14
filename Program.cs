@@ -103,7 +103,7 @@ namespace Cubuild
         // Minecraft (which does hold-to-break - that rapid carving is why it feels too fast
         // at 1:1). CreativeBreakInterval is the throttle: it turns vanilla's machine-gun into
         // something you can steer. Bump it for a slower dig, drop it toward 0 for vanilla feel.
-        private const float CreativeBreakInterval = 0.25f;
+        private const float CreativeBreakInterval = 0.40f;
         private float _creativeBreakCooldown;
         private (int x, int y, int z)? _miningTarget;
         private float _miningProgress;
