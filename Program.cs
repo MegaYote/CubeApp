@@ -29,7 +29,20 @@ namespace Cubuild
         private int _lastSkylightSubtracted = -1;
         private readonly InputProcessor input = new();
         private bool mouseLook;
-        private volatile bool needsMeshUpdate = true;
+        /// <summary>
+        /// Requests that the mesher be pumped on the next frame. This is a property rather than
+        /// a plain flag so every existing "needsMeshUpdate = true" call site (block edits, chunk
+        /// generation, mining, world load) actually raises the SCHEDULER's pending-work flag,
+        /// which is what MainLoop now reads to decide whether to drain the mesh queue.
+        ///
+        /// Previously it was a standalone field read only when the player had moved more than
+        /// 2 blocks, so work could sit unmeshed until you happened to walk or fly far enough.
+        /// </summary>
+        private bool needsMeshUpdate
+        {
+            get => World?.Mesher?.NeedsMeshUpdate ?? true;
+            set { if (value && World?.Mesher != null) World.Mesher.NeedsMeshUpdate = true; }
+        }
         private string baseTitle = "Cubuild";
         private bool showFps;
         private int frameCount;

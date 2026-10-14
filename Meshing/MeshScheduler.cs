@@ -50,6 +50,11 @@ namespace Cubuild
             {
                 _dirty.Add(coords);
             }
+            // Raise the flag HERE, not only inside Update(). This is the scheduler's own
+            // "pending work" signal and MainLoop pumps the queue off it, so anything that
+            // dirties a chunk must set it - otherwise the work sits until something unrelated
+            // happens to move the player past the pump threshold.
+            NeedsMeshUpdate = true;
         }
 
         public int Update()
@@ -116,6 +121,7 @@ namespace Cubuild
             chunk.NeedsRemesh = true;
             chunk.IsMeshingQueued = true;
             _meshQueue.EnqueuePriority(coords);
+            NeedsMeshUpdate = true;
 
             // A block edit also affects the faces of the four cardinal neighbours (and the four
             // diagonal neighbours at a chunk corner) that share the edited cell's border: the

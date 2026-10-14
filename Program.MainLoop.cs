@@ -138,7 +138,6 @@ namespace Cubuild
                         double posDelta = delta.X * delta.X + delta.Y * delta.Y + delta.Z * delta.Z;
                         if (posDelta > 4.0)
                         {
-                            needsMeshUpdate = true;
                             _lastMeshPosition = World?.PlayerPosition ?? _lastMeshPosition.Value;
                         }
                     }
@@ -146,10 +145,15 @@ namespace Cubuild
                     {
                         _lastMeshPosition = World.PlayerPosition;
                     }
-                    if (needsMeshUpdate && World?.Mesher != null)
+
+                    // Drain the mesher whenever it says it has pending work. This used to be
+                    // gated on the player having travelled >2 blocks, which meant a block edit
+                    // could sit unmeshed while you stood still - and in creative flight the
+                    // edit only appeared once you moved horizontally. Pending work is now the
+                    // trigger, so it is serviced on the very next frame regardless of movement.
+                    if (World?.Mesher != null && World.Mesher.NeedsMeshUpdate)
                     {
                         World.Mesher.Update();
-                        needsMeshUpdate = false;
                     }
                     var t3 = stageStopwatch.ElapsedTicks;
                     lastMeshMs = (t3 - t2) * 1000f / Stopwatch.Frequency;
