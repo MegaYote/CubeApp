@@ -136,6 +136,17 @@
       "mapColor": "#3F76E4"
     },
     {
+      "id": "lava",
+      "displayName": "Lava",
+      "texture": "12,15",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "alpha": 0.9,
+      "mapColor": "#FF6600",
+      "lightEmission": 15
+    },
+    {
       "id": "bricks",
       "displayName": "Bricks",
       "texture": "8,4",
