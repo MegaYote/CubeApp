@@ -1108,6 +1108,18 @@
       "toolType": "pickaxe"
     },
     {
+      "id": "rail",
+      "displayName": "Rail",
+      "texture": "3,9",
+      "solid": false,
+      "opaque": false,
+      "transparent": true,
+      "alpha": 1.0,
+      "mapColor": "#6E4A32",
+      "hardness": 0.6,
+      "toolType": "pickaxe"
+    },
+    {
       "id": "oak_door_bottom",
       "displayName": "Oak Door",
       "texture": "12,4",

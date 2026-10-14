@@ -230,7 +230,9 @@ namespace Cubuild
                 // Boats: right-click water to launch one, right-click a boat to board it, and
                 // right-click again while riding to step out. Checked before placement so the
                 // boat item never tries to place a block.
-                else if (World.ToggleBoatUnderCrosshair(World.PlayerPosition, World.GetCameraForward())
+                else if (World.ToggleCartUnderCrosshair(World.PlayerPosition, World.GetCameraForward())
+                      || World.ToggleBoatUnderCrosshair(World.PlayerPosition, World.GetCameraForward())
+                      || World.TryPlaceCart(World.PlayerPosition, World.GetCameraForward())
                       || World.TryLaunchBoat(World.PlayerPosition, World.GetCameraForward()))
                 {
                     _handSwingTimer = HandSwingDuration;

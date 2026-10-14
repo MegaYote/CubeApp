@@ -218,6 +218,9 @@ namespace Cubuild
                 mob = new Coyote(position, yaw);
             else if (mobId == "steve")
                 mob = new SteveMob(position, yaw);
+            else if (mobId == "cart")
+                // Prototype: rides the rail network, driven by a seated player.
+                mob = new CartEntity(position, yaw);
             else if (mobId == "boat")
                 // Player-launched vehicle, not a spawned mob: no brain, floats, steered by a rider.
                 mob = new BoatEntity(position, yaw);
@@ -807,6 +810,12 @@ namespace Cubuild
                 var mob = new SteveMob(pos, m.Yaw);
                 mob.RestoreState(pos, m.Yaw, m.Health);
                 _mobs.Add(mob);
+            }
+            else if (m.Type == "cart")
+            {
+                var cart = new CartEntity(pos, m.Yaw);
+                cart.RestoreState(pos, m.Yaw, m.Health);
+                _mobs.Add(cart);
             }
             else if (m.Type == "boat")
             {

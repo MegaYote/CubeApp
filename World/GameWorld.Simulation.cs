@@ -205,9 +205,11 @@ namespace Cubuild
             StepItemDrops(deltaSeconds);
             BlockTicks?.Tick(deltaSeconds);
             UpdateLeafDecay(deltaSeconds);
-            // While riding, the boat is what moves: StepRiding steers it and pins the player's eye
-            // to the hull instead of running the normal walk/fall/collide path.
-            if (IsRiding) StepRiding(tickInput, deltaSeconds);
+            // While riding a cart or a boat, THAT vehicle is what moves: StepRidingCart /
+            // StepRiding steer it and pin the player's eye to the hull instead of running the
+            // normal walk/fall/collide path.
+            if (IsRidingCart) StepRidingCart(tickInput, deltaSeconds);
+            else if (IsRiding) StepRiding(tickInput, deltaSeconds);
             else StepPlayer(LocalPlayer, tickInput, deltaSeconds);
             // Third-person body yaw: the body lags the look direction (slowly while idle, faster
             // while moving/flying) so the head can swivel ahead of the body like a real person.
