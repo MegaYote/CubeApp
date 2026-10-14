@@ -120,11 +120,13 @@ _wasCreativeBreakHeld = breakHeldNow;
 
             if (miningHeld && _ignoreInteractFrames == 0)
             {
-// Creative: exactly Minecraft's behaviour - one instant break per CLICK, and holding the
-                    // button does nothing further. Vanilla creative has no hold-to-repeat: you
-                    // click each block you want gone. That is what makes it controllable, and it
-                    // removes the whole "held button shredded half the hillside" problem instead
-                    // of just throttling it.
+// Creative: breaks on the press edge AND repeats while the button is held, like
+                    // vanilla Minecraft - but throttled to CreativeBreakInterval so it is
+                    // controllable instead of machine-gunning.
+                    //
+                    // The press edge (freshBreakPress, computed above the gate) is what makes a
+                    // fresh click break instantly regardless of the cooldown, so tapping is
+                    // always responsive and holding gives a steady, aimable cadence.
                     if (World.IsCreative)
                     {
                         if (freshBreakPress)
@@ -137,6 +139,35 @@ _wasCreativeBreakHeld = breakHeldNow;
                                     && !float.IsPositiveInfinity(BlockRegistry.HardnessOf(id)))
                                 {
                                     DeleteBlockAt(target.x, target.y, target.z);
+                                    _creativeBreakCooldown = CreativeBreakInterval;
+                                }
+                            }
+                        }
+                        else if (breakHeldNow)
+                        {
+                            // Holding: repeat once the interval has elapsed.
+                            if (_creativeBreakCooldown > 0f)
+                            {
+                                _creativeBreakCooldown -= deltaSeconds;
+                            }
+                            else
+                            {
+                                var rcpick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
+                                if (rcpick.HasValue)
+                                {
+                                    var rtarget = rcpick.Value.Remove;
+                                    if (World.Chunks.TryGetLoadedBlock(rtarget.x, rtarget.y, rtarget.z, out int rid)
+                                        && !float.IsPositiveInfinity(BlockRegistry.HardnessOf(rid)))
+                                    {
+                                        DeleteBlockAt(rtarget.x, rtarget.y, rtarget.z);
+                                        _creativeBreakCooldown = CreativeBreakInterval;
+                                    }
+                                    else
+                                    {
+                                        // Aimed at something unbreakable: wait out the interval
+                                        // instead of retrying every frame.
+                                        _creativeBreakCooldown = CreativeBreakInterval;
+                                    }
                                 }
                             }
                         }

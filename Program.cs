@@ -99,9 +99,12 @@ namespace Cubuild
         // hardness, particles pop every 20%, and the block breaks at progress >= 1.
         private const float BaseBreakTime = 2.5f;    // seconds for hardness 1.0
         private const float BreakParticleInterval = 0.2f; // spawn shards every 20% progress
-        // Creative breaking needs no timers: it fires once per click press (matching vanilla
-        // Minecraft, where holding the button does not repeat-break). _wasCreativeBreakHeld
-        // detects the press edge.
+        // Creative breaking fires on the press edge AND repeats while held, matching vanilla
+        // Minecraft (which does hold-to-break - that rapid carving is why it feels too fast
+        // at 1:1). CreativeBreakInterval is the throttle: it turns vanilla's machine-gun into
+        // something you can steer. Bump it for a slower dig, drop it toward 0 for vanilla feel.
+        private const float CreativeBreakInterval = 0.25f;
+        private float _creativeBreakCooldown;
         private (int x, int y, int z)? _miningTarget;
         private float _miningProgress;
         private int _miningBlockId;
