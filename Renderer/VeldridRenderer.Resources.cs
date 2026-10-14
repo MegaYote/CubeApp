@@ -383,23 +383,35 @@ namespace Cubuild.Renderer
             _iconAtlasItemGeneration = itemGen;
         }
 
-        /// <summary>Releases the two icon atlases so they can be rebuilt without leaking.</summary>
+        /// <summary>
+        /// Releases ONLY the resources that BuildIconAtlas and BuildItemIconAtlas allocate, so
+        /// they can be rebuilt without leaking. Deliberately does NOT touch
+        /// _itemsAtlasTexture/_itemsAtlasView/_itemsImGuiId - those are the RAW items.png
+        /// binding created once in Initialize and owned by Dispose(); nothing on this rebuild
+        /// path recreates them, and both TryGetFlatSpriteUv and TryGetBlockFlatSpriteUv (the
+        /// flat-sprite render used for items and for blocks like sap that carry an items.json
+        /// itemTile override) return that ImGui id, so dropping it would blank every flat
+        /// sprite in the game.
+        /// </summary>
         private void DisposeIconAtlases()
         {
+            // Block icon atlas (BuildIconAtlas).
             if (_iconAtlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_iconAtlasTexture);
-            if (_itemsAtlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_itemsAtlasTexture);
-            _iconAtlasTexture?.Dispose();
-            _itemsAtlasTexture?.Dispose();
             _iconAtlasView?.Dispose();
-            _itemsAtlasView?.Dispose();
+            _iconAtlasTexture?.Dispose();
             _iconAtlasTexture = null;
-            _itemsAtlasTexture = null;
             _iconAtlasView = null;
-            _itemsAtlasView = null;
-            _blockIconUv = null;
-            _itemIconUv = null;
             _iconImGuiId = IntPtr.Zero;
-            _itemsImGuiId = IntPtr.Zero;
+            _blockIconUv = null;
+
+            // Flat item icon atlas (BuildItemIconAtlas).
+            if (_itemIconAtlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_itemIconAtlasTexture);
+            _itemIconAtlasView?.Dispose();
+            _itemIconAtlasTexture?.Dispose();
+            _itemIconAtlasTexture = null;
+            _itemIconAtlasView = null;
+            _itemIconImGuiId = IntPtr.Zero;
+            _itemIconUv = null;
         }
 
         private void BuildIconAtlas()

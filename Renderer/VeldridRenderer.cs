@@ -974,6 +974,16 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             _healthbarFlashTexture?.Dispose();
             _iconAtlasView?.Dispose();
             _iconAtlasTexture?.Dispose();
+            // The flat item icon atlas is allocated by BuildItemIconAtlas and was never being
+            // released here - a leak on every shutdown.
+            if (_itemIconAtlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_itemIconAtlasTexture);
+            _itemIconAtlasView?.Dispose();
+            _itemIconAtlasTexture?.Dispose();
+            // Raw items.png backing (the flat-sprite render path for items and for blocks that
+            // carry an items.json itemTile override, e.g. sap).
+            if (_itemsAtlasView != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_itemsAtlasView);
+            _itemsAtlasView?.Dispose();
+            _itemsAtlasTexture?.Dispose();
             _sc?.Dispose();
             _gd?.Dispose();
         }
