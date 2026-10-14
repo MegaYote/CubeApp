@@ -384,6 +384,16 @@ namespace Cubuild
                     SetSlot(slot, clicked);
                 }
             }
+
+            // Slots 40..49 are the hotbar. Dropping a stack onto the CURRENTLY SELECTED hotbar
+            // slot changed Hotbar[] but left SelectedBlock pointing at the old item, so you
+            // couldn't build with what you'd just put there until you switched away and back
+            // (that path re-syncs, which is why the switch 'fixed' it). Re-sync whenever the
+            // selected slot is the one we just wrote to.
+            if (slot >= BagSlotCount && slot - BagSlotCount == SelectedSlot)
+            {
+                SelectedBlock = Hotbar[SelectedSlot];
+            }
         }
 
         // Throw velocity along the player's facing direction (spawned at the feet): fast enough
