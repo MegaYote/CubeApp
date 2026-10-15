@@ -70,7 +70,20 @@ namespace Cubuild
             {
                 if (_manager.TryGetLoadedBlock(currentX, currentY, currentZ, out var block) && block != BlockRegistry.AirId)
                 {
-                    return new PickBlockResult((currentX, currentY, currentZ), (lastX, lastY, lastZ), normal, distance);
+                    // A full cube is hit the moment the ray enters its cell. A partial shape
+                    // (slab, rail) only fills part of the cell, so the ray must actually pass
+                    // through its hitbox - otherwise aiming at the empty air above a rail would
+                    // still select it. On a miss the cell is treated as passable and the DDA
+                    // continues, so you can place a block in the space above a rail.
+                    if (!TryGetHitbox(block, currentX, currentY, currentZ, out var hb))
+                        return new PickBlockResult((currentX, currentY, currentZ), (lastX, lastY, lastZ), normal, distance);
+
+                    if (RayAABB(origin, direction, hb.minX, hb.minY, hb.minZ, hb.maxX, hb.maxY, hb.maxZ,
+                               out double tHit, out Point3D hitNormal))
+                    {
+                        if (tHit >= distance - 1e-6 && tHit <= BlockReach)
+                            return new PickBlockResult((currentX, currentY, currentZ), (lastX, lastY, lastZ), hitNormal, tHit);
+                    }
                 }
 
                 lastX = currentX;
@@ -114,6 +127,81 @@ namespace Cubuild
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// The world-space hitbox of a partial block, or false when the block is a full cube and
+        /// needs no refinement. Slabs, slab-tops and rails occupy only part of their cell, so the
+        /// raycast tests against the real bounds instead of the whole cell.
+        /// </summary>
+        private static bool TryGetHitbox(int id, int x, int y, int z,
+            out (double minX, double minY, double minZ, double maxX, double maxY, double maxZ) hb)
+        {
+            if (BlockRegistry.IsSlab(id))     { hb = (x, y,         z, x + 1, y + 0.5,               z + 1); return true; }
+            if (BlockRegistry.IsSlabTop(id))  { hb = (x, y + 0.5,    z, x + 1, y + 1,                 z + 1); return true; }
+            if (BlockRegistry.IsRail(id))     { hb = (x, y,         z, x + 1, y + BlockRegistry.RailPickHeight, z + 1); return true; }
+            hb = (0, 0, 0, 0, 0, 0);
+            return false;
+        }
+
+        /// <summary>
+        /// Slab-method ray/AABB intersection. Returns true when the ray hits the box, with the
+        /// entry distance and the face normal it entered through.
+        /// </summary>
+        private static bool RayAABB(Point3D o, Point3D d, double minX, double minY, double minZ,
+            double maxX, double maxY, double maxZ, out double tHit, out Point3D normal)
+        {
+            tHit = 0;
+            normal = new Point3D(0, 1, 0);
+            double tMin = double.NegativeInfinity;
+            double tMax = double.PositiveInfinity;
+            int axis = -1;
+            bool positive = false;
+
+            // X
+            if (Math.Abs(d.X) < 1e-9) { if (o.X < minX || o.X > maxX) return false; }
+            else
+            {
+                double inv = 1.0 / d.X;
+                double t1 = (minX - o.X) * inv, t2 = (maxX - o.X) * inv;
+                bool pos = d.X > 0;
+                if (t1 > t2) { double t = t1; t1 = t2; t2 = t; }
+                if (t1 > tMin) { tMin = t1; axis = 0; positive = pos; }
+                if (t2 < tMax) tMax = t2;
+            }
+            // Y
+            if (Math.Abs(d.Y) < 1e-9) { if (o.Y < minY || o.Y > maxY) return false; }
+            else
+            {
+                double inv = 1.0 / d.Y;
+                double t1 = (minY - o.Y) * inv, t2 = (maxY - o.Y) * inv;
+                bool pos = d.Y > 0;
+                if (t1 > t2) { double t = t1; t1 = t2; t2 = t; }
+                if (t1 > tMin) { tMin = t1; axis = 1; positive = pos; }
+                if (t2 < tMax) tMax = t2;
+            }
+            // Z
+            if (Math.Abs(d.Z) < 1e-9) { if (o.Z < minZ || o.Z > maxZ) return false; }
+            else
+            {
+                double inv = 1.0 / d.Z;
+                double t1 = (minZ - o.Z) * inv, t2 = (maxZ - o.Z) * inv;
+                bool pos = d.Z > 0;
+                if (t1 > t2) { double t = t1; t1 = t2; t2 = t; }
+                if (t1 > tMin) { tMin = t1; axis = 2; positive = pos; }
+                if (t2 < tMax) tMax = t2;
+            }
+
+            if (tMax < tMin || tMax < 0) return false;
+            tHit = tMin > 0 ? tMin : 0;
+            normal = axis switch
+            {
+                0 => new Point3D(positive ? -1 : 1, 0, 0),
+                1 => new Point3D(0, positive ? -1 : 1, 0),
+                2 => new Point3D(0, 0, positive ? -1 : 1),
+                _ => new Point3D(0, 1, 0),
+            };
+            return true;
         }
 
         /// <summary>

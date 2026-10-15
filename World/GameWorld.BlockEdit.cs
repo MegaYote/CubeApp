@@ -124,7 +124,62 @@ namespace Cubuild
             // lose their support too (a floor torch above is handled by the cross cascade).
             BreakUnsupportedWallTorches(x, y, z);
 
+            // Lifting a rail re-opens the question for its neighbours: a corner you just dug up
+            // leaves the cell beside it that was curving into it now running straight.
+            if (BlockRegistry.IsRail(removedBlockId)) RefreshRailShapesAround(x, y, z, fireEdited: true);
+
             return true;
+        }
+
+        // ---- rail auto-connect ---------------------------------------------------
+        //
+        // A rail stores no orientation of its own; its shape is INFERRED from the rails around
+        // it (RailShape.ComputeShape). That has a consequence the placement site cannot ignore:
+        // the neighbour you built first is left holding a stale shape the moment you build the
+        // one that connects to it. Laying a line east and then turning south leaves the corner
+        // still drawn straight, and the cart still tries to drive it straight. So every rail
+        // edit re-resolves the whole set of cells that physically touch the change, not just the
+        // cell that changed.
+
+        /// <summary>
+        /// Re-derives rail orientation for (x,y,z) and for every rail that touches it: the four
+        /// horizontal neighbours, each also sampled one block up and one block down (a step links
+        /// vertically, so a ramp is a neighbour too), plus the edited cell itself.
+        /// </summary>
+        private void RefreshRailShapesAround(int x, int y, int z, bool fireEdited)
+        {
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                for (int i = 0; i < 4; i++)
+                {
+                    RefreshRailShapeAt(x + RailShape.DirX[i], y + dy, z + RailShape.DirZ[i], fireEdited);
+                }
+            }
+            RefreshRailShapeAt(x, y, z, fireEdited);
+        }
+
+        /// <summary>
+        /// Recomputes one rail cell's shape and writes it back if it actually changed.
+        ///
+        /// Deliberately loaded-only: this runs from the network apply path as well as from local
+        /// edits, and must never force terrain generation around the player. A rail whose
+        /// neighbour is in an unloaded chunk simply keeps the shape it has until that chunk is
+        /// there to be read.
+        /// </summary>
+        private void RefreshRailShapeAt(int x, int y, int z, bool fireEdited)
+        {
+            if (!Chunks.TryGetLoadedBlockAndMeta(x, y, z, out int id, out byte meta)) return;
+            if (!BlockRegistry.IsRail(id)) return;
+
+            int want = RailShape.ComputeShape(Chunks, x, y, z);
+            if (want == meta) return;
+
+            if (!Chunks.TrySetBlockLoadedOnly(x, y, z, id, want)) return;
+            Mesher.RequestImmediateRemesh(new ChunkCoordinates(
+                ChunkManager.LayerForWorldY(y), WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            // fireEdited is false only on the network apply path, where re-broadcasting would
+            // bounce the edit straight back to the peer that sent it.
+            if (fireEdited) BlockEdited?.Invoke(x, y, z, id, want);
         }
 
         /// <summary>
@@ -432,6 +487,18 @@ var place = pickResult.Value.Place;
                 }
             }
 
+            // Rails can't be stacked either. A rail's shape is inferred from its neighbours, so
+            // a rail sitting directly on top of another would re-derive a nonsense orientation
+            // from a "neighbour" one block straight up, and two tracks in one column is never
+            // what the player meant. Same treatment as a flower on a flower: the click is
+            // simply refused, so the rail stays in hand.
+            if (BlockRegistry.IsRail(blockToPlace)
+                && Chunks.TryGetLoadedBlock(place.x, place.y, place.z, out var atPlace)
+                && BlockRegistry.IsRail(atPlace))
+            {
+                return false;
+            }
+
             // Torches: placed on a top face -> floor torch (X-cross); placed against a
             // side face -> wall torch (single quad leaning away from the wall, meta 1-4).
             // Sap torches and burnt torches can also be placed on ceilings (upside-down, meta 5).
@@ -495,6 +562,9 @@ var place = pickResult.Value.Place;
             var editedChunk = new ChunkCoordinates(placeLayer, WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));
             Mesher.RequestImmediateRemesh(editedChunk);
             BlockEdited?.Invoke(place.x, place.y, place.z, blockToPlace, meta);
+            // Freshly laid rail: resolve its own shape, and re-resolve any neighbour that was
+            // previously a dead-end stub or a straight run that now has a corner to bend into.
+            if (BlockRegistry.IsRail(blockToPlace)) RefreshRailShapesAround(place.x, place.y, place.z, fireEdited: true);
             // Schedule burn for sap torches
             if (blockToPlace == _idSapTorch)
             {
@@ -510,6 +580,9 @@ var place = pickResult.Value.Place;
             // Same "wait for it to fall" rule on the authoritative path (host applying a client's
             // edit): never place into a cell a falling block is passing through.
             if (BlockTicks != null && BlockTicks.IsCellOccupiedByFalling(x, y, z)) return false;
+            // Remember what was here: a rail may be being removed, which changes the shape of
+            // its neighbours just as much as placing one does.
+            Chunks.TryGetLoadedBlock(x, y, z, out int oldId);
             if (!Chunks.TrySetBlockLoadedOnly(x, y, z, blockId, meta)) return false;
             BlockTicks?.OnBlockChanged(x, y, z);
             int ebLayer = ChunkManager.LayerForWorldY(y);
@@ -525,6 +598,11 @@ var place = pickResult.Value.Place;
                 BreakUnsupportedCross(x, y + 1, z);
                 BreakUnsupportedWallTorches(x, y, z);
             }
+            // Keep rail orientation correct on the authoritative path too, but WITHOUT firing
+            // BlockEdited: this method is also the client's receive path (NetClient), and
+            // re-broadcasting here would bounce the edit back to whoever just sent it.
+            if (BlockRegistry.IsRail(blockId) || BlockRegistry.IsRail(oldId))
+                RefreshRailShapesAround(x, y, z, fireEdited: false);
             return true;
         }
 

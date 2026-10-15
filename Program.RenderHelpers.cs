@@ -178,13 +178,16 @@ namespace Cubuild
             // Head pitch follows the camera look (clamped so the neck doesn't bend absurdly).
             float headPitch = Math.Clamp(w.LocalPlayer.Pitch * (float)Math.PI / 180f, -1.05f, 1.05f);
             bool dead = w.LocalPlayer.Health <= 0;
+            // Seated while riding a cart: the model drops into the seat instead of standing
+            // rigidly on top of it.
+            float sitAmount = w.IsRidingCart ? 1f : 0f;
             return new MobRenderData(
                 "player", feet, bodyYaw, headLocal,
                 w.PlayerWalkPhase, dead ? 0f : w.PlayerWalkAmount, 0f, 0f, 0f,
                 (float)w.PlayerVelocity.Y, w.PlayerGrounded,
                 dead, dead ? Math.Clamp(w.LocalPlayer.DeathTimer / 0.5f, 0f, 1f) : 0f,
                 w.LocalPlayer.DeathRollDir, dead ? 0f : w.LocalPlayer.HurtTimer,
-                headPitch);
+                headPitch, 1f, sitAmount);
         }
 
         /// <summary>

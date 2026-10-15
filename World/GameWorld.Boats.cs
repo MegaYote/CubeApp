@@ -121,9 +121,16 @@ namespace Cubuild
         {
             DismountBoat();
             Riding = boat;
+            Entities.LocallyDrivenMob = boat;
             boat.Occupied = true;
             // Face the boat the way the player was already looking, so steering feels immediate.
-            if (Math.Abs(boat.Yaw) > 0.001f) LocalPlayer.Yaw = boat.Yaw;
+            // BoatEntity stores yaw in RADIANS (it feeds Math.Sin/Cos and its own steering),
+            // whereas the player's yaw is in DEGREES (Simulation converts with *PI/180).
+            if (Math.Abs(boat.Yaw) > 0.001f)
+            {
+                float deg = boat.Yaw * 180f / (float)Math.PI;
+                LocalPlayer.Yaw = (deg % 360f + 360f) % 360f;
+            }
         }
 
         public void DismountBoat()
@@ -136,7 +143,10 @@ namespace Cubuild
                 double sz = b.Position.Z - Math.Sin(b.Yaw) * 1.1;
                 double feetY = b.Position.Y + 0.2;
                 LocalPlayer.Position = new Point3D(sx, feetY + EyeHeight, sz);
+                // Drop anything accumulated while carried, so stepping off never launches you.
+                LocalPlayer.Velocity = new Point3D(0, 0, 0);
                 Riding = null;
+                Entities.LocallyDrivenMob = null;
             }
         }
 
@@ -168,6 +178,8 @@ namespace Cubuild
                 boat.Position.X,
                 boat.Position.Y + BoatSeatEyeHeight,
                 boat.Position.Z);
+            // Carried, not walking - nothing of the player's own motion applies while aboard.
+            LocalPlayer.Velocity = new Point3D(0, 0, 0);
         }
 
         /// <summary>True when this cell is water - used to keep launches on the surface.</summary>

@@ -264,6 +264,15 @@ namespace Cubuild
         public Action<Point3D>? PlayerPushCallback { get; set; }
 
         /// <summary>
+        /// The vehicle the local player is currently riding, if any. GameWorld already stepped it
+        /// (StepRidingCart / StepRiding) and pinned the player to it this frame, so ticking it a
+        /// second time here would (a) run the vehicle at double speed and (b) leave the vehicle
+        /// further along the track than the rider, which the separation pass would read as the
+        /// rider being buried inside it.
+        /// </summary>
+        public MobEntity? LocallyDrivenMob;
+
+        /// <summary>
         /// Advance all mobs by one frame. When <paramref name="playerPosition"/> is supplied,
         /// natural spawning (near the player, 24-32 blocks out) and despawning (far-away mobs)
         /// also run. <paramref name="playerAlive"/> tells hostile mobs whether the player is a
@@ -334,7 +343,8 @@ namespace Cubuild
                         mobEntity.OnAttack = null;
                     }
 
-                    mobEntity.Update(deltaSeconds, _chunkManager);
+                    if (mobEntity != LocallyDrivenMob)
+                        mobEntity.Update(deltaSeconds, _chunkManager);
 
                     if (mobEntity.Removed)
                     {

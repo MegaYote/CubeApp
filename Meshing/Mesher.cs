@@ -820,10 +820,23 @@ namespace Cubuild
                         }
                         else if (BlockRegistry.IsRail(id))
                               {
-                              // Rails lie flat on the floor of their cell, one sixteenth of a block
-                              // high, rather than filling it. Cutout (-1) so the transparent parts of
-                              // the rail texture show the ground underneath instead of black.
-                              EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0, 0, 0, 1, BlockRegistry.RailHeight, 1, -1f);
+                              // Rails lie flat on the floor of their cell rather than filling it.
+                              // The SHAPE is carried by the texture: one straight tile and one
+                              // curve tile, rotated per meta so a corner draws a corner and a
+                              // straight draws a straight. A slope is drawn as a real ramp quad so
+                              // a step up visibly connects the two heights.
+                              int meta = chunk.GetMeta(x, y, z);
+                              var railTex = RailShape.GetRailTexture(meta);
+                              int railRot = RailShape.GetRailRotation(meta);
+                              if (RailShape.IsSlope(meta))
+                                  EmitRailSlope(lighting, mesh, wx, wy, wz, meta, railTex, railRot);
+                              else
+                              {
+                              // One sixteenth of a block high; cutout (-1) so the transparent parts
+                              // of the rail texture show the ground underneath instead of black.
+                              // Top face only - a rail's sides and bottom are meant to be invisible.
+                              EmitBox(lookup, lighting, mesh, wx, wy, wz, id, 0, 0, 0, 1, BlockRegistry.RailHeight, 1, -1f, railTex, railRot, true);
+                              }
                               }
                               else if (BlockRegistry.IsDoor(id))
                         {
@@ -865,21 +878,32 @@ namespace Cubuild
         }
 
         private static void EmitBox(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh,
-            int wx, int wy, int wz, int blockId, double minX, double minY, double minZ, double maxX, double maxY, double maxZ)
-            => EmitBox(lookup, lighting, mesh, wx, wy, wz, blockId, minX, minY, minZ, maxX, maxY, maxZ, 1f);
+            int wx, int wy, int wz, int blockId, double minX, double minY, double minZ, double maxX, double maxY, double maxZ,
+            TextureRect? texOverride = null, int textureRotation = 0)
+            => EmitBox(lookup, lighting, mesh, wx, wy, wz, blockId, minX, minY, minZ, maxX, maxY, maxZ, 1f, texOverride, textureRotation);
 
         /// <summary>
         /// As <see cref="EmitBox(Dictionary{ChunkCoordinates,Chunk},ChunkLighting,List{MeshFace},int,int,int,int,double,double,double,double,double,double)"/>,
         /// but with an explicit render alpha. Negative values are sentinels understood by the
         /// renderer's pass bucketing (-1 = cutout, i.e. honour the atlas PNG's per-pixel alpha).
         /// </summary>
+        /// <summary>
+        /// As <see cref="EmitBox(Dictionary{ChunkCoordinates,Chunk},ChunkLighting,List{MeshFace},int,int,int,int,double,double,double,double,double,double)"/>,
+        /// but with an explicit render alpha. Negative values are sentinels understood by the
+        /// renderer's pass bucketing (-1 = cutout, i.e. honour the atlas PNG's per-pixel alpha).
+        /// </summary>
         private static void EmitBox(Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh,
-            int wx, int wy, int wz, int blockId, double minX, double minY, double minZ, double maxX, double maxY, double maxZ, float alpha)
+            int wx, int wy, int wz, int blockId, double minX, double minY, double minZ, double maxX, double maxY, double maxZ, float alpha,
+            TextureRect? texOverride = null, int textureRotation = 0, bool topFaceOnly = false)
         {
             var def = BlockRegistry.GetById(blockId);
             for (int i = 0; i < FaceOffsets.Length; i++)
             {
                 var off = FaceOffsets[i];
+                // A rail is a single flat quad lying on the floor of its cell. Emitting the box's
+                // sides and bottom would smear slivers of the rail texture up the edges, so only
+                // the upward face is drawn - the rest of the slab is invisible by design.
+                if (topFaceOnly && off.dy <= 0) continue;
                 int nx = wx + off.dx;
                 int ny = wy + off.dy;
                 int nz = wz + off.dz;
@@ -924,8 +948,8 @@ namespace Cubuild
                     p3 = tmp;
                 }
 
-                var src = def.FaceTexture(normal);
-                mesh.Add(new MeshFace(p0, p1, p2, p3, src, normal, new Point3D(wx, wy, wz), (float)brightness, 1, 1, alpha));
+                var src = texOverride ?? def.FaceTexture(normal);
+                mesh.Add(new MeshFace(p0, p1, p2, p3, src, normal, new Point3D(wx, wy, wz), (float)brightness, 1, 1, alpha, false, textureRotation));
             }
         }
 
@@ -1226,6 +1250,39 @@ namespace Cubuild
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Draws a sloped rail as a real ramp quad so a step up visibly connects the lower track
+        /// to the higher one. The quad runs from the cell's low edge at ground level to its high
+        /// edge a block up, spanning the full cell across the track.
+        /// </summary>
+        private static void EmitRailSlope(ChunkLighting lighting, List<MeshFace> mesh,
+            int wx, int wy, int wz, int meta, TextureRect tex, int textureRotation)
+        {
+            // Four corners in cell-local space, wound so the surface normal points up.
+            double[] c = RailShape.AscendDirection(meta) switch
+            {
+                0 => new double[] { 0,0,0,  0,0,1,  1,1,1,  1,1,0 },  // ascends East
+                1 => new double[] { 0,0,0,  0,1,1,  1,1,1,  1,0,0 },  // ascends South
+                2 => new double[] { 1,0,0,  0,1,0,  0,1,1,  1,0,1 },  // ascends West
+                _ => new double[] { 0,0,1,  1,0,1,  1,1,0,  0,1,0 },  // ascends North
+            };
+            var p0 = new Point3D(wx + c[0], wy + c[1], wz + c[2]);
+            var p1 = new Point3D(wx + c[3], wy + c[4], wz + c[5]);
+            var p2 = new Point3D(wx + c[6], wy + c[7], wz + c[8]);
+            var p3 = new Point3D(wx + c[9], wy + c[10], wz + c[11]);
+            var normal = Cross(p1 - p0, p2 - p1).Normalized();
+            // ChunkLighting indexes by chunk-LOCAL y, not world y - every other emitter does
+            // `wy - lighting.OriginY` first. Passing the world y sampled a row off the top of the
+            // light array (which reads as zero light), which is why slopes came out black.
+            // The ramp also climbs a whole block across its cell, so its high end reaches the
+            // top of the cell above; taking the brighter of the two keeps a slope from being
+            // darker than the flat track it continues from. Shade 1.0: a ramp faces up.
+            int ly = wy - lighting.OriginY;
+            int rampLight = Math.Max(lighting.GetLight(wx, ly, wz), lighting.GetLight(wx, ly + 1, wz));
+            double brightness = ChunkLighting.Brightness(rampLight);
+            mesh.Add(new MeshFace(p0, p1, p2, p3, tex, normal, new Point3D(wx, wy, wz), (float)brightness, 1, 1, -1f, false, textureRotation));
         }
 
         private static double Dot(Point3D a, Point3D b)

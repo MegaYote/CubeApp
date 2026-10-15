@@ -1168,6 +1168,20 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                         dv = Math.Clamp(dv, 0.0, 1.0) * spanV;
                     }
 
+                    // Quarter-turn the tile. Rails carry ONE texture per shape kind and rely on
+                    // rotation for its four orientations, so the swap happens here in UV space
+                    // rather than needing four atlas tiles. Faces with no rotation opt out and
+                    // pass straight through, which is every other block in the game.
+                    double rotU = du, rotV = dv;
+                    switch (f.TextureRotation & 3)
+                    {
+                        case 1: rotU = spanV - dv; rotV = du; break;
+                        case 2: rotU = spanU - du; rotV = spanV - dv; break;
+                        case 3: rotU = dv; rotV = spanU - du; break;
+                    }
+                    du = Math.Clamp(rotU, 0.0, spanU);
+                    dv = Math.Clamp(rotV, 0.0, spanV);
+
                     // Pack du/dv as 8.8 fixed point (0..255 blocks, 1/256 block precision).
                     uint duFixed = (uint)Math.Clamp((int)Math.Round(du * 256.0), 0, 0xFFFF);
                     uint dvFixed = (uint)Math.Clamp((int)Math.Round(dv * 256.0), 0, 0xFFFF);

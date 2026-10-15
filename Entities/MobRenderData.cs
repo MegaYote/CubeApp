@@ -23,6 +23,7 @@ namespace Cubuild
         public readonly float DeathRollDir;
         public readonly float HurtTimer;
         public readonly float RenderScale;
+        public readonly float SitAmount;
 
         public MobRenderData(
             string mobType,
@@ -41,7 +42,8 @@ namespace Cubuild
             float deathRollDir,
             float hurtTimer,
             float headPitchLocal = 0f,
-            float renderScale = 1f)
+            float renderScale = 1f,
+            float sitAmount = 0f)
         {
             MobType = mobType;
             Position = position;
@@ -60,6 +62,7 @@ namespace Cubuild
             DeathRollDir = deathRollDir;
             HurtTimer = hurtTimer;
             RenderScale = renderScale;
+            SitAmount = sitAmount;
         }
 
         /// <summary>

@@ -33,8 +33,26 @@ namespace Cubuild
         /// <summary>Speed lost per second with nothing driving it.</summary>
         public const float CoastDecay = 2.2f;
 
+        /// <summary>
+        /// Fraction of gravity that acts ALONG the track rather than into it. A slope climbs a
+        /// full block across one cell, i.e. a 45-degree grade, so sin(45 degrees). This is what
+        /// drives the cart downhill on its own.
+        /// </summary>
+        private const double SlopeGrade = 0.7071067811865476;
+
         /// <summary>Set by GameWorld while the local player is riding this cart.</summary>
         public bool Occupied { get; set; }
+
+        /// <summary>
+        /// A cart never separates against the local player. GameWorld pins the rider's body
+        /// EXACTLY onto the cart each tick, so any separation pass sees a permanent overlap and
+        /// shoves the player every frame - and because StepPlayer (the only thing that applies
+        /// walk friction) is skipped while riding, that shove never decays. It just accumulates
+        /// and fires the moment you dismount, flinging you away from the track. BoatEntity does
+        /// the same; see its override for the same reasoning.
+        /// </summary>
+        public override bool ParticipatesInSeparation => false;
+
 
         public CartEntity(Point3D position, float yaw) : base(position, yaw)
         {
@@ -74,6 +92,53 @@ namespace Cubuild
 
         private static bool TryFindRail(ChunkManager cm, CartEntity c, out int rx, out int ry, out int rz)
             => TryFindRail(cm, c.Position.X, c.Position.Y, c.Position.Z, out rx, out ry, out rz);
+
+        /// <summary>
+        /// Height of the rail surface at a world position, or false when there is no rail there.
+        /// On a slope the surface ramps a full block across the cell, so the height depends on
+        /// where in the cell the position falls: low edge at the climb's start, high edge at its
+        /// end. Callers that test a candidate position must use the height returned here rather
+        /// than the cart's own Y - on a climb the body lags a tick behind the surface, and testing
+        /// the lower height collides with the hill the track is laid over.
+        /// </summary>
+        private static bool TryRailTopAt(ChunkManager cm, double px, double py, double pz, out double railTop, out int rbx, out int rby, out int rbz)
+        {
+            railTop = 0;
+            if (!TryFindRail(cm, px, py, pz, out int bx, out int by, out int bz)) { rbx = rby = rbz = 0; return false; }
+            rbx = bx; rby = by; rbz = bz;
+            railTop = by + BlockRegistry.RailHeight;
+            if (cm.TryGetLoadedBlockAndMeta(bx, by, bz, out _, out byte meta))
+            {
+                switch (RailShape.AscendDirection(meta))
+                {
+                    case 0: railTop += px - bx; break;          // ascends East
+                    case 2: railTop += 1.0 - (px - bx); break;  // ascends West
+                    case 1: railTop += pz - bz; break;          // ascends South
+                    case 3: railTop += 1.0 - (pz - bz); break;  // ascends North
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Snaps the cart laterally onto the middle of its rail cell. A cart travels along one
+        /// axis and nothing re-centred the other, so it sat wherever it was first placed and
+        /// looked like it was riding off the side of the track. Curves are left alone because a
+        /// curve genuinely runs diagonally through its cell.
+        /// </summary>
+        private static Point3D CentreOnRail(Point3D pos, int bx, int bz, int meta)
+        {
+            var (a, b) = RailShape.Connections(meta);
+            // Straight and slope links are an opposite pair; that pair names the travel axis.
+            if (a != b && ((a + 2) & 3) == b)
+            {
+                bool alongX = a == 0 || a == 2;
+                return alongX
+                    ? new Point3D(pos.X, pos.Y, bz + 0.5)
+                    : new Point3D(bx + 0.5, pos.Y, pos.Z);
+            }
+            return pos;
+        }
 
         // Travel directions. The opposite of direction i is (i + 2) % 4, so a straight pair is
         // i and i+2. Yaw is the engine's sense - movement is (sin(yaw), cos(yaw)) - so the yaw
@@ -143,6 +208,8 @@ namespace Cubuild
             if (onRail)
             {
                 int by = ry;   // the RAIL's Y, not the cart's
+                manager.TryGetLoadedBlockAndMeta(bx, by, bz, out _, out byte railMeta);
+                int railAscend = RailShape.AscendDirection(railMeta);
 
                 // Drive: W/S throttle forward/back along the current heading. This runs BEFORE
                 // the heading snap so the snap can see this tick's signed speed and know whether
@@ -173,6 +240,21 @@ namespace Cubuild
                 int dir = SnapHeadingToRail(manager, bx, by, bz, ref snappedYaw, Speed >= 0f ? 1f : -1f);
                 Yaw = snappedYaw;
 
+                // Gravity along the track. A slope rises a full block across a single cell, so it
+                // is a real 45-degree grade and g*sin(45) of its pull acts along the rails rather
+                // than straight down. That is what makes the cart behave like a cart: park it on
+                // a hill and it rolls off downhill, and riding up drains the speed you gained
+                // coming down. Applied after the heading snap so the sign is resolved against
+                // the direction actually travelled this tick.
+                if (dir >= 0 && railAscend >= 0)
+                {
+                    int downhill = (railAscend + 2) & 3;
+                    double along = DirX[downhill] * DirX[dir] + DirZ[downhill] * DirZ[dir];
+                    Speed += (float)(along * Gravity * SlopeGrade * dt);
+                    // Gravity must never outrun the throttle.
+                    Speed = Math.Clamp(Speed, -MaxSpeed, MaxSpeed);
+                }
+
                 if (dir < 0)
                 {
                     // Dead end: nothing continues from this cell, so stop rather than drift off.
@@ -190,30 +272,50 @@ namespace Cubuild
                     {
                         double nx = Position.X + DirX[dir] * inc;
                         double nz = Position.Z + DirZ[dir] * inc;
-                        if (IntersectsSolid(manager, nx, Position.Y, nz)) { Speed = 0f; break; }
-                        // The destination cell must still be track. This is the containment
-                        // that was missing entirely before.
-                        if (!TryFindRail(manager, nx, Position.Y, nz, out _, out _, out _)) { Speed = 0f; break; }
+                        // The destination cell must still be track - that is the ONLY containment
+                        // while riding, and it is what was missing entirely before. A cart on rails
+                        // deliberately does NOT collide with the terrain it is laid over: testing
+                        // the body against solid blocks stopped it dead on every hill, because
+                        // climbing a ramp puts the body inside the ground beneath the upper rail.
+                        if (!TryRailTopAt(manager, nx, Position.Y, nz, out _, out _, out _, out _)) { Speed = 0f; break; }
                         Position = new Point3D(nx, Position.Y, nz);
                     }
                 }
 
-                // Sit on top of the rail surface rather than sinking through it.
-                double railTop = by + BlockRegistry.RailHeight;
-                if (Position.Y < railTop + 0.02)
+                // Sit on top of the rail surface rather than sinking through it. Re-find the cell
+                // at the post-movement position: a fast cart can cross into the next cell
+                // mid-tick, and the ramp must be measured across the cell it is actually over
+                // now, not the one the tick started in.
+                if (TryRailTopAt(manager, Position.X, Position.Y, Position.Z, out double railTop, out int cbx, out int cby, out int cbz))
                 {
-                    Position = new Point3D(Position.X, railTop + 0.02, Position.Z);
-                    _velY = 0;
-                }
-                else
-                {
-                    _velY -= Gravity * dt;
-                    Position = new Point3D(Position.X, Position.Y + _velY * dt, Position.Z);
+                    // Lock onto the rail centreline before settling the height.
+                    int cmeta = manager.TryGetLoadedBlockAndMeta(cbx, cby, cbz, out _, out byte cm) ? cm : 0;
+                    Position = CentreOnRail(Position, cbx, cbz, cmeta);
                     if (Position.Y < railTop + 0.02)
                     {
                         Position = new Point3D(Position.X, railTop + 0.02, Position.Z);
                         _velY = 0;
                     }
+                    else
+                    {
+                        _velY -= Gravity * dt;
+                        Position = new Point3D(Position.X, Position.Y + _velY * dt, Position.Z);
+                        if (Position.Y < railTop + 0.02)
+                        {
+                            Position = new Point3D(Position.X, railTop + 0.02, Position.Z);
+                            _velY = 0;
+                        }
+                    }
+                }
+                else
+                {
+                    // Clean off the end of the track: fall and stop.
+                    _velY -= Gravity * dt;
+                    if (_velY < -MaxFallSpeed) _velY = -MaxFallSpeed;
+                    MoveWithCollision(manager, Axis.X, _velX * dt);
+                    MoveWithCollision(manager, Axis.Z, _velZ * dt);
+                    MoveWithCollision(manager, Axis.Y, _velY * dt);
+                    Speed = 0f;
                 }
             }
             else

@@ -319,6 +319,13 @@ namespace Cubuild
 
         public bool IsPlayerColliding(Point3D eyePosition)
         {
+            // While riding a cart the VEHICLE is what moves and collides. The rider is carried
+            // inside it, so their own body must pass through the world - otherwise the player's
+            // wider box snags on the hill the track climbs over and drags the cart to a stop.
+            // Normal collision returns the moment they step out (DismountCart hands control back
+            // to StepPlayer).
+            if (IsRidingCart) return false;
+
             double minX = eyePosition.X - PlayerRadius;
             double maxX = eyePosition.X + PlayerRadius;
             double minY = eyePosition.Y - EyeHeight;
@@ -348,6 +355,11 @@ namespace Cubuild
         {
             if (BlockRegistry.IsSlab(id)) return new[] { (0.0, 0.0, 0.0, 1.0, 0.5, 1.0) };
             if (BlockRegistry.IsSlabTop(id)) return new[] { (0.0, 0.5, 0.0, 1.0, 1.0, 1.0) };
+            // Rails render as almost nothing, so the clickable volume is a shallow quarter block
+            // sitting on the floor of the cell rather than the full cube. Gated on nothing here,
+            // but the player path checks IsSolid first and rails are not solid, so this only
+            // ever affects the pick raycast and the highlight that follows it.
+            if (BlockRegistry.IsRail(id)) return new[] { (0.0, 0.0, 0.0, 1.0, BlockRegistry.RailPickHeight, 1.0) };
             if (BlockRegistry.IsStair(id))
             {
                 return meta switch

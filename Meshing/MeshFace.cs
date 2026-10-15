@@ -24,7 +24,12 @@ namespace Cubuild
         /// </summary>
         public bool AnchorVBottom { get; }
 
-        public MeshFace(Point3D v0, Point3D v1, Point3D v2, Point3D v3, TextureRect srcRect, Point3D normal, Point3D blockPosition, float shade, int tileWidth, int tileHeight, float alpha = 1f, bool anchorVBottom = false)
+        /// <summary>Quarter turns (0-3) to rotate the tile's UVs by, so one texture can serve
+        /// every orientation. Used by rails: one straight tile and one curve tile, rotated to
+        /// face whichever way the track runs.</summary>
+        public int TextureRotation { get; }
+
+        public MeshFace(Point3D v0, Point3D v1, Point3D v2, Point3D v3, TextureRect srcRect, Point3D normal, Point3D blockPosition, float shade, int tileWidth, int tileHeight, float alpha = 1f, bool anchorVBottom = false, int textureRotation = 0)
         {
             V0 = v0;
             V1 = v1;
@@ -38,6 +43,7 @@ namespace Cubuild
             TileHeight = tileHeight;
             Alpha = alpha;
             AnchorVBottom = anchorVBottom;
+            TextureRotation = textureRotation;
         }
     }
 }

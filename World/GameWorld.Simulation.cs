@@ -211,6 +211,7 @@ namespace Cubuild
             if (IsRidingCart) StepRidingCart(tickInput, deltaSeconds);
             else if (IsRiding) StepRiding(tickInput, deltaSeconds);
             else StepPlayer(LocalPlayer, tickInput, deltaSeconds);
+
             // Third-person body yaw: the body lags the look direction (slowly while idle, faster
             // while moving/flying) so the head can swivel ahead of the body like a real person.
             if (LocalPlayer.Health > 0)

@@ -6,7 +6,7 @@
   "maxHealth": 100,
   "speed": 7.0,
   "scale": 1.0,
-  "yawCorrection": 0.0,
+  "yawCorrection": 1.5707963267948966,
   "burnsInDaylight": false,
   "hostile": false,
   "attackDamage": 0

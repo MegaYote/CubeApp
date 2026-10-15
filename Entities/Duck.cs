@@ -25,13 +25,14 @@ namespace Cubuild
         public readonly float DeathRollDir; // +1/-1 roll direction on death
         public readonly float HurtTimer;    // seconds of remaining hurt flash
         public readonly float Scale;        // per-instance model scale (1 = normal)
+        public readonly float SitAmount;    // 0 = standing, 1 = fully seated (riding a cart)
 
         public DuckInstance(
             Point3D position, float yaw, float headYawLocal,
             float walkPhase, float walkAmount, float animTime, float animBlend, float flapPhase,
             float velocityY, bool onGround,
             bool isDead, float deathT, float deathRollDir, float hurtTimer,
-            float headPitchLocal = 0f, float scale = 1f)
+            float headPitchLocal = 0f, float scale = 1f, float sitAmount = 0f)
         {
             Position = position;
             Yaw = yaw;
@@ -49,6 +50,7 @@ namespace Cubuild
             DeathRollDir = deathRollDir;
             HurtTimer = hurtTimer;
             Scale = scale;
+            SitAmount = sitAmount;
         }
     }
 

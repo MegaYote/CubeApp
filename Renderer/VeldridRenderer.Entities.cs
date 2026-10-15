@@ -145,6 +145,20 @@ namespace Cubuild.Renderer
             float py = (float)inst.Position.Y;
             float pz = (float)inst.Position.Z;
 
+            // Seated pose (riding a cart). The thighs swing forward until the legs stick out
+            // ahead, roughly the pose of sitting on a stool. Legs rotate about the hip pivot on
+            // the X axis; in model space a POSITIVE angle swings the foot toward -Z, which is
+            // the way the model faces (model -Z == world forward at yaw 0). Walk swing fades out
+            // as the sit blends in so the legs don't cycle while parked in a cart.
+            //
+            // The model's origin is the FEET, and the rider's feet are already pinned below the
+            // cart (seat eye height 0.95 < player eye height 1.62), so a seated rider needs a
+            // LIFT, not a drop - otherwise the hips sink under the cart instead of sitting in it.
+            float sit = Math.Clamp(inst.SitAmount, 0f, 1f);
+            const float SitLegAngle = 1.25f;   // ~72 deg, thighs near horizontal
+            const float SitRise = 0.32f;       // blocks the seated model is raised by
+            py += sit * SitRise;
+
             float blink = isDead ? 1f : (inst.HurtTimer > 0f ? ((float)Math.Sin(inst.HurtTimer * 95.0f) > 0f ? 1f : 0.72f) : 0f);
             float flashBlend = isDead ? 1f : (inst.HurtTimer > 0f ? Math.Clamp((inst.HurtTimer / 0.20f) * blink, 0f, 1f) : 0f);
             float gbMul = 1f - 0.82f * flashBlend;
@@ -163,7 +177,10 @@ namespace Cubuild.Renderer
                 }
                 else
                 {
-                    float angle = PlayerBoneAnimDelta(bone.Id, swing, 0f);
+                    bool isLeg = bone.Id == PlayerBoneId.RightLeg || bone.Id == PlayerBoneId.LeftLeg;
+                    // Seated: legs hold the sit angle, walk swing blends out. Standing: unchanged.
+                    float angle = PlayerBoneAnimDelta(bone.Id, swing, 0f) * (1f - sit);
+                    if (isLeg) angle += sit * SitLegAngle;
                     ca = (float)Math.Cos(angle); sa = (float)Math.Sin(angle);
                 }
 

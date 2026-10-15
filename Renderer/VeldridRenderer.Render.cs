@@ -354,7 +354,7 @@ namespace Cubuild.Renderer
                     md.WalkPhase, md.WalkAmount, md.AnimTime, md.AnimBlend, md.FlapPhase,
                     md.VelocityY, md.OnGround,
                     md.IsDead, md.DeathT, md.DeathRollDir, md.HurtTimer,
-                    md.HeadPitchLocal, md.RenderScale);
+                    md.HeadPitchLocal, md.RenderScale, md.SitAmount);
 
                 if (isDuck) { _duckList.Add(inst); continue; }
                 if (isPlayer) { _playerList.Add(inst); continue; }

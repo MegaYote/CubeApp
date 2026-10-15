@@ -96,9 +96,17 @@ namespace Cubuild
         {
             DismountCart();
             RidingCart = cart;
+            Entities.LocallyDrivenMob = cart;
             cart.Occupied = true;
             cart._driveFwd = 0f;
-            if (Math.Abs(cart.Yaw) > 0.001f) LocalPlayer.Yaw = cart.Yaw;
+            // CartEntity keeps its yaw in RADIANS (it feeds Math.Sin/Math.Atan2 directly),
+            // but the player's yaw is in DEGREES - Simulation.cs converts with *PI/180. Copying
+            // one into the other verbatim left the rider facing a nonsense heading after boarding.
+            if (Math.Abs(cart.Yaw) > 0.001f)
+            {
+                float deg = cart.Yaw * 180f / (float)Math.PI;
+                LocalPlayer.Yaw = (deg % 360f + 360f) % 360f;
+            }
         }
 
         public void DismountCart()
@@ -110,7 +118,11 @@ namespace Cubuild
                 double sx = c.Position.X + Math.Cos(c.Yaw) * 1.1;
                 double sz = c.Position.Z - Math.Sin(c.Yaw) * 1.1;
                 LocalPlayer.Position = new Point3D(sx, c.Position.Y + 0.2 + EyeHeight, sz);
+                // Anything the player accumulated while carried (mob shoves, a stale fall) must
+                // not be applied the instant they step off, or they rocket away from the track.
+                LocalPlayer.Velocity = new Point3D(0, 0, 0);
                 RidingCart = null;
+                Entities.LocallyDrivenMob = null;
             }
         }
 
@@ -129,6 +141,10 @@ namespace Cubuild
                 cart.Position.X,
                 cart.Position.Y + CartSeatEyeHeight,
                 cart.Position.Z);
+            // The rider is carried, not falling or walking, so their own velocity is meaningless
+            // while mounted. Clearing it every tick means nothing can build up behind the scenes
+            // and ambush them on the next dismount.
+            LocalPlayer.Velocity = new Point3D(0, 0, 0);
         }
     }
 }

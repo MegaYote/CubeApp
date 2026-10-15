@@ -410,8 +410,19 @@ namespace Cubuild
         public static bool IsDoor(int id) => id > 0 && id < Count && _door[id];
 
         /// <summary>Rail: a flat slab lying on the floor of its cell, one sixteenth high.</summary>
-        /// <summary>How tall a rail block stands, in blocks. One sixteenth, like Minecraft.</summary>
+        /// <summary>
+        /// How tall a rail block stands, in blocks. One sixteenth, like Minecraft. This is the
+        /// RENDER height: the mesh is a wafer-thin quad lying on the floor of its cell.
+        /// </summary>
         public const double RailHeight = 1.0 / 16.0;
+
+        /// <summary>
+        /// Height of a rail's clickable volume, in blocks. A rail renders as almost nothing, and
+        /// aiming at a 1/16 sliver is miserable - so the selectable box is a shallow quarter
+        /// block, half a slab's height. Deep enough to hit reliably, shallow enough that the air
+        /// above a track stays selectable for building.
+        /// </summary>
+        public const double RailPickHeight = 0.25;
         public static bool IsRail(int id) => id > 0 && id < Count && _rail[id];
         public static bool IsPartialShape(int id) => id > 0 && id < Count && (_slab[id] || _slabTop[id] || _stair[id] || _door[id] || _rail[id]);
         public static bool IsInInventory(int id) => id >= 0 && id < Count && _inventory[id];
