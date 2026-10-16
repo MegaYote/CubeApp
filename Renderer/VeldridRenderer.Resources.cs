@@ -455,6 +455,15 @@ namespace Cubuild.Renderer
             }
         }
 
+        // Item id -> mob id, for the items whose icon should be a render of their ENTITY rather
+        // than the items.png sprite: the vehicles. Both halves are looked up in the registries, so
+        // a pack that has no boat (or no BoatMob folder) simply keeps the flat sprite.
+        private static readonly (string Item, string Mob)[] EntityIconItems =
+        {
+            ("cart", "cart"),
+            ("boat", "boat"),
+        };
+
         // Renders flat 2D icons for GENUINE items (tools, food, gems): each item's items.png
         // tile is copied into its own icon-atlas cell, then bound to ImGui. Unlike blocks (which
         // get software-rendered 3D cube icons), items are sprites, exactly like Minecraft.
@@ -475,27 +484,61 @@ namespace Cubuild.Renderer
             _itemIconUv = new Vector4[count];
             int tileStride = _itemsAtlasPixelsW * 4;
 
+            // Vehicles are the one kind of item that is really an ENTITY: a flat items.png sprite
+            // says nothing about what you are about to set down on the rails or in the water, so
+            // these draw the real model instead - the same GLB/bbmodel the world loads,
+            // software-rasterized by DrawEntityIcon below. The models are loaded here and disposed
+            // once the atlas is baked, because the renderer's shared mob models are built lazily,
+            // long after this atlas exists. Missing item or model simply falls back to the tile.
+            var entityIcons = new Dictionary<int, MobModel>();
+            foreach (var (itemName, mobId) in EntityIconItems)
+            {
+                try
+                {
+                    if (!ItemRegistry.TryGet(itemName, out var itemDef)) continue;
+                    var mobDef = MobRegistry.Get(mobId);
+                    if (mobDef == null) continue;
+
+                    var model = new MobModel(_gd);
+                    if (model.Load(mobDef.ModelPath, mobDef.TexturePath)) entityIcons[itemDef.NumericId] = model;
+                    else model.Dispose();
+                }
+                catch
+                {
+                    // An icon is never worth failing the atlas for; the flat tile still shows.
+                }
+            }
+
             for (int k = 0; k < count; k++)
             {
                 int itemId = ItemRegistry.ItemIdBase + k;
-                var tile = ItemRegistry.GetTile(itemId, out _);
-                if (tile.Width <= 0) continue;
                 int cellX = (k % cols) * iconSize;
                 int cellY = (k / cols) * iconSize;
 
-                // Nearest-neighbour upscale of the 16x16 tile into the 48x48 cell.
-                for (int y = 0; y < iconSize; y++)
+                if (entityIcons.TryGetValue(itemId, out var iconModel))
                 {
-                    int sy = Math.Min(_itemsAtlasPixelsH - 1, tile.Y + (y * tile.Height) / iconSize);
-                    for (int x = 0; x < iconSize; x++)
+                    int di = (cellY * atlasW + cellX) * 4;
+                    DrawEntityIcon(iconData, di, atlasW, iconModel);
+                }
+                else
+                {
+                    var tile = ItemRegistry.GetTile(itemId, out _);
+                    if (tile.Width <= 0) continue;
+
+                    // Nearest-neighbour upscale of the 16x16 tile into the 48x48 cell.
+                    for (int y = 0; y < iconSize; y++)
                     {
-                        int sx = Math.Min(_itemsAtlasPixelsW - 1, tile.X + (x * tile.Width) / iconSize);
-                        int si = sy * tileStride + sx * 4;
-                        int di = ((cellY + y) * atlasW + (cellX + x)) * 4;
-                        iconData[di + 0] = _itemsAtlasRgba[si + 0];
-                        iconData[di + 1] = _itemsAtlasRgba[si + 1];
-                        iconData[di + 2] = _itemsAtlasRgba[si + 2];
-                        iconData[di + 3] = _itemsAtlasRgba[si + 3];
+                        int sy = Math.Min(_itemsAtlasPixelsH - 1, tile.Y + (y * tile.Height) / iconSize);
+                        for (int x = 0; x < iconSize; x++)
+                        {
+                            int sx = Math.Min(_itemsAtlasPixelsW - 1, tile.X + (x * tile.Width) / iconSize);
+                            int si = sy * tileStride + sx * 4;
+                            int di = ((cellY + y) * atlasW + (cellX + x)) * 4;
+                            iconData[di + 0] = _itemsAtlasRgba[si + 0];
+                            iconData[di + 1] = _itemsAtlasRgba[si + 1];
+                            iconData[di + 2] = _itemsAtlasRgba[si + 2];
+                            iconData[di + 3] = _itemsAtlasRgba[si + 3];
+                        }
                     }
                 }
 
@@ -503,6 +546,8 @@ namespace Cubuild.Renderer
                     cellX / (float)atlasW, cellY / (float)atlasH,
                     iconSize / (float)atlasW, iconSize / (float)atlasH);
             }
+
+            foreach (var model in entityIcons.Values) model.Dispose();
 
             _itemIconAtlasTexture = _gd.ResourceFactory.CreateTexture(TextureDescription.Texture2D(
                 (uint)atlasW, (uint)atlasH, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled));
@@ -623,8 +668,10 @@ namespace Cubuild.Renderer
         // Software-renders a block icon from the REAL mesher output: builds a tiny 16x16x16 chunk
         // with the block at (8,8,8), runs Mesher.GenerateMesh (the same mesh builder the world uses),
         // then rasterizes the actual MeshFaces into the 48px cell. Every shape - full cubes, slabs,
-        // stairs, cross plants, glass, water - renders exactly like it does in the world, so there is
-        // ONE source of truth and the GUI can never drift from the game.
+        // stairs, glass, water - renders exactly like it does in the world, so there is ONE source
+        // of truth and the GUI can never drift from the game. Two shapes are exceptions that draw
+        // their sprite flat instead, because projecting their real geometry makes them unreadable:
+        // cross plants (thin diagonal billboards) and rails (a sixteenth of a block tall).
         private void DrawMeshIcon(byte[] dst, int cellDi, int atlasW, int blockId)
         {
             // Cross plants are drawn as their FLAT sprite tile (like Cubuild's cross shape), not as
@@ -634,7 +681,18 @@ namespace Cubuild.Renderer
                 var def = BlockRegistry.GetById(blockId);
                 var tile = def.FaceTexture(new Point3D(0, 0, -1));
                 if (tile.Width == 0) tile = def.AllTexture ?? default;
-                DrawCrossSprite(dst, cellDi, atlasW, tile);
+                DrawFlatSprite(dst, cellDi, atlasW, tile, CrossIconPadX, CrossIconPadY);
+                return;
+            }
+
+            // Rails are a sixteenth of a block tall, so meshed and projected they come out as a
+            // thin diagonal streak across the cell - it reads as a smudge, not as track. Draw the
+            // tile flat and top-down instead: the vanilla item-icon look. The tile comes from the
+            // SAME lookup the world uses (GetRailTexture), and it is the straight shape, so the
+            // icon is the real art at its canonical orientation rather than a re-drawn stand-in.
+            if (BlockRegistry.IsRail(blockId))
+            {
+                DrawFlatSprite(dst, cellDi, atlasW, RailShape.GetRailTexture(RailShape.FlatNorthSouth), 0f, 0f);
                 return;
             }
 
@@ -878,13 +936,14 @@ namespace Cubuild.Renderer
                 30.75f + 6.75f * lx - 6.75f * lz - 19.5f * ly);
         }
 
-        // Cross-plant icon: draws the flat sprite tile stretched in the cell with Cubuild's
-        // padding (10/6 on a 64 canvas => ~7.5/4.5 on 48), so flowers/mushrooms/saplings show as
-        // their real sprite instead of a squished 3D diagonal.
-        private void DrawCrossSprite(byte[] dst, int cellDi, int atlasW, TextureRect tile)
+        // Flat-sprite icon: stretches a tile into the 48px cell with a little padding, for shapes
+        // whose real geometry is too thin or too diagonal to read as an icon. Cross plants use
+        // Cubuild's padding (10/6 on a 64 canvas => 7.5/4.5 on 48), so flowers/mushrooms/saplings
+        // show as their real sprite instead of a squished 3D diagonal. Rails use none: the rail
+        // tile already carries its own margin, and it should fill the slot the way a vanilla
+        // item icon does.
+        private void DrawFlatSprite(byte[] dst, int cellDi, int atlasW, TextureRect tile, float padX, float padY)
         {
-            const float padX = 7.5f;
-            const float padY = 4.5f;
             for (int py = 0; py < IconCellSize; py++)
             {
                 for (int px = 0; px < IconCellSize; px++)
@@ -900,6 +959,10 @@ namespace Cubuild.Renderer
             }
         }
 
+        /// <summary>Icon padding for cross plants, in 48px cells (10/6 on Cubuild's 64 canvas).</summary>
+        private const float CrossIconPadX = 7.5f;
+        private const float CrossIconPadY = 4.5f;
+
         // Copies one nearest-sampled texel from the terrain atlas into the icon buffer, applying the
         // Per-face shade multiplier (top 1.0, N+S 0.8, E+W 0.6) so the icon cubes read like
         // the shaded blocks in the world.
@@ -912,6 +975,207 @@ namespace Cubuild.Renderer
             dst[di + 1] = (byte)(_atlasRgba[si + 1] * shade);
             dst[di + 2] = (byte)(_atlasRgba[si + 2] * shade);
             dst[di + 3] = _atlasRgba[si + 3];
+        }
+
+        // ---- entity icons ----------------------------------------------------------
+
+        // One triangle of an entity model in bind pose, carrying the per-vertex data the world's
+        // model shader would have consumed (uv + face shade), so the software path can reproduce it.
+        private struct IconTri
+        {
+            public Vector3 A, B, C;
+            public Vector2 Ua, Ub, Uc;
+            public float Sa, Sb, Sc;
+            public Vector3 Centre; // model-space centroid, for the painter's sort
+        }
+
+        // Software-renders an ENTITY model into a 48px icon cell. Block icons go through the
+        // mesher; an entity has no mesher output, so this walks the model's own triangles instead -
+        // the very geometry the world uploads to the GPU. Bind pose only (baked node rotation +
+        // pivot, no animation), because an icon is a still. The triangles are fit to the cell
+        // through the same isometric camera the block icons use, depth-sorted far-to-near and
+        // rasterized with the model's own texture and face shades - so the cart's icon literally
+        // IS the cart entity, and the two can never drift apart.
+        private void DrawEntityIcon(byte[] dst, int cellDi, int atlasW, MobModel model)
+        {
+            var parts = model.Parts;
+            var tex = model.CpuTexture;
+            if (parts.Count == 0 || tex == null || tex.Length == 0) return;
+            int texW = model.CpuTextureWidth, texH = model.CpuTextureHeight;
+            if (texW <= 0 || texH <= 0) return;
+
+            var tris = new List<IconTri>();
+            var min = new Vector3(float.MaxValue);
+            var max = new Vector3(float.MinValue);
+
+            foreach (var part in parts)
+            {
+                bool rotated = part.StaticRotation != Quaternion.Identity;
+                for (int i = 0; i + 2 < part.Indices.Length; i += 3)
+                {
+                    int ia = part.Indices[i], ib = part.Indices[i + 1], ic = part.Indices[i + 2];
+                    if (ia >= part.Positions.Length || ib >= part.Positions.Length || ic >= part.Positions.Length) continue;
+
+                    var a = BindPose(part, ia, rotated);
+                    var b = BindPose(part, ib, rotated);
+                    var c = BindPose(part, ic, rotated);
+
+                    tris.Add(new IconTri
+                    {
+                        A = a,
+                        B = b,
+                        C = c,
+                        Ua = part.Uvs[ia],
+                        Ub = part.Uvs[ib],
+                        Uc = part.Uvs[ic],
+                        Sa = IconShade(part.Shades[ia]),
+                        Sb = IconShade(part.Shades[ib]),
+                        Sc = IconShade(part.Shades[ic]),
+                        Centre = (a + b + c) / 3f,
+                    });
+
+                    min = Vector3.Min(min, Vector3.Min(a, Vector3.Min(b, c)));
+                    max = Vector3.Max(max, Vector3.Max(a, Vector3.Max(b, c)));
+                }
+            }
+            if (tris.Count == 0) return;
+
+            // Isometric camera matching the block icons (+X,+Y,-Z, see ProjectIconPoint): +X runs to
+            // the screen right, +Z to the left, +Y up. It is applied about the model's bounding
+            // centre, so whatever origin a given model was authored with, the icon sits centred.
+            var centre = (min + max) * 0.5f;
+            Vector2 Proj(Vector3 v)
+            {
+                float dx = v.X - centre.X, dy = v.Y - centre.Y, dz = v.Z - centre.Z;
+                return new Vector2(13.5f * (dx + dz), 6.75f * (dx - dz) - 19.5f * dy);
+            }
+
+            // Fit the projected silhouette to the cell: measure it first, then pick the uniform
+            // scale that seats the larger axis inside 0.84 of the cell (the same breathing room the
+            // cube icons keep), and offset so its centre lands in the cell's centre.
+            float rMinX = float.MaxValue, rMaxX = float.MinValue, rMinY = float.MaxValue, rMaxY = float.MinValue;
+            void Fit(Vector2 p)
+            {
+                if (p.X < rMinX) rMinX = p.X;
+                if (p.X > rMaxX) rMaxX = p.X;
+                if (p.Y < rMinY) rMinY = p.Y;
+                if (p.Y > rMaxY) rMaxY = p.Y;
+            }
+            foreach (var t in tris) { Fit(Proj(t.A)); Fit(Proj(t.B)); Fit(Proj(t.C)); }
+
+            float extent = MathF.Max(rMaxX - rMinX, rMaxY - rMinY);
+            if (extent < 1e-4f) return;
+            float fit = IconCellSize * 0.84f / extent;
+            float midX = (rMinX + rMaxX) * 0.5f * fit;
+            float midY = (rMinY + rMaxY) * 0.5f * fit;
+            const float cellMid = IconCellSize * 0.5f;
+            Vector2 Screen(Vector2 p) => new Vector2(cellMid + p.X * fit - midX, cellMid + p.Y * fit - midY);
+
+            // Painter's algorithm, exactly as in the block path: depth grows toward -X, +Z, -Y for a
+            // camera at +X,+Y,-Z, so the key is (-x + z - y) and the farthest triangle paints first.
+            for (int i = 1; i < tris.Count; i++)
+            {
+                var t = tris[i];
+                float key = TriDepthKey(t.Centre);
+                int j = i;
+                for (; j > 0 && TriDepthKey(tris[j - 1].Centre) < key; j--) tris[j] = tris[j - 1];
+                tris[j] = t;
+            }
+
+            foreach (var t in tris)
+            {
+                RasterizeIconTri(dst, cellDi, atlasW,
+                    Screen(Proj(t.A)), Screen(Proj(t.B)), Screen(Proj(t.C)),
+                    t.Ua, t.Ub, t.Uc, t.Sa, t.Sb, t.Sc, tex, texW, texH);
+            }
+        }
+
+        // Bind pose, mirroring WriteInstance with no animation: the mesh is stored relative to the
+        // part's pivot, so the node's baked rotation turns it about that pivot and the pivot places
+        // it. An identity rotation is just a translation.
+        private static Vector3 BindPose(MobModel.ModelPart part, int i, bool rotated)
+        {
+            var v = part.Positions[i];
+            if (rotated) v = Vector3.Transform(v, part.StaticRotation);
+            return v + part.Pivot;
+        }
+
+        // WriteInstance treats an unset (zero) shade as "unshaded" - a part the mesher never gave a
+        // face normal - and draws it full bright. Same rule here, so icon and entity agree.
+        private static float IconShade(float shade) => shade <= 0f ? 1f : shade;
+
+        private static float TriDepthKey(Vector3 c) => -c.X + c.Z - c.Y;
+
+        // Rasterizes one model triangle into the icon cell: barycentric fill, uv and shade
+        // interpolated the same way the GPU interpolates varyings, nearest-sampled from the model
+        // texture. Alpha under 0.5 is dropped, matching the model shader's `discard`, so the icon
+        // has the same cutout silhouette the entity itself has.
+        private static void RasterizeIconTri(byte[] dst, int cellDi, int atlasW,
+            Vector2 p0, Vector2 p1, Vector2 p2,
+            Vector2 uv0, Vector2 uv1, Vector2 uv2,
+            float s0, float s1, float s2,
+            byte[] tex, int texW, int texH)
+        {
+            float minX = Math.Min(Math.Min(p0.X, p1.X), p2.X);
+            float maxX = Math.Max(Math.Max(p0.X, p1.X), p2.X);
+            float minY = Math.Min(Math.Min(p0.Y, p1.Y), p2.Y);
+            float maxY = Math.Max(Math.Max(p0.Y, p1.Y), p2.Y);
+
+            int ix0 = Math.Max(0, (int)MathF.Floor(minX));
+            int ix1 = Math.Min(IconCellSize - 1, (int)MathF.Ceiling(maxX));
+            int iy0 = Math.Max(0, (int)MathF.Floor(minY));
+            int iy1 = Math.Min(IconCellSize - 1, (int)MathF.Ceiling(maxY));
+            if (ix0 > ix1 || iy0 > iy1) return;
+
+            float e01 = p1.X - p0.X, e02 = p1.Y - p0.Y;
+            float e11 = p2.X - p0.X, e12 = p2.Y - p0.Y;
+            float area = e01 * e12 - e02 * e11;
+            if (MathF.Abs(area) < 1e-6f) return;
+
+            // Screen space has Y pointing down, which flips winding versus the model. As in the block
+            // rasterizer, normalize to a positive area by swapping the two edge vertices rather than
+            // rejecting clockwise triangles: models are drawn double-sided in the world
+            // (FaceCullMode.None), so they must be double-sided here too.
+            if (area < 0f)
+            {
+                area = -area;
+                (p1, p2) = (p2, p1);
+                (uv1, uv2) = (uv2, uv1);
+                (s1, s2) = (s2, s1);
+                e01 = p1.X - p0.X; e02 = p1.Y - p0.Y;
+                e11 = p2.X - p0.X; e12 = p2.Y - p0.Y;
+            }
+
+            for (int py = iy0; py <= iy1; py++)
+            {
+                for (int px = ix0; px <= ix1; px++)
+                {
+                    float fx = px - p0.X;
+                    float fy = py - p0.Y;
+                    float w1 = (fx * e12 - fy * e11) / area; // weight of vertex 1
+                    float w2 = (e01 * fy - e02 * fx) / area; // weight of vertex 2
+                    float w0 = 1f - w1 - w2;                 // weight of vertex 0
+                    if (w0 < -0.001f || w1 < -0.001f || w2 < -0.001f) continue;
+
+                    float u = uv0.X * w0 + uv1.X * w1 + uv2.X * w2;
+                    float v = uv0.Y * w0 + uv1.Y * w1 + uv2.Y * w2;
+                    int tx = (int)(u * texW);
+                    int ty = (int)(v * texH);
+                    if (tx < 0) tx = 0; else if (tx >= texW) tx = texW - 1;
+                    if (ty < 0) ty = 0; else if (ty >= texH) ty = texH - 1;
+                    int ti = (ty * texW + tx) * 4;
+                    if (tex[ti + 3] < 128) continue; // cutout, like the shader's discard
+
+                    float shade = s0 * w0 + s1 * w1 + s2 * w2;
+                    if (shade > 1f) shade = 1f;
+
+                    int di = cellDi + (py * atlasW + px) * 4;
+                    dst[di + 0] = (byte)(tex[ti + 0] * shade);
+                    dst[di + 1] = (byte)(tex[ti + 1] * shade);
+                    dst[di + 2] = (byte)(tex[ti + 2] * shade);
+                    dst[di + 3] = 255;
+                }
+            }
         }
 
     }

@@ -22,7 +22,7 @@ namespace Cubuild
         // part has a pivot (its mesh node's translation) and an optional joint node whose rotation
         // is driven by the model's animation - animating a part = rotating it around its pivot:
         //   v' = T + R(t)(v - T)
-        private sealed class ModelPart
+        internal sealed class ModelPart
         {
             public Vector3[] Positions = Array.Empty<Vector3>();
             public Vector2[] Uvs = Array.Empty<Vector2>();
@@ -36,6 +36,22 @@ namespace Cubuild
 
         private readonly List<ModelPart> _parts = new();
         private readonly List<float> _allShades = new();
+
+        /// <summary>
+        /// CPU-side mesh, in bind pose. The world path only needs the GPU buffers, but offline uses
+        /// do need the raw geometry - the software icon renderer draws the minecart's hotbar icon
+        /// from exactly these triangles, so the icon and the entity can never diverge.
+        /// </summary>
+        internal List<ModelPart> Parts => _parts;
+
+        /// <summary>
+        /// CPU copy of the model texture (RGBA, top-left origin - glTF's UV convention, which is
+        /// what the mesh UVs and the world shader both assume). Kept for the icon renderer, which
+        /// has no GPU sampler to lean on.
+        /// </summary>
+        internal byte[]? CpuTexture;
+        internal int CpuTextureWidth;
+        internal int CpuTextureHeight;
 
         // Keyframed joint rotations: jointNode -> (times, quaternions). Sampled by animTime.
         private sealed class JointTrack
@@ -663,6 +679,10 @@ namespace Cubuild
             {
                 using var stream = System.IO.File.OpenRead(texturePath);
                 var imageBytes = StbImageSharp.ImageResult.FromStream(stream, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
+                // Keep the pixels on the CPU too: the icon renderer samples this copy directly.
+                CpuTexture = imageBytes.Data;
+                CpuTextureWidth = imageBytes.Width;
+                CpuTextureHeight = imageBytes.Height;
                 var texDesc = TextureDescription.Texture2D((uint)imageBytes.Width, (uint)imageBytes.Height, 1, 1,
                     PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled);
                 _texture = _gd.ResourceFactory.CreateTexture(texDesc);
