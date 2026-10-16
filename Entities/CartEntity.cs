@@ -92,6 +92,55 @@ namespace Cubuild
         /// </summary>
         private const float RailPushFactor = 0.5f;
 
+        /// <summary>
+        /// How far a PUSHED cart may be nudged out of a cart-cart overlap per 60fps-equivalent
+        /// tick. Capped so a cart pinned against a wall - with something still driving into it -
+        /// gets shoved rather than teleported, and so two carts moving apart can never leapfrog
+        /// each other in a single frame.
+        /// </summary>
+        internal const double CartPushStepCap = 0.35;
+
+        /// <summary>
+        /// True when this cart is meant to be PUSHED rather than driven (the ore cart). Exposed to
+        /// EntityManager's cart-shove pass, which may only ever write to a cart that says yes
+        /// here: that is what keeps a driven minecart an immovable pusher, and keeps the rider
+        /// pinned inside it out of the shove channel entirely.
+        /// </summary>
+        internal bool AcceptsCartPush => AcceptsExternalPush;
+
+        /// <summary>
+        /// The cart's world-space horizontal velocity. While it rides a rail that is its scalar
+        /// <see cref="Speed"/> along the tracked heading; off the rails Speed is zeroed and the
+        /// motion lives in the raw _velX/_velZ the fall path integrates. EntityManager's
+        /// cart-shove pass reads this to work out how fast two carts are closing on each other.
+        /// </summary>
+        internal void GetWorldVelocity(out double vx, out double vz)
+        {
+            if (_facing >= 0)
+            {
+                vx = DirX[_facing] * Speed;
+                vz = DirZ[_facing] * Speed;
+            }
+            else
+            {
+                vx = _velX;
+                vz = _velZ;
+            }
+        }
+
+        /// <summary>
+        /// Moves a PUSHED cart out of a cart-cart overlap, respecting the world: the nudge runs
+        /// through the same sub-stepped MoveWithCollision the cart itself uses, so a shove can
+        /// never push it through a wall or into the ground. Off the rails that is the whole move;
+        /// on them the cart's next step re-centres it on the track, so the shove reads as sliding
+        /// along the rail rather than a sideways teleport.
+        /// </summary>
+        internal void ShoveBy(double dx, double dz, ChunkManager manager)
+        {
+            if (dx != 0) MoveWithCollision(manager, Axis.X, dx);
+            if (dz != 0) MoveWithCollision(manager, Axis.Z, dz);
+        }
+
 
         public CartEntity(Point3D position, float yaw) : base(position, yaw)
         {

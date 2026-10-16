@@ -372,6 +372,10 @@ namespace Cubuild
             // horizontal repulsion applied to both entities.
             PushMobsApart(deltaSeconds);
 
+            // Carts shove each other separately (see PushCartsApart for why they cannot ride the
+            // generic pass above).
+            PushCartsApart(deltaSeconds);
+
             // Natural spawning: each category ticks on its own interval from spawns.json and runs
             // multiple passes per check, so an empty area fills quickly without hammering every
             // frame. The light probe combines the day/night-aware sky estimate with the baked
@@ -486,6 +490,78 @@ namespace Cubuild
                                 -pdx * pInv * pPush * 0.5, 0, -pdz * pInv * pPush * 0.5));
                         }
                     }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Cart-against-cart shoving, kept OUT of <see cref="PushMobsApart"/> on purpose. The
+        /// driven minecart opts out of the generic pass - its rider is pinned exactly onto it, so
+        /// a separation shove would fire every frame, never decay (StepPlayer is skipped while
+        /// riding) and fling the player away from the track on dismount. The cost of that opt-out
+        /// was that a driven minecart and an ore cart had no way to notice each other at all: the
+        /// cart drove straight through one. This pass closes that gap for carts only.
+        ///
+        /// Only a cart that accepts pushes is ever written to (the ore cart), so the minecart acts
+        /// as an immovable pusher - exactly like an occupied cart in Minecraft - and the transfer
+        /// is driven by the carts' OWN rail velocities rather than a fixed force: the closing
+        /// speed is handed over as velocity, which the pushed cart folds into its rail Speed
+        /// (RailPushFactor), and the leftover overlap is then resolved positionally through its
+        /// collision-aware mover so the two bodies read as solid.
+        /// </summary>
+        private void PushCartsApart(float dt)
+        {
+            int count = _mobs.Count;
+            if (count < 2) return;
+            double dtScale = dt * 60.0;
+
+            for (int i = 0; i < count; i++)
+            {
+                if (_mobs[i] is not CartEntity a || a.IsDead) continue;
+                double ax = a.Position.X, ay = a.Position.Y, az = a.Position.Z;
+                a.GetWorldVelocity(out double avx, out double avz);
+
+                for (int j = i + 1; j < count; j++)
+                {
+                    if (_mobs[j] is not CartEntity b || b.IsDead) continue;
+
+                    // Two minecarts are both immovable, so the pair is left completely alone.
+                    bool aPush = a.AcceptsCartPush;
+                    bool bPush = b.AcceptsCartPush;
+                    if (!aPush && !bPush) continue;
+
+                    // Same contact test as the generic pass: horizontal overlap AND vertical
+                    // overlap, so a cart on a bridge never shoves a cart on the track below.
+                    double dx = ax - b.Position.X, dz = az - b.Position.Z;
+                    double distXZSq = dx * dx + dz * dz;
+                    double minDistXZ = a.Width * 0.5 + b.Width * 0.5;
+                    if (distXZSq >= minDistXZ * minDistXZ || distXZSq <= 0.0001) continue;
+                    if (Math.Abs(ay - b.Position.Y) >= a.Height * 0.5 + b.Height * 0.5) continue;
+
+                    double dist = Math.Sqrt(distXZSq);
+                    double nx = dx / dist, nz = dz / dist; // unit vector pointing from b to a
+
+                    b.GetWorldVelocity(out double bvx, out double bvz);
+
+                    // Closing speed, positive when the two approach along n. Handing THIS over
+                    // instead of a fixed push is what makes a moving cart transfer real momentum
+                    // while a parked pair does nothing at all - and because the transfer cancels
+                    // the closure, a pushed cart settles at the pusher's speed instead of
+                    // accelerating away from it.
+                    double closing = (bvx - avx) * nx + (bvz - avz) * nz;
+                    if (closing > 0)
+                    {
+                        if (aPush) a.AddVelocity(nx * closing, 0, nz * closing);
+                        if (bPush) b.AddVelocity(-nx * closing, 0, -nz * closing);
+                    }
+
+                    // Resolve whatever overlap is left, so a driven cart pushes the one ahead of it
+                    // along the rails rather than driving through it, and an ore cart coasting
+                    // into a parked minecart bumps to a stop instead of clipping inside.
+                    double move = Math.Min((minDistXZ - dist) * 0.5, CartEntity.CartPushStepCap * dtScale);
+                    if (move <= 0) continue;
+                    if (aPush) a.ShoveBy(nx * move, nz * move, _chunkManager);
+                    if (bPush) b.ShoveBy(-nx * move, -nz * move, _chunkManager);
                 }
             }
         }
