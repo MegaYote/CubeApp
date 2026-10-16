@@ -90,11 +90,17 @@ namespace Cubuild
 
             if (p.FlyMode)
             {
+                // Forward/back are HORIZONTAL: flatten the camera vector onto the XZ plane, exactly
+                // as the walk path below does, so looking down while flying ahead still moves you
+                // AHEAD instead of diving with the pitch. Altitude comes only from Space/Ctrl
+                // (MoveUp/MoveDown), which is why straight-and-level flight is possible at all.
+                // Left/right were already horizontal (yaw only), so they needed no change.
                 var flyForward = GetCameraForward(p);
+                var flyHorizontal = new Point3D(flyForward.X, 0, flyForward.Z).Normalized();
                 var flyRight = GetCameraRight(p.Yaw);
                 var flyDir = new Point3D(0, 0, 0);
-                if (tickInput.MoveForward) flyDir += flyForward;
-                if (tickInput.MoveBackward) flyDir -= flyForward;
+                if (tickInput.MoveForward) flyDir += flyHorizontal;
+                if (tickInput.MoveBackward) flyDir -= flyHorizontal;
                 if (tickInput.MoveLeft) flyDir += flyRight;
                 if (tickInput.MoveRight) flyDir -= flyRight;
                 if (tickInput.MoveUp) flyDir += new Point3D(0, 1, 0);
