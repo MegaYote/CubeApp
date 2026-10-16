@@ -181,13 +181,20 @@ namespace Cubuild
             // Seated while riding a cart: the model drops into the seat instead of standing
             // rigidly on top of it.
             float sitAmount = w.IsRidingCart ? 1f : 0f;
+            // Lean with the cart: the body tips onto the same ramp the cart is lying on, so a
+            // rider in third person doesn't stay bolt upright while the seat under them climbs.
+            // The swing axis is the CART's heading, not the body's - the body yaw keeps lagging
+            // the camera while mounted, so you can face any which way while the cart stays on
+            // rails, and a pitch taken about your own facing would lean you sideways.
+            float bodyPitch = w.RidingCart?.BodyPitch ?? 0f;
+            float pitchAxisYaw = w.RidingCart?.Yaw ?? 0f;
             return new MobRenderData(
                 "player", feet, bodyYaw, headLocal,
                 w.PlayerWalkPhase, dead ? 0f : w.PlayerWalkAmount, 0f, 0f, 0f,
                 (float)w.PlayerVelocity.Y, w.PlayerGrounded,
                 dead, dead ? Math.Clamp(w.LocalPlayer.DeathTimer / 0.5f, 0f, 1f) : 0f,
                 w.LocalPlayer.DeathRollDir, dead ? 0f : w.LocalPlayer.HurtTimer,
-                headPitch, 1f, sitAmount);
+                headPitch, 1f, sitAmount, bodyPitch, pitchAxisYaw);
         }
 
         /// <summary>

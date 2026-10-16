@@ -741,11 +741,14 @@ namespace Cubuild
         /// around its pivot, so the mob swings its legs/tail properly instead of a flat bob.
         /// <paramref name="animBlend"/> (0..1) blends the sampled pose back toward the neutral
         /// rest pose, so an idle mob stands normally instead of freezing mid-stride.
+        /// <paramref name="bodyPitch"/> (radians, positive = nose up) leans the WHOLE body onto a
+        /// slope - the minecart's, which sits at the angle of the rail under it - and is applied
+        /// after yaw in world space; see the note at the rotation itself for why.
         /// </summary>
         public void WriteInstance(float[] vertexScratch, ref int vf, ushort[] indexScratch, ref int ii, ref ushort baseVertex,
             float x, float y, float z, float yaw, float animTime = 0f, float animBlend = 1f, float nightDim = 1f,
             float headYawLocal = 0f, float hurtTimer = 0f, float headPitchLocal = 0f,
-            bool isDead = false, float deathT = 0f, float deathRollDir = 0f, float scale = 1f)
+            bool isDead = false, float deathT = 0f, float deathRollDir = 0f, float scale = 1f, float bodyPitch = 0f)
         {
             float renderYaw = yaw + MathF.PI + YawCorrection;
             float cosY = MathF.Cos(renderYaw);
@@ -839,6 +842,34 @@ namespace Cubuild
                     float fx = local.X * cosY + local.Z * sinY;
                     float fy = local.Y;
                     float fz = -local.X * sinY + local.Z * cosY;
+
+                    // Body pitch: lean the whole model onto a slope (the minecart rides a 45-degree
+                    // ramp, so without this it slides through the hillside sitting flat).
+                    //
+                    // Done in WORLD space, after yaw, rather than as a pre-rotation in local space.
+                    // The engine's yaw convention puts the body's forward at (sin yaw, cos yaw) - it
+                    // is YawCorrection's whole job to put whichever local axis a given model's nose
+                    // happens to sit on onto that world axis - so rotating about the horizontal
+                    // axis perpendicular to (sin yaw, cos yaw) tips the model nose-up no matter
+                    // which way its nose is modelled, and no per-model axis guess is needed.
+                    // Pivot is the model origin: for a cart that is its bottom centre on the rail,
+                    // so the wheels stay planted on the ramp surface. A positive angle raises the
+                    // forward end, which is the sign CartEntity picks for facing uphill.
+                    if (bodyPitch != 0f)
+                    {
+                        float fwdX = MathF.Sin(yaw), fwdZ = MathF.Cos(yaw);
+                        // Work in the (forward, up, across) basis. A pitch only mixes forward with
+                        // up; 'across' - the axis the body would roll about - passes through
+                        // untouched, which is what keeps this a pure nose-up/down tilt.
+                        float cp = MathF.Cos(bodyPitch), sp = MathF.Sin(bodyPitch);
+                        float alongFwd = fx * fwdX + fz * fwdZ;
+                        float across = -fx * fwdZ + fz * fwdX;
+                        float a2 = alongFwd * cp - fy * sp;
+                        float h2 = alongFwd * sp + fy * cp;
+                        fx = a2 * fwdX - across * fwdZ;
+                        fz = a2 * fwdZ + across * fwdX;
+                        fy = h2;
+                    }
 
                     // Death roll: rotate around Z axis (sideways tumble).
                     if (isDead)

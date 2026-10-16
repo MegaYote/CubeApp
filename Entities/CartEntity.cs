@@ -40,6 +40,13 @@ namespace Cubuild
         /// </summary>
         private const double SlopeGrade = 0.7071067811865476;
 
+        /// <summary>
+        /// How far the rendered body leans to lie along a slope, in radians. A slope rises a full
+        /// block across one cell, so it is a real 45-degree incline - the same angle SlopeGrade
+        /// takes the sine of for the physics.
+        /// </summary>
+        private const float SlopeTilt = MathF.PI / 4f;
+
         /// <summary>Set by GameWorld while the local player is riding this cart.</summary>
         public bool Occupied { get; set; }
 
@@ -190,6 +197,21 @@ namespace Cubuild
         /// </summary>
         private int _facing = -1;
 
+        /// <summary>
+        /// The angle the body is currently LEANING at, in radians, positive nose-up. Purely
+        /// cosmetic: the physics stays on the rail surface, this just rotates the drawn model so it
+        /// lies along the ramp instead of sliding through it level. Settled toward its target each
+        /// tick rather than snapped - see <see cref="UpdateVisualPitch"/>.
+        /// </summary>
+        private float _visualPitch;
+
+        /// <summary>
+        /// <see cref="IMobRenderable.BodyPitch"/>: the current lean angle, handed to the renderer
+        /// (and to the seated rider, so a player tips with the cart instead of sitting upright in
+        /// it). The rest of the game's mobs inherit the default of 0 and never change.
+        /// </summary>
+        public override float BodyPitch => _visualPitch;
+
         private int SnapHeadingToRail(ChunkManager cm, int bx, int by, int bz, ref float yaw, float travelSign)
         {
             int mask = 0;
@@ -244,6 +266,9 @@ namespace Cubuild
             if (IsDead) return;
 
             bool onRail = TryFindRail(manager, this, out int bx, out int ry, out int bz);
+
+            // The rail cell we should lean to this tick; -1 means "no slope", i.e. level.
+            int tiltAscend = -1;
 
             if (onRail)
             {
@@ -338,6 +363,7 @@ namespace Cubuild
                     // Lock onto the rail centreline before settling the height.
                     int cmeta = manager.TryGetLoadedBlockAndMeta(cbx, cby, cbz, out _, out byte cm) ? cm : 0;
                     Position = CentreOnRail(Position, cbx, cbz, cmeta);
+                    tiltAscend = RailShape.AscendDirection(cmeta);
 
                     // The rail surface IS the cart's height while it rides. Always settle onto it
                     // exactly and zero the vertical velocity.
@@ -376,8 +402,33 @@ namespace Cubuild
                 Speed = 0f;
             }
 
+            // Lean the drawn body onto the ramp (or level it out again off-track). Cosmetic only.
+            UpdateVisualPitch(dt, tiltAscend);
+
             OnGround = onRail;
             if (Position.Y < -32) { Removed = true; return; }
+        }
+
+        /// <summary>
+        /// Eases <see cref="_visualPitch"/> toward the angle of the rail under the cart. The target
+        /// is the ramp's ascend direction projected onto the BODY'S FORWARD AXIS (_facing) rather
+        /// than onto the direction of travel: what gets rotated is the body, and the two only agree
+        /// while rolling forward - reversing down a hill would otherwise flip the sign and dig the
+        /// nose in instead of lifting it. Independent of travel direction, so up and down look the
+        /// same either way round. Eased exponentially instead of snapped because the entity ticks at
+        /// 20Hz with no render interpolation: crossing a flat cell onto a ramp would otherwise pop
+        /// the model to a hard 45 degrees in a single frame, and the same easing levels the cart off
+        /// again once it is back on flat rail (ascend &lt; 0).
+        /// </summary>
+        private void UpdateVisualPitch(float dt, int ascend)
+        {
+            float target = 0f;
+            if (ascend >= 0 && _facing >= 0)
+            {
+                int along = DirX[ascend] * DirX[_facing] + DirZ[ascend] * DirZ[_facing];
+                if (along != 0) target = along > 0 ? SlopeTilt : -SlopeTilt;
+            }
+            _visualPitch += (target - _visualPitch) * (1f - (float)Math.Exp(-dt * 14.0));
         }
 
         // Throttle, written by GameWorld while ridden.

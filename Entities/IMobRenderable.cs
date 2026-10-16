@@ -95,5 +95,14 @@ namespace Cubuild
         /// the shared model (e.g. brute zombies render 2x without a separate model). 1 = normal.
         /// </summary>
         float RenderScale { get; }
+
+        /// <summary>
+        /// Whole-body pitch in radians, applied to the rendered model AFTER yaw (positive tips the
+        /// nose up). Every mob returns 0 except the minecart, which reports the angle of the rail it
+        /// is standing on so the body lies along the ramp instead of floating level through a climb.
+        /// The seated rider is fed the cart's value, so it tips with the cart rather than sitting
+        /// upright in it.
+        /// </summary>
+        float BodyPitch { get; }
     }
 }

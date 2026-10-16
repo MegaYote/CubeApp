@@ -24,6 +24,8 @@ namespace Cubuild
         public readonly float HurtTimer;
         public readonly float RenderScale;
         public readonly float SitAmount;
+        public readonly float BodyPitch;
+        public readonly float PitchAxisYaw;
 
         public MobRenderData(
             string mobType,
@@ -43,7 +45,9 @@ namespace Cubuild
             float hurtTimer,
             float headPitchLocal = 0f,
             float renderScale = 1f,
-            float sitAmount = 0f)
+            float sitAmount = 0f,
+            float bodyPitch = 0f,
+            float pitchAxisYaw = 0f)
         {
             MobType = mobType;
             Position = position;
@@ -63,6 +67,8 @@ namespace Cubuild
             HurtTimer = hurtTimer;
             RenderScale = renderScale;
             SitAmount = sitAmount;
+            BodyPitch = bodyPitch;
+            PitchAxisYaw = pitchAxisYaw;
         }
 
         /// <summary>
@@ -87,7 +93,9 @@ namespace Cubuild
                 mob.DeathRollDir,
                 mob.HurtTimer,
                 mob.HeadPitchLocal,
-                mob.RenderScale);
+                mob.RenderScale,
+                bodyPitch: mob.BodyPitch,
+                pitchAxisYaw: mob.Yaw);
         }
     }
 }

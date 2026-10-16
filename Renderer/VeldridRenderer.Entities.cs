@@ -86,7 +86,7 @@ namespace Cubuild.Renderer
                     entry.Model.WriteInstance(entry.VertexScratch, ref vf, entry.IndexScratch, ref ii, ref baseVertex,
                         (float)inst.Position.X, (float)inst.Position.Y, (float)inst.Position.Z, inst.Yaw,
                         inst.AnimTime, inst.AnimBlend, mobLight, inst.HeadYawLocal, inst.HurtTimer, inst.HeadPitchLocal,
-                        inst.IsDead, inst.DeathT, inst.DeathRollDir, inst.Scale);
+                        inst.IsDead, inst.DeathT, inst.DeathRollDir, inst.Scale, inst.BodyPitch);
                 }
 
                 EnsureMobBuffers(entry, (uint)(totalVertexFloats * sizeof(float)), (uint)(totalIndices * sizeof(ushort)));
@@ -223,6 +223,30 @@ namespace Cubuild.Renderer
                     fx *= PlayerModelScale;
                     ay *= PlayerModelScale;
                     fz *= PlayerModelScale;
+
+                    // Ramp lean while riding: tip the body onto the same ramp the cart lies on,
+                    // so a third-person rider doesn't stay bolt upright as the seat climbs. The
+                    // swing axis is the CART's heading (PitchAxisYaw), never the body's own yaw -
+                    // BodyYaw keeps lagging the camera while mounted, so facing off the direction
+                    // of travel would otherwise lean the rider sideways instead of nose-up. Built
+                    // exactly like MobModel.WriteInstance's version: decompose the point into
+                    // forward / up across that axis, turn forward into up, and put it back
+                    // together. The sideways component is untouched by a pitch, which is what
+                    // keeps this a pure tilt about the seat's axis. Pivot is the model origin
+                    // (the feet), which sits within about a tenth of a block of the cart's own
+                    // pivot at rail level, so the hips stay on the seat through a full 45 degrees.
+                    if (inst.BodyPitch != 0f)
+                    {
+                        float fwdX = (float)Math.Sin(inst.PitchAxisYaw), fwdZ = (float)Math.Cos(inst.PitchAxisYaw);
+                        float cp = (float)Math.Cos(inst.BodyPitch), sp = (float)Math.Sin(inst.BodyPitch);
+                        float alongFwd = fx * fwdX + fz * fwdZ;   // component along the seat's front
+                        float across = -fx * fwdZ + fz * fwdX;    // sideways - a pitch leaves it alone
+                        float a2 = alongFwd * cp - ay * sp;
+                        float h2 = alongFwd * sp + ay * cp;
+                        fx = a2 * fwdX - across * fwdZ;
+                        fz = a2 * fwdZ + across * fwdX;
+                        ay = h2;
+                    }
 
                     _playerVertexScratch[vf++] = px + fx;
                     _playerVertexScratch[vf++] = py + ay;

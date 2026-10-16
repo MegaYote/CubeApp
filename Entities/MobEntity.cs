@@ -137,6 +137,15 @@ namespace Cubuild
         /// would feel awful. Ordinary mobs keep the default true.
         /// </summary>
         public virtual bool ParticipatesInSeparation => true;
+
+        /// <summary>
+        /// Whole-body pitch in radians applied to the rendered model after yaw (positive tips the
+        /// nose up). Zero for everything except the minecart, which overrides it with the angle of
+        /// the rail it stands on so the body follows the slope. Read back through the implicit
+        /// <see cref="IMobRenderable.BodyPitch"/> implementation, so all of this class's subclasses
+        /// inherit it for free.
+        /// </summary>
+        public virtual float BodyPitch => 0f;
         float IMobRenderable.WalkPhase => _walkPhase;
         float IMobRenderable.WalkAmount => _walkAmount;
         float IMobRenderable.AnimTime => _animClock;
