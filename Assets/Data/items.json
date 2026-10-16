@@ -62,6 +62,11 @@
     // hotbar/inventory of any saved world that already holds those items.
     // Boat: right-click water to set one afloat, right-click the boat to board it. Like the
     // minecart it is a placed entity, and its menu icon is the real boat model, not this tile.
-    { "id": "boat", "displayName": "Boat", "category": "tool", "itemTile": "1,4", "stackSize": 1, "mapColor": "#96602F" }
+    { "id": "boat", "displayName": "Boat", "category": "tool", "itemTile": "1,4", "stackSize": 1, "mapColor": "#96602F" },
+
+    // Ore cart: like the minecart, right-click a rail to set it down - but it has no seat, so
+    // you can never ride or drive it. Walk into it to shove it along the track. Its menu icon is
+    // the real model (see EntityIconItems), so the tile below is only a fallback.
+    { "id": "orecart", "displayName": "Ore Cart", "category": "tool", "itemTile": "1,3", "stackSize": 1, "mapColor": "#5A4030" }
   ]
 }

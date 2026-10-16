@@ -221,6 +221,9 @@ namespace Cubuild
             else if (mobId == "cart")
                 // Prototype: rides the rail network, driven by a seated player.
                 mob = new CartEntity(position, yaw);
+            else if (mobId == "orecart")
+                // Passive variant: same rails, but no rider and no throttle - you push it by walking.
+                mob = new OreCartEntity(position, yaw);
             else if (mobId == "boat")
                 // Player-launched vehicle, not a spawned mob: no brain, floats, steered by a rider.
                 mob = new BoatEntity(position, yaw);
@@ -824,6 +827,14 @@ namespace Cubuild
             else if (m.Type == "cart")
             {
                 var cart = new CartEntity(pos, m.Yaw);
+                cart.RestoreState(pos, m.Yaw, m.Health);
+                _mobs.Add(cart);
+            }
+            else if (m.Type == "orecart")
+            {
+                // Explicit branch for the same reason as the boat below: without it an ore cart
+                // would fall through to the generic path and be rebuilt as an AI mob.
+                var cart = new OreCartEntity(pos, m.Yaw);
                 cart.RestoreState(pos, m.Yaw, m.Health);
                 _mobs.Add(cart);
             }

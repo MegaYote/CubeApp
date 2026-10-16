@@ -461,6 +461,7 @@ namespace Cubuild.Renderer
         private static readonly (string Item, string Mob)[] EntityIconItems =
         {
             ("cart", "cart"),
+            ("orecart", "orecart"),
             ("boat", "boat"),
         };
 

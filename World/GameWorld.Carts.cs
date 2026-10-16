@@ -80,7 +80,9 @@ namespace Cubuild
             double bestDist = CartReach;
             foreach (var mob in Entities.Mobs)
             {
-                if (mob is not CartEntity cart) continue;
+                // Only boardable carts: the passive ore cart is a CartEntity too, but says
+                // CanBeRidden = false, and right-clicking one must not seat the player.
+                if (mob is not CartEntity cart || !cart.CanBeRidden) continue;
                 double dx = cart.Position.X - origin.X;
                 double dy = cart.Position.Y + cart.Height * 0.5 - origin.Y;
                 double dz = cart.Position.Z - origin.Z;

@@ -13,9 +13,16 @@ namespace Cubuild
     /// Everything below is derived locally each tick - there is no cached rail graph - so
     /// editing the track while a cart is moving can never leave it following a stale path.
     /// </summary>
-    public sealed class CartEntity : MobEntity
+    public class CartEntity : MobEntity
     {
         public override string MobTypeName => "cart";
+
+        /// <summary>
+        /// Whether a player may board this cart. The minecart says yes; the passive ore cart
+        /// (<see cref="OreCartEntity"/>) says no, and GameWorld skips it when picking a cart to
+        /// mount so right-clicking one never seats the player.
+        /// </summary>
+        public virtual bool CanBeRidden => true;
 
         private static int _railIdCache = -1;
         private static int RailId
@@ -67,6 +74,23 @@ namespace Cubuild
         /// the same; see its override for the same reasoning.
         /// </summary>
         public override bool ParticipatesInSeparation => false;
+
+        /// <summary>
+        /// Whether an external world-space shove (the separation pass writing _velX/_velZ) should
+        /// be folded into <see cref="Speed"/> while the cart rides a rail. False for the ridden
+        /// minecart - see <see cref="ParticipatesInSeparation"/> for why the separation pass must
+        /// never touch it. A passive cart overrides this so walking into it nudges it along the
+        /// track instead of doing nothing (the base on-rail loop reads only Speed, so a raw shove
+        /// would otherwise be silently dropped).
+        /// </summary>
+        protected virtual bool AcceptsExternalPush => false;
+
+        /// <summary>
+        /// Fraction of a shove's along-rail component that becomes cart speed each tick. One would
+        /// be a straight 1:1 match to the shove velocity; a fraction keeps a body-check from
+        /// launching the cart down the line.
+        /// </summary>
+        private const float RailPushFactor = 0.5f;
 
 
         public CartEntity(Point3D position, float yaw) : base(position, yaw)
@@ -340,6 +364,24 @@ namespace Cubuild
                 // wrote the TARGET into snappedYaw; the model is what catches up with it.
                 Yaw = StepHeadingToward(Yaw, snappedYaw, dt, Speed);
 
+                // A shove from the world (the separation pass writing _velX/_velZ) reaches the
+                // cart only off the rails otherwise, where the fall path below integrates it. On a
+                // rail the cart's motion is the scalar Speed along its heading, so fold the
+                // along-track part of the shove into that and discard the rest: the rails hold the
+                // cart on the line, and an unconsumed velocity would just sit and pile up tick
+                // after tick. Skipped entirely by the minecart (see AcceptsExternalPush).
+                if (AcceptsExternalPush)
+                {
+                    if (_facing >= 0 && (_velX != 0 || _velZ != 0))
+                    {
+                        double along = _velX * DirX[_facing] + _velZ * DirZ[_facing];
+                        Speed += (float)(along * RailPushFactor);
+                        Speed = Math.Clamp(Speed, -MaxSpeed, MaxSpeed);
+                    }
+                    _velX = 0;
+                    _velZ = 0;
+                }
+
                 // Gravity along the track. A slope rises a full block across a single cell, so it
                 // is a real 45-degree grade and g*sin(45) of its pull acts along the rails rather
                 // than straight down. That is what makes the cart behave like a cart: park it on
@@ -439,6 +481,16 @@ namespace Cubuild
 
             // Lean the drawn body onto the ramp (or level it out again off-track). Cosmetic only.
             UpdateVisualPitch(dt, tiltAscend);
+
+            // Bleed off any leftover external shove so an off-rail nudge glides to a stop instead
+            // of sliding forever - the base off-rail path has no friction of its own. On the rails
+            // the shove was already folded into Speed and cleared above, so this is a no-op there.
+            // The minecart never has one to bleed (AcceptsExternalPush is false).
+            if (AcceptsExternalPush)
+            {
+                _velX *= Math.Pow(0.05, dt);
+                _velZ *= Math.Pow(0.05, dt);
+            }
 
             OnGround = onRail;
             if (Position.Y < -32) { Removed = true; return; }

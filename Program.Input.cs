@@ -233,6 +233,7 @@ namespace Cubuild
                 else if (World.ToggleCartUnderCrosshair(World.PlayerPosition, World.GetCameraForward())
                       || World.ToggleBoatUnderCrosshair(World.PlayerPosition, World.GetCameraForward())
                       || World.TryPlaceCart(World.PlayerPosition, World.GetCameraForward())
+                      || World.TryPlaceOreCart(World.PlayerPosition, World.GetCameraForward())
                       || World.TryLaunchBoat(World.PlayerPosition, World.GetCameraForward()))
                 {
                     _handSwingTimer = HandSwingDuration;
