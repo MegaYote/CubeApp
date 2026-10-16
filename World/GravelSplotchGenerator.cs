@@ -14,8 +14,10 @@ namespace Cubuild.World
         public bool Enabled = true;
         /// <summary>Independent blob attempts per chunk, each gated by ChancePerAttempt.</summary>
         public int AttemptsPerChunk = 2;
-        /// <summary>Probability one attempt actually places a splotch (~1 splotch per 1.5 chunks).</summary>
-        public float ChancePerAttempt = 0.35f;
+        /// <summary>Probability one attempt actually places a splotch (~1 splotch per chunk).
+        /// Was 0.35 (per 1.5 chunks); raised to 0.5 so casual digging in the non-alpha biomes
+        /// reliably turns a pocket up without gravel ever feeling common.</summary>
+        public float ChancePerAttempt = 0.5f;
         /// <summary>How deep below the surface splotches sit (blocks).</summary>
         public int MinDepth = 4;
         public int MaxDepth = 40;

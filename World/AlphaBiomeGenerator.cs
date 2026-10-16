@@ -205,9 +205,13 @@ namespace Cubuild.World
                     double wx = chunkX * 16 + x;
                     double wz = chunkZ * 16 + z;
 
-                    // Faithful dice for EVERY column (the original never skipped any).
+                    // Faithful dice for EVERY column (the original never skipped any). The gravel
+                    // threshold is tuned DOWN from the 2010 value of 3.0 to 2.4: at 3.0 the sand
+                    // override left visible gravel on only ~7% of shore-band columns, which made
+                    // gravel beaches so rare they felt absent. 2.4 keeps the same dice shape and
+                    // patch scale (~32-block blobs in the y60-65 band) for ~1/3 more patches.
                     bool sand = _sandGravel.Noise3D(wx / 32.0, wz / 32.0, 0.0) + _rand.NextDouble() * 0.2 > 0.0;
-                    bool gravel = _sandGravel.Noise3D(wz / 32.0, 109.0134, wx / 32.0) + _rand.NextDouble() * 0.2 > 3.0;
+                    bool gravel = _sandGravel.Noise3D(wz / 32.0, 109.0134, wx / 32.0) + _rand.NextDouble() * 0.2 > 2.4;
                     int depth = (int)(_dirtDepth.Noise2D(wx / 16.0, wz / 16.0) / 3.0 + 3.0 + _rand.NextDouble() * 0.25);
 
                     if (!isAlphaColumn((int)wx, (int)wz)) continue;
