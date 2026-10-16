@@ -38,7 +38,8 @@
   //   paradise    -0.30 to  0.10  (warm moderate)
   //   alpha        0.10 to  0.45  (temperate)
   //   hills        0.45 to  0.55  (narrow ridge)
-  //   plains       0.55 to  1.00  (humid)
+  //   lowlands     0.55 to  0.85  (humid; twice the band of plains)
+  //   plains       0.85 to  1.00  (humid, far end)
   // ===========================================================================
 
   "biomes": [
@@ -140,12 +141,31 @@
       "fillDepth": 3,
       "treeDensity": 1
     },
-    // ---- PLAINS: the other most common biome. Wide humid band, flat willow-tree lowlands.
+    // ---- LOWLANDS: plains' bigger sibling - same flat grass country, ~2 blocks
+    // lower, oak trees instead of willows, and twice the humidity band (0.55-0.85 vs
+    // 0.85-1.0) so it's the common wet biome and plains is the rare far-humid sliver.
+    // baseHeight: 1 unit = 128 blocks, so 0.545 vs plains' 0.56 = ~1.9 blocks lower.
+    {
+      "id": "lowlands",
+      "displayName": "Lowlands",
+      "temperature": { "min": 0.0, "max": 1.0 },
+      "humidity": { "min": 0.55, "max": 0.85 },
+      "water": false,
+      "baseHeight": 0.545,
+      "heightVariation": 0.08,
+      "surfaceBlock": "grass",
+      "fillBlock": "dirt",
+      "fillDepth": 3,
+      "treeDensity": 1,
+      "treeType": "oak"
+    },
+    // ---- PLAINS: flat willow lowlands at the far humid end. Narrower band since lowlands
+    // (its oak twin) claims the wider 0.55-0.85 slice.
     {
       "id": "plains",
       "displayName": "Plains",
       "temperature": { "min": 0.0, "max": 1.0 },
-      "humidity": { "min": 0.55, "max": 1.0 },
+      "humidity": { "min": 0.85, "max": 1.0 },
       "water": false,
       "baseHeight": 0.56,
       "heightVariation": 0.08,
