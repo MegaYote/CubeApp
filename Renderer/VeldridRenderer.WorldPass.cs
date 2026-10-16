@@ -560,6 +560,7 @@ namespace Cubuild.Renderer
             cl.SetPipeline(_modelPipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
             cl.SetGraphicsResourceSet(1, _duckTextureSet);
+            cl.SetGraphicsResourceSet(2, _fogSet);
             cl.SetVertexBuffer(0, _duckVertexBuffer);
             cl.SetIndexBuffer(_duckIndexBuffer, IndexFormat.UInt16);
             cl.DrawIndexed((uint)totalIndices, 1, 0, 0, 0);

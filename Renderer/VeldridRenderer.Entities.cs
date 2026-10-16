@@ -46,6 +46,7 @@ namespace Cubuild.Renderer
             cl.SetPipeline(_modelPipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
             cl.SetGraphicsResourceSet(1, _playerTextureSet);
+            cl.SetGraphicsResourceSet(2, _fogSet);
             cl.SetVertexBuffer(0, _playerVertexBuffer);
             cl.SetIndexBuffer(_playerIndexBuffer, IndexFormat.UInt16);
             cl.DrawIndexed((uint)totalIndices, 1, 0, 0, 0);
@@ -96,6 +97,7 @@ namespace Cubuild.Renderer
                 cl.SetPipeline(_modelPipeline);
                 cl.SetGraphicsResourceSet(0, _projViewSet);
                 cl.SetGraphicsResourceSet(1, entry.TextureSet);
+                cl.SetGraphicsResourceSet(2, _fogSet);
                 cl.SetVertexBuffer(0, entry.VertexBuffer);
                 cl.SetIndexBuffer(entry.IndexBuffer, IndexFormat.UInt16);
                 cl.DrawIndexed((uint)totalIndices, 1, 0, 0, 0);

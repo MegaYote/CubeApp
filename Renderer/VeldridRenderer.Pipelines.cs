@@ -965,24 +965,39 @@ void main() {
         {
             var factory = _gd.ResourceFactory;
 
+            // Fogged model shaders: players + world mobs fade into the same linear distance fog
+            // as terrain (shared FogParams block at set 2, written once per frame by UpdateFog).
+            // The VS passes the CPU-transformed world position through for the fog distance.
             string vsCode = @"#version 450
 layout(location=0) in vec3 aPosition;
 layout(location=1) in vec2 aUV;
 layout(location=2) in vec4 aColor;
 layout(location=0) out vec2 vUV;
 layout(location=1) out vec4 vColor;
+layout(location=2) out vec3 vWorldPos;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
-void main() { vUV = aUV; vColor = aColor; gl_Position = projView * vec4(aPosition, 1.0); }";
+void main() { vUV = aUV; vColor = aColor; vWorldPos = aPosition; gl_Position = projView * vec4(aPosition, 1.0); }";
 
             string fsCode = @"#version 450
 layout(location=0) in vec2 vUV;
 layout(location=1) in vec4 vColor;
+layout(location=2) in vec3 vWorldPos;
 layout(set=1, binding=0) uniform sampler2D uTex;
+layout(set=2, binding=0) uniform FogParams {
+    vec4 fogColor;   // rgb + pad
+    vec2 fogRange;   // start, end
+    vec4 cameraPos;  // xyz + pad
+    vec4 hiddenCell; // unused here - block keeps the world's uniform layout byte-identical
+};
 layout(location=0) out vec4 outColor;
 void main() {
     vec4 tex = texture(uTex, vUV);
     if (tex.a < 0.5) discard;
     outColor = tex * vColor;
+    // Same linear distance fog as terrain: fully fogged at fogRange.y, clear at fogRange.x.
+    float dist = length(vWorldPos - cameraPos.xyz);
+    float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
+    outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);
 }";
 
             var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
@@ -1004,17 +1019,20 @@ void main() {
                 // isn't consistently front-facing, and an opaque duck looks fine drawn double-sided.
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
-                ResourceLayouts = new[] { _projViewLayout, _textureLayout },
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout, _fogLayout },
                 ShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { shaders[0], shaders[1] }),
                 Outputs = _sc.Framebuffer.OutputDescription
             };
 
             _modelPipeline = factory.CreateGraphicsPipeline(pipelineDesc);
 
-            // First-person hand: same model shaders (camera-space positions + player skin), but
-            // depth testing DISABLED so the hand always renders on top of the world, and set 0 is
-            // a dedicated camera-space projection (no view transform - the hand is positioned
-            // relative to the eye each frame on the CPU).
+            // First-person hand: same model VERTEX shader (camera-space positions + player skin),
+            // but depth testing DISABLED so the hand always renders on top of the world, and set 0
+            // is a dedicated camera-space projection (no view transform - the hand is positioned
+            // relative to the eye each frame on the CPU). Its fragment shader is a SEPARATE
+            // unfogged copy: the hand's positions are camera-space, so feeding them to the world
+            // fog block (which measures against the world-space cameraPos) would fog the hand
+            // based on nonsense distances. At arm's length it should stay crisp regardless of fog.
             string handVsCode = @"#version 450
 layout(location=0) in vec3 aPosition;
 layout(location=1) in vec2 aUV;
@@ -1023,10 +1041,21 @@ layout(location=0) out vec2 vUV;
 layout(location=1) out vec4 vColor;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() { vUV = aUV; vColor = aColor; gl_Position = projView * vec4(aPosition, 1.0); }";
+            string handFsCode = @"#version 450
+layout(location=0) in vec2 vUV;
+layout(location=1) in vec4 vColor;
+layout(set=1, binding=0) uniform sampler2D uTex;
+layout(location=0) out vec4 outColor;
+void main() {
+    vec4 tex = texture(uTex, vUV);
+    if (tex.a < 0.5) discard;
+    outColor = tex * vColor;
+}";
             var handVsSpirv = SpirvCompilation.CompileGlslToSpirv(handVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var handFsSpirv = SpirvCompilation.CompileGlslToSpirv(handFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
             var handShaders = factory.CreateFromSpirv(
                 new ShaderDescription(ShaderStages.Vertex, handVsSpirv.SpirvBytes, "main"),
-                new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main"));
+                new ShaderDescription(ShaderStages.Fragment, handFsSpirv.SpirvBytes, "main"));
 
             _handPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
             {
