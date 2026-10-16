@@ -133,9 +133,19 @@ namespace Cubuild
             if (a != b && ((a + 2) & 3) == b)
             {
                 bool alongX = a == 0 || a == 2;
-                return alongX
-                    ? new Point3D(pos.X, pos.Y, bz + 0.5)
-                    : new Point3D(bx + 0.5, pos.Y, pos.Z);
+
+                // Only snap if the cart is actually inside this cell on BOTH axes. A cart that
+                // has crossed into the neighbouring cell mid-tick (its coordinate on that axis
+                // landing outside [cellOrigin, cellOrigin+1)) must not be yanked back - that is
+                // what made reversing lurch: x sitting exactly on the cell boundary got
+                // teleported to the cell centre, the cart never left, and it crept along the
+                // corner instead of traversing it.
+                double cx = pos.X - bx, cz = pos.Z - bz;
+                bool insideX = cx > 1e-9 && cx < 1.0 - 1e-9;
+                bool insideZ = cz > 1e-9 && cz < 1.0 - 1e-9;
+
+                if (alongX && insideZ) return new Point3D(pos.X, pos.Y, bz + 0.5);
+                if (!alongX && insideX) return new Point3D(bx + 0.5, pos.Y, pos.Z);
             }
             return pos;
         }
@@ -167,7 +177,20 @@ namespace Cubuild
         /// where it is actually travelling - straight on when the track continues, otherwise
         /// the 90-degree turn.
         /// </summary>
-        private static int SnapHeadingToRail(ChunkManager cm, int bx, int by, int bz, ref float yaw, float travelSign)
+        /// <summary>
+        /// The body's forward AXIS as a cardinal direction index (0=+X, 1=+Z, 2=-X, 3=-Z), or -1
+        /// until it is first resolved from yaw. Driving forward moves along _facing; reversing
+        /// moves along _facing+2. It is kept as its own state rather than read back from yaw
+        /// because on a curve the two decouple: backing through a bend must rotate the body by the
+        /// SAME turn the travel direction took (a single 90-degree step) so the cart keeps rolling
+        /// backward around the corner, and the next cell's exit - resolved off the rotated axis -
+        /// points the way it is actually going. If the axis were left frozen (or re-derived from a
+        /// frozen yaw), backing out of a corner would aim at the wrong exit, double back, and stall.
+        /// It is never advanced by 180, so reversing on a straight does not spin the cart around.
+        /// </summary>
+        private int _facing = -1;
+
+        private int SnapHeadingToRail(ChunkManager cm, int bx, int by, int bz, ref float yaw, float travelSign)
         {
             int mask = 0;
             for (int i = 0; i < 4; i++)
@@ -178,24 +201,41 @@ namespace Cubuild
             }
             if (mask == 0) return -1;
 
-            int facing = DirFromYaw(yaw);
-            int travel = travelSign < 0f ? (facing + 2) % 4 : facing;
+            // Resolve the body's forward axis the first time it is needed (or after a remount).
+            if (_facing < 0) _facing = DirFromYaw(yaw);
 
+            int facing = _facing;
+            int intended = travelSign < 0f ? (facing + 2) & 3 : facing;
+
+            int travel = intended;
             if ((mask & (1 << travel)) == 0)
             {
+                // The intended exit is not connected, so this is a curve: take the connected exit
+                // that keeps us going. +1 = straight on, 0 = a 90-degree turn, -1 = doubling back.
+                // A real curve offers a turn (0); only a dead end offers nothing but the way we
+                // came (-1), and doubling back is exactly what makes a cart bounce and stall, so
+                // report a dead end and let the caller stop instead.
                 int best = -1;
                 double bestDot = -2.0;
                 for (int i = 0; i < 4; i++)
                 {
                     if ((mask & (1 << i)) == 0) continue;
-                    // +1 = straight on, 0 = a 90-degree turn, -1 = doubling back.
-                    double dot = DirX[i] * DirX[travel] + DirZ[i] * DirZ[travel];
+                    double dot = DirX[i] * DirX[intended] + DirZ[i] * DirZ[intended];
                     if (dot > bestDot) { bestDot = dot; best = i; }
                 }
-                if (best < 0) return -1;
+                if (best < 0 || bestDot < 0.0) return -1;
                 travel = best;
             }
-            yaw = (float)Math.Atan2(DirX[travel], DirZ[travel]);
+
+            // Advance the body's forward axis by the SAME turn the travel direction just took. On
+            // a straight that turn is zero, so reversing never spins the cart; through a curve it
+            // is one 90-degree step, so the body follows the bend in the same sense its travel
+            // did. Because `intended` is defined relative to `facing` both ways, this keeps the
+            // body pointing opposite its travel while reversing, all the way around the corner.
+            int turn = (travel - intended) & 3;
+            _facing = (facing + turn) & 3;
+
+            yaw = (float)Math.Atan2(DirX[_facing], DirZ[_facing]);
             return travel;
         }
 
@@ -249,7 +289,16 @@ namespace Cubuild
                 if (dir >= 0 && railAscend >= 0)
                 {
                     int downhill = (railAscend + 2) & 3;
-                    double along = DirX[downhill] * DirX[dir] + DirZ[downhill] * DirZ[dir];
+
+                    // Measure the pull along the body's FORWARD axis (_facing), NOT along `dir`.
+                    // Speed is a signed scalar on that axis (positive = driving the way the cart
+                    // faces), so gravity must accelerate it in axis terms. Using `dir` here is
+                    // `_facing` when rolling forward but `_facing+2` when rolling backward, which
+                    // inverts the sign exactly while reversing: a cart rolling backward downhill
+                    // got pushed back uphill instead, so its Speed oscillated around zero and it
+                    // hung stuck on the slope. Projected onto _facing, downhill is +1 when the cart
+                    // faces downhill (roll on down) and -1 when it faces uphill (roll back down).
+                    double along = DirX[downhill] * DirX[_facing] + DirZ[downhill] * DirZ[_facing];
                     Speed += (float)(along * Gravity * SlopeGrade * dt);
                     // Gravity must never outrun the throttle.
                     Speed = Math.Clamp(Speed, -MaxSpeed, MaxSpeed);
@@ -264,19 +313,17 @@ namespace Cubuild
                 {
                     // Sub-step so a fast cart cannot skip clean over a corner cell in one tick,
                     // and so the rail test below applies to every step and not just the end.
-                    double total = Speed * dt;
-                    int steps = Math.Max(1, (int)Math.Ceiling(Math.Abs(total) / 0.05));
+                    //
+                    // dir already encodes the direction of TRAVEL: reversing picks the backward
+                    // exit. The step is the MAGNITUDE of Speed (the sign is carried by dir).
+                    double total = Math.Abs(Speed) * dt;
+                    int steps = Math.Max(1, (int)Math.Ceiling(total / 0.05));
                     if (steps > 96) steps = 96;
                     double inc = total / steps;
                     for (int s = 0; s < steps; s++)
                     {
                         double nx = Position.X + DirX[dir] * inc;
                         double nz = Position.Z + DirZ[dir] * inc;
-                        // The destination cell must still be track - that is the ONLY containment
-                        // while riding, and it is what was missing entirely before. A cart on rails
-                        // deliberately does NOT collide with the terrain it is laid over: testing
-                        // the body against solid blocks stopped it dead on every hill, because
-                        // climbing a ramp puts the body inside the ground beneath the upper rail.
                         if (!TryRailTopAt(manager, nx, Position.Y, nz, out _, out _, out _, out _)) { Speed = 0f; break; }
                         Position = new Point3D(nx, Position.Y, nz);
                     }
@@ -291,25 +338,24 @@ namespace Cubuild
                     // Lock onto the rail centreline before settling the height.
                     int cmeta = manager.TryGetLoadedBlockAndMeta(cbx, cby, cbz, out _, out byte cm) ? cm : 0;
                     Position = CentreOnRail(Position, cbx, cbz, cmeta);
-                    if (Position.Y < railTop + 0.02)
-                    {
-                        Position = new Point3D(Position.X, railTop + 0.02, Position.Z);
-                        _velY = 0;
-                    }
-                    else
-                    {
-                        _velY -= Gravity * dt;
-                        Position = new Point3D(Position.X, Position.Y + _velY * dt, Position.Z);
-                        if (Position.Y < railTop + 0.02)
-                        {
-                            Position = new Point3D(Position.X, railTop + 0.02, Position.Z);
-                            _velY = 0;
-                        }
-                    }
+
+                    // The rail surface IS the cart's height while it rides. Always settle onto it
+                    // exactly and zero the vertical velocity.
+                    //
+                    // Letting gravity fly here instead is what made a long slope stutter: a ramp
+                    // drops one block per block travelled, so at Speed 7 the cart must descend
+                    // 7 blocks/s, but _velY only accelerates from zero at 20/s^2 and needs ~0.35s
+                    // (~2.4 blocks) to reach that rate. Until it does the cart hangs ABOVE the
+                    // surface; once it overshoots it plunges BELOW, snaps back, zeroes, and repeats
+                    // - a downward hiccup every couple of blocks. Descent is already driven by the
+                    // along-track gravity applied to Speed, so the surface can simply be obeyed.
+                    Position = new Point3D(Position.X, railTop + 0.02, Position.Z);
+                    _velY = 0;
                 }
                 else
                 {
                     // Clean off the end of the track: fall and stop.
+                    _facing = -1;
                     _velY -= Gravity * dt;
                     if (_velY < -MaxFallSpeed) _velY = -MaxFallSpeed;
                     MoveWithCollision(manager, Axis.X, _velX * dt);
@@ -321,6 +367,7 @@ namespace Cubuild
             else
             {
                 // Off-track: behave like a dropped item rather than a vehicle.
+                _facing = -1;
                 _velY -= Gravity * dt;
                 if (_velY < -MaxFallSpeed) _velY = -MaxFallSpeed;
                 MoveWithCollision(manager, Axis.X, _velX * dt);
