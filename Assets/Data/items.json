@@ -54,6 +54,14 @@
     { "id": "quartz_shard",     "displayName": "Quartz Shard",     "category": "gemstone", "itemTile": "12,2", "stackSize": 64, "mapColor": "#F1EBE2" },
     { "id": "charcoal",         "displayName": "Charcoal",         "category": "misc",     "itemTile": "13,2", "stackSize": 64, "mapColor": "#2B2B2B" },
     { "id": "charcoal_fragment","displayName": "Charcoal Fragment","category": "misc",     "itemTile": "14,2", "stackSize": 64, "mapColor": "#3A3A3A" },
-    { "id": "coal",             "displayName": "Coal",             "category": "misc",     "itemTile": "15,2", "stackSize": 64, "mapColor": "#1C1C1C" }
+    { "id": "coal",             "displayName": "Coal",             "category": "misc",     "itemTile": "15,2", "stackSize": 64, "mapColor": "#1C1C1C" },
+
+    // ----- vehicles --------------------------------------------------------------------
+    // Added at the END on purpose: genuine items take their numeric id from their position in
+    // this list, so inserting one above would renumber every item after it and corrupt the
+    // hotbar/inventory of any saved world that already holds those items.
+    // Boat: right-click water to set one afloat, right-click the boat to board it. Like the
+    // minecart it is a placed entity, and its menu icon is the real boat model, not this tile.
+    { "id": "boat", "displayName": "Boat", "category": "tool", "itemTile": "1,4", "stackSize": 1, "mapColor": "#96602F" }
   ]
 }

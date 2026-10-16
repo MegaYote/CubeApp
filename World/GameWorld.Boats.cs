@@ -57,8 +57,12 @@ namespace Cubuild
         /// <summary>
         /// True when the boat item is selected. Checked before the normal block-place path so
         /// right-clicking a boat never tries to put a "boat block" into the world.
+        ///
+        /// The "&gt; 0" guard matters: a missing boat item resolves to id 0, and 0 is AIR - an empty
+        /// hand. Without it, holding literally nothing equalled "holding the boat", so a right-click
+        /// on water launched a boat out of thin air (in any pack whose items.json has no boat).
         /// </summary>
-        public bool HoldingBoat => SelectedBlock == BoatItemId;
+        public bool HoldingBoat => BoatItemId > 0 && SelectedBlock == BoatItemId;
 
         /// <summary>
         /// Handles a right-click while the boat item is in hand. Aiming at water launches a
