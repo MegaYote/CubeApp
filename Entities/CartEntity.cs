@@ -47,6 +47,14 @@ namespace Cubuild
         /// </summary>
         private const float SlopeTilt = MathF.PI / 4f;
 
+        /// <summary>
+        /// Floor on how fast the drawn heading chases the rail's direction, in radians per second.
+        /// The speed-proportional term already covers a moving cart; this only matters when one
+        /// stops with its model still trailing the bend, which would otherwise leave it parked
+        /// askew on a straight with no way to finish the turn.
+        /// </summary>
+        private const float TurnSettleRate = 1.5f;
+
         /// <summary>Set by GameWorld while the local player is riding this cart.</summary>
         public bool Occupied { get; set; }
 
@@ -261,6 +269,30 @@ namespace Cubuild
             return travel;
         }
 
+        /// <summary>
+        /// Eases the drawn heading onto <paramref name="target"/> along the shortest arc rather
+        /// than cutting to it. A bend used to be a hard snap: the instant the cart entered a curve
+        /// cell the model jumped a full 90 degrees in one frame while its position kept travelling,
+        /// so the turn read as a glitch instead of a turn. The rate is tied to travel - pi/2 per
+        /// block travelled is exactly one 90-degree swing per cell crossed - so the model finishes
+        /// turning at about the moment it finishes crossing the bend, which lines the sweep up with
+        /// CentreOnRail dragging it onto the rail's centreline through the same cell. The floor
+        /// only ever matters at a standstill. Nothing physical reads Yaw (travel runs off _facing),
+        /// so this is purely what the eye sees.
+        /// </summary>
+        private static float StepHeadingToward(float current, float target, float dt, float speed)
+        {
+            float delta = target - current;
+            while (delta > (float)Math.PI) delta -= 2f * (float)Math.PI;
+            while (delta < -(float)Math.PI) delta += 2f * (float)Math.PI;
+            if (delta == 0f) return target;
+
+            float rate = MathF.Max(TurnSettleRate, MathF.Abs(speed) * ((float)Math.PI * 0.5f));
+            float step = rate * dt;
+            if (step >= MathF.Abs(delta)) return target;
+            return current + (delta > 0f ? step : -step);
+        }
+
         public override void Update(float dt, ChunkManager manager)
         {
             if (IsDead) return;
@@ -303,7 +335,10 @@ namespace Cubuild
                 // point it was already flying off in whatever direction it was pointing.
                 float snappedYaw = Yaw;
                 int dir = SnapHeadingToRail(manager, bx, by, bz, ref snappedYaw, Speed >= 0f ? 1f : -1f);
-                Yaw = snappedYaw;
+                // Ease onto the rail's direction instead of cutting to it, so a bend sweeps round
+                // over the cell instead of snapping 90 degrees in a single frame. SnapHeadingToRail
+                // wrote the TARGET into snappedYaw; the model is what catches up with it.
+                Yaw = StepHeadingToward(Yaw, snappedYaw, dt, Speed);
 
                 // Gravity along the track. A slope rises a full block across a single cell, so it
                 // is a real 45-degree grade and g*sin(45) of its pull acts along the rails rather
