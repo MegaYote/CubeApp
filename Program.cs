@@ -88,9 +88,9 @@ namespace Cubuild
         private float ResolutionScale = 1f;
         private bool PixelatedUpscale;
         private const double MaxFrameDeltaSeconds = 0.25;
-        private static readonly int[] RenderDistances = { 16, 8, 4, 2 };
-        private static readonly string[] RenderDistanceNames = { "Far", "Normal", "Short", "Tiny" };
-        private int renderDistanceIndex = 0; // Far by default
+        private static readonly int[] RenderDistances = { 64, 16, 8, 4, 2 };
+        private static readonly string[] RenderDistanceNames = { "Extreme", "Far", "Normal", "Short", "Tiny" };
+        private int renderDistanceIndex = 1; // Far by default (index 0 is the 64-chunk Extreme preset)
         private int ChunkRenderRadius => RenderDistances[renderDistanceIndex];
         private string RenderDistanceName => RenderDistanceNames[renderDistanceIndex];
         private int _ignoreInteractFrames; // skips break/place right after a menu click

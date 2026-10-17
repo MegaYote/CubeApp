@@ -1329,7 +1329,8 @@ namespace Cubuild.Renderer
                 // ---- Render distance ----
                 ImGui.TextColored(new Vector4(0.85f, 0.85f, 0.85f, 1f), "Render Distance");
                 ImGui.Spacing();
-                string[] rdNames = { "Far (16)", "Normal (8)", "Short (4)", "Tiny (2)" };
+                // Order must match Program.RenderDistances / RenderDistanceNames (index-addressed).
+                string[] rdNames = { "Extreme (64)", "Far (16)", "Normal (8)", "Short (4)", "Tiny (2)" };
                 for (int i = 0; i < rdNames.Length; i++)
                 {
                     if (ImGui.RadioButton(rdNames[i], m.SelectedRenderDistance == i))

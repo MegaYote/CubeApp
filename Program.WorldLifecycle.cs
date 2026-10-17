@@ -136,7 +136,13 @@ namespace Cubuild
                     {
                         int cx = GameWorld.WorldToChunkCoord(World.PlayerPosition.X);
                         int cz = GameWorld.WorldToChunkCoord(World.PlayerPosition.Z);
-                        int ring = Math.Min(_loadTargetRadius, 1 + (int)(_loadPhaseStart * 4.0)); // ~4 rings/sec
+                        // Request radius grows at a rate that finishes the ramp in ~4s for EVERY
+                        // preset (progress is measured in rings/target). The old fixed 4 rings/sec
+                        // meant Far ramped in 4s but a 64-chunk Extreme load spent 16s dribbling out
+                        // early rings while the generate/mesh workers idled. The 4.0 floor keeps the
+                        // small presets byte-for-byte identical (16/4, 8/4, 4/4 and 2/4 all resolve to 4).
+                        double ringsPerSecond = Math.Max(4.0, _loadTargetRadius / 4.0);
+                        int ring = Math.Min(_loadTargetRadius, 1 + (int)(_loadPhaseStart * ringsPerSecond));
                         World.Chunks.RequestChunksAround(cx, cz, ring, World.PlayerPosition, ChunkManager.GroundLayer);
                         _loadGroundRequested = CountGroundChunksInRadius(cx, cz, ring);
                         menu.LoadingPhase = "Generating terrain";
