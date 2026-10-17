@@ -140,9 +140,9 @@
       "displayName": "Lava",
       "texture": "12,15",
       "solid": false,
-      "opaque": false,
-      "transparent": true,
-      "alpha": 0.9,
+      "opaque": true,
+      "transparent": false,
+      "alpha": 1.0,
       "mapColor": "#FF6600",
       "lightEmission": 15
     },

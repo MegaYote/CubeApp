@@ -6,13 +6,19 @@ namespace Cubuild
 {
     public sealed class Mesher
     {
-        // Water is meshed by a dedicated pass (sloped surfaces + stretched sides), so the greedy
-        // cube pass must never emit faces owned by a water block. Neighbouring solid blocks still
-        // render their faces toward water through the normal RendersToward rules.
+        // Water AND lava are meshed by dedicated passes (sloped surfaces + stretched sides), so the
+        // greedy cube pass must never emit faces owned by either fluid. Miss one and every surface
+        // of that fluid is meshed twice: a full cube from the greedy pass plus the dedicated
+        // surface, which for a flowing cell (surface below the top of its cube) leaves a leftover
+        // full-height cube face poking up out of the lava. Neighbouring solid blocks still render
+        // their faces toward a fluid through the normal RendersToward rules.
         private static readonly int WaterId = BlockRegistry.GetId("water");
         private static readonly int LavaId = BlockRegistry.GetId("lava");
         private static readonly TextureRect WaterBaseTile = BlockRegistry.Get("water").AllTexture ?? default;
         private static readonly TextureRect LavaBaseTile = BlockRegistry.Get("lava").AllTexture ?? default;
+
+        /// <summary>True for the fluids that own their geometry (see the note above).</summary>
+        private static bool HasDedicatedPass(int id) => id == WaterId || id == LavaId;
 
         private static readonly (int dx, int dy, int dz)[] FaceOffsets =
         {
@@ -225,8 +231,8 @@ namespace Cubuild
                                     ? (rawPosX != null ? rawPosX[jv * height + iu] : BlockRegistry.AirId)
                                     : raw[((slice + 1) * depth + jv) * height + iu];
                                 int cell = iu * dimV + jv;
-                                if (A != WaterId && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + slice + 1, iu, chunk.OriginZ + jv));
-                                if (B != WaterId && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + slice, iu, chunk.OriginZ + jv));
+                                if (!HasDedicatedPass(A) && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + slice + 1, iu, chunk.OriginZ + jv));
+                                if (!HasDedicatedPass(B) && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + slice, iu, chunk.OriginZ + jv));
                             }
                         }
                     }
@@ -246,8 +252,8 @@ namespace Cubuild
                                     ? (rawPosY != null ? rawPosY[(jv * depth + iu) * aboveHeight + 0] : BlockRegistry.AirId)
                                     : raw[baseIdx + 1];
                                 int cell = iu * dimV + jv;
-                                if (A != WaterId && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu));
-                                if (B != WaterId && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + jv, slice, chunk.OriginZ + iu));
+                                if (!HasDedicatedPass(A) && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu));
+                                if (!HasDedicatedPass(B) && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + jv, slice, chunk.OriginZ + iu));
                             }
                         }
                     }
@@ -264,8 +270,8 @@ namespace Cubuild
                                     ? (rawPosZ != null ? rawPosZ[iu * depth * height + jv] : BlockRegistry.AirId)
                                     : raw[(iu * depth + slice + 1) * height + jv];
                                 int cell = iu * dimV + jv;
-                                if (A != WaterId && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice + 1));
-                                if (B != WaterId && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice));
+                                if (!HasDedicatedPass(A) && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice + 1));
+                                if (!HasDedicatedPass(B) && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice));
                             }
                         }
                     }
@@ -322,8 +328,30 @@ namespace Cubuild
         /// </summary>
         private static bool RendersToward(int xId, int nId)
             => xId != BlockRegistry.AirId
-               && (nId == BlockRegistry.AirId || BlockRegistry.IsTransparent(nId) || BlockRegistry.IsPartialShape(nId))
+               // A fluid neighbour (see HasDedicatedPass) is meshed by its own dedicated pass and is
+               // only ever a partial-height surface: the block next to it stays visible above the
+               // fluid line, so its face must keep rendering. Lava counts as opaque, so without this
+               // the wall beside a shallow lava stream would lose its face and show the void through.
+               && (nId == BlockRegistry.AirId || BlockRegistry.IsTransparent(nId) || BlockRegistry.IsPartialShape(nId) || HasDedicatedPass(nId))
                && !(BlockRegistry.IsTransparent(nId) && nId == xId);
+
+        /// <summary>
+        /// Returns the quad's corners with p1/p3 swapped when its winding faces away from
+        /// <paramref name="normal"/>, i.e. re-wound so V0->V1->V2 is counter-clockwise seen from the
+        /// outside. The greedy pass's <see cref="FaceVertices"/> table has its +Z/-Z rows wound
+        /// opposite their normals, and the renderer culls back faces with a counter-clockwise front
+        /// face, so any quad built from the raw table order (fluid walls) would be invisible from
+        /// outside - you would instead see the far inner wall of the fluid, which reads as the fluid
+        /// rendering inside-out. The opaque pass culls, so this only became visible for lava when it
+        /// stopped being translucent (the water pass is drawn with FaceCullMode.None).
+        /// </summary>
+        private static void WindTowardNormal(Point3D normal, ref Point3D p0, ref Point3D p1, ref Point3D p2, ref Point3D p3)
+        {
+            if (Dot(Cross(p1 - p0, p2 - p0), normal) < 0)
+            {
+                (p1, p3) = (p3, p1);
+            }
+        }
 
         // ---- Fluid (water) pass -----------------------------------------------------
 
@@ -477,6 +505,7 @@ namespace Cubuild
             int sideLight = Math.Max(lighting.GetLight(wx, ly, wz), lighting.GetLight(neighborX, ly, neighborZ));
             double brightness = shade * ChunkLighting.Brightness(sideLight);
             var blockPos = new Point3D(wx, wy, wz);
+            WindTowardNormal(normal, ref p0, ref p1, ref p2, ref p3);
             mesh.Add(new MeshFace(
                 p0, p1, p2, p3,
                 tile, normal, blockPos, (float)brightness, 1, 1, alpha, anchorVBottom: true));
@@ -514,10 +543,12 @@ namespace Cubuild
                     }
                 }
             }
-            // Second sweep: ALL top faces LAST. Lava doesn't write depth, so face draw order is
-            // what decides lava-over-lava blending; emitting the surface after the walls means
-            // the lava surface always blends over exposed lower faces instead of the far faces
-            // painting over the nearer lava.
+            // Second sweep: ALL top faces LAST. Lava draws opaque (alpha 1.0, so depth-write on) and
+            // internal lava-over-lava walls are culled by EmitLavaSide, so face order no longer
+            // decides anything here. The split is kept deliberately: it costs nothing, and emitting
+            // the surface last is what keeps the look correct if lava is ever made translucent
+            // again (it used to be alpha 0.9, where draw order was the only thing separating the
+            // surface from the walls behind it).
             for (int x = 0; x < width; x++)
             {
                 for (int z = 0; z < depth; z++)
@@ -619,6 +650,7 @@ namespace Cubuild
             int sideLight = Math.Max(lighting.GetLight(wx, ly, wz), lighting.GetLight(neighborX, ly, neighborZ));
             double brightness = shade * ChunkLighting.Brightness(sideLight);
             var blockPos = new Point3D(wx, wy, wz);
+            WindTowardNormal(normal, ref p0, ref p1, ref p2, ref p3);
             mesh.Add(new MeshFace(
                 p0, p1, p2, p3,
                 tile, normal, blockPos, (float)brightness, 1, 1, alpha, anchorVBottom: true));

@@ -20,6 +20,7 @@ namespace Cubuild
         private readonly MeshScheduler _meshScheduler;
         private readonly FluidSimulation _fluid;
         private readonly LavaSimulation _lava;
+        private readonly FluidInteraction _interaction;
         private readonly GravitySimulation _gravity;
         private readonly GrassSpreadSimulation _grass;
         private readonly SaplingGrowthSimulation _sapling;
@@ -39,6 +40,7 @@ namespace Cubuild
             _meshScheduler = meshScheduler ?? throw new ArgumentNullException(nameof(meshScheduler));
             _fluid = new FluidSimulation(manager, this);
             _lava = new LavaSimulation(manager, this);
+            _interaction = new FluidInteraction(manager, this);
             _gravity = new GravitySimulation(manager, this, meshScheduler);
             _grass = new GrassSpreadSimulation(manager, this);
             _sapling = new SaplingGrowthSimulation(manager, this);
@@ -46,6 +48,7 @@ namespace Cubuild
 
         public FluidSimulation Fluid => _fluid;
         public LavaSimulation Lava => _lava;
+        public FluidInteraction Interaction => _interaction;
         public GravitySimulation Gravity => _gravity;
         public GrassSpreadSimulation Grass => _grass;
         public SaplingGrowthSimulation Sapling => _sapling;
@@ -82,6 +85,19 @@ namespace Cubuild
 
         /// <summary>Wake nearby water + gravity + grass + saplings + lava after any world change (block placed/removed).</summary>
         public void OnBlockChanged(int x, int y, int z)
+        {
+            NotifyBlockChanged(x, y, z);
+            // Water/lava contact is settled here too, so placing one fluid against the other reacts
+            // on the spot rather than on the next scheduled tick.
+            _interaction.Resolve(x, y, z);
+        }
+
+        /// <summary>
+        /// Wakes the per-block simulations around a cell WITHOUT re-running fluid contact. Used by
+        /// the interaction after it converts a cell: the spectators still need to re-evaluate, but
+        /// re-entering contact resolution from inside a conversion would recurse.
+        /// </summary>
+        public void NotifyBlockChanged(int x, int y, int z)
         {
             _fluid.OnBlockChanged(x, y, z);
             _lava.OnBlockChanged(x, y, z);
@@ -127,6 +143,11 @@ namespace Cubuild
                 {
                     continue; // superseded by a later re-schedule; nothing to tick
                 }
+
+                // Water/lava contact first: a cell that is about to be set (or about to flow into
+                // the other fluid) resolves its reaction before any flow runs, which is what keeps
+                // the two liquids from ever overwriting each other.
+                _interaction.TryReact(item.x, item.y, item.z);
 
                 _gravity.TickBlock(item.x, item.y, item.z);
                 _fluid.TickBlock(item.x, item.y, item.z);
