@@ -21,6 +21,13 @@ namespace Cubuild
         public float Speed { get; }
         public float Scale { get; }
         public float YawCorrection { get; }
+        /// <summary>
+        /// Vertical world-space nudge applied to the whole drawn model, in blocks. Models are
+        /// authored with their origin at "ground"; if a Blockbench export puts that origin slightly
+        /// off (the locomotive's body sits 1/8 of a block above its wheels' contact point) this
+        /// drops the model back onto the rails without re-exporting the GLB.
+        /// </summary>
+        public float ModelYOffset { get; }
         public bool BurnsInDaylight { get; }
         public bool Hostile { get; }
         public int AttackDamage { get; }
@@ -32,7 +39,7 @@ namespace Cubuild
             float width = 0.68f, float height = 1.35f, int maxHealth = 10, float speed = 4f,
             float scale = 1.0f, float yawCorrection = MathF.PI / 2f, bool burnsInDaylight = false,
             bool hostile = false, int attackDamage = 5, float aggroRange = 24f,
-            float attackRange = 1.5f, float attackCooldown = 1.0f)
+            float attackRange = 1.5f, float attackCooldown = 1.0f, float modelYOffset = 0f)
         {
             Id = id;
             DisplayName = displayName;
@@ -44,6 +51,7 @@ namespace Cubuild
             Speed = speed;
             Scale = scale;
             YawCorrection = yawCorrection;
+            ModelYOffset = modelYOffset;
             BurnsInDaylight = burnsInDaylight;
             Hostile = hostile;
             AttackDamage = attackDamage;
@@ -150,6 +158,7 @@ namespace Cubuild
             float speed = 4f;
             float scale = 1.0f;
             float yawCorrection = MathF.PI / 2f;
+            float modelYOffset = 0f;
             bool burnsInDaylight = false;
             bool hostile = false;
             int attackDamage = 5;
@@ -182,6 +191,8 @@ namespace Cubuild
                         scale = scaleProp.GetSingle();
                     if (root.TryGetProperty("yawCorrection", out var yawProp))
                         yawCorrection = yawProp.GetSingle();
+                    if (root.TryGetProperty("modelYOffset", out var yOffsetProp))
+                        modelYOffset = yOffsetProp.GetSingle();
                     if (root.TryGetProperty("burnsInDaylight", out var burnProp))
                         burnsInDaylight = burnProp.GetBoolean();
                     if (root.TryGetProperty("hostile", out var hostileProp))
@@ -202,7 +213,8 @@ namespace Cubuild
             }
 
             return new MobDefinition(id, displayName, modelPath, texturePath, width, height, maxHealth, speed,
-                scale, yawCorrection, burnsInDaylight, hostile, attackDamage, aggroRange, attackRange, attackCooldown);
+                scale, yawCorrection, burnsInDaylight, hostile, attackDamage, aggroRange, attackRange, attackCooldown,
+                modelYOffset);
         }
     }
 }

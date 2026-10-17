@@ -510,6 +510,72 @@ namespace Cubuild.Renderer
             }
         }
 
+        // Draws a thin solid beam between each coupled pair of carts. World-space and depth-tested,
+        // so terrain occludes it exactly like the carts themselves. Data is fed via HudState.LinkBeams.
+        private void DrawLinkBeams(CommandList cl)
+        {
+            if (_linkBeamPipeline == null || _linkBeamVertexBuffer == null) return;
+            var beams = _hud.LinkBeams;
+            if (beams == null || beams.Count == 0) return;
+
+            const int floatsPerBeam = 36 * 3;   // 12 triangles, 3 floats per vertex
+            int needed = beams.Count * floatsPerBeam;
+            if (_linkBeamVertexScratch.Length < needed)
+            {
+                _linkBeamVertexScratch = new float[needed];
+                _linkBeamVertexBuffer?.Dispose();
+                _linkBeamVertexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                    (uint)(needed * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            }
+
+            int v = 0;
+            foreach (var beam in beams)
+                v = WriteBeamBox(_linkBeamVertexScratch, v, beam.A, beam.B, 0.06f);
+
+            if (v == 0) return;
+            _gd.UpdateBuffer(_linkBeamVertexBuffer, 0, _linkBeamVertexScratch);
+
+            cl.SetPipeline(_linkBeamPipeline);
+            cl.SetGraphicsResourceSet(0, _projViewSet);
+            cl.SetVertexBuffer(0, _linkBeamVertexBuffer);
+            cl.Draw((uint)v / 3, 1, 0, 0);
+        }
+
+        // Appends one oriented box (thin square cross-section, half-size r) spanning a..b as 12
+        // triangles and returns the new write index. Winding is irrelevant (the pipeline culls none).
+        private static int WriteBeamBox(float[] buf, int v, Vector3 a, Vector3 b, float r)
+        {
+            var axis = b - a;
+            float len = axis.Length();
+            if (len < 1e-4f) return v;
+            axis /= len;
+            var upRef = Math.Abs(axis.Y) > 0.99f ? new Vector3(1f, 0f, 0f) : new Vector3(0f, 1f, 0f);
+            var right = Vector3.Normalize(Vector3.Cross(axis, upRef));
+            var up = Vector3.Cross(right, axis);
+
+            void Push(Vector3 p) { buf[v++] = p.X; buf[v++] = p.Y; buf[v++] = p.Z; }
+            Vector3 Corner(int end, float sr, float su)
+            {
+                var c = end == 0 ? a : b;
+                return c + right * (sr * r) + up * (su * r);
+            }
+            void Tri(Vector3 p0, Vector3 p1, Vector3 p2) { Push(p0); Push(p1); Push(p2); }
+            void Quad(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3) { Tri(p0, p1, p2); Tri(p0, p2, p3); }
+
+            var a00 = Corner(0, -1f, -1f); var a01 = Corner(0, -1f, 1f);
+            var a11 = Corner(0, 1f, 1f); var a10 = Corner(0, 1f, -1f);
+            var b00 = Corner(1, -1f, -1f); var b01 = Corner(1, -1f, 1f);
+            var b11 = Corner(1, 1f, 1f); var b10 = Corner(1, 1f, -1f);
+
+            Quad(a00, a01, a11, a10);   // a cap
+            Quad(b00, b11, b01, b10);   // b cap
+            Quad(a00, b00, b10, a10);   // -right
+            Quad(a01, a11, b11, b01);   // +right
+            Quad(a00, a01, b01, b00);   // -up
+            Quad(a11, a10, b10, b11);   // +up
+            return v;
+        }
+
         private void AddLine(float x1, float y1, float z1, float x2, float y2, float z2, ref int vertexIndex)
         {
             if (vertexIndex + 6 > _chunkBorderVertexScratch.Length)

@@ -346,6 +346,7 @@ namespace Cubuild.Renderer
 
                     model.ModelScale = def.Scale > 0f ? def.Scale : 1.0f;
                     model.YawCorrection = def.YawCorrection;
+                    model.ModelYOffset = def.ModelYOffset;
                     _modelMobs[key] = new MobModelEntry
                     {
                         Model = model,
@@ -463,6 +464,7 @@ namespace Cubuild.Renderer
             ("cart", "cart"),
             ("orecart", "orecart"),
             ("boat", "boat"),
+            ("locomotive", "locomotivehot"),
         };
 
         // Renders flat 2D icons for GENUINE items (tools, food, gems): each item's items.png

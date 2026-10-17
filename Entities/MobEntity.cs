@@ -57,6 +57,17 @@ namespace Cubuild
 
         public Point3D Position { get; set; }
         public float Yaw { get; set; }
+
+        /// <summary>
+        /// Render-only transform (see <see cref="IMobRenderable.RenderPosition"/>). Identity for every
+        /// mob except the towed minecart cart, which eases its DRAWN spot through a bend so a train
+        /// swings round a corner instead of snapping a whole cell at once. Physics never reads it.
+        /// </summary>
+        public virtual Point3D RenderPosition => Position;
+
+        /// <summary>Render-only yaw (see <see cref="IMobRenderable.RenderYaw"/>).</summary>
+        public virtual float RenderYaw => Yaw;
+
         public bool OnGround { get; set; }
         public bool Removed { get; protected set; }
         public bool IsDead => _dead;

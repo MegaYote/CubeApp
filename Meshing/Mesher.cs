@@ -828,8 +828,15 @@ namespace Cubuild
                               int meta = chunk.GetMeta(x, y, z);
                               var railTex = RailShape.GetRailTexture(meta);
                               int railRot = RailShape.GetRailRotation(meta);
+                              // Hanging track: how far this cell has sagged below the rail plane.
+                              double railDrop = RailSag.Dequantize(chunk.GetRailDroop(x, y, z));
                               if (RailShape.IsSlope(meta))
-                                  EmitRailSlope(lighting, mesh, wx, wy, wz, meta, railTex, railRot);
+                                  EmitRailSlope(lighting, mesh, wx, wy, wz, meta, railTex, railRot, railDrop);
+                              else if (railDrop > 0.0 || RailNeighbourDrop(lookup, wx, wy, wz, meta) > 0.0)
+                                  // Sagging (or tied to a neighbour that is): draw a real plank that
+                                  // tilts to meet the rail on each side, so a drooping run reads as
+                                  // one continuous hanging line instead of detached floating tiles.
+                                  EmitRailFlat(lighting, mesh, wx, wy, wz, meta, railTex, railRot, railDrop, lookup);
                               else
                               {
                               // One sixteenth of a block high; cutout (-1) so the transparent parts
@@ -981,6 +988,18 @@ namespace Cubuild
             int lz = wz - chunk.OriginZ;
             int ly = chunk.WorldYToLocal(wy);
             return chunk.IsInBounds(lx, ly, lz) ? chunk.GetMeta(lx, ly, lz) : 0;
+        }
+
+        /// <summary>Rail droop, in blocks, at a world cell (0 when it isn't a loaded rail cell).
+        /// Reads the runtime-only droop byte off the chunk, mirroring GetBlockAt/GetMetaAt.</summary>
+        private static double GetRailDroopAt(Dictionary<ChunkCoordinates, Chunk> lookup, int wx, int wy, int wz)
+        {
+            var chunk = FindChunk(lookup, wx, wy, wz);
+            if (chunk == null) return 0;
+            int lx = wx - chunk.OriginX;
+            int lz = wz - chunk.OriginZ;
+            int ly = chunk.WorldYToLocal(wy);
+            return chunk.IsInBounds(lx, ly, lz) ? RailSag.Dequantize(chunk.GetRailDroop(lx, ly, lz)) : 0;
         }
 
         private static Chunk? FindChunk(Dictionary<ChunkCoordinates, Chunk> lookup, int wx, int wy, int wz)
@@ -1258,7 +1277,7 @@ namespace Cubuild
         /// edge a block up, spanning the full cell across the track.
         /// </summary>
         private static void EmitRailSlope(ChunkLighting lighting, List<MeshFace> mesh,
-            int wx, int wy, int wz, int meta, TextureRect tex, int textureRotation)
+            int wx, int wy, int wz, int meta, TextureRect tex, int textureRotation, double drop)
         {
             // Four corners in cell-local space, wound so the surface normal points up.
             double[] c = RailShape.AscendDirection(meta) switch
@@ -1268,10 +1287,12 @@ namespace Cubuild
                 2 => new double[] { 1,0,0,  0,1,0,  0,1,1,  1,0,1 },  // ascends West
                 _ => new double[] { 0,0,1,  1,0,1,  1,1,0,  0,1,0 },  // ascends North
             };
-            var p0 = new Point3D(wx + c[0], wy + c[1], wz + c[2]);
-            var p1 = new Point3D(wx + c[3], wy + c[4], wz + c[5]);
-            var p2 = new Point3D(wx + c[6], wy + c[7], wz + c[8]);
-            var p3 = new Point3D(wx + c[9], wy + c[10], wz + c[11]);
+            // A drooping ramp sinks as a whole (its low end applies the drop; the climb span is
+            // unchanged, so the ramp keeps connecting the same two heights, just lowered).
+            var p0 = new Point3D(wx + c[0], wy + c[1] - drop, wz + c[2]);
+            var p1 = new Point3D(wx + c[3], wy + c[4] - drop, wz + c[5]);
+            var p2 = new Point3D(wx + c[6], wy + c[7] - drop, wz + c[8]);
+            var p3 = new Point3D(wx + c[9], wy + c[10] - drop, wz + c[11]);
             var normal = Cross(p1 - p0, p2 - p1).Normalized();
             // ChunkLighting indexes by chunk-LOCAL y, not world y - every other emitter does
             // `wy - lighting.OriginY` first. Passing the world y sampled a row off the top of the
@@ -1282,6 +1303,75 @@ namespace Cubuild
             int ly = wy - lighting.OriginY;
             int rampLight = Math.Max(lighting.GetLight(wx, ly, wz), lighting.GetLight(wx, ly + 1, wz));
             double brightness = ChunkLighting.Brightness(rampLight);
+            mesh.Add(new MeshFace(p0, p1, p2, p3, tex, normal, new Point3D(wx, wy, wz), (float)brightness, 1, 1, -1f, false, textureRotation));
+        }
+
+        /// <summary>Largest droop among the rail neighbours this cell links to (same Y only). Used
+        /// as a cheap "is anything near me sagging" test so a flat cell still tilts toward a
+        /// drooping neighbour instead of leaving a step in the run.</summary>
+        private static double RailNeighbourDrop(Dictionary<ChunkCoordinates, Chunk> lookup, int wx, int wy, int wz, int meta)
+        {
+            var (a, b) = RailShape.Connections(meta);
+            double best = 0;
+            best = Math.Max(best, RailEdgeDrop(lookup, wx, wy, wz, 0, a));
+            best = Math.Max(best, RailEdgeDrop(lookup, wx, wy, wz, 0, b));
+            return best;
+        }
+
+        /// <summary>The droop height of the track where it crosses the edge of this cell toward
+        /// <paramref name="dir"/>: the midpoint between this cell's droop and the rail neighbour
+        /// in that direction, or just this cell's droop when there is no rail there (a free end,
+        /// which hangs at its own height rather than bending toward absent track).</summary>
+        private static double RailEdgeDrop(Dictionary<ChunkCoordinates, Chunk> lookup, int wx, int wy, int wz, double ownDrop, int dir)
+        {
+            int nx = wx + RailShape.DirX[dir], nz = wz + RailShape.DirZ[dir];
+            if (GetBlockAt(lookup, nx, wy, nz) == RailShape.RailId)
+                return (ownDrop + GetRailDroopAt(lookup, nx, wy, nz)) * 0.5;
+            return ownDrop;
+        }
+
+        /// <summary>
+        /// Draws a straight (or curve) rail as a plank that tilts along the track so a sagging run
+        /// stays visually connected end to end - the hanging-chain look. The corners use the SAME
+        /// winding as the flat top face (FaceVertices[3]) so the atlas tile and its per-meta
+        /// rotation are unchanged; only the corner heights move.
+        /// </summary>
+        private static void EmitRailFlat(ChunkLighting lighting, List<MeshFace> mesh,
+            int wx, int wy, int wz, int meta, TextureRect tex, int textureRotation,
+            double drop, Dictionary<ChunkCoordinates, Chunk> lookup)
+        {
+            double hPos = drop, hNeg = drop;
+            bool axisZ = false;
+            if (!RailShape.IsCurve(meta))
+            {
+                var (a, b) = RailShape.Connections(meta);
+                int posDir = (a == 0 || a == 1) ? a : b;   // the +X/+Z end of the track
+                int negDir = (a == 0 || a == 1) ? b : a;
+                axisZ = posDir == 1 || posDir == 3;
+                hPos = RailEdgeDrop(lookup, wx, wy, wz, drop, posDir);
+                hNeg = RailEdgeDrop(lookup, wx, wy, wz, drop, negDir);
+            }
+
+            double top = wy + BlockRegistry.RailHeight;
+            // Corner heights: each corner takes the edge it lies on (x or z = 0/1).
+            var p0 = new Point3D(wx + 0, top - hNeg, wz + 0);
+            var p1 = new Point3D(wx + 0, top - (axisZ ? hPos : hNeg), wz + 1);
+            var p2 = new Point3D(wx + 1, top - hPos, wz + 1);
+            var p3 = new Point3D(wx + 1, top - (axisZ ? hNeg : hPos), wz + 0);
+
+            // The normal here does exactly ONE job: it picks the UV axes in
+            // TryGetCubuildFaceAxes (lighting comes from `brightness` below, and culling runs off
+            // the winding, never the normal). A sagging plank's true normal tilts along the track,
+            // and once that tilt passes ~30 degrees the axis pick falls through from the TOP-face
+            // branch to a SIDE branch and quarter-turns the tile - which is why a hanging run's
+            // texture flipped orientation only once it drooped past a certain angle. Pin the same
+            // top convention the flat rail uses so the sprite holds its orientation at every droop
+            // angle. (EmitRailSlope keeps its true diagonal normal: a ramp's tilt is fixed, so its
+            // branch never changes out from under it.)
+            var normal = new Point3D(0, 1, 0);
+
+            int nly = wy + 1 - lighting.OriginY;
+            double brightness = ChunkLighting.Brightness(lighting.GetLight(wx, nly, wz));
             mesh.Add(new MeshFace(p0, p1, p2, p3, tex, normal, new Point3D(wx, wy, wz), (float)brightness, 1, 1, -1f, false, textureRotation));
         }
 

@@ -33,6 +33,38 @@ namespace Cubuild
         /// <summary>How far the crosshair may reach to grab a cart.</summary>
         private const double CartReach = 3.5;
 
+        /// <summary>
+        /// How quickly the rider's eye catches up to the cart's own height, in 1/seconds. The cart
+        /// rides the rail surface EXACTLY, and on a slope that surface ramps a whole block across a
+        /// cell - so at speed the body climbs at 7 (minecart) to 14 (locomotive) blocks per second,
+        /// and every wobble in the frame time turns straight into vertical camera movement. Welding
+        /// the eye rigidly to the body made those read as a jitter. Easing instead low-passes them:
+        /// the eye trails a ramp by only Speed/rate blocks (~0.4 at full tilt, invisible from inside
+        /// the seat) but a one-frame step lands spread over a few frames instead of as a snap.
+        /// </summary>
+        private const double RiderEyeSmoothRate = 18.0;
+
+        /// <summary>
+        /// A jump bigger than this is not jitter - it is mounting, dismounting, a teleport or a
+        /// cart that just fell off a ledge. Snap to it rather than gliding, so the camera never
+        /// swoops across the map trying to catch up.
+        /// </summary>
+        private const double RiderEyeSnapDistance = 1.5;
+
+        /// <summary>
+        /// How far the eased eye may trail BELOW the seat, in blocks. Lag is not symmetric: on a
+        /// descent the eye floats a little ABOVE the seat (open air - invisible), but on a climb it
+        /// trails BELOW it, and the seat is only ~0.2 above the cart's rim - so an unbounded climb
+        /// lag drops the camera straight into the cart body (and into the ground, which is rising
+        /// around you). Bounding the sink keeps the smoothing for small deltas while never letting
+        /// the eye go far enough down to clip.
+        /// </summary>
+        private const double RiderEyeMaxSink = 0.2;
+
+        private double _riderEyeY;
+        private double _riderEyeTarget;
+        private bool _riderEyeInit;
+
         public bool IsRidingCart => RidingCart != null;
 
         public bool HoldingCart => CartItemId > 0 && SelectedBlock == CartItemId;
@@ -98,6 +130,9 @@ namespace Cubuild
         {
             DismountCart();
             RidingCart = cart;
+            // Start the eye ease fresh so the first pin snaps onto the seat instead of gliding
+            // across from wherever the player was standing.
+            _riderEyeInit = false;
             Entities.LocallyDrivenMob = cart;
             cart.Occupied = true;
             cart._driveFwd = 0f;
@@ -117,6 +152,14 @@ namespace Cubuild
             {
                 c.Occupied = false;
                 c._driveFwd = 0f;
+                // The train's engine was the one actually being driven, not the carriage the player
+                // sat in (see StepRidingCart), so it has to be released too - otherwise a locomotive
+                // would keep the last throttle input forever after its driver stepped off.
+                if (c.FindTrainLocomotive() is { } loco)
+                {
+                    loco.Occupied = false;
+                    loco._driveFwd = 0f;
+                }
                 double sx = c.Position.X + Math.Cos(c.Yaw) * 1.1;
                 double sz = c.Position.Z - Math.Sin(c.Yaw) * 1.1;
                 LocalPlayer.Position = new Point3D(sx, c.Position.Y + 0.2 + EyeHeight, sz);
@@ -124,6 +167,8 @@ namespace Cubuild
                 // not be applied the instant they step off, or they rocket away from the track.
                 LocalPlayer.Velocity = new Point3D(0, 0, 0);
                 RidingCart = null;
+                // Drop the eased eye so the next mount starts clean.
+                _riderEyeInit = false;
                 Entities.LocallyDrivenMob = null;
             }
         }
@@ -136,17 +181,80 @@ namespace Cubuild
         {
             if (RidingCart is not { } cart) { StepPlayer(LocalPlayer, tickInput, deltaSeconds); return; }
 
-            cart._driveFwd = (tickInput.MoveForward ? 1f : 0f) - (tickInput.MoveBackward ? 1f : 0f);
-            cart.Update(deltaSeconds, Chunks);
+            float drive = (tickInput.MoveForward ? 1f : 0f) - (tickInput.MoveBackward ? 1f : 0f);
 
-            LocalPlayer.Position = new Point3D(
-                cart.Position.X,
-                cart.Position.Y + CartSeatEyeHeight,
-                cart.Position.Z);
+            // A carriage coupled to a LOCOMOTIVE is not a vehicle any more, it is freight: it is
+            // placed rigidly behind the engine by the train pass (EntityManager.ResolveTrainLinks)
+            // and its own Update would bail out anyway (Leader != null). So hand the throttle to the
+            // locomotive and tick THAT instead - it is the train's only mover. With no locomotive in
+            // the chain this is the plain minecart behaviour.
+            var loco = cart.FindTrainLocomotive();
+            if (loco != null && !ReferenceEquals(loco, cart))
+            {
+                cart._driveFwd = 0f;
+                cart.Occupied = false;
+
+                loco.Occupied = true;
+                loco._driveFwd = drive;
+                loco.Update(deltaSeconds, Chunks);
+
+                // Entities.Update skips LocallyDrivenMob, so it must point at whatever was ticked.
+                Entities.LocallyDrivenMob = loco;
+            }
+            else
+            {
+                cart._driveFwd = drive;
+                cart.Update(deltaSeconds, Chunks);
+                Entities.LocallyDrivenMob = cart;
+            }
+
+            PinRiderEye(deltaSeconds);
             // The rider is carried, not falling or walking, so their own velocity is meaningless
             // while mounted. Clearing it every tick means nothing can build up behind the scenes
             // and ambush them on the next dismount.
             LocalPlayer.Velocity = new Point3D(0, 0, 0);
+        }
+
+        /// <summary>
+        /// Places the rider's eye on the cart they are sitting in. Called again after
+        /// EntityManager.Update: a carriage hauled by a locomotive is a rigid trailer, and the train
+        /// pass that places it only runs at the END of the entity tick (after StepRidingCart), so
+        /// without this second pin the camera would trail the carriage by a frame.
+        ///
+        /// Only the HEIGHT is eased (see RiderEyeSmoothRate): the horizontal pin stays exact so
+        /// steering keeps its feel, and a slope is the one place the body's motion is fast enough
+        /// and vertical enough for frame jitter to be visible.
+        ///
+        /// Because both pins usually see the SAME target (a solo cart has not moved again by the
+        /// end of the tick), the ease is skipped when the target is unchanged - otherwise each tick
+        /// would ease twice, roughly doubling the rate and halving the smoothing.
+        /// </summary>
+        public void PinRiderEye(double dt)
+        {
+            if (RidingCart is not { } cart) return;
+
+            double targetY = cart.Position.Y + CartSeatEyeHeight;
+            if (!_riderEyeInit || Math.Abs(targetY - _riderEyeY) > RiderEyeSnapDistance)
+            {
+                // First pin of the ride, or a jump too big to be jitter: snap.
+                _riderEyeY = targetY;
+                _riderEyeInit = true;
+                _riderEyeTarget = targetY;
+            }
+            else if (targetY != _riderEyeTarget)
+            {
+                if (dt > 0.0)
+                {
+                    double k = 1.0 - Math.Exp(-RiderEyeSmoothRate * dt);
+                    _riderEyeY += (targetY - _riderEyeY) * k;
+                }
+                _riderEyeTarget = targetY;
+            }
+
+            // Never let the ease drop the eye far enough below the seat to sit inside the cart.
+            if (_riderEyeY < targetY - RiderEyeMaxSink) _riderEyeY = targetY - RiderEyeMaxSink;
+
+            LocalPlayer.Position = new Point3D(cart.Position.X, _riderEyeY, cart.Position.Z);
         }
     }
 }

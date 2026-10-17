@@ -22,6 +22,17 @@ namespace Cubuild
         float Yaw { get; }
 
         /// <summary>
+        /// Position used for RENDERING only. Defaults to <see cref="Position"/>; overridden by mobs
+        /// that smooth their drawn motion (a coupled minecart cart snaps cell-to-cell through a bend,
+        /// so it eases the DRAWN transform while physics keeps the exact rigid one). Never read by
+        /// the simulation.
+        /// </summary>
+        Point3D RenderPosition => Position;
+
+        /// <summary>Yaw used for RENDERING only; see <see cref="RenderPosition"/>.</summary>
+        float RenderYaw => Yaw;
+
+        /// <summary>
         /// Whether the mob is currently on the ground.
         /// </summary>
         bool OnGround { get; }

@@ -15,6 +15,18 @@ namespace Cubuild.Renderer
     }
 
     /// <summary>
+    /// One drawn coupling between two linked carts: the two world-space points the beam connects
+    /// (each already trimmed to the visible gap between the cart bodies). Filled per frame from the
+    /// world's cart links and drawn as a thin solid box.
+    /// </summary>
+    public struct LinkBeam
+    {
+        public Vector3 A;
+        public Vector3 B;
+        public LinkBeam(Vector3 a, Vector3 b) { A = a; B = b; }
+    }
+
+    /// <summary>
     /// Plain data describing what the HUD overlay should currently display.
     /// Populated by Program each tick and consumed by VeldridRenderer's ImGui pass.
     /// This replaces the old GDI+-based DrawHotbar/DrawCrosshair/DrawSelectedBlockLabel overlay.
@@ -100,6 +112,13 @@ namespace Cubuild.Renderer
         /// instead of always painting over everything as a 2D overlay would.
         /// </summary>
         public Vector3[]? HighlightWorldQuad;
+
+        /// <summary>
+        /// Coupling beams between linked carts (null/empty when nothing is coupled). The renderer
+        /// draws each as a thin solid box. This is a reference to a reused list owned by Program, so
+        /// assigning it into this (struct) state every frame copies only the reference.
+        /// </summary>
+        public List<LinkBeam>? LinkBeams;
 
         /// <summary>
         /// Player's current world position for the debug overlay.
@@ -193,6 +212,7 @@ namespace Cubuild.Renderer
             PlayerHealth = 20,
             DeathCause = DeathCause.Unknown,
             HighlightWorldQuad = null,
+            LinkBeams = null,
             PlayerChunkX = 0,
             PlayerChunkZ = 0,
             RenderDistance = 0,

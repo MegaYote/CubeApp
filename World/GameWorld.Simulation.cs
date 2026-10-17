@@ -205,6 +205,7 @@ namespace Cubuild
             StepItemDrops(deltaSeconds);
             BlockTicks?.Tick(deltaSeconds);
             UpdateLeafDecay(deltaSeconds);
+            UpdateRailSag(deltaSeconds);
             // While riding a cart or a boat, THAT vehicle is what moves: StepRidingCart /
             // StepRiding steer it and pin the player's eye to the hull instead of running the
             // normal walk/fall/collide path.
@@ -231,6 +232,9 @@ namespace Cubuild
                 LocalPlayer.Position.Z);
             Entities.Update(deltaSeconds, LocalPlayer.Position, true, LocalPlayer.Health > 0);
             LastEntityMs = Entities.LastUpdateMs;
+            // The train pass inside Entities.Update places a hauled carriage, which may be the very
+            // cart the player is sitting in, so re-pin the eye now that it has moved (see PinRiderEye).
+            if (IsRidingCart) PinRiderEye(deltaSeconds);
             int chunkX = WorldToChunkCoord(LocalPlayer.Position.X);
             int chunkZ = WorldToChunkCoord(LocalPlayer.Position.Z);
             // Request/unload scans cost O(radius^2) + O(loadedChunks); only run them when the

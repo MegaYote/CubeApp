@@ -184,7 +184,13 @@ namespace Cubuild
             }
             if (screen == GameScreen.Playing && mouseLook && World != null && _ignoreInteractFrames == 0 && frameInput.BreakBlockPressed)
             {
-                if (!World.Entities.TryAttackMob(World.PlayerPosition, World.GetCameraForward(), null))
+                // Left-clicking the coupling beam between two linked carts severs the link. Tested
+                // before the mob attack so the click breaks the link rather than damaging a cart.
+                if (World.Entities.TryBreakLink(World.PlayerPosition, World.GetCameraForward(), out _))
+                {
+                    _handSwingTimer = HandSwingDuration;
+                }
+                else if (!World.Entities.TryAttackMob(World.PlayerPosition, World.GetCameraForward(), null))
                 {
                     // No mob hit: mining is driven by BreakHeld in StepSimulation, but the click
                     // primes the target so progress starts immediately this frame.
@@ -227,6 +233,13 @@ namespace Cubuild
                     _handSwingTimer = HandSwingDuration;
                     _handPokeTimer = 0.3f;
                 }
+                // Linkage: while holding the coupler, right-click carts to couple them into a train.
+                // Checked before the cart/boat branch so it never just seats the player instead.
+                else if (World.TryLinkCarts(World.PlayerPosition, World.GetCameraForward()))
+                {
+                    _handSwingTimer = HandSwingDuration;
+                    _handPokeTimer = 0.3f;
+                }
                 // Boats: right-click water to launch one, right-click a boat to board it, and
                 // right-click again while riding to step out. Checked before placement so the
                 // boat item never tries to place a block.
@@ -234,6 +247,7 @@ namespace Cubuild
                       || World.ToggleBoatUnderCrosshair(World.PlayerPosition, World.GetCameraForward())
                       || World.TryPlaceCart(World.PlayerPosition, World.GetCameraForward())
                       || World.TryPlaceOreCart(World.PlayerPosition, World.GetCameraForward())
+                      || World.TryPlaceLocomotive(World.PlayerPosition, World.GetCameraForward())
                       || World.TryLaunchBoat(World.PlayerPosition, World.GetCameraForward()))
                 {
                     _handSwingTimer = HandSwingDuration;

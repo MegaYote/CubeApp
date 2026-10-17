@@ -194,6 +194,7 @@ namespace Cubuild
         {
             // Built-in mobs spawn from hardcoded classes; registry mobs need a MobDefinition.
             if (mobId != "duck" && mobId != "coyote" && mobId != "coyotemob" && mobId != "steve"
+                && mobId != "locomotive" && mobId != "locomotivehot" && mobId != "locomotivecold"
                 && MobRegistry.Get(mobId) == null) return false;
 
             float yawRad = playerYaw * (float)Math.PI / 180f;
@@ -224,6 +225,10 @@ namespace Cubuild
             else if (mobId == "orecart")
                 // Passive variant: same rails, but no rider and no throttle - you push it by walking.
                 mob = new OreCartEntity(position, yaw);
+            else if (mobId == "locomotive" || mobId == "locomotivehot" || mobId == "locomotivecold")
+                // Train engine: no seat, but drives its whole train when a rider sits in a carriage
+                // coupled to it (see LocomotiveEntity / GameWorld.StepRidingCart).
+                mob = new LocomotiveEntity(position, yaw, mobId == "locomotivecold" ? "locomotivecold" : "locomotivehot");
             else if (mobId == "boat")
                 // Player-launched vehicle, not a spawned mob: no brain, floats, steered by a rider.
                 mob = new BoatEntity(position, yaw);
@@ -351,6 +356,8 @@ namespace Cubuild
 
                     if (mobEntity.Removed)
                     {
+                        // A coupling cannot outlive a cart - drop either half it belonged to.
+                        if (mobEntity is CartEntity removedCart) SeverCartLink(removedCart);
                         _mobs.RemoveAt(i);
                         continue;
                     }
@@ -360,11 +367,17 @@ namespace Cubuild
                     // returns to its chunk (world-streaming persistence).
                     if (enableSpawning && ShouldDespawn(mobEntity, playerPosition))
                     {
+                        if (mobEntity is CartEntity despawnedCart) SeverCartLink(despawnedCart);
                         DetachMob(mobEntity);
                         _mobs.RemoveAt(i);
                     }
                 }
             }
+
+            // Rigid train coupling: place every towed cart behind its leader, head-of-train first
+            // so a whole chain resolves in one pass. Runs before the shove passes below so they see
+            // the trains' settled positions.
+            ResolveTrainLinks(deltaSeconds);
 
             LastUpdateMs = (float)_entityWatch.Elapsed.TotalMilliseconds;
 
@@ -525,6 +538,10 @@ namespace Cubuild
                 {
                     if (_mobs[j] is not CartEntity b || b.IsDead) continue;
 
+                    // Rigidly coupled carts are one train: never shove a linked pair apart (that
+                    // would fight the rigid tow and could drag them out of their spacing).
+                    if (a.Follower == b || b.Follower == a) continue;
+
                     // Two minecarts are both immovable, so the pair is left completely alone.
                     bool aPush = a.AcceptsCartPush;
                     bool bPush = b.AcceptsCartPush;
@@ -564,6 +581,157 @@ namespace Cubuild
                     if (bPush) b.ShoveBy(-nx * move, -nz * move, _chunkManager);
                 }
             }
+        }
+
+        // ------------------------------------------------------------------
+        // Cart coupling ("linkage" trains). A link is Head -> Trailer: the trailer's own Update is
+        // skipped (see CartEntity.Update) and it is placed rigidly behind its head here. Links are
+        // removed ONLY by a left-click on the beam (TryBreakLink) or by a cart ceasing to exist
+        // (SeverCartLink) - never by the physics.
+        // ------------------------------------------------------------------
+
+        /// <summary>Half-thickness of the drawn coupling beam, in blocks (matches the renderer).</summary>
+        private const double LinkBeamRadius = 0.06;
+
+        /// <summary>How forgiving the left-click pick is: the ray may miss the beam's axis by this much.</summary>
+        private const double LinkPickRadius = 0.35;
+
+        /// <summary>
+        /// Places every towed cart rigidly behind its leader. Walks each train from its HEAD (a cart
+        /// with no leader of its own but with something coupled behind) down the chain, so each
+        /// follower is placed against an already-placed leader within the same frame - a chain of N
+        /// carts settles correctly in one pass.
+        /// </summary>
+        private void ResolveTrainLinks(float dt)
+        {
+            for (int i = 0; i < _mobs.Count; i++)
+            {
+                if (_mobs[i] is not CartEntity head) continue;
+                if (head.IsDead || head.Removed) continue;
+                if (head.Leader != null || head.Follower == null) continue;   // only start from a head
+
+                var trailer = head.Follower;
+                int guard = 0;
+                while (trailer != null && guard++ < 256)
+                {
+                    if (trailer.IsDead || trailer.Removed)
+                    {
+                        SeverCartLink(trailer);
+                        break;
+                    }
+                    trailer.FollowLeader(_chunkManager, dt);
+                    trailer = trailer.Follower;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Clears both halves of a cart's couplings. Called ONLY when a cart is removed or despawned -
+        /// the coupling cannot outlive a cart. Never called by the physics.
+        /// </summary>
+        private static void SeverCartLink(CartEntity c)
+        {
+            if (c.Leader is { } l && l.Follower == c) l.Follower = null;
+            if (c.Follower is { } f && f.Leader == c) f.Leader = null;
+            c.Leader = null;
+            c.Follower = null;
+        }
+
+        /// <summary>
+        /// The drawn/pickable coupling segment between two linked carts: each cart's coupling point,
+        /// trimmed in so the beam fills the visible gap between the bodies rather than passing through
+        /// them (so a left-click on a cart still hits the cart, and a left-click in the gap hits the
+        /// beam). Shared by the renderer feed and the break test so they can never disagree.
+        /// </summary>
+        private static void LinkSegment(CartEntity a, CartEntity b, out Point3D pa, out Point3D pb)
+        {
+            // Render transform, not the raw physics one: a towed cart eases its drawn spot through a
+            // bend (CartEntity.SmoothRenderPose), and the beam must stay attached to the cart the eye
+            // actually sees. The head is not towed, so its RenderPosition is its exact spot.
+            var ap = a.RenderPosition;
+            var bp = b.RenderPosition;
+            double ax = ap.X, ay = ap.Y + a.Height * 0.5, az = ap.Z;
+            double bx = bp.X, by = bp.Y + b.Height * 0.5, bz = bp.Z;
+            double dx = bx - ax, dy = by - ay, dz = bz - az;
+            double len = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            if (len < 1e-6) { pa = new Point3D(ax, ay, az); pb = pa; return; }
+            double ux = dx / len, uy = dy / len, uz = dz / len;
+            const double trim = 0.42;                      // ~half a cart's width
+            double t = Math.Min(trim, len * 0.5);
+            pa = new Point3D(ax + ux * t, ay + uy * t, az + uz * t);
+            pb = new Point3D(bx - ux * t, by - uy * t, bz - uz * t);
+        }
+
+        /// <summary>
+        /// Fills <paramref name="list"/> with the coupling beams of every active link, for the
+        /// renderer. Called each frame from Program.BuildHud.
+        /// </summary>
+        public void CollectLinkBeams(List<Cubuild.Renderer.LinkBeam> list)
+        {
+            list.Clear();
+            foreach (var mob in _mobs)
+            {
+                if (mob is not CartEntity a || a.IsDead || a.Removed) continue;
+                if (a.Follower is not { } b || b.IsDead || b.Removed) continue;
+                LinkSegment(a, b, out var pa, out var pb);
+                list.Add(new Cubuild.Renderer.LinkBeam(
+                    new System.Numerics.Vector3((float)pa.X, (float)pa.Y, (float)pa.Z),
+                    new System.Numerics.Vector3((float)pb.X, (float)pb.Y, (float)pb.Z)));
+            }
+        }
+
+        /// <summary>
+        /// True when the pick ray strikes a link's beam: severs that coupling and reports the hit
+        /// distance. This is the ONLY way a player removes a link. Tested BEFORE the mob attack so a
+        /// click on the beam breaks it instead of damaging a cart.
+        /// </summary>
+        public bool TryBreakLink(Point3D origin, Point3D forward, out double hitDistance)
+        {
+            hitDistance = double.PositiveInfinity;
+            var dir = forward.Normalized();
+            CartEntity? hitA = null, hitB = null;
+            double best = double.PositiveInfinity;
+
+            foreach (var mob in _mobs)
+            {
+                if (mob is not CartEntity a || a.IsDead || a.Removed) continue;
+                if (a.Follower is not { } b || b.IsDead || b.Removed) continue;
+
+                LinkSegment(a, b, out var pa, out var pb);
+                if (!RaySegmentHit(origin, dir, pa, pb, LinkPickRadius, BlockReach, out double t)) continue;
+                if (t < best) { best = t; hitA = a; hitB = b; }
+            }
+
+            if (hitA == null || hitB == null) return false;
+            if (hitA.Follower == hitB) hitA.Follower = null;
+            if (hitB.Leader == hitA) hitB.Leader = null;
+            hitDistance = best;
+            return true;
+        }
+
+        /// <summary>
+        /// Cheap ray-vs-segment proximity test: samples the segment and keeps the nearest point whose
+        /// ray projection is in [0, maxDist] and whose perpendicular distance to the ray is within
+        /// <paramref name="radius"/>. A handful of links with two dozen samples each is trivial, and
+        /// it avoids the fragility of an analytic ray/segment solve for such a thin target.
+        /// </summary>
+        private static bool RaySegmentHit(Point3D origin, Point3D dir, Point3D p0, Point3D p1, double radius, double maxDist, out double hitT)
+        {
+            hitT = double.PositiveInfinity;
+            const int samples = 24;
+            for (int i = 0; i <= samples; i++)
+            {
+                double s = (double)i / samples;
+                double px = p0.X + (p1.X - p0.X) * s;
+                double py = p0.Y + (p1.Y - p0.Y) * s;
+                double pz = p0.Z + (p1.Z - p0.Z) * s;
+                double dx = px - origin.X, dy = py - origin.Y, dz = pz - origin.Z;
+                double t = dx * dir.X + dy * dir.Y + dz * dir.Z;   // dir is normalized
+                if (t < 0 || t > maxDist) continue;
+                double ox = dx - dir.X * t, oy = dy - dir.Y * t, oz = dz - dir.Z * t;
+                if (ox * ox + oy * oy + oz * oz <= radius * radius && t < hitT) hitT = t;
+            }
+            return !double.IsPositiveInfinity(hitT);
         }
 
         // Despawn (tuned so natural spawns don't instantly vanish): instant despawn
@@ -921,6 +1089,14 @@ namespace Cubuild
                 var boat = new BoatEntity(pos, m.Yaw);
                 boat.RestoreState(pos, m.Yaw, m.Health);
                 _mobs.Add(boat);
+            }
+            else if (m.Type == "locomotivehot" || m.Type == "locomotivecold")
+            {
+                // Same reasoning as the ore cart above: a locomotive is a built-in vehicle with no
+                // MobRegistry entry, so the generic fallback would rebuild it as an AI mob.
+                var loco = new LocomotiveEntity(pos, m.Yaw, m.Type);
+                loco.RestoreState(pos, m.Yaw, m.Health);
+                _mobs.Add(loco);
             }
             else
             {

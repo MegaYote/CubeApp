@@ -66,6 +66,11 @@ namespace Cubuild
         /// chunk to find mesh work.</summary>
         public Action<Chunk>? ChunkDirty;
 
+        /// <summary>Fired once when a chunk is first created/loaded (called from BOTH the main
+        /// thread and chunk-gen workers, so handlers must be thread-safe). Used to seed hanging
+        /// rail track for rails that come back with a loaded world.</summary>
+        public Action<Chunk>? ChunkLoaded;
+
         public ChunkManager(IChunkProvider? deepProvider = null, IChunkProvider? groundProvider = null, IChunkProvider? skyProvider = null)
         {
             chunkProviders[DeepLayer] = deepProvider ?? new DeepChunkProvider();
@@ -165,6 +170,9 @@ namespace Cubuild
                     back.NeedsRemesh = true;
                 if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ + 1), out var front))
                     front.NeedsRemesh = true;
+                // Announce the new chunk. Handlers run on a gen worker, so they must be
+                // thread-safe (rail sag only enqueues the chunk and scans it later).
+                ChunkLoaded?.Invoke(result);
             }
 
             return result;
@@ -283,6 +291,46 @@ namespace Cubuild
             chunk[localX, localY, localZ] = blockId;
             chunk.SetMeta(localX, localY, localZ, (byte)meta);
             MarkDirty(chunkX, chunkZ, localX, localZ, layer);
+            return true;
+        }
+
+        /// <summary>Reads the rail-droop byte at a loaded cell. False when the chunk isn't loaded
+        /// or the coord is out of bounds (mirrors the flush in TryGetLoadedBlockAndMeta).</summary>
+        public bool TryGetLoadedChunkAndDrop(int worldX, int worldY, int worldZ, out byte droop)
+        {
+            droop = 0;
+            int layer = LayerForWorldY(worldY);
+            int chunkX = FloorDiv(worldX, ChunkSize);
+            int chunkZ = FloorDiv(worldZ, ChunkSize);
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk))
+                return false;
+
+            int localX = worldX - chunk.OriginX;
+            int localZ = worldZ - chunk.OriginZ;
+            int localY = chunk.WorldYToLocal(worldY);
+            if (!chunk.IsInBounds(localX, localY, localZ)) return false;
+
+            droop = chunk.GetRailDroop(localX, localY, localZ);
+            return true;
+        }
+
+        /// <summary>Writes the rail-droop byte at a loaded cell. Returns true only when the value
+        /// actually changed, so the caller can skip a re-mesh. Never generates the chunk.</summary>
+        public bool TrySetRailDroop(int worldX, int worldY, int worldZ, byte value)
+        {
+            int layer = LayerForWorldY(worldY);
+            int chunkX = FloorDiv(worldX, ChunkSize);
+            int chunkZ = FloorDiv(worldZ, ChunkSize);
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk))
+                return false;
+
+            int localX = worldX - chunk.OriginX;
+            int localZ = worldZ - chunk.OriginZ;
+            int localY = chunk.WorldYToLocal(worldY);
+            if (!chunk.IsInBounds(localX, localY, localZ)) return false;
+            if (chunk.GetRailDroop(localX, localY, localZ) == value) return false;
+
+            chunk.SetRailDroop(localX, localY, localZ, value);
             return true;
         }
 

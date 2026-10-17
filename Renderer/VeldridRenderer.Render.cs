@@ -520,6 +520,7 @@ namespace Cubuild.Renderer
 
             DrawParticles(cl);
             DrawHighlight(cl);
+            DrawLinkBeams(cl);
             DrawShrinkCube(cl);
             DrawChunkBorders(cl);
 

@@ -694,6 +694,7 @@ _itemDropIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)smallInd
 
             CreateHighlightPipeline();
             CreateChunkBorderPipeline();
+            CreateLinkBeamPipeline();
             CreateModelPipeline();
             CreateSkyPipeline();
             CreateCelestialPipelines();
@@ -1306,6 +1307,47 @@ void main() { outColor = vec4(0.0, 1.0, 0.0, 0.5); }"; // Green wireframe
                 (uint)(_chunkBorderVertexScratch.Length * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
             _chunkBorderIndexBuffer = factory.CreateBuffer(new BufferDescription(
                 256 * sizeof(ushort), BufferUsage.IndexBuffer | BufferUsage.Dynamic));
+        }
+
+        // Solid coupling beams between linked carts. Bare world-space position in, a flat brown
+        // fragment out; TriangleList so each beam is a thin oriented box. Depth-tested (so terrain
+        // occludes it) but depth-write off, and culling off so the box reads solid from any angle.
+        private void CreateLinkBeamPipeline()
+        {
+            var factory = _gd.ResourceFactory;
+
+            string vsCode = @"#version 450
+layout(location=0) in vec3 aPosition;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() { gl_Position = projView * vec4(aPosition, 1.0); }";
+
+            string fsCode = @"#version 450
+layout(location=0) out vec4 outColor;
+void main() { outColor = vec4(0.36, 0.24, 0.12, 1.0); }"; // dark wood / rope brown
+
+            var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var fsSpirv = SpirvCompilation.CompileGlslToSpirv(fsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var shaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, vsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main"));
+
+            var vertexLayout = new VertexLayoutDescription(
+                new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3));
+
+            var pipelineDesc = new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleAlphaBlend,
+                DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout },
+                ShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { shaders[0], shaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            };
+
+            _linkBeamPipeline = factory.CreateGraphicsPipeline(pipelineDesc);
+            _linkBeamVertexBuffer = factory.CreateBuffer(new BufferDescription(
+                (uint)(_linkBeamVertexScratch.Length * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
         }
 
         // Pipeline for the sky: two huge flat planes (glSkyList at y+16, glSkyList2 at y-16,

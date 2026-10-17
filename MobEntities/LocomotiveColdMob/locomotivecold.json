@@ -1,0 +1,14 @@
+{
+  "id": "locomotivecold",
+  "displayName": "Locomotive (Cold)",
+  "width": 1.0,
+  "height": 0.9,
+  "maxHealth": 200,
+  "speed": 14.0,
+  "scale": 1.0,
+  "yawCorrection": 4.71238898038469,
+  "modelYOffset": -0.125,
+  "burnsInDaylight": false,
+  "hostile": false,
+  "attackDamage": 0
+}

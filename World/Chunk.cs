@@ -13,6 +13,14 @@ namespace Cubuild
         // Per-block metadata (same layout as blocks). For fluids this holds the flow level:
         // 0 = source/still, 1..7 = flowing, >=8 = falling stream. Zero-initialized like blocks.
         private readonly byte[] meta;
+        // Runtime-only rail droop (same layout as blocks/meta). Quantized 0..255 over
+        // [0, RailSag.MaxDrop] blocks: how far below the rail plane this cell's track has sunk
+        // because it lost the block under it. Lives on the chunk rather than in a world table
+        // so the background mesh workers can read it with the same thread-safety story as
+        // blocks/meta. NOT persisted and NOT network-synced: it re-settles itself the moment a
+        // chunk reloads, so there is nothing worth saving (leaf-decay timers work the same way).
+        // Zero means "flat" - every rail that has never been solved, and every anchored rail.
+        private readonly byte[] railDroop;
         private readonly object _meshLock = new();
 
         public int Width { get; }
@@ -103,6 +111,7 @@ namespace Cubuild
             OriginZ = originZ;
             blocks = new byte[width * height * depth];
             meta = new byte[width * height * depth];
+            railDroop = new byte[width * height * depth];
         }
 
         /// <summary>Flat index of a local block coordinate (column-major; y contiguous).</summary>
@@ -115,6 +124,13 @@ namespace Cubuild
 
         public byte GetMeta(int x, int y, int z) => meta[(x * Depth + z) * Height + y];
         public void SetMeta(int x, int y, int z, byte value) => meta[(x * Depth + z) * Height + y] = value;
+
+        /// <summary>Raw rail-droop storage (same layout as blocks/meta). Quantized 0..255 over
+        /// [0, RailSag.MaxDrop] blocks. See <see cref="railDroop"/> for the lifetime rules.</summary>
+        public byte[] RawRailDroop => railDroop;
+
+        public byte GetRailDroop(int x, int y, int z) => railDroop[(x * Depth + z) * Height + y];
+        public void SetRailDroop(int x, int y, int z, byte value) => railDroop[(x * Depth + z) * Height + y] = value;
 
         public int this[int x, int y, int z]
         {

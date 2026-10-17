@@ -652,6 +652,9 @@ namespace Cubuild
             // Dirty-list wiring: any chunk whose NeedsRemesh flips true registers itself with the
             // scheduler instead of the scheduler scanning every loaded chunk each update.
             Chunks.ChunkDirty = Mesher.MarkDirtyChunk;
+            // Hanging rails: when a chunk streams in with rails in it, seed them for a sag solve
+            // (they come back hanging where they were left). Scanning is deferred to the sim thread.
+            Chunks.ChunkLoaded = OnChunkLoadedForRailSag;
             BlockTicks = new BlockTickScheduler(Chunks, Mesher);
             _chunkGenWorker = new ChunkGenWorker(Chunks, () => ChunkGenerated?.Invoke(), Math.Max(1, chunkGenWorkers));
 
@@ -670,6 +673,7 @@ namespace Cubuild
             _meshQueue = new NoOpMeshQueue();
             Mesher = new MeshScheduler(Chunks, _meshQueue);
             Chunks.ChunkDirty = Mesher.MarkDirtyChunk;
+            Chunks.ChunkLoaded = OnChunkLoadedForRailSag;
             BlockTicks = new BlockTickScheduler(Chunks, Mesher);
         }
 

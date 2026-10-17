@@ -15,6 +15,9 @@ namespace Cubuild
 {
     public sealed partial class Program : IDisposable
     {
+        // Reused each frame so feeding the coupling beams into HudState never allocates.
+        private readonly List<Cubuild.Renderer.LinkBeam> _linkBeams = new();
+
         private void AddRemotePlayersToRender(List<MobRenderData> list)
         {
             if (World == null) return;
@@ -127,6 +130,9 @@ namespace Cubuild
                     miningBlockNormal = _miningSlideDir;
                 }
             }
+            // Coupling beams for any linked carts (empty list when none), for the world pass to draw.
+            World.Entities.CollectLinkBeams(_linkBeams);
+
             return new HudState
             {
                 ShowDebug = showFps, InventoryOpen = inventoryOpen, CraftingOpen = craftingOpen, SmeltOpen = smeltOpen, BiomeMenuOpen = biomeMenuOpen, HandEditorOpen = handEditorOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
@@ -141,7 +147,7 @@ namespace Cubuild
                 RenderDistanceText = $"Render dist: {RenderDistanceName} ({ChunkRenderRadius})",
                 SelectedSlot = World.SelectedSlot, WorldSeed = World.Seed,
                 BiomeText = World.ChunkProvider?.BiomeNameAt((int)Math.Floor(World.PlayerPosition.X), (int)Math.Floor(World.PlayerPosition.Z)) ?? string.Empty,
-                Hotbar = World.Hotbar, HighlightWorldQuad = highlightQuad,
+                Hotbar = World.Hotbar, HighlightWorldQuad = highlightQuad, LinkBeams = _linkBeams,
                 ThirdPerson = thirdPersonView,
                 Mode = World.Mode, BagSlots = World.BagSlots, HotbarCounts = World.HotbarCounts, HeldStack = World.HeldStack,
                 CraftingSlots = World.CraftingGrid, CraftingResult = World.CraftingResult,

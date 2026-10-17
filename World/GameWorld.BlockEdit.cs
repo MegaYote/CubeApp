@@ -128,6 +128,10 @@ namespace Cubuild
             // leaves the cell beside it that was curving into it now running straight.
             if (BlockRegistry.IsRail(removedBlockId)) RefreshRailShapesAround(x, y, z, fireEdited: true);
 
+            // Removing ANY block can change what supports a rail: pull the floor out from under a
+            // track and it must start to hang. Re-solving is cheap and local (the 27 nearby cells).
+            MarkRailSagAround(x, y, z);
+
             return true;
         }
 
@@ -487,14 +491,17 @@ var place = pickResult.Value.Place;
                 }
             }
 
-            // Rails can't be stacked either. A rail's shape is inferred from its neighbours, so
-            // a rail sitting directly on top of another would re-derive a nonsense orientation
-            // from a "neighbour" one block straight up, and two tracks in one column is never
-            // what the player meant. Same treatment as a flower on a flower: the click is
-            // simply refused, so the rail stays in hand.
+            // Rails can't be stacked in a column. A rail's shape is inferred from its neighbours,
+            // so a rail sitting directly above or below another would re-derive a nonsense
+            // orientation from a "neighbour" one block straight up (or down), and two tracks in
+            // one column is never what the player meant. The target cell itself is already known
+            // clear by the occupancy check just above (a non-air cell was refused there), so only
+            // the two vertical neighbours need testing - which is the case this guard's old
+            // same-cell check could never actually reach. Refused outright, so the rail stays in
+            // hand.
             if (BlockRegistry.IsRail(blockToPlace)
-                && Chunks.TryGetLoadedBlock(place.x, place.y, place.z, out var atPlace)
-                && BlockRegistry.IsRail(atPlace))
+                && (Chunks.TryGetLoadedBlock(place.x, place.y - 1, place.z, out int belowRail) && BlockRegistry.IsRail(belowRail)
+                    || Chunks.TryGetLoadedBlock(place.x, place.y + 1, place.z, out int aboveRail) && BlockRegistry.IsRail(aboveRail)))
             {
                 return false;
             }
@@ -565,6 +572,9 @@ var place = pickResult.Value.Place;
             // Freshly laid rail: resolve its own shape, and re-resolve any neighbour that was
             // previously a dead-end stub or a straight run that now has a corner to bend into.
             if (BlockRegistry.IsRail(blockToPlace)) RefreshRailShapesAround(place.x, place.y, place.z, fireEdited: true);
+            // Laying a block can give a rail above it its support back (and laying a rail feeds a
+            // new track into the sag solve). Laying track over a gap is how you build a bridge.
+            MarkRailSagAround(place.x, place.y, place.z);
             // Schedule burn for sap torches
             if (blockToPlace == _idSapTorch)
             {
@@ -580,6 +590,14 @@ var place = pickResult.Value.Place;
             // Same "wait for it to fall" rule on the authoritative path (host applying a client's
             // edit): never place into a cell a falling block is passing through.
             if (BlockTicks != null && BlockTicks.IsCellOccupiedByFalling(x, y, z)) return false;
+            // Mirror the local rail-stacking rule on the authoritative / receive path too, so a
+            // stray client edit can't build a rail tower where the local placement would refuse.
+            if (BlockRegistry.IsRail(blockId)
+                && (Chunks.TryGetLoadedBlock(x, y - 1, z, out int belowRail) && BlockRegistry.IsRail(belowRail)
+                    || Chunks.TryGetLoadedBlock(x, y + 1, z, out int aboveRail) && BlockRegistry.IsRail(aboveRail)))
+            {
+                return false;
+            }
             // Remember what was here: a rail may be being removed, which changes the shape of
             // its neighbours just as much as placing one does.
             Chunks.TryGetLoadedBlock(x, y, z, out int oldId);
@@ -603,6 +621,8 @@ var place = pickResult.Value.Place;
             // re-broadcasting here would bounce the edit back to whoever just sent it.
             if (BlockRegistry.IsRail(blockId) || BlockRegistry.IsRail(oldId))
                 RefreshRailShapesAround(x, y, z, fireEdited: false);
+            // Keep hanging rails in sync on the authoritative / receive path too.
+            MarkRailSagAround(x, y, z);
             return true;
         }
 

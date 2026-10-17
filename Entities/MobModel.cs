@@ -32,6 +32,20 @@ namespace Cubuild
             public int JointNode = -1; // animation joint node, or -1 for static parts
             public string Name = "";   // mesh node name (e.g. "leftarm") for procedural limbs
             public Quaternion StaticRotation = Quaternion.Identity; // node's baked pose rotation
+
+            // ---- bone-parented parts (the locomotive's wheels/piston) --------------------------
+            // When this part hangs off an ANIMATED ANCESTOR bone (Blockbench can nest the mesh
+            // cubes INSIDE the bone, the opposite of the coyote's mesh-node-then-child-joint
+            // shape), the joint's translation and scale animate too, not just its rotation - the
+            // locomotive's piston slides and stretches. Those parts set JointFullTrs and carry the
+            // pivot's own rotation so the sampled TRS can be lifted into the model's frame.
+            public bool JointFullTrs;
+            public Quaternion JointParentRotation = Quaternion.Identity;
+            // Rest TRS (already in the parent-rotated model frame) the animation blends back to
+            // when AnimBlend eases to 0, so a stopped locomotive returns to its neutral stance.
+            public Quaternion JointRestRotation = Quaternion.Identity;
+            public Vector3 JointRestTranslation = Vector3.Zero;
+            public Vector3 JointRestScale = Vector3.One;
         }
 
         private readonly List<ModelPart> _parts = new();
@@ -53,12 +67,28 @@ namespace Cubuild
         internal int CpuTextureWidth;
         internal int CpuTextureHeight;
 
-        // Keyframed joint rotations: jointNode -> (times, quaternions). Sampled by animTime.
+        // Keyframed joint channels: jointNode -> keyframes, sampled by animTime. glTF stores
+        // rotation / translation / scale as separate channels that may have DIFFERENT key counts
+        // and times (the locomotive's piston has 15 rotation keys but only 5 translation and 8
+        // scale keys), so each path keeps its own timeline. Rest* holds the node's untweened TRS,
+        // used when that path is not animated at all.
         private sealed class JointTrack
         {
             public float[] Times = Array.Empty<float>();
             public Quaternion[] Rotations = Array.Empty<Quaternion>();
             public float Duration;
+
+            public float[] TTimes = Array.Empty<float>();
+            public Vector3[] Translations = Array.Empty<Vector3>();
+            public float TDuration;
+
+            public float[] STimes = Array.Empty<float>();
+            public Vector3[] Scales = Array.Empty<Vector3>();
+            public float SDuration;
+
+            public Vector3 RestTranslation = Vector3.Zero;
+            public Quaternion RestRotation = Quaternion.Identity;
+            public Vector3 RestScale = Vector3.One;
         }
 
         private readonly Dictionary<int, JointTrack> _jointTracks = new();
@@ -417,74 +447,79 @@ namespace Cubuild
                 // Get binary chunk offset (skip JSON chunk header: length(4) + type(4) = 8 bytes)
                 uint binaryOffset = 20 + jsonLength + 8;
 
-                // Blockbench exports each body part as its OWN mesh, placed by a NODE translation
-                // (the part's pivot/origin in blocks). Each skinned part has a child JOINT node
-                // that the walk animation rotates. We collect per-mesh: pivot translation + joint
-                // node index, so animating = rotating the part around its pivot.
+                // Blockbench exports each body part as its OWN mesh, and two node shapes turn up:
+                //
+                //  * FLAT (coyote, zombie, cart): the MESH node sits in the scene and the animated
+                //    joint is its FIRST CHILD. The part sits at the node translation and the joint
+                //    only ever rotates, about the node's origin.
+                //
+                //  * BONE-PARENTED (locomotive): the mesh cubes hang INSIDE an animated ancestor
+                //    bone ('wheel' - cubes, 'bone' - piston rods). Those bones animate TRANSLATION
+                //    and SCALE as well as rotation, and their children carry their own baked pose
+                //    rotations, so the flat model cannot express them - we need the real node chain.
+                //
+                // Both are served by accumulating the real node transforms, then baking each mesh
+                // node's vertices down into the frame of its nearest animated ancestor-or-self bone
+                // and storing THAT bone as the joint. Flat exports degenerate to the old behaviour
+                // (bake the node's own rotation/scale, pivot at the node origin, rotate about it).
                 _parts.Clear();
                 _jointTracks.Clear();
-                int[] meshJoint = Array.Empty<int>();   // meshIndex -> joint node index (or -1)
-                Vector3[] meshPivot = Array.Empty<Vector3>();
-                Quaternion[] meshStaticRotation = Array.Empty<Quaternion>();
-                string[] meshName = Array.Empty<string>();
 
-                if (root.TryGetProperty("nodes", out var nodes))
+                // ---- nodes -------------------------------------------------------------------
+                int nodeCount = 0;
+                if (root.TryGetProperty("nodes", out var nodes)) nodeCount = nodes.GetArrayLength();
+
+                var nodeT = new Vector3[nodeCount];
+                var nodeR = new Quaternion[nodeCount];
+                var nodeS = new Vector3[nodeCount];
+                var nodeName = new string[nodeCount];
+                var nodeMesh = new int[nodeCount];
+                var nodeChild = new int[nodeCount];       // FIRST child (flat exports put the joint here)
+                var nodeParent = new int[nodeCount];
+                var nodeChildren = new int[nodeCount][];
+                for (int i = 0; i < nodeCount; i++)
                 {
-                    // First pass: for every node that references a mesh, find its pivot, its baked
-                    // pose rotation, its node name (used for the procedural walk fallback) and the
-                    // skinned joint (the node's FIRST child - Blockbench puts the joint there).
-                    var nodeList = new List<(Vector3 t, Quaternion r, string name, int mesh, int child)>();
-                    foreach (var node in nodes.EnumerateArray())
-                    {
-                        Vector3 t = Vector3.Zero;
-                        if (node.TryGetProperty("translation", out var tArr) && tArr.GetArrayLength() >= 3)
-                            t = new Vector3(tArr[0].GetSingle(), tArr[1].GetSingle(), tArr[2].GetSingle());
-                        Quaternion r = Quaternion.Identity;
-                        if (node.TryGetProperty("rotation", out var rArr) && rArr.GetArrayLength() >= 4)
-                            r = new Quaternion(rArr[0].GetSingle(), rArr[1].GetSingle(), rArr[2].GetSingle(), rArr[3].GetSingle());
-                        string name = "";
-                        if (node.TryGetProperty("name", out var nameProp))
-                            name = nameProp.GetString() ?? "";
-                        int mesh = -1;
-                        if (node.TryGetProperty("mesh", out var mProp)) mesh = mProp.GetInt32();
-                        int child = -1;
-                        if (node.TryGetProperty("children", out var cArr) && cArr.GetArrayLength() >= 1)
-                            child = cArr[0].GetInt32();
-                        nodeList.Add((t, r, name, mesh, child));
-                    }
+                    nodeR[i] = Quaternion.Identity;
+                    nodeS[i] = Vector3.One;
+                    nodeName[i] = "";
+                    nodeMesh[i] = -1;
+                    nodeChild[i] = -1;
+                    nodeParent[i] = -1;
+                    nodeChildren[i] = Array.Empty<int>();
+                }
 
-                    meshPivot = new Vector3[meshes.GetArrayLength()];
-                    meshJoint = new int[meshes.GetArrayLength()];
-                    meshStaticRotation = new Quaternion[meshes.GetArrayLength()];
-                    meshName = new string[meshes.GetArrayLength()];
-                    for (int i = 0; i < meshJoint.Length; i++) { meshJoint[i] = -1; meshStaticRotation[i] = Quaternion.Identity; meshName[i] = ""; }
-                    for (int i = 0; i < nodeList.Count; i++)
+                int nIdx = 0;
+                foreach (var node in nodes.EnumerateArray())
+                {
+                    if (node.TryGetProperty("translation", out var tArr) && tArr.GetArrayLength() >= 3)
+                        nodeT[nIdx] = new Vector3(tArr[0].GetSingle(), tArr[1].GetSingle(), tArr[2].GetSingle());
+                    if (node.TryGetProperty("rotation", out var rArr) && rArr.GetArrayLength() >= 4)
+                        nodeR[nIdx] = new Quaternion(rArr[0].GetSingle(), rArr[1].GetSingle(), rArr[2].GetSingle(), rArr[3].GetSingle());
+                    if (node.TryGetProperty("scale", out var sArr) && sArr.GetArrayLength() >= 3)
+                        nodeS[nIdx] = new Vector3(sArr[0].GetSingle(), sArr[1].GetSingle(), sArr[2].GetSingle());
+                    if (node.TryGetProperty("name", out var nameProp))
+                        nodeName[nIdx] = nameProp.GetString() ?? "";
+                    if (node.TryGetProperty("mesh", out var mProp)) nodeMesh[nIdx] = mProp.GetInt32();
+                    if (node.TryGetProperty("children", out var cArr))
                     {
-                        if (nodeList[i].mesh < 0 || nodeList[i].mesh >= meshJoint.Length) continue;
-                        meshPivot[nodeList[i].mesh] = nodeList[i].t;
-                        meshJoint[nodeList[i].mesh] = nodeList[i].child;
-                        meshStaticRotation[nodeList[i].mesh] = nodeList[i].r;
-                        meshName[nodeList[i].mesh] = nodeList[i].name;
+                        nodeChildren[nIdx] = new int[cArr.GetArrayLength()];
+                        for (int c = 0; c < cArr.GetArrayLength(); c++) nodeChildren[nIdx][c] = cArr[c].GetInt32();
+                        nodeChild[nIdx] = nodeChildren[nIdx].Length > 0 ? nodeChildren[nIdx][0] : -1;
+                    }
+                    nIdx++;
+                }
+                for (int i = 0; i < nodeCount; i++)
+                {
+                    foreach (int c in nodeChildren[i])
+                    {
+                        if (c >= 0 && c < nodeCount) nodeParent[c] = i;
                     }
                 }
 
-                int meshIndex = 0;
-                foreach (var mesh in meshes.EnumerateArray())
-                {
-                    Vector3 pivot = meshPivot.Length > meshIndex ? meshPivot[meshIndex] : Vector3.Zero;
-                    int joint = meshJoint.Length > meshIndex ? meshJoint[meshIndex] : -1;
-                    Quaternion staticRot = meshStaticRotation.Length > meshIndex ? meshStaticRotation[meshIndex] : Quaternion.Identity;
-                    string partName = meshName.Length > meshIndex ? meshName[meshIndex] : "";
-                    if (!mesh.TryGetProperty("primitives", out var primitives)) continue;
-                    
-                    foreach (var primitive in primitives.EnumerateArray())
-                    {
-                        ExtractPrimitive(primitive, bufferViews, accessors, buffers, glbBytes, binaryOffset, pivot, joint, staticRot, partName);
-                    }
-                    meshIndex++;
-                }
-
-                // Parse the animation: joint node -> rotation keyframes (times + quaternions).
+                // ---- animation channels --------------------------------------------------------
+                // glTF keeps rotation / translation / scale as SEPARATE channels that may have
+                // different key counts and times (the locomotive's piston has 15 rotation keys but
+                // only 5 translation and 8 scale keys), so each path gets its own timeline.
                 if (root.TryGetProperty("animations", out var animations))
                 {
                     foreach (var anim in animations.EnumerateArray())
@@ -496,19 +531,149 @@ namespace Cubuild
                             if (!channel.TryGetProperty("target", out var target)) continue;
                             if (!target.TryGetProperty("node", out var nodeProp)) continue;
                             if (!target.TryGetProperty("path", out var pathProp)) continue;
-                            if (pathProp.GetString() != "rotation") continue;
                             int jointNode = nodeProp.GetInt32();
+                            if (jointNode < 0 || jointNode >= nodeCount) continue;
                             int samplerIdx = channel.GetProperty("sampler").GetInt32();
                             if (samplerIdx < 0 || samplerIdx >= animSamplers.GetArrayLength()) continue;
                             var sampler = animSamplers[samplerIdx];
                             int inputAcc = sampler.GetProperty("input").GetInt32();
                             int outputAcc = sampler.GetProperty("output").GetInt32();
-                            var track = new JointTrack();
-                            track.Times = ReadFloatArray(accessors, bufferViews, glbBytes, binaryOffset, inputAcc);
-                            track.Rotations = ReadQuaternionArray(accessors, bufferViews, glbBytes, binaryOffset, outputAcc);
-                            if (track.Times.Length > 0) track.Duration = track.Times[track.Times.Length - 1];
-                            _jointTracks[jointNode] = track;
+
+                            if (!_jointTracks.TryGetValue(jointNode, out var track))
+                            {
+                                track = new JointTrack
+                                {
+                                    RestTranslation = nodeT[jointNode],
+                                    RestRotation = nodeR[jointNode],
+                                    RestScale = nodeS[jointNode],
+                                };
+                                _jointTracks[jointNode] = track;
+                            }
+
+                            switch (pathProp.GetString())
+                            {
+                                case "rotation":
+                                    track.Times = ReadFloatArray(accessors, bufferViews, glbBytes, binaryOffset, inputAcc);
+                                    track.Rotations = ReadQuaternionArray(accessors, bufferViews, glbBytes, binaryOffset, outputAcc);
+                                    if (track.Times.Length > 0) track.Duration = track.Times[track.Times.Length - 1];
+                                    break;
+                                case "translation":
+                                    track.TTimes = ReadFloatArray(accessors, bufferViews, glbBytes, binaryOffset, inputAcc);
+                                    track.Translations = ReadVector3Array(accessors, bufferViews, glbBytes, binaryOffset, outputAcc);
+                                    if (track.TTimes.Length > 0) track.TDuration = track.TTimes[track.TTimes.Length - 1];
+                                    break;
+                                case "scale":
+                                    track.STimes = ReadFloatArray(accessors, bufferViews, glbBytes, binaryOffset, inputAcc);
+                                    track.Scales = ReadVector3Array(accessors, bufferViews, glbBytes, binaryOffset, outputAcc);
+                                    if (track.STimes.Length > 0) track.SDuration = track.STimes[track.STimes.Length - 1];
+                                    break;
+                            }
                         }
+                    }
+                }
+
+                // ---- accumulated node transforms ------------------------------------------------
+                // accM[n] maps node n's LOCAL space straight to model space. System.Numerics uses
+                // row vectors (v' = v * M), so "scale, then rotate, then translate" composes as
+                // S * R * T, and a child prepends its parent:  accM[n] = M(n) * accM[parent].
+                var accM = new Matrix4x4[nodeCount];
+                var haveAcc = new bool[nodeCount];
+                var pending = new Stack<int>();
+                for (int i = 0; i < nodeCount; i++)
+                {
+                    if (nodeParent[i] < 0) pending.Push(i);
+                }
+                while (pending.Count > 0)
+                {
+                    int n = pending.Pop();
+                    if (haveAcc[n]) continue;
+                    var local = Matrix4x4.CreateScale(nodeS[n])
+                              * Matrix4x4.CreateFromQuaternion(nodeR[n])
+                              * Matrix4x4.CreateTranslation(nodeT[n]);
+                    if (nodeParent[n] < 0)
+                    {
+                        accM[n] = local;
+                    }
+                    else
+                    {
+                        if (!haveAcc[nodeParent[n]]) { pending.Push(nodeParent[n]); pending.Push(n); continue; }
+                        accM[n] = local * accM[nodeParent[n]];
+                    }
+                    haveAcc[n] = true;
+                    foreach (int c in nodeChildren[n])
+                    {
+                        if (c >= 0 && c < nodeCount) pending.Push(c);
+                    }
+                }
+
+                // ---- mesh parts -----------------------------------------------------------------
+                int meshCount = meshes.GetArrayLength();
+                for (int n = 0; n < nodeCount; n++)
+                {
+                    int meshIndex = nodeMesh[n];
+                    if (meshIndex < 0 || meshIndex >= meshCount) continue;
+                    if (!meshes[meshIndex].TryGetProperty("primitives", out var primitives)) continue;
+
+                    int bone = NearestAnimatedNode(n, nodeParent, _jointTracks);
+
+                    Vector3 pivot = Vector3.Zero;
+                    Quaternion parentRot = Quaternion.Identity;
+                    Quaternion staticRot = Quaternion.Identity;
+                    Quaternion restRot = Quaternion.Identity;
+                    Vector3 restTrans = Vector3.Zero;
+                    Vector3 restScale = Vector3.One;
+                    int jointNode = -1;
+                    bool fullTrs = false;
+                    Matrix4x4 bake = Matrix4x4.Identity;
+
+                    if (bone >= 0)
+                    {
+                        // Bone-parented part. Hand the renderer the BONE's frame: pivot at the bone
+                        // origin's parent, and the bone's sampled TRS re-applied at draw time.
+                        int boneParent = nodeParent[bone];
+                        if (boneParent >= 0)
+                        {
+                            DecomposeTransform(accM[boneParent], out pivot, out parentRot, out _);
+                        }
+
+                        // Bake the vertices into the BONE's local frame (strip the bone's own TRS) so
+                        // that re-applying the sampled TRS rebuilds the whole chain. D = accM[n] *
+                        // inverse(accM[bone]); folding it in here keeps draw time to one rotate.
+                        if (Matrix4x4.Invert(accM[bone], out var boneInv))
+                        {
+                            bake = accM[n] * boneInv;
+                        }
+
+                        _jointTracks.TryGetValue(bone, out var boneTrack);
+                        fullTrs = true;
+                        if (boneTrack != null)
+                        {
+                            restRot = Quaternion.Multiply(parentRot, boneTrack.RestRotation);
+                            restTrans = Vector3.Transform(boneTrack.RestTranslation, parentRot);
+                            restScale = boneTrack.RestScale;
+                        }
+                        jointNode = bone;
+                    }
+                    else if (nodeChild[n] >= 0 && _jointTracks.ContainsKey(nodeChild[n]))
+                    {
+                        // Flat export: mesh node in the scene, animated joint is its first child.
+                        // Bake the node's own pose so the joint can rotate about the node origin.
+                        DecomposeTransform(accM[n], out pivot, out staticRot, out var scale);
+                        bake = Matrix4x4.CreateScale(scale);
+                        jointNode = nodeChild[n];
+                    }
+                    else
+                    {
+                        // Fully static part.
+                        DecomposeTransform(accM[n], out pivot, out staticRot, out var scale);
+                        bake = Matrix4x4.CreateScale(scale);
+                    }
+
+                    foreach (var primitive in primitives.EnumerateArray())
+                    {
+                        ExtractPrimitive(primitive, bufferViews, accessors, buffers, glbBytes, binaryOffset,
+                            pivot, jointNode, staticRot, nodeName[n], bake,
+                            parentRot, fullTrs, restRot, restTrans, restScale);
                     }
                 }
             }
@@ -549,34 +714,145 @@ namespace Cubuild
             return result;
         }
 
+        private static Vector3[] ReadVector3Array(JsonElement accessors, JsonElement bufferViews, byte[] glbBytes, uint binaryOffset, int accessorIdx)
+        {
+            var acc = accessors[accessorIdx];
+            int count = acc.GetProperty("count").GetInt32();
+            var view = bufferViews[acc.GetProperty("bufferView").GetInt32()];
+            int byteOffset = view.TryGetProperty("byteOffset", out var bo) ? bo.GetInt32() : 0;
+            int start = (int)(binaryOffset + byteOffset);
+            var result = new Vector3[count];
+            for (int i = 0; i < count; i++)
+            {
+                int o = start + i * 12;
+                result[i] = new Vector3(
+                    BitConverter.ToSingle(glbBytes, o),
+                    BitConverter.ToSingle(glbBytes, o + 4),
+                    BitConverter.ToSingle(glbBytes, o + 8));
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Splits a node's accumulated transform into translation / rotation / per-axis scale.
+        /// The rotation is recovered by normalising the basis vectors (glTF nodes may carry scale,
+        /// and Quaternion.CreateFromRotationMatrix requires an orthonormal matrix).
+        /// </summary>
+        private static void DecomposeTransform(Matrix4x4 m, out Vector3 translation, out Quaternion rotation, out Vector3 scale)
+        {
+            translation = m.Translation;
+            var sx = new Vector3(m.M11, m.M12, m.M13);
+            var sy = new Vector3(m.M21, m.M22, m.M23);
+            var sz = new Vector3(m.M31, m.M32, m.M33);
+            scale = new Vector3(sx.Length(), sy.Length(), sz.Length());
+
+            if (scale.X > 1e-6f) { m.M11 /= scale.X; m.M12 /= scale.X; m.M13 /= scale.X; }
+            if (scale.Y > 1e-6f) { m.M21 /= scale.Y; m.M22 /= scale.Y; m.M23 /= scale.Y; }
+            if (scale.Z > 1e-6f) { m.M31 /= scale.Z; m.M32 /= scale.Z; m.M33 /= scale.Z; }
+            m.Translation = Vector3.Zero;
+
+            try { rotation = Quaternion.CreateFromRotationMatrix(m); }
+            catch { rotation = Quaternion.Identity; }
+            rotation = Quaternion.Normalize(rotation);
+        }
+
+        /// <summary>
+        /// Walks up from <paramref name="node"/> to the nearest ancestor-or-self that has an
+        /// animation track, or -1 when nothing in the chain is animated. Flat exports hit on the
+        /// node's own child (checked separately by the caller) rather than an ancestor, which is
+        /// what keeps the coyote on its original code path.
+        /// </summary>
+        private static int NearestAnimatedNode(int node, int[] nodeParent, Dictionary<int, JointTrack> tracks)
+        {
+            int n = node;
+            int guard = 0;
+            while (n >= 0 && n < nodeParent.Length && guard++ < 1024)
+            {
+                if (tracks.ContainsKey(n)) return n;
+                n = nodeParent[n];
+            }
+            return -1;
+        }
+
         /// <summary>
         /// Samples the given joint's rotation at <paramref name="animTime"/> (seconds, wrapped to
         /// the track duration). Returns identity for a static joint.
         /// </summary>
         public Quaternion SampleJointRotation(int jointNode, float animTime)
         {
-            if (!_jointTracks.TryGetValue(jointNode, out var track) || track.Rotations.Length == 0)
-                return Quaternion.Identity;
+            SampleJoint(jointNode, animTime, out _, out var rotation, out _);
+            return rotation;
+        }
 
-            float t = track.Duration > 0.0001f ? animTime % track.Duration : 0f;
-            int n = track.Times.Length;
-            if (n == 1) return track.Rotations[0];
+        /// <summary>
+        /// Samples a joint's full TRS at <paramref name="animTime"/>. Channels the clip does not
+        /// animate fall back to the node's rest transform (the locomotive's wheels only animate
+        /// rotation, its piston animates all three).
+        /// </summary>
+        public void SampleJoint(int jointNode, float animTime, out Vector3 translation, out Quaternion rotation, out Vector3 scale)
+        {
+            if (!_jointTracks.TryGetValue(jointNode, out var track))
+            {
+                translation = Vector3.Zero;
+                rotation = Quaternion.Identity;
+                scale = Vector3.One;
+                return;
+            }
 
-            // Find the surrounding keyframes (binary-ish: the coyote's 24 keys are small enough to scan).
+            translation = SampleVector3(track.TTimes, track.Translations, track.TDuration, animTime, track.RestTranslation);
+            rotation = SampleQuaternion(track.Times, track.Rotations, track.Duration, animTime, track.RestRotation);
+            scale = SampleVector3(track.STimes, track.Scales, track.SDuration, animTime, track.RestScale);
+        }
+
+        /// <summary>Wraps t into [0, duration) - the wheel track runs 0..3.5s and must loop.</summary>
+        private static float WrapTime(float animTime, float duration)
+        {
+            if (duration <= 0.0001f) return 0f;
+            float t = animTime % duration;
+            if (t < 0f) t += duration;
+            return t;
+        }
+
+        private static Vector3 SampleVector3(float[] times, Vector3[] values, float duration, float animTime, Vector3 fallback)
+        {
+            if (values.Length == 0) return fallback;
+            if (values.Length == 1) return values[0];
+
+            float t = WrapTime(animTime, duration);
+            int n = Math.Min(times.Length, values.Length);
             int hi = 1;
-            while (hi < n && track.Times[hi] < t) hi++;
-            if (hi >= n) return track.Rotations[n - 1];
+            while (hi < n && times[hi] < t) hi++;
+            if (hi >= n) return values[n - 1];
             int lo = hi - 1;
-            if (lo < 0) return track.Rotations[0];
+            if (lo < 0) return values[0];
 
-            float span = track.Times[hi] - track.Times[lo];
-            float s = span > 0.0001f ? (t - track.Times[lo]) / span : 0f;
-            return Quaternion.Slerp(track.Rotations[lo], track.Rotations[hi], s);
+            float span = times[hi] - times[lo];
+            float s = span > 0.0001f ? (t - times[lo]) / span : 0f;
+            return Vector3.Lerp(values[lo], values[hi], s);
+        }
+
+        private static Quaternion SampleQuaternion(float[] times, Quaternion[] values, float duration, float animTime, Quaternion fallback)
+        {
+            if (values.Length == 0) return fallback;
+            if (values.Length == 1) return values[0];
+
+            float t = WrapTime(animTime, duration);
+            int n = Math.Min(times.Length, values.Length);
+            int hi = 1;
+            while (hi < n && times[hi] < t) hi++;
+            if (hi >= n) return values[n - 1];
+            int lo = hi - 1;
+            if (lo < 0) return values[0];
+
+            float span = times[hi] - times[lo];
+            float s = span > 0.0001f ? (t - times[lo]) / span : 0f;
+            return Quaternion.Slerp(values[lo], values[hi], s);
         }
 
         private void ExtractPrimitive(JsonElement primitive, JsonElement bufferViews, 
             JsonElement accessors, JsonElement buffers, byte[] glbBytes, uint binaryOffset,
-            Vector3 pivot, int jointNode, Quaternion staticRotation, string partName)
+            Vector3 pivot, int jointNode, Quaternion staticRotation, string partName, Matrix4x4 bake,
+            Quaternion parentRotation, bool fullTrs, Quaternion restRotation, Vector3 restTranslation, Vector3 restScale)
         {
             try
             {
@@ -628,11 +904,25 @@ namespace Cubuild
                     }
                 }
                 
-                // Read positions into LOCAL space (not offset by pivot - the pivot rotation is
-                // applied at animation/write time so parts swing around their joint origin).
-                var part = new ModelPart { Pivot = pivot, JointNode = jointNode, StaticRotation = staticRotation, Name = partName };
+                // Read positions into the PART's own space. For a flat export the bake is just the
+                // node's scale (the joint rotates about the pivot, applied at write time). For a
+                // bone-parented part it also folds the whole child chain down into the bone's frame,
+                // so draw time only has to re-apply the sampled bone TRS.
+                var part = new ModelPart
+                {
+                    Pivot = pivot,
+                    JointNode = jointNode,
+                    StaticRotation = staticRotation,
+                    Name = partName,
+                    JointFullTrs = fullTrs,
+                    JointParentRotation = parentRotation,
+                    JointRestRotation = restRotation,
+                    JointRestTranslation = restTranslation,
+                    JointRestScale = restScale,
+                };
                 part.Positions = new Vector3[posCount];
                 part.Shades = new float[posCount];
+                bool needBake = bake != Matrix4x4.Identity;
                 int posStart = (int)(binaryOffset + posByteOffset);
                 for (int i = 0; i < posCount; i++)
                 {
@@ -640,7 +930,7 @@ namespace Cubuild
                     float x = BitConverter.ToSingle(glbBytes, offset);
                     float y = BitConverter.ToSingle(glbBytes, offset + 4);
                     float z = BitConverter.ToSingle(glbBytes, offset + 8);
-                    part.Positions[i] = new Vector3(x, y, z);
+                    part.Positions[i] = needBake ? Vector3.Transform(new Vector3(x, y, z), bake) : new Vector3(x, y, z);
                 }
                 
                 // UVs (pad with zeros if missing)
@@ -796,20 +1086,50 @@ namespace Cubuild
 
             foreach (var part in _parts)
             {
-                // Rigged mobs (coyote) sample the GLB animation track on their joint node.
-                // Rig-less mobs (zombie) get a procedural walk cycle: arms/legs swing around the
-                // part's pivot from the walk phase, so ANY static Blockbench export can still move.
-                Quaternion jointRot = part.JointNode >= 0 ? SampleJointRotation(part.JointNode, animTime) : Quaternion.Identity;
+                // Rigged mobs sample the GLB animation track on their joint node. Rig-less mobs
+                // (zombie) get a procedural walk cycle: arms/legs swing around the part's pivot
+                // from the walk phase, so ANY static Blockbench export can still move.
+                Quaternion jointRot = Quaternion.Identity;
+                Vector3 jointTrans = Vector3.Zero;
+                Vector3 jointScale = Vector3.One;
+
+                if (part.JointNode >= 0)
+                {
+                    SampleJoint(part.JointNode, animTime, out var sampleT, out var sampleR, out var sampleS);
+                    if (part.JointFullTrs)
+                    {
+                        // Bone-parented part: the bone's TRS lives in ITS parent's frame, so lift it
+                        // into model space via that parent's rotation. Quaternion.Multiply(a, b)
+                        // applies b first and then a, which is the order the pivot rotation has to
+                        // follow the bone's own (see the convention note in the loader).
+                        jointRot = Quaternion.Multiply(part.JointParentRotation, sampleR);
+                        jointTrans = Vector3.Transform(sampleT, part.JointParentRotation);
+                        jointScale = sampleS;
+                    }
+                    else
+                    {
+                        jointRot = sampleR;
+                    }
+                }
+
                 Quaternion staticRot = part.StaticRotation;
                 if (part.JointNode < 0 && IsProceduralLimb(part.Name) && animBlend > 0f)
                 {
                     jointRot = ProceduralLimbRotation(part.Name, animTime) * jointRot;
                 }
 
-                // Blend toward rest pose: at blend 0 the joint is identity (neutral stance).
+                // Blend toward the rest pose: at blend 0 a plain joint goes back to identity, and a
+                // bone-parented one returns to the bone's own rest TRS - so an idle mob stands
+                // normally instead of freezing mid-stride, and a stopped locomotive settles back
+                // onto its wheels.
                 if (animBlend < 1f)
                 {
-                    jointRot = Quaternion.Slerp(Quaternion.Identity, jointRot, animBlend);
+                    jointRot = Quaternion.Slerp(part.JointRestRotation, jointRot, animBlend);
+                    if (part.JointFullTrs)
+                    {
+                        jointTrans = Vector3.Lerp(part.JointRestTranslation, jointTrans, animBlend);
+                        jointScale = Vector3.Lerp(part.JointRestScale, jointScale, animBlend);
+                    }
                 }
 
                 bool isHead = part.Name.Contains("head", StringComparison.OrdinalIgnoreCase);
@@ -828,7 +1148,20 @@ namespace Cubuild
                         local = Vector3.Transform(local, staticRot);
                     }
 
-                    if (jointRot != Quaternion.Identity)
+                    if (part.JointFullTrs)
+                    {
+                        // Bone-parented: world = pivot + jointT + rot(jointR, jointScale * x).
+                        if (jointScale != Vector3.One)
+                        {
+                            local = new Vector3(local.X * jointScale.X, local.Y * jointScale.Y, local.Z * jointScale.Z);
+                        }
+                        if (jointRot != Quaternion.Identity)
+                        {
+                            local = Vector3.Transform(local, jointRot);
+                        }
+                        local += part.Pivot + jointTrans;
+                    }
+                    else if (jointRot != Quaternion.Identity)
                     {
                         local = part.Pivot + Vector3.Transform(local, jointRot);
                     }
@@ -853,6 +1186,11 @@ namespace Cubuild
                         local.Y = part.Pivot.Y + hy * cosP + hz * sinP;
                         local.Z = part.Pivot.Z - hy * sinP + hz * cosP;
                     }
+
+                    // Vertical origin nudge so the model's own origin lands on the entity's feet
+                    // (see ModelYOffset). Done before the scale so it grows with the model, and
+                    // before body pitch so the model still tips about its contact point.
+                    local.Y += ModelYOffset;
 
                     // Uniform world scale grows the whole model about its feet origin. ModelScale is
                     // the per-type bake (mob config); scale is the per-instance multiplier, so brute
@@ -963,6 +1301,14 @@ namespace Cubuild
 
         /// <summary>Uniform world scale applied to the model at draw time (1.0 = raw GLB size).</summary>
         public float ModelScale = 1.0f;
+
+        /// <summary>
+        /// Vertical offset (blocks) applied to every vertex at draw time so the model's own origin
+        /// can be lined up with the entity's feet. Blockbench exports keep the origin wherever the
+        /// author left it - the locomotive's wheels hang at y=0.125, so it needs -0.125 to sit on
+        /// the rail instead of floating a eighth-block up. 0 = raw GLB origin.
+        /// </summary>
+        public float ModelYOffset = 0f;
 
         public void Draw(CommandList cl, ResourceSet? textureSet, float x, float y, float z, float yaw)
         {

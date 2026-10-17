@@ -78,8 +78,8 @@ namespace Cubuild
         {
             return new MobRenderData(
                 mob.MobType,
-                mob.Position,
-                mob.Yaw,
+                mob.RenderPosition,
+                mob.RenderYaw,
                 mob.HeadYawLocal,
                 mob.WalkPhase,
                 mob.WalkAmount,
@@ -95,7 +95,7 @@ namespace Cubuild
                 mob.HeadPitchLocal,
                 mob.RenderScale,
                 bodyPitch: mob.BodyPitch,
-                pitchAxisYaw: mob.Yaw);
+                pitchAxisYaw: mob.RenderYaw);
         }
     }
 }

@@ -94,6 +94,12 @@ namespace Cubuild.Renderer
         private DeviceBuffer _chunkBorderIndexBuffer;
         private float[] _chunkBorderVertexScratch = new float[768]; // grown on demand for larger render distances
 
+        // Solid beams linking coupled carts (drawn as a thin oriented box per link). Same bare
+        // world-position vertex format as the chunk-border pass; grown on demand.
+        private Pipeline? _linkBeamPipeline;
+        private DeviceBuffer? _linkBeamVertexBuffer;
+        private float[] _linkBeamVertexScratch = new float[36 * 3 * 4];
+
         // Sky: two GIANT fog-blended planes drawn before the world
         // with depth-write off. Top plane (glSkyList) at cameraY+16 uses the sky color, bottom plane
         // (glSkyList2) at cameraY-16 uses the darkened color (r*0.2+0.04, g*0.2+0.04, b*0.6+0.1).
@@ -926,6 +932,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             _highlightVertexBuffer?.Dispose();
             _highlightIndexBuffer?.Dispose();
             _highlightPipeline?.Dispose();
+            _linkBeamPipeline?.Dispose();
+            _linkBeamVertexBuffer?.Dispose();
             _shrinkCubeVertexBuffer?.Dispose();
             _shrinkCubeIndexBuffer?.Dispose();
             _shrinkCubePipeline?.Dispose();
