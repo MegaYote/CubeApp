@@ -670,8 +670,34 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         // cube + walls with the same brightness as regular world blocks.
         private int _miningLightLevel = 15;
         private long _miningLightChunkKey = long.MinValue;
-        // Upload budget per frame to avoid large spikes
+        // Floor for the per-frame upload budget. Uploads are individually cheap, but a fixed COUNT
+        // is the wrong unit for a budget: four per frame is plenty at the 2-chunk Tiny preset yet
+        // means well over a minute to stream the ~12.9k chunks the 64-chunk Extreme preset loads,
+        // with the world visibly missing around the player the whole time. The render loop
+        // therefore treats this as a guaranteed minimum and then keeps uploading while it stays
+        // inside UploadBudgetMs, so the small presets behave exactly as they always have and the
+        // large ones stream in a few seconds.
         private int _maxUploadsPerFrame = 4;
+        private const double UploadBudgetMs = 2.0;
+
+        // TEMP streaming diagnostics (enabled only when CUBUILD_PERF_LOG=1). Remove once the
+        // flying/streming hitch is identified.
+        // TEMP streaming diagnostics (disabled)
+        private static readonly bool PerfLog = false;
+        private readonly System.Diagnostics.Stopwatch _perfLogClock = System.Diagnostics.Stopwatch.StartNew();
+        private double _perfUploadMs;
+        private double _perfUploadMsMax;
+        private double _perfUploadMsSum;
+        private int _perfUploadFrames;
+        private int _perfUploadCount;
+        private int _perfRemovalCount;
+        private int _perfBufferGrowths;
+        private int _perfHitches;
+        private double _perfWriteCallMsMax;
+        private double _perfRebuildMs;
+        private double _perfRebuildMsMax;
+
+        private static double MsSince(long ts) => (System.Diagnostics.Stopwatch.GetTimestamp() - ts) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 
         private readonly struct PendingUpload
         {

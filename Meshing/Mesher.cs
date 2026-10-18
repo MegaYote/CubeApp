@@ -282,23 +282,14 @@ namespace Cubuild
                 }
             }
 
-            // Fluid pass: water blocks render as sloped surfaces, not cubes. This runs after the
-            // greedy pass (which was told to skip water-owned faces) so solid blocks keep their
-            // correct occlusion against water while water gets its own geometry.
-            EmitWaterFaces(chunk, chunkLookup, lighting, mesh);
-
-            // Lava pass: same as water but with lava-specific properties.
-            EmitLavaFaces(chunk, chunkLookup, lighting, mesh);
-
-            // Cross pass: saplings/flowers/mushrooms render as two crossed billboard quads.
-            EmitCrossFaces(chunk, chunkLookup, lighting, mesh);
-
-            // Special-solid pass: slabs and stairs render as partial boxes (not full cubes).
-            EmitSpecialFaces(chunk, chunkLookup, lighting, mesh);
-
             // Cache the per-block combined light for entity sampling (mobs read the light of the
             // block they stand on). Reuses the flood fill already computed for faces - no extra
-            // lighting pass. Written under the same lock as MeshFaces.
+            // lighting pass. Written under the same lock as MeshFaces. This has to cover the WHOLE
+            // column including the air above the terrain, because mobs sample the light where they
+            // stand, so it can't stop at the top block - but it does have to visit every cell
+            // regardless, which makes it the cheapest place to also census which special passes
+            // this chunk needs at all.
+            bool hasWater = false, hasLava = false, hasCross = false, hasSpecial = false;
             lock (chunk.MeshLock)
             {
                 var grid = chunk.LightGrid;
@@ -307,15 +298,41 @@ namespace Cubuild
                 {
                     for (int z = 0; z < depth; z++)
                     {
+                        int column = (x * depth + z) * height;
                         for (int y = 0; y < height; y++)
                         {
-                            int idx = (x * depth + z) * height + y;
-                            grid[idx] = (byte)lighting.GetLight(chunk.OriginX + x, y, chunk.OriginZ + z);
+                            grid[column + y] = (byte)lighting.GetLight(chunk.OriginX + x, y, chunk.OriginZ + z);
+                            int id = raw[column + y];
+                            if (id == WaterId) hasWater = true;
+                            else if (id == LavaId) hasLava = true;
+                            else if (BlockRegistry.IsCross(id)) hasCross = true;
+                            else if (BlockRegistry.IsPartialShape(id)) hasSpecial = true;
                         }
                     }
                 }
                 chunk.LightGrid = grid;
             }
+
+            // The four passes below are each a full-column scan, and most chunks need none of them:
+            // a plain stone/dirt chunk has no fluid, no cross billboards and no partial shapes at
+            // all. The census above says which are worth running, and each pass can stop at
+            // topSolidLocalY, since nothing above the chunk's own highest block can be any of these
+            // (the greedy pass above relies on the same fact via blockAtY). Between them that turns
+            // four unconditional full-volume scans into usually none, and at worst a third of one.
+
+            // Fluid pass: water blocks render as sloped surfaces, not cubes. This runs after the
+            // greedy pass (which was told to skip water-owned faces) so solid blocks keep their
+            // correct occlusion against water while water gets its own geometry.
+            if (hasWater) EmitWaterFaces(chunk, chunkLookup, lighting, mesh, topSolidLocalY);
+
+            // Lava pass: same as water but with lava-specific properties.
+            if (hasLava) EmitLavaFaces(chunk, chunkLookup, lighting, mesh, topSolidLocalY);
+
+            // Cross pass: saplings/flowers/mushrooms render as two crossed billboard quads.
+            if (hasCross) EmitCrossFaces(chunk, chunkLookup, lighting, mesh, topSolidLocalY);
+
+            // Special-solid pass: slabs and stairs render as partial boxes (not full cubes).
+            if (hasSpecial) EmitSpecialFaces(chunk, chunkLookup, lighting, mesh, topSolidLocalY);
 
             return mesh;
         }
@@ -355,7 +372,7 @@ namespace Cubuild
 
         // ---- Fluid (water) pass -----------------------------------------------------
 
-        private static void EmitWaterFaces(Chunk chunk, Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh)
+        private static void EmitWaterFaces(Chunk chunk, Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh, int maxY)
         {
             byte[] raw = chunk.RawBlocks;
             int height = chunk.Height;
@@ -370,7 +387,7 @@ namespace Cubuild
                 for (int z = 0; z < depth; z++)
                 {
                     int column = (x * depth + z) * height;
-                    for (int y = 0; y < height; y++)
+                    for (int y = 0; y <= maxY; y++)
                     {
                         if (raw[column + y] != WaterId) continue;
 
@@ -396,7 +413,7 @@ namespace Cubuild
                 for (int z = 0; z < depth; z++)
                 {
                     int column = (x * depth + z) * height;
-                    for (int y = 0; y < height; y++)
+                    for (int y = 0; y <= maxY; y++)
                     {
                         if (raw[column + y] != WaterId) continue;
 
@@ -513,7 +530,7 @@ namespace Cubuild
 
 // ---- Lava pass (same as water but with lava properties) ----
 
-        private static void EmitLavaFaces(Chunk chunk, Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh)
+        private static void EmitLavaFaces(Chunk chunk, Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh, int maxY)
         {
             byte[] raw = chunk.RawBlocks;
             int height = chunk.Height;
@@ -528,7 +545,7 @@ namespace Cubuild
                 for (int z = 0; z < depth; z++)
                 {
                     int column = (x * depth + z) * height;
-                    for (int y = 0; y < height; y++)
+                    for (int y = 0; y <= maxY; y++)
                     {
                         if (raw[column + y] != LavaId) continue;
 
@@ -554,7 +571,7 @@ namespace Cubuild
                 for (int z = 0; z < depth; z++)
                 {
                     int column = (x * depth + z) * height;
-                    for (int y = 0; y < height; y++)
+                    for (int y = 0; y <= maxY; y++)
                     {
                         if (raw[column + y] != LavaId) continue;
 
@@ -664,7 +681,7 @@ namespace Cubuild
         // interprets it as "sample the sprite's per-pixel alpha" (the plant tiles ship with
         // transparent backgrounds). The transparent pipeline is double-sided, so each quad is
         // emitted once with front-facing winding and mirrors correctly from behind.
-        private static void EmitCrossFaces(Chunk chunk, Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh)
+        private static void EmitCrossFaces(Chunk chunk, Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh, int maxY)
         {
             byte[] raw = chunk.RawBlocks;
             int height = chunk.Height;
@@ -679,7 +696,7 @@ namespace Cubuild
                 for (int z = 0; z < depth; z++)
                 {
                     int column = (x * depth + z) * height;
-                    for (int y = 0; y < height; y++)
+                    for (int y = 0; y <= maxY; y++)
                     {
                         int id = raw[column + y];
                         if (!BlockRegistry.IsCross(id)) continue;
@@ -822,7 +839,7 @@ namespace Cubuild
         // Slabs and stairs render as partial boxes, not full cubes. Each visible face is emitted
         // with the greedy pass's exact vertex winding (FaceVertices) so back-face culling keeps
         // the correct side, and the face's light is sampled from the empty cell it faces into.
-        private static void EmitSpecialFaces(Chunk chunk, Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh)
+        private static void EmitSpecialFaces(Chunk chunk, Dictionary<ChunkCoordinates, Chunk> lookup, ChunkLighting lighting, List<MeshFace> mesh, int maxY)
         {
             byte[] raw = chunk.RawBlocks;
             int height = chunk.Height;
@@ -834,7 +851,7 @@ namespace Cubuild
                 for (int z = 0; z < depth; z++)
                 {
                     int column = (x * depth + z) * height;
-                    for (int y = 0; y < height; y++)
+                    for (int y = 0; y <= maxY; y++)
                     {
                         int id = raw[column + y];
                         if (!BlockRegistry.IsPartialShape(id)) continue;

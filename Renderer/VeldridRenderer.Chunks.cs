@@ -13,6 +13,8 @@ namespace Cubuild.Renderer
             uint[] cutoutVerts, ushort[] cutoutIndices, uint[] glassVerts, ushort[] glassIndices,
             uint[] transVerts, ushort[] transIndices)
         {
+            long tWrite = PerfLog ? System.Diagnostics.Stopwatch.GetTimestamp() : 0; // TEMP streaming diagnostics
+
             if (_chunkRanges.TryGetValue(coord, out var prev))
             {
                 FreeRange(prev);
@@ -90,18 +92,22 @@ namespace Cubuild.Renderer
                 _transparentRanges.Remove(coord);
             }
 
-            // Incrementally update this chunk's draw command in each pass instead of rebuilding
-            // all passes from scratch (FPS roadmap #4). The GPU cull data must refresh too, since
-            // the new AABB/args replace the old one.
-            _chunkRanges.TryGetValue(coord, out var newOpaque);
-            _cutoutRanges.TryGetValue(coord, out var newCutout);
-            _glassRanges.TryGetValue(coord, out var newGlass);
-            _transparentRanges.TryGetValue(coord, out var newTrans);
-            SyncPassCommand(_drawCommands, ref _indirectScratch, coord, newOpaque);
-            SyncPassCommand(_cutoutDrawCommands, ref _cutoutIndirectScratch, coord, newCutout);
-            SyncPassCommand(_glassDrawCommands, ref _glassIndirectScratch, coord, newGlass);
-            SyncPassCommand(_transparentDrawCommands, ref _transparentIndirectScratch, coord, newTrans);
+            // Mark the pass lists dirty; Render() rebuilds them once per frame from the range
+            // dictionaries (see RebuildDrawCommands). This used to sync each pass incrementally
+            // here (FPS roadmap #4), but that was an O(n) linear scan of the whole pass list per
+            // pass - four scans per chunk, growing with the render distance. At the 64-chunk
+            // Extreme preset (24k commands) a burst of ~200 unloads in one frame meant ~19M
+            // struct comparisons and a 40-60ms stall, which is exactly the fps collapse seen
+            // while flying. The lists are re-sorted back-to-front every frame anyway (SortPass*),
+            // so incremental ordering bought nothing; one O(n) rebuild per dirty frame is far
+            // cheaper than O(n) per chunk. Counts here are tiny (logical chunks, not commands).
+            _drawCommandsDirty = true;
             _gpuCullDataDirty = true;
+            if (PerfLog) // TEMP streaming diagnostics
+            {
+                double d = MsSince(tWrite);
+                if (d > _perfWriteCallMsMax) _perfWriteCallMsMax = d;
+            }
         }
 
         // First-fit allocator: reuse a freed hole if one's big enough, else append at the tail
@@ -157,11 +163,9 @@ namespace Cubuild.Renderer
                 _transparentRanges.Remove(coord);
             }
 
-            // Remove this chunk's draw commands from every pass (incremental, not a full rebuild).
-            SyncPassCommand(_drawCommands, ref _indirectScratch, coord, null);
-            SyncPassCommand(_cutoutDrawCommands, ref _cutoutIndirectScratch, coord, null);
-            SyncPassCommand(_glassDrawCommands, ref _glassIndirectScratch, coord, null);
-            SyncPassCommand(_transparentDrawCommands, ref _transparentIndirectScratch, coord, null);
+            // Drop this chunk's commands from every pass via the per-frame rebuild (see
+            // WriteChunkData for why the old incremental O(n)-per-chunk sync was removed).
+            _drawCommandsDirty = true;
             _gpuCullDataDirty = true;
         }
 
@@ -171,8 +175,9 @@ namespace Cubuild.Renderer
         private void EnsureVertexCapacity(uint needed)
         {
             if (_megaVertexBuffer != null && _vbCapacityBytes >= needed) return;
+            _perfBufferGrowths++; // TEMP streaming diagnostics
             uint newCap = Math.Max(needed, Math.Max(1024, _vbCapacityBytes * 2));
-            var newBuf = _gd.ResourceFactory.CreateBuffer(new BufferDescription(newCap, BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            var newBuf = _gd.ResourceFactory.CreateBuffer(new BufferDescription(newCap, BufferUsage.VertexBuffer));
             if (_megaVertexBuffer != null)
             {
                 _pendingBufferCopies.Add((_megaVertexBuffer, newBuf, _vbTailBytes));
@@ -184,8 +189,9 @@ namespace Cubuild.Renderer
         private void EnsureIndexCapacity(uint needed)
         {
             if (_megaIndexBuffer != null && _ibCapacityBytes >= needed) return;
+            _perfBufferGrowths++; // TEMP streaming diagnostics
             uint newCap = Math.Max(needed, Math.Max(1024, _ibCapacityBytes * 2));
-            var newBuf = _gd.ResourceFactory.CreateBuffer(new BufferDescription(newCap, BufferUsage.IndexBuffer | BufferUsage.Dynamic));
+            var newBuf = _gd.ResourceFactory.CreateBuffer(new BufferDescription(newCap, BufferUsage.IndexBuffer));
             if (_megaIndexBuffer != null)
             {
                 _pendingBufferCopies.Add((_megaIndexBuffer, newBuf, _ibTailBytes));
@@ -359,57 +365,10 @@ namespace Cubuild.Renderer
             cl.CopyBuffer(_cullArgsBuffer, 0, _indirectBuffer, 0, (uint)commands.Count * IndirectCommandStride);
         }
 
-        // Incrementally syncs ONE chunk's draw command in a pass list instead of rebuilding the
-        // whole pass from scratch (FPS roadmap #4). Upserts the existing entry for `coord`, appends
-        // a new one, or removes the entry when the chunk no longer has faces in this pass. Also
-        // grows the pass's indirect scratch so CPU-cull draws have room.
-        private void SyncPassCommand(
-            System.Collections.Generic.List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
-            ref IndirectDrawIndexedArguments[] scratch,
-            Cubuild.ChunkCoordinates coord,
-            ChunkRange? range)
-        {
-            int found = -1;
-            for (int i = 0; i < commands.Count; i++)
-            {
-                if (commands[i].Coord.Equals(coord))
-                {
-                    found = i;
-                    break;
-                }
-            }
-
-            if (range == null)
-            {
-                if (found >= 0) commands.RemoveAt(found);
-                return;
-            }
-
-            var r = range.Value;
-            var cmd = new IndirectDrawIndexedArguments
-            {
-                IndexCount = r.IndexCount,
-                InstanceCount = 1,
-                FirstIndex = r.IbOffsetBytes / 2,           // ushort index units
-                VertexOffset = (int)(r.VbOffsetBytes / VertexStrideBytes),
-                FirstInstance = 0,
-            };
-
-            if (found >= 0)
-            {
-                commands[found] = (coord, cmd);
-            }
-            else
-            {
-                commands.Add((coord, cmd));
-            }
-
-            if (scratch.Length < commands.Count)
-            {
-                scratch = new IndirectDrawIndexedArguments[Math.Max(256, commands.Count * 2)];
-            }
-        }
-
+        // Rebuilds all four pass lists from the range dictionaries. Called once per frame when a
+        // chunk was uploaded or unloaded (see WriteChunkData / FreeChunkRange), which replaced the
+        // old per-chunk incremental sync - that scanned each pass list per pass, so its cost grew
+        // with the render distance and caused 40-60ms stalls while flying at the 64-chunk preset.
         private void RebuildDrawCommands()
         {
             _drawCommands.Clear();
@@ -497,6 +456,14 @@ namespace Cubuild.Renderer
         // angular height clearly beats the target's, with a margin, so nothing pops while visible.
         private const double BlockingMargin = 0.35; // angular margin (radians-ish, slope units) - was 0.12, too aggressive
         private const int NearSkipChunks = 4;
+        // The horizon march walks one step per chunk of distance, so its cost scales with the
+        // render distance even though its VALUE does not: past a few dozen chunks the fog is doing
+        // the hiding anyway, and whether a chunk there is drawn or not is invisible. Bound the march
+        // so the CPU cull stays affordable at the 64-chunk Extreme preset. Beyond the bound a chunk
+        // is simply assumed visible, which is the safe direction - over-drawing an occluded chunk
+        // costs fill rate, whereas wrongly hiding a visible one would pop. Every preset up to the
+        // 16-chunk Far one is entirely inside this bound, so those are unaffected.
+        private const int OcclusionMaxChunks = 32;
         private bool IsHeightmapOccluded(Cubuild.ChunkCoordinates coord)
         {
             if (_chunkManager == null || !_cameraPosition.HasValue) return false;
@@ -512,6 +479,7 @@ namespace Cubuild.Renderer
             double dz = targetCz - camCz;
             double dist = Math.Sqrt(dx * dx + dz * dz);
             if (dist < NearSkipChunks + 1.0) return false; // too close to the camera to ever hide
+            if (dist > OcclusionMaxChunks) return false;   // too far for the horizon test to pay for itself
 
             // Target chunk terrain top (world Y). Unknown = don't occlude (conservative).
             if (!_chunkManager.TryGetLoadedChunk(coord, out var targetChunk)) return false;

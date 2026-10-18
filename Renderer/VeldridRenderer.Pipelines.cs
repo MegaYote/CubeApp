@@ -922,7 +922,20 @@ void main() {
             {
                 CullingMode.Gpu => true,
                 CullingMode.Cpu => false,
-                _ => !IsIntelGpu(_gd.VendorName),
+                // Auto picks whichever path ISSUES THE FEWER DRAW COMMANDS, because that is what
+                // dominates once the loaded set gets large:
+                //  - D3D11 has no multi-draw indirect. Veldrid emulates DrawIndexedIndirect with one
+                //    DrawIndexedInstancedIndirect per command (D3D11CommandList.DrawIndexedIndirectCore
+                //    is a plain for-loop), so the GPU path's "submit every command and let culled
+                //    chunks cull themselves down to InstanceCount = 0" costs one real driver call per
+                //    LOADED chunk per pass - three quarters of the world's ~12.9k chunks at the
+                //    64-chunk Extreme preset, which is exactly the cost the GPU path exists to avoid.
+                //    Compacting on the CPU issues only the chunks actually in view.
+                //  - Vulkan/OpenGL have real multi-draw, where submitting everything really is
+                //    cheaper than a per-frame CPU scan.
+                // Intel keeps the CPU path on every backend - their indirect support is the one that
+                // historically misbehaved here.
+                _ => !IsIntelGpu(_gd.VendorName) && _gd.BackendType != GraphicsBackend.Direct3D11,
             };
             _gpuCullDataDirty = true;
             _opaqueCullData = Array.Empty<uint>();
