@@ -132,7 +132,9 @@ namespace Cubuild
                                 if (layer < 2 && _manager.TryGetLoadedChunk(new ChunkCoordinates(layer + 1, chunkX, chunkZ), out var above)) chunksToPass.Add(above);
 
                                 var renderer = _getRenderer();
-                                var faces = Mesher.GenerateMesh(chunksToPass);
+                                var faces = Mesher.GenerateMesh(chunksToPass,
+                                    (worldX, worldZ) => _manager.BiomeAt(worldX, worldZ).Id,
+                                    out var surfaceLodFaces);
 
                                 // Lock to ensure atomic mesh update. Mesher.GenerateMesh always
                                 // returns a List<MeshFace>, and the worker owns it exclusively here,
@@ -141,6 +143,7 @@ namespace Cubuild
                                 lock (chunk.MeshLock)
                                 {
                                     chunk.MeshFaces = faces as List<MeshFace> ?? new List<MeshFace>(faces);
+                                    chunk.SurfaceLodFaces = surfaceLodFaces;
                                     chunk.MeshVersion++;
                                     chunk.NeedsRemesh = false;
                                     facesToUpload = chunk.MeshFaces;
@@ -152,11 +155,11 @@ namespace Cubuild
                                     {
                                         if (isPriority)
                                         {
-                                            renderer.UploadChunkPriority(coords, facesToUpload);
+                                            renderer.UploadChunkPriorityWithLod(coords, facesToUpload, surfaceLodFaces);
                                         }
                                         else
                                         {
-                                            renderer.UploadChunk(coords, facesToUpload);
+                                            renderer.UploadChunkWithLod(coords, facesToUpload, surfaceLodFaces);
                                         }
                                     }
                                     else

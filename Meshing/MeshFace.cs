@@ -1,3 +1,5 @@
+using System;
+
 namespace Cubuild
 {
     /// <summary>
@@ -14,6 +16,8 @@ namespace Cubuild
         public Point3D Normal { get; }
         public Point3D BlockPosition { get; }
         public float Shade { get; }
+        public int SkyLight { get; }
+        public int BlockLight { get; }
         public int TileWidth { get; }
         public int TileHeight { get; }
         public float Alpha { get; }
@@ -28,8 +32,10 @@ namespace Cubuild
         /// every orientation. Used by rails: one straight tile and one curve tile, rotated to
         /// face whichever way the track runs.</summary>
         public int TextureRotation { get; }
+        /// <summary>When true, green atlas texels on this face receive the Hills-biome tint.</summary>
+        public bool BiomeHillsGreenTint { get; }
 
-        public MeshFace(Point3D v0, Point3D v1, Point3D v2, Point3D v3, TextureRect srcRect, Point3D normal, Point3D blockPosition, float shade, int tileWidth, int tileHeight, float alpha = 1f, bool anchorVBottom = false, int textureRotation = 0)
+        public MeshFace(Point3D v0, Point3D v1, Point3D v2, Point3D v3, TextureRect srcRect, Point3D normal, Point3D blockPosition, float shade, int tileWidth, int tileHeight, int skyLight, int blockLight, float alpha = 1f, bool anchorVBottom = false, int textureRotation = 0, bool biomeHillsGreenTint = false)
         {
             V0 = v0;
             V1 = v1;
@@ -39,11 +45,14 @@ namespace Cubuild
             Normal = normal;
             BlockPosition = blockPosition;
             Shade = shade;
+            SkyLight = Math.Clamp(skyLight, 0, ChunkLighting.MaxLight);
+            BlockLight = Math.Clamp(blockLight, 0, ChunkLighting.MaxLight);
             TileWidth = tileWidth;
             TileHeight = tileHeight;
             Alpha = alpha;
             AnchorVBottom = anchorVBottom;
             TextureRotation = textureRotation;
+            BiomeHillsGreenTint = biomeHillsGreenTint;
         }
     }
 }

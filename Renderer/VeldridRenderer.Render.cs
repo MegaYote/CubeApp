@@ -369,50 +369,13 @@ namespace Cubuild.Renderer
             _playerInstances = _playerList;
         }
 
-        // TEMP streaming diagnostics (only active when CUBUILD_PERF_LOG=1). One line per second.
-        private void LogStreamingDiagIfDue()
-        {
-            if (!PerfLog) return;
-            if (_perfLogClock.ElapsedMilliseconds < 1000) return;
-            _perfLogClock.Restart();
-            try
-            {
-                int cmds = _drawCommands.Count + _cutoutDrawCommands.Count + _glassDrawCommands.Count + _transparentDrawCommands.Count;
-                string line = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                    "{0:HH:mm:ss} fps={1:0.0} upd={2:0.0} mesh={3:0.0} render={4:0.0} | chunks={5} cmds={6} up={7} upMsAvg={8:0.00} upMsMax={9:0.00} wCallMax={10:0.00} rebMsSum={11:0.00} rebMsMax={12:0.00} rem={13} vb={14}/{15}MB ib={16}/{17}MB grow={18} hitches={19}",
-                    DateTime.Now, _hud.Fps, _hud.UpdateMs, _hud.MeshMs, _hud.RenderMs,
-                    _chunkRanges.Count, cmds, _perfUploadCount,
-                    _perfUploadFrames > 0 ? _perfUploadMsSum / _perfUploadFrames : 0.0, _perfUploadMsMax,
-                    _perfWriteCallMsMax, _perfRebuildMs, _perfRebuildMsMax,
-                    _perfRemovalCount,
-                    _vbTailBytes / (1024 * 1024), _vbCapacityBytes / (1024 * 1024),
-                    _ibTailBytes / (1024 * 1024), _ibCapacityBytes / (1024 * 1024),
-                    _perfBufferGrowths, _perfHitches);
-                System.IO.File.AppendAllText(System.IO.Path.Combine(AppContext.BaseDirectory, "perf.log"), line + Environment.NewLine);
-            }
-            catch { }
-            _perfUploadCount = 0;
-            _perfUploadMsSum = 0;
-            _perfUploadFrames = 0;
-            _perfRemovalCount = 0;
-            _perfUploadMsMax = 0;
-            _perfHitches = 0;
-            _perfWriteCallMsMax = 0;
-            _perfRebuildMs = 0;
-            _perfRebuildMsMax = 0;
-        }
-
         public void Render()
         {
             // Process pending removals/uploads on render thread
-            int removalsThisFrame = 0;
             while (_pendingRemovals.TryDequeue(out var rem))
             {
                 FreeChunkRange(rem);
-                removalsThisFrame++;
             }
-            _perfRemovalCount += removalsThisFrame;
-            long uploadClock = System.Diagnostics.Stopwatch.GetTimestamp();
 
             // Decay the health-outline flash (1/60s per frame; ImGui is updated at 60Hz).
             if (_healthFlashTimer > 0f) _healthFlashTimer -= 1f / 60f;
@@ -426,7 +389,7 @@ namespace Cubuild.Renderer
             // Process priority uploads (player edits) first - no limit for instant feedback
             while (_pendingPriorityUploads.TryDequeue(out var pu))
             {
-                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices, pu.TransparentVertices, pu.TransparentIndices);
+                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices, pu.TransparentVertices, pu.TransparentIndices, pu.SurfaceLodVertices, pu.SurfaceLodIndices);
             }
 
             // Stream pending chunk meshes: always take the guaranteed minimum, then keep going
@@ -437,7 +400,7 @@ namespace Cubuild.Renderer
             double ticksPerMs = System.Diagnostics.Stopwatch.Frequency / 1000.0;
             while (_pendingUploads.TryDequeue(out var pu))
             {
-                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices, pu.TransparentVertices, pu.TransparentIndices);
+                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices, pu.TransparentVertices, pu.TransparentIndices, pu.SurfaceLodVertices, pu.SurfaceLodIndices);
                 uploadsThisFrame++;
                 if (uploadsThisFrame >= _maxUploadsPerFrame
                     && (System.Diagnostics.Stopwatch.GetTimestamp() - uploadStartTicks) / ticksPerMs >= UploadBudgetMs)
@@ -446,24 +409,18 @@ namespace Cubuild.Renderer
                 }
             }
 
-            if (_drawCommandsDirty)
+            // All currently processed removals and uploads have invalidated their groups. Rebuild
+            // each affected patch once, after the final per-frame state is known.
+            if (_dirtySurfacePatches.Count > 0)
             {
-                long tReb = System.Diagnostics.Stopwatch.GetTimestamp();
-                RebuildDrawCommands();
-                _drawCommandsDirty = false;
-                double rebMs = MsSince(tReb); // TEMP streaming diagnostics
-                _perfRebuildMs += rebMs;
-                if (rebMs > _perfRebuildMsMax) _perfRebuildMsMax = rebMs;
+                RebuildDirtySurfacePatches();
             }
 
-            // TEMP streaming diagnostics
-            _perfUploadMs = (System.Diagnostics.Stopwatch.GetTimestamp() - uploadClock) / ticksPerMs;
-            _perfUploadMsMax = Math.Max(_perfUploadMsMax, _perfUploadMs);
-            _perfUploadMsSum += _perfUploadMs;
-            _perfUploadCount += uploadsThisFrame;
-            _perfUploadFrames++;
-            if (_hud.RenderMs > 20f) _perfHitches++;
-            LogStreamingDiagIfDue();
+            if (_drawCommandsDirty)
+            {
+                RebuildDrawCommands();
+                _drawCommandsDirty = false;
+            }
 
             var cl = _commandList;
             cl.Begin();

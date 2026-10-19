@@ -145,7 +145,7 @@ namespace Cubuild
                             int chunkX = ch.OriginX / ChunkManager.ChunkSize;
                             int chunkZ = ch.OriginZ / ChunkManager.ChunkSize;
                             int layer = ChunkManager.LayerForWorldY(ch.OriginY);
-                            gpuRenderer.UploadChunk(new ChunkCoordinates(layer, chunkX, chunkZ), ch.MeshFaces);
+                            gpuRenderer.UploadChunkWithLod(new ChunkCoordinates(layer, chunkX, chunkZ), ch.MeshFaces, ch.SurfaceLodFaces);
                         }
                     }
                 }

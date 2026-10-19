@@ -7,7 +7,11 @@ namespace Cubuild.Renderer
         void Render();
         void Dispose();
         void UploadChunk(Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces);
+        void UploadChunkWithLod(Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces,
+            System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace>? surfaceLodFaces);
         void UploadChunkPriority(Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces);
+        void UploadChunkPriorityWithLod(Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces,
+            System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace>? surfaceLodFaces);
         void RemoveChunk(Cubuild.ChunkCoordinates coords);
         void UpdateCamera(Cubuild.Point3D position, float yaw, float pitch, float walkPhase = 0f, float walkAmount = 0f, bool firstPerson = false, bool grounded = true);
         Cubuild.Point3D? CameraPosition { get; }

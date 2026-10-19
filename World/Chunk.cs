@@ -46,12 +46,26 @@ namespace Cubuild
         public List<MeshFace> MeshFaces { get; set; } = new List<MeshFace>();
 
         /// <summary>
+        /// Optional far-field surface mesh derived from this chunk's actual block data. It is a
+        /// visual-only heightfield approximation; full MeshFaces remain authoritative for nearby
+        /// rendering and gameplay. Null means the chunk is ineligible for this representation.
+        /// </summary>
+        public IReadOnlyList<MeshFace>? SurfaceLodFaces { get; set; }
+
+        /// <summary>True once block data has been edited or restored from a save. Player-edited
+        /// chunks deliberately stay full-detail at every distance.</summary>
+        public volatile bool HasRuntimeEdits;
+
+        /// <summary>
         /// Cached per-block combined light (0..15) for this chunk, same layout as RawBlocks
         /// (column-major ((x*Depth+z)*Height+y)). Filled by the mesher while it flood-fills light
         /// for faces, so mobs/entities can sample the block they stand on with one array lookup
         /// instead of rebuilding a lighting region. Null until first mesh; stale after edits until
         /// the next remesh (same lifetime as MeshFaces).
         /// </summary>
+        // Packed per-cell light channels: sky light in the high nibble, block/emitted light in
+        // the low nibble. This stays one byte per block while allowing renderers and gameplay
+        // checks to distinguish ambient daylight from torches.
         public byte[]? LightGrid;
         private bool _needsRemesh = true;
         /// <summary>True when this chunk's mesh must be regenerated. The setter fires

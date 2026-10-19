@@ -11,9 +11,9 @@ namespace Cubuild.Renderer
     {
         private void WriteChunkData(Cubuild.ChunkCoordinates coord, uint[] verts, ushort[] indices,
             uint[] cutoutVerts, ushort[] cutoutIndices, uint[] glassVerts, ushort[] glassIndices,
-            uint[] transVerts, ushort[] transIndices)
+            uint[] transVerts, ushort[] transIndices, uint[] surfaceLodVerts, ushort[] surfaceLodIndices)
         {
-            long tWrite = PerfLog ? System.Diagnostics.Stopwatch.GetTimestamp() : 0; // TEMP streaming diagnostics
+            InvalidateSurfacePatchFor(coord);
 
             if (_chunkRanges.TryGetValue(coord, out var prev))
             {
@@ -31,6 +31,12 @@ namespace Cubuild.Renderer
             {
                 FreeRange(prevTrans);
             }
+            if (_surfaceLodRanges.TryGetValue(coord, out var prevLod))
+            {
+                FreeRange(prevLod);
+                _surfaceLodRanges.Remove(coord);
+            }
+            _surfaceLodMeshes.Remove(coord);
 
             uint vbBytes = (uint)(verts.Length * sizeof(float));
             uint ibBytes = (uint)(indices.Length * sizeof(ushort));
@@ -92,6 +98,26 @@ namespace Cubuild.Renderer
                 _transparentRanges.Remove(coord);
             }
 
+            // The far-field heightfield is opaque-only and intentionally has a separate range so
+            // the full chunk mesh remains available for the near-field representation.
+            if (Cubuild.LodSettings.SurfaceLodEnabled && surfaceLodVerts != null && surfaceLodVerts.Length > 0
+                && surfaceLodIndices != null && surfaceLodIndices.Length > 0)
+            {
+                uint lvbBytes = (uint)(surfaceLodVerts.Length * sizeof(float));
+                uint libBytes = (uint)(surfaceLodIndices.Length * sizeof(ushort));
+                var (lvbo, _, libo, _) = AllocateRange(lvbBytes, libBytes);
+                _gd.UpdateBuffer(_megaVertexBuffer, lvbo, surfaceLodVerts);
+                _gd.UpdateBuffer(_megaIndexBuffer, libo, surfaceLodIndices);
+                _surfaceLodRanges[coord] = new ChunkRange
+                {
+                    VbOffsetBytes = lvbo,
+                    VbBytes = lvbBytes,
+                    IbOffsetBytes = libo,
+                    IndexCount = (uint)surfaceLodIndices.Length,
+                };
+                _surfaceLodMeshes[coord] = (surfaceLodVerts, surfaceLodIndices);
+            }
+
             // Mark the pass lists dirty; Render() rebuilds them once per frame from the range
             // dictionaries (see RebuildDrawCommands). This used to sync each pass incrementally
             // here (FPS roadmap #4), but that was an O(n) linear scan of the whole pass list per
@@ -103,11 +129,6 @@ namespace Cubuild.Renderer
             // cheaper than O(n) per chunk. Counts here are tiny (logical chunks, not commands).
             _drawCommandsDirty = true;
             _gpuCullDataDirty = true;
-            if (PerfLog) // TEMP streaming diagnostics
-            {
-                double d = MsSince(tWrite);
-                if (d > _perfWriteCallMsMax) _perfWriteCallMsMax = d;
-            }
         }
 
         // First-fit allocator: reuse a freed hole if one's big enough, else append at the tail
@@ -135,13 +156,15 @@ namespace Cubuild.Renderer
 
         private void FreeRange(ChunkRange r)
         {
-            // Callers (WriteChunkData / FreeChunkRange) sync the affected chunk's draw commands
-            // incrementally - no full-rebuild flag here (FPS roadmap #4).
+            // Callers mark draw commands dirty; Render() rebuilds them once after the current
+            // batch of uploads/removals instead of scanning pass lists once per changed chunk.
             _freeBlocks.Add((r.VbOffsetBytes, r.VbBytes, r.IbOffsetBytes, r.IndexCount * sizeof(ushort)));
         }
 
         private void FreeChunkRange(Cubuild.ChunkCoordinates coord)
         {
+            InvalidateSurfacePatchFor(coord);
+
             if (_chunkRanges.TryGetValue(coord, out var r))
             {
                 FreeRange(r);
@@ -162,11 +185,132 @@ namespace Cubuild.Renderer
                 FreeRange(tr);
                 _transparentRanges.Remove(coord);
             }
+            if (_surfaceLodRanges.TryGetValue(coord, out var lod))
+            {
+                FreeRange(lod);
+                _surfaceLodRanges.Remove(coord);
+            }
+            _surfaceLodMeshes.Remove(coord);
 
             // Drop this chunk's commands from every pass via the per-frame rebuild (see
             // WriteChunkData for why the old incremental O(n)-per-chunk sync was removed).
             _drawCommandsDirty = true;
             _gpuCullDataDirty = true;
+        }
+
+        private static int FloorDiv(int value, int divisor)
+        {
+            int quotient = value / divisor;
+            if (value % divisor < 0) quotient--;
+            return quotient;
+        }
+
+        private static Cubuild.ChunkCoordinates SurfacePatchCoord(Cubuild.ChunkCoordinates coord)
+        {
+            return new Cubuild.ChunkCoordinates(ChunkManager.GroundLayer,
+                FloorDiv(coord.X, 4) * 4, FloorDiv(coord.Z, 4) * 4);
+        }
+
+        // The patch range is removed only on the first invalidation in a batch. Later uploads or
+        // removals in that same group merely keep its dirty key set, avoiding duplicate frees.
+        private void InvalidateSurfacePatchFor(Cubuild.ChunkCoordinates coord)
+        {
+            if (!Cubuild.LodSettings.SurfaceLodEnabled || coord.Layer != ChunkManager.GroundLayer) return;
+            var patchCoord = SurfacePatchCoord(coord);
+            if (_surfacePatchRanges.TryGetValue(patchCoord, out var patchRange))
+            {
+                FreeRange(patchRange);
+                _surfacePatchRanges.Remove(patchCoord);
+            }
+            _dirtySurfacePatches.Add(patchCoord);
+            _drawCommandsDirty = true;
+            _gpuCullDataDirty = true;
+        }
+
+        // Aggregate existing packed per-chunk surface LOD arrays. No block data is read or meshed
+        // here; each chunk's local ushort indices are rebased into the combined 16-bit vertex set.
+        private void RebuildDirtySurfacePatches()
+        {
+            if (!Cubuild.LodSettings.SurfaceLodEnabled)
+            {
+                _dirtySurfacePatches.Clear();
+                return;
+            }
+
+            foreach (var patchCoord in _dirtySurfacePatches)
+            {
+                var memberMeshes = new (uint[] Vertices, ushort[] Indices)[16];
+                int vertexCount = 0;
+                int indexCount = 0;
+                bool complete = true;
+                for (int dx = 0; dx < 4 && complete; dx++)
+                {
+                    for (int dz = 0; dz < 4; dz++)
+                    {
+                        var member = new Cubuild.ChunkCoordinates(ChunkManager.GroundLayer,
+                            patchCoord.X + dx, patchCoord.Z + dz);
+                        if (!_surfaceLodMeshes.TryGetValue(member, out var mesh)
+                            || mesh.Vertices.Length == 0 || mesh.Indices.Length == 0
+                            || mesh.Vertices.Length % 6 != 0)
+                        {
+                            complete = false;
+                            break;
+                        }
+
+                        int memberVertices = mesh.Vertices.Length / 6;
+                        if (vertexCount > 65536 - memberVertices)
+                        {
+                            complete = false;
+                            break;
+                        }
+                        memberMeshes[dx * 4 + dz] = mesh;
+                        vertexCount += memberVertices;
+                        indexCount += mesh.Indices.Length;
+                    }
+                }
+
+                if (!complete || vertexCount == 0 || indexCount == 0) continue;
+
+                var vertices = new uint[vertexCount * 6];
+                var indices = new ushort[indexCount];
+                int vertexWrite = 0;
+                int indexWrite = 0;
+                int vertexBase = 0;
+                for (int memberIndex = 0; memberIndex < memberMeshes.Length; memberIndex++)
+                {
+                    var mesh = memberMeshes[memberIndex];
+                    Array.Copy(mesh.Vertices, 0, vertices, vertexWrite, mesh.Vertices.Length);
+                    vertexWrite += mesh.Vertices.Length;
+                    int memberVertexCount = mesh.Vertices.Length / 6;
+                    for (int i = 0; i < mesh.Indices.Length; i++)
+                    {
+                        int rebased = vertexBase + mesh.Indices[i];
+                        if ((uint)rebased >= (uint)vertexCount || rebased > ushort.MaxValue)
+                        {
+                            complete = false;
+                            break;
+                        }
+                        indices[indexWrite++] = (ushort)rebased;
+                    }
+                    if (!complete) break;
+                    vertexBase += memberVertexCount;
+                }
+                if (!complete || indexWrite != indices.Length) continue;
+
+                uint vbBytes = (uint)(vertices.Length * sizeof(uint));
+                uint ibBytes = (uint)(indices.Length * sizeof(ushort));
+                var (vbOffset, _, ibOffset, _) = AllocateRange(vbBytes, ibBytes);
+                _gd.UpdateBuffer(_megaVertexBuffer, vbOffset, vertices);
+                _gd.UpdateBuffer(_megaIndexBuffer, ibOffset, indices);
+                _surfacePatchRanges[patchCoord] = new ChunkRange
+                {
+                    VbOffsetBytes = vbOffset,
+                    VbBytes = vbBytes,
+                    IbOffsetBytes = ibOffset,
+                    IndexCount = (uint)indices.Length,
+                };
+            }
+            _dirtySurfacePatches.Clear();
         }
 
         // Grows the mega vertex buffer to 2x (or to the needed size) when the tail would overflow.
@@ -175,7 +319,6 @@ namespace Cubuild.Renderer
         private void EnsureVertexCapacity(uint needed)
         {
             if (_megaVertexBuffer != null && _vbCapacityBytes >= needed) return;
-            _perfBufferGrowths++; // TEMP streaming diagnostics
             uint newCap = Math.Max(needed, Math.Max(1024, _vbCapacityBytes * 2));
             var newBuf = _gd.ResourceFactory.CreateBuffer(new BufferDescription(newCap, BufferUsage.VertexBuffer));
             if (_megaVertexBuffer != null)
@@ -189,7 +332,6 @@ namespace Cubuild.Renderer
         private void EnsureIndexCapacity(uint needed)
         {
             if (_megaIndexBuffer != null && _ibCapacityBytes >= needed) return;
-            _perfBufferGrowths++; // TEMP streaming diagnostics
             uint newCap = Math.Max(needed, Math.Max(1024, _ibCapacityBytes * 2));
             var newBuf = _gd.ResourceFactory.CreateBuffer(new BufferDescription(newCap, BufferUsage.IndexBuffer));
             if (_megaIndexBuffer != null)
@@ -261,7 +403,7 @@ namespace Cubuild.Renderer
         // std430: vec4 aabbMin + vec4 aabbMax + uvec4 cmd + uint firstInstance = 16 uint32s per
         // chunk. The array is sized exactly to the command count so it can be uploaded whole.
         private void FillCullData(
-            System.Collections.Generic.List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            System.Collections.Generic.List<DrawEntry> commands,
             ref uint[] target)
         {
             int count = commands.Count;
@@ -271,11 +413,13 @@ namespace Cubuild.Renderer
             }
             for (int i = 0; i < count; i++)
             {
-                var (coord, cmd) = commands[i];
+                var entry = commands[i];
+                var coord = entry.Coord;
+                var cmd = entry.Cmd;
                 float minX = coord.X * ChunkManager.ChunkSize;
-                float maxX = minX + ChunkManager.ChunkSize;
+                float maxX = minX + ChunkManager.ChunkSize * entry.ChunkSpan;
                 float minZ = coord.Z * ChunkManager.ChunkSize;
-                float maxZ = minZ + ChunkManager.ChunkSize;
+                float maxZ = minZ + ChunkManager.ChunkSize * entry.ChunkSpan;
                 // Match ChunkInFrustum: layer-based Y bounds (ground -256..383, sky 384..1023).
                 float minY = ChunkManager.OriginYForLayer(coord.Layer);
                 float maxY = minY + ChunkManager.HeightForLayer(coord.Layer);
@@ -305,14 +449,14 @@ namespace Cubuild.Renderer
         // before its dispatch) - a GraphicsDevice-level upload executes immediately and would be
         // overwritten by the last pass, making every dispatch read the wrong AABBs.
         private void ApplyHeightmapOcclusion(
-            System.Collections.Generic.List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            System.Collections.Generic.List<DrawEntry> commands,
             ref uint[] cullData)
         {
             // cullData is indexed the same as commands (i*16 per chunk, InstanceCount at +9).
             if (cullData.Length < commands.Count * 16) return;
             for (int i = 0; i < commands.Count; i++)
             {
-                if (IsHeightmapOccluded(commands[i].Coord))
+                if (IsDrawEntryHeightmapOccluded(commands[i]))
                 {
                     cullData[i * 16 + 9] = 0; // InstanceCount = 0 -> skipped by the GPU draw
                 }
@@ -321,7 +465,7 @@ namespace Cubuild.Renderer
 
         private void RunGpuCull(
             CommandList cl,
-            System.Collections.Generic.List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            System.Collections.Generic.List<DrawEntry> commands,
             ref uint[] cullData)
         {
             if (commands.Count == 0) return;
@@ -377,17 +521,60 @@ namespace Cubuild.Renderer
             _cutoutCullData = Array.Empty<uint>();
             _glassCullData = Array.Empty<uint>();
             _transparentCullData = Array.Empty<uint>();
+
+            var patchedChunks = new HashSet<Cubuild.ChunkCoordinates>();
+            foreach (var kv in _surfacePatchRanges)
+            {
+                bool usePatch = true;
+                for (int dx = 0; dx < 4 && usePatch; dx++)
+                {
+                    for (int dz = 0; dz < 4; dz++)
+                    {
+                        var member = new Cubuild.ChunkCoordinates(ChunkManager.GroundLayer,
+                            kv.Key.X + dx, kv.Key.Z + dz);
+                        if (!_chunkRanges.ContainsKey(member) || !_surfaceLodRanges.ContainsKey(member)
+                            || !ShouldUseSurfaceLod(member))
+                        {
+                            usePatch = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (!usePatch) continue;
+                var patchRange = kv.Value;
+                _drawCommands.Add(new DrawEntry(kv.Key, new IndirectDrawIndexedArguments
+                {
+                    IndexCount = patchRange.IndexCount,
+                    InstanceCount = 1,
+                    FirstIndex = patchRange.IbOffsetBytes / 2,
+                    VertexOffset = (int)(patchRange.VbOffsetBytes / VertexStrideBytes),
+                    FirstInstance = 0,
+                }, 4));
+                for (int dx = 0; dx < 4; dx++)
+                {
+                    for (int dz = 0; dz < 4; dz++)
+                    {
+                        patchedChunks.Add(new Cubuild.ChunkCoordinates(ChunkManager.GroundLayer,
+                            kv.Key.X + dx, kv.Key.Z + dz));
+                    }
+                }
+            }
+
             foreach (var kv in _chunkRanges)
             {
-                var r = kv.Value;
-                _drawCommands.Add((kv.Key, new IndirectDrawIndexedArguments
+                if (patchedChunks.Contains(kv.Key)) continue;
+                var r = ShouldUseSurfaceLod(kv.Key) && _surfaceLodRanges.TryGetValue(kv.Key, out var lodRange)
+                    ? lodRange
+                    : kv.Value;
+                _drawCommands.Add(new DrawEntry(kv.Key, new IndirectDrawIndexedArguments
                 {
                     IndexCount = r.IndexCount,
                     InstanceCount = 1,
                     FirstIndex = r.IbOffsetBytes / 2,           // ushort index units
                     VertexOffset = (int)(r.VbOffsetBytes / VertexStrideBytes),
                     FirstInstance = 0,
-                }));
+                }, 1));
             }
             if (_indirectScratch.Length < _drawCommands.Count)
             {
@@ -398,14 +585,14 @@ namespace Cubuild.Renderer
             foreach (var kv in _cutoutRanges)
             {
                 var r = kv.Value;
-                _cutoutDrawCommands.Add((kv.Key, new IndirectDrawIndexedArguments
+                _cutoutDrawCommands.Add(new DrawEntry(kv.Key, new IndirectDrawIndexedArguments
                 {
                     IndexCount = r.IndexCount,
                     InstanceCount = 1,
                     FirstIndex = r.IbOffsetBytes / 2,           // ushort index units
                     VertexOffset = (int)(r.VbOffsetBytes / VertexStrideBytes),
                     FirstInstance = 0,
-                }));
+                }, 1));
             }
             if (_cutoutIndirectScratch.Length < _cutoutDrawCommands.Count)
             {
@@ -416,14 +603,14 @@ namespace Cubuild.Renderer
             foreach (var kv in _glassRanges)
             {
                 var r = kv.Value;
-                _glassDrawCommands.Add((kv.Key, new IndirectDrawIndexedArguments
+                _glassDrawCommands.Add(new DrawEntry(kv.Key, new IndirectDrawIndexedArguments
                 {
                     IndexCount = r.IndexCount,
                     InstanceCount = 1,
                     FirstIndex = r.IbOffsetBytes / 2,           // ushort index units
                     VertexOffset = (int)(r.VbOffsetBytes / VertexStrideBytes),
                     FirstInstance = 0,
-                }));
+                }, 1));
             }
             if (_glassIndirectScratch.Length < _glassDrawCommands.Count)
             {
@@ -434,19 +621,36 @@ namespace Cubuild.Renderer
             foreach (var kv in _transparentRanges)
             {
                 var r = kv.Value;
-                _transparentDrawCommands.Add((kv.Key, new IndirectDrawIndexedArguments
+                _transparentDrawCommands.Add(new DrawEntry(kv.Key, new IndirectDrawIndexedArguments
                 {
                     IndexCount = r.IndexCount,
                     InstanceCount = 1,
                     FirstIndex = r.IbOffsetBytes / 2,           // ushort index units
                     VertexOffset = (int)(r.VbOffsetBytes / VertexStrideBytes),
                     FirstInstance = 0,
-                }));
+                }, 1));
             }
             if (_transparentIndirectScratch.Length < _transparentDrawCommands.Count)
             {
                 _transparentIndirectScratch = new IndirectDrawIndexedArguments[Math.Max(256, _transparentDrawCommands.Count * 2)];
             }
+        }
+
+        private bool ShouldUseSurfaceLod(Cubuild.ChunkCoordinates coord)
+        {
+            if (!Cubuild.LodSettings.SurfaceLodEnabled
+                || coord.Layer != ChunkManager.GroundLayer
+                || _surfaceLodCameraLayer != ChunkManager.GroundLayer
+                || !_surfaceLodAllowed
+                || _surfaceLodStartChunks == int.MaxValue)
+            {
+                return false;
+            }
+
+            long dx = (long)coord.X - _surfaceLodCameraX;
+            long dz = (long)coord.Z - _surfaceLodCameraZ;
+            long threshold = _surfaceLodStartChunks;
+            return dx * dx + dz * dz > threshold * threshold;
         }
 
         // Heightmap occlusion: is the view from the camera to this chunk blocked by a NEARER
@@ -459,7 +663,7 @@ namespace Cubuild.Renderer
         // The horizon march walks one step per chunk of distance, so its cost scales with the
         // render distance even though its VALUE does not: past a few dozen chunks the fog is doing
         // the hiding anyway, and whether a chunk there is drawn or not is invisible. Bound the march
-        // so the CPU cull stays affordable at the 64-chunk Extreme preset. Beyond the bound a chunk
+        // so the CPU cull stays affordable even at the former 64-chunk maximum. Beyond the bound a chunk
         // is simply assumed visible, which is the safe direction - over-drawing an occluded chunk
         // costs fill rate, whereas wrongly hiding a visible one would pop. Every preset up to the
         // 16-chunk Far one is entirely inside this bound, so those are unaffected.
@@ -517,11 +721,27 @@ namespace Cubuild.Renderer
             return false;
         }
 
+        // A patch is hidden only when every constituent chunk independently passes the existing
+        // conservative horizon test. Any visible or unknown member keeps the full patch visible.
+        private bool IsDrawEntryHeightmapOccluded(DrawEntry entry)
+        {
+            for (int dx = 0; dx < entry.ChunkSpan; dx++)
+            {
+                for (int dz = 0; dz < entry.ChunkSpan; dz++)
+                {
+                    var member = new Cubuild.ChunkCoordinates(entry.Coord.Layer,
+                        entry.Coord.X + dx, entry.Coord.Z + dz);
+                    if (!IsHeightmapOccluded(member)) return false;
+                }
+            }
+            return true;
+        }
+
         // Fills the given indirect scratch array with the commands from a pass list that are inside
         // the current view frustum. Returns the visible count; falls back to "everything" when no
         // camera is set.
         private uint CullDrawCommands(
-            System.Collections.Generic.List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            System.Collections.Generic.List<DrawEntry> commands,
             IndirectDrawIndexedArguments[] scratch)
         {
             int n = 0;
@@ -530,9 +750,10 @@ namespace Cubuild.Renderer
                 ExtractFrustumPlanes(_viewProjection.Value);
                 for (int i = 0; i < commands.Count; i++)
                 {
-                    if (ChunkInFrustum(commands[i].Coord) && !IsHeightmapOccluded(commands[i].Coord))
+                    var entry = commands[i];
+                    if (DrawEntryInFrustum(entry) && !IsDrawEntryHeightmapOccluded(entry))
                     {
-                        scratch[n++] = commands[i].Cmd;
+                        scratch[n++] = entry.Cmd;
                     }
                 }
             }
@@ -559,11 +780,13 @@ namespace Cubuild.Renderer
 
         // AABB-vs-frustum via the positive-vertex trick. The chunk AABB covers the full world
         // height, so this culls by horizontal footprint only - still rejects everything off-screen.
-        private bool ChunkInFrustum(Cubuild.ChunkCoordinates coord)
-        {            float minX = coord.X * ChunkManager.ChunkSize;
-            float maxX = minX + ChunkManager.ChunkSize;
+        private bool DrawEntryInFrustum(DrawEntry entry)
+        {
+            var coord = entry.Coord;
+            float minX = coord.X * ChunkManager.ChunkSize;
+            float maxX = minX + ChunkManager.ChunkSize * entry.ChunkSpan;
             float minZ = coord.Z * ChunkManager.ChunkSize;
-            float maxZ = minZ + ChunkManager.ChunkSize;
+            float maxZ = minZ + ChunkManager.ChunkSize * entry.ChunkSpan;
             // World Y bounds come from the chunk's LAYER (ground -256..383, sky 384..1023), not
             // the ground origin. Using the ground bounds for sky chunks made them vanish when the
             // camera was up in the stratosphere (their frustum box sat below them).

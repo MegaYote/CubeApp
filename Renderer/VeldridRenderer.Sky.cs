@@ -31,6 +31,10 @@ namespace Cubuild.Renderer
             _fogParams[3] = 1f;
             _fogParams[4] = fogStart;
             _fogParams[5] = fogEnd;
+            // std140 padding after fogRange: use the two floats at indices 6-7 for the
+            // continuous skylight scale and Fullbright override, without growing the 64-byte UBO.
+            _fogParams[6] = _nightDim;
+            _fogParams[7] = ChunkLighting.Fullbright ? 1f : 0f;
             if (_cameraPosition.HasValue)
             {
                 // std140: vec4 cameraPos must start at a 16-byte boundary -> floats 8-11.
@@ -103,14 +107,14 @@ namespace Cubuild.Renderer
             if (sky > 1f) sky = 1f;
             _nightSkyDim = sky;
 
-            // World light: scale the baked brightness (which assumed full daylight 15) by the ratio
-            // of brightness(15 - nightDim) / brightness(15), using the same curve as the mesher.
+            // World light: scale the separate skylight channel continuously. Block-light sources
+            // are evaluated independently in the fragment shader and remain bright at night.
             float sub = 1f - (float)(Math.Cos(ang * Math.PI * 2.0) * 2.0 + 0.5);
             if (sub < 0f) sub = 0f;
             if (sub > 1f) sub = 1f;
-            int dimmed = (int)(sub * 11f);
+            float dimmed = sub * 11f;
             float full = ChunkLighting.Brightness(15);
-            float night = ChunkLighting.Brightness(Math.Max(0, 15 - dimmed));
+            float night = ChunkLighting.Brightness(Math.Max(0f, 15f - dimmed));
             _nightDim = full > 1e-5f ? night / full : 0.12f;
             if (_nightDim < 0.05f) _nightDim = 0.05f;
 

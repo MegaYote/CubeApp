@@ -598,6 +598,17 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         private uint _vbCapacityBytes;
         private uint _ibCapacityBytes;
         private uint _indirectCapacityCommands;
+        // Far ground chunks may have a compact surface-only range alongside the normal full mesh.
+        // Complete aligned 4x4 groups also own one merged surface range for far-field rendering.
+        private readonly Dictionary<Cubuild.ChunkCoordinates, ChunkRange> _surfaceLodRanges = new();
+        private readonly Dictionary<Cubuild.ChunkCoordinates, (uint[] Vertices, ushort[] Indices)> _surfaceLodMeshes = new();
+        private readonly Dictionary<Cubuild.ChunkCoordinates, ChunkRange> _surfacePatchRanges = new();
+        private readonly HashSet<Cubuild.ChunkCoordinates> _dirtySurfacePatches = new();
+        private volatile int _surfaceLodCameraX = int.MinValue;
+        private volatile int _surfaceLodCameraZ = int.MinValue;
+        private volatile int _surfaceLodCameraLayer = int.MinValue;
+        private volatile bool _surfaceLodAllowed;
+        private int _surfaceLodStartChunks = int.MaxValue;
 
         private struct ChunkRange
         {
@@ -606,6 +617,23 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             public uint IbOffsetBytes;
             public uint IndexCount;
         }
+
+        // Shared command metadata for chunk and aggregated-patch draws. ChunkSpan controls the
+        // conservative horizontal bounds used by both CPU and GPU culling (1 for chunks, 4 for patches).
+        private readonly struct DrawEntry
+        {
+            public Cubuild.ChunkCoordinates Coord { get; }
+            public IndirectDrawIndexedArguments Cmd { get; }
+            public int ChunkSpan { get; }
+
+            public DrawEntry(Cubuild.ChunkCoordinates coord, IndirectDrawIndexedArguments cmd, int chunkSpan)
+            {
+                Coord = coord;
+                Cmd = cmd;
+                ChunkSpan = chunkSpan;
+            }
+        }
+
         private readonly Dictionary<Cubuild.ChunkCoordinates, ChunkRange> _chunkRanges = new();
         // Cutout (cross plants / leaves, alpha-tested, depth-writing) and transparent (water,
         // blended, no depth-write) faces live in separate ranges drawn as their own passes.
@@ -613,10 +641,10 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         private readonly Dictionary<Cubuild.ChunkCoordinates, ChunkRange> _glassRanges = new();
         private readonly Dictionary<Cubuild.ChunkCoordinates, ChunkRange> _transparentRanges = new();
         private readonly List<(uint VbOffset, uint VbBytes, uint IbOffset, uint IbBytes)> _freeBlocks = new();
-        private readonly List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _drawCommands = new();
-        private readonly List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _cutoutDrawCommands = new();
-        private readonly List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _glassDrawCommands = new();
-        private readonly List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> _transparentDrawCommands = new();
+        private readonly List<DrawEntry> _drawCommands = new();
+        private readonly List<DrawEntry> _cutoutDrawCommands = new();
+        private readonly List<DrawEntry> _glassDrawCommands = new();
+        private readonly List<DrawEntry> _transparentDrawCommands = new();
         private IndirectDrawIndexedArguments[] _indirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
         private IndirectDrawIndexedArguments[] _cutoutIndirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
         private IndirectDrawIndexedArguments[] _glassIndirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
@@ -627,9 +655,9 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         // command, tests the 6 frustum planes in parallel, and zeroes InstanceCount for culled
         // chunks. It writes args into a StructuredBufferReadWrite scratch, which is copied into
         // the IndirectBuffer for the draw - no CPU scan, no scratch copy on CPU, no readback.
-        // The player picks the mode in Settings (Auto/Cpu/Gpu); Auto defaults to CPU-side
-        // frustum culling as the safe baseline across all GPUs (some Intel drivers produce wrong
-        // results from the GPU cull compute shader) and only enables GPU on NVIDIA/AMD.
+        // The player picks the mode in Settings (Auto/Cpu/Gpu); Auto avoids the measured-slower
+        // D3D11 GPU path and known-problematic Intel compute path, while explicit modes remain
+        // available for testing on supported devices.
         private CullingMode _cullMode = CullingMode.Auto;
         private bool _gpuCullEnabled = false;
         private bool _gpuCullSupported;
@@ -665,39 +693,22 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         private readonly System.Collections.Concurrent.ConcurrentQueue<PendingUpload> _pendingPriorityUploads = new(); // player edits jump the line
         private readonly System.Collections.Concurrent.ConcurrentQueue<Cubuild.ChunkCoordinates> _pendingRemovals = new();
         private ChunkManager? _chunkManager; // set via SetChunkManager, used by MeshChunkImmediate
-        // Cached mining-block light (0..15), captured once per mining CHUNK like the C++
-        // startBreaking: the max of the 6 neighbors' combined light. Used to shade the shrink
-        // cube + walls with the same brightness as regular world blocks.
-        private int _miningLightLevel = 15;
+        // Cached mining-block light channels, captured once per mining CHUNK like the C++
+        // startBreaking: the brightest of the six neighboring sky/block pairs.
+        private int _miningSkyLightLevel = 15;
+        private int _miningBlockLightLevel;
+        private readonly int[] _miningNeighborSkyLights = new int[6];
+        private readonly int[] _miningNeighborBlockLights = new int[6];
         private long _miningLightChunkKey = long.MinValue;
         // Floor for the per-frame upload budget. Uploads are individually cheap, but a fixed COUNT
         // is the wrong unit for a budget: four per frame is plenty at the 2-chunk Tiny preset yet
-        // means well over a minute to stream the ~12.9k chunks the 64-chunk Extreme preset loads,
+        // means many seconds to stream the ~3.2k chunks the 32-chunk Extreme preset loads,
         // with the world visibly missing around the player the whole time. The render loop
         // therefore treats this as a guaranteed minimum and then keeps uploading while it stays
         // inside UploadBudgetMs, so the small presets behave exactly as they always have and the
         // large ones stream in a few seconds.
         private int _maxUploadsPerFrame = 4;
         private const double UploadBudgetMs = 2.0;
-
-        // TEMP streaming diagnostics (enabled only when CUBUILD_PERF_LOG=1). Remove once the
-        // flying/streming hitch is identified.
-        // TEMP streaming diagnostics (disabled)
-        private static readonly bool PerfLog = false;
-        private readonly System.Diagnostics.Stopwatch _perfLogClock = System.Diagnostics.Stopwatch.StartNew();
-        private double _perfUploadMs;
-        private double _perfUploadMsMax;
-        private double _perfUploadMsSum;
-        private int _perfUploadFrames;
-        private int _perfUploadCount;
-        private int _perfRemovalCount;
-        private int _perfBufferGrowths;
-        private int _perfHitches;
-        private double _perfWriteCallMsMax;
-        private double _perfRebuildMs;
-        private double _perfRebuildMsMax;
-
-        private static double MsSince(long ts) => (System.Diagnostics.Stopwatch.GetTimestamp() - ts) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 
         private readonly struct PendingUpload
         {
@@ -710,10 +721,13 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             public ushort[] GlassIndices { get; }
             public uint[] TransparentVertices { get; }
             public ushort[] TransparentIndices { get; }
+            public uint[] SurfaceLodVertices { get; }
+            public ushort[] SurfaceLodIndices { get; }
 
             public PendingUpload(Cubuild.ChunkCoordinates coord, uint[] vertices, ushort[] indices,
                 uint[] cutoutVertices, ushort[] cutoutIndices, uint[] glassVertices, ushort[] glassIndices,
-                uint[] transparentVertices, ushort[] transparentIndices)
+                uint[] transparentVertices, ushort[] transparentIndices,
+                uint[]? surfaceLodVertices = null, ushort[]? surfaceLodIndices = null)
             {
                 Coord = coord;
                 Vertices = vertices;
@@ -724,6 +738,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 GlassIndices = glassIndices;
                 TransparentVertices = transparentVertices;
                 TransparentIndices = transparentIndices;
+                SurfaceLodVertices = surfaceLodVertices ?? Array.Empty<uint>();
+                SurfaceLodIndices = surfaceLodIndices ?? Array.Empty<ushort>();
             }
         }
 
@@ -877,8 +893,15 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         public void Dispose()
         {
             _chunkRanges.Clear();
+            _surfaceLodRanges.Clear();
+            _surfaceLodMeshes.Clear();
+            _surfacePatchRanges.Clear();
+            _dirtySurfacePatches.Clear();
             _freeBlocks.Clear();
             _drawCommands.Clear();
+            _cutoutDrawCommands.Clear();
+            _glassDrawCommands.Clear();
+            _transparentDrawCommands.Clear();
             _megaVertexBuffer?.Dispose();
             _megaIndexBuffer?.Dispose();
             _indirectBuffer?.Dispose();
@@ -1028,12 +1051,57 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr));
         }
 
+        public void UploadChunkWithLod(Cubuild.ChunkCoordinates coords,
+            System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces,
+            System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace>? surfaceLodFaces)
+        {
+            if (!Cubuild.LodSettings.SurfaceLodEnabled)
+            {
+                UploadChunk(coords, faces);
+                return;
+            }
+
+            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr);
+            uint[] lodVertices = Array.Empty<uint>();
+            ushort[] lodIndices = Array.Empty<ushort>();
+            if (surfaceLodFaces != null && surfaceLodFaces.Count > 0)
+            {
+                BuildMesh(surfaceLodFaces, out lodVertices, out lodIndices, out _, out _, out _, out _, out _, out _);
+            }
+            _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr,
+                lodVertices, lodIndices));
+        }
+
         // Player edits jump the line: same vertex data, but enqueued on the priority queue that
         // ProcessPendingPriorityMeshes drains every frame for instant feedback.
         public void UploadChunkPriority(Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces)
         {
             BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr);
             _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr));
+        }
+
+        // Priority remeshes for edited chunks and their neighbors use the same ordering as direct
+        // edits while retaining LOD for eligible untouched neighbors. Direct immediate edits keep
+        // using UploadChunkPriority, which intentionally queues no surface LOD.
+        public void UploadChunkPriorityWithLod(Cubuild.ChunkCoordinates coords,
+            System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces,
+            System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace>? surfaceLodFaces)
+        {
+            if (!Cubuild.LodSettings.SurfaceLodEnabled)
+            {
+                UploadChunkPriority(coords, faces);
+                return;
+            }
+
+            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr);
+            uint[] lodVertices = Array.Empty<uint>();
+            ushort[] lodIndices = Array.Empty<ushort>();
+            if (surfaceLodFaces != null && surfaceLodFaces.Count > 0)
+            {
+                BuildMesh(surfaceLodFaces, out lodVertices, out lodIndices, out _, out _, out _, out _, out _, out _);
+            }
+            _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr,
+                lodVertices, lodIndices));
         }
 
         // Builds the packed 24-byte-per-vertex chunk mesh (Float3 pos + 3x UInt1 packs) from greedy
@@ -1171,7 +1239,9 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 uint tileX = (uint)Math.Clamp(f.SrcRect.X, 0, 255);
                 uint tileY = (uint)Math.Clamp(f.SrcRect.Y, 0, 255);
                 uint pack2 = (tileX << 24) | (tileY << 16) | ((uint)Math.Clamp(tileW, 0, 255) << 8) | (uint)Math.Clamp(tileH, 0, 255);
-                uint pack3 = shadeByte | (alphaByte << 8) | (alphaMode << 16);
+                uint biomeHillsGreenTintBit = f.BiomeHillsGreenTint ? (1u << 18) : 0u;
+                uint pack3 = shadeByte | (alphaByte << 8) | (alphaMode << 16) | biomeHillsGreenTintBit
+                    | ((uint)(f.SkyLight & 0xF) << 19) | ((uint)(f.BlockLight & 0xF) << 23);
 
                 // Face-edge basis for the non-axis (fluid slope) UV fallback.
                 var v0p = vertsSpan[0];
@@ -1387,6 +1457,33 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             // Cache the camera and view-projection so chunk frustum culling and the mob meshing
             // can read them without re-deriving.
             _cameraPosition = position;
+            int cameraChunkX = (int)Math.Floor(position.X / ChunkManager.ChunkSize);
+            int cameraChunkZ = (int)Math.Floor(position.Z / ChunkManager.ChunkSize);
+            int cameraLayer = ChunkManager.LayerForWorldY((int)Math.Floor(position.Y));
+            if (cameraChunkX != _surfaceLodCameraX || cameraChunkZ != _surfaceLodCameraZ
+                || cameraLayer != _surfaceLodCameraLayer)
+            {
+                _surfaceLodCameraX = cameraChunkX;
+                _surfaceLodCameraZ = cameraChunkZ;
+                _surfaceLodCameraLayer = cameraLayer;
+                _drawCommandsDirty = true;
+            }
+            bool allowSurfaceLod = false;
+            if (cameraLayer == ChunkManager.GroundLayer && _surfaceLodStartChunks != int.MaxValue
+                && _chunkManager != null
+                && _chunkManager.TryGetLoadedChunk(
+                    new Cubuild.ChunkCoordinates(ChunkManager.GroundLayer, cameraChunkX, cameraChunkZ),
+                    out var cameraChunk)
+                && cameraChunk.TopSolidY != int.MinValue
+                && position.Y > cameraChunk.TopSolidY + 1.5)
+            {
+                allowSurfaceLod = true;
+            }
+            if (allowSurfaceLod != _surfaceLodAllowed)
+            {
+                _surfaceLodAllowed = allowSurfaceLod;
+                _drawCommandsDirty = true;
+            }
             _viewProjection = viewProj;
             _gd.UpdateBuffer(_projViewBuffer, 0, ref viewProj);
             UpdateWaterAnimation();
@@ -1496,13 +1593,12 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
 
         public void SetRenderDistance(int chunkRadius)
         {
-            // The far plane must enclose the FULL loaded square, not a circle: chunks load within
-            // +-chunkRadius in BOTH x and z (RequestChunksAround uses |dx|<=r AND |dz|<=r), so the
-            // farthest loaded block sits at the square corner, chunkRadius*16*sqrt(2) away. If the
-            // far plane were only chunkRadius*16 (a circle), looking diagonally would clip terrain
-            // at 256 while chunks exist to 362 - a circular, camera-locked "invisible terrain" line
-            // that does NOT follow chunk shapes. Enclosing the square makes the visible edge the
-            // chunk boundary itself.
+            // Keep small presets visually exact. At larger radii, keep a full-detail inner ring
+            // and use the surface heightfield beyond it.
+            _surfaceLodStartChunks = chunkRadius <= 8 ? int.MaxValue : Math.Max(8, chunkRadius / 4);
+            _drawCommandsDirty = true;
+            // The far plane conservatively encloses the render-distance footprint, including its
+            // diagonal corners, so the projection does not clip terrain before the fog boundary.
             // Far plane target is 700 blocks (user preference): sky/clouds/terrain stretch further
             // before clipping. Keep the chunk square fully enclosed even if the render distance
             // ever grows beyond 700's coverage. Near plane raised 0.1 -> 0.3 to keep depth
@@ -1542,7 +1638,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         {
             while (_pendingPriorityUploads.TryDequeue(out var pu))
             {
-                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices, pu.TransparentVertices, pu.TransparentIndices);
+                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices, pu.TransparentVertices, pu.TransparentIndices, pu.SurfaceLodVertices, pu.SurfaceLodIndices);
             }
         }
 
@@ -1586,6 +1682,10 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         public void ResetWorld()
         {
             _chunkRanges.Clear();
+            _surfaceLodRanges.Clear();
+            _surfaceLodMeshes.Clear();
+            _surfacePatchRanges.Clear();
+            _dirtySurfacePatches.Clear();
             _cutoutRanges.Clear();
             _glassRanges.Clear();
             _transparentRanges.Clear();
@@ -1597,6 +1697,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             _vbTailBytes = 0;
             _ibTailBytes = 0;
             _drawCommandsDirty = true;
+            _gpuCullDataDirty = true;
         }
 
         // Spawns little textured cubes of the block's tile flying out of a broken block.
@@ -1673,7 +1774,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             if (_chunkManager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(chunkX, chunkZ - 1), out var back)) chunksToPass.Add(back);
             if (_chunkManager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(chunkX, chunkZ + 1), out var front)) chunksToPass.Add(front);
 
-            var faces = Mesher.GenerateMesh(chunksToPass);
+            var faces = Mesher.GenerateMesh(chunksToPass,
+                (worldX, worldZ) => _chunkManager.BiomeAt(worldX, worldZ).Id);
             if (faces != null && faces.Count > 0)
             {
                 UploadChunkPriority(coords, faces);

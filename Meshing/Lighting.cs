@@ -268,13 +268,12 @@ namespace Cubuild
             return 255;
         }
 
-        // Daylight seeding: walk each column down from just above the highest solid. Every cell at
-        // or above the column's height map sees the sky -> full daylight (reduced by the night dim
-        // at dusk). Cells below that are lit by the 6-way flood from those sources.
+        // Daylight seeding is stable at full strength. Day/night is applied by a renderer uniform
+        // to the sky-light channel, so a clock tick never causes every loaded chunk to remesh.
         private void SeedSkyLight(Queue<int> queue, int bandLo, int bandHi, int fillTop)
         {
             int startY = Math.Max(bandLo, Math.Min(fillTop + 1, bandHi));
-            byte skySeed = (byte)Math.Max(0, MaxLight - NightDimLevel);
+            const byte skySeed = MaxLight;
             for (int lx = 0; lx < dimX; lx++)
             {
                 for (int lz = 0; lz < dimZ; lz++)
@@ -402,6 +401,14 @@ namespace Cubuild
         /// </summary>
         public int GetLight(int worldX, int y, int worldZ)
         {
+            int s = GetSkyLight(worldX, y, worldZ);
+            int b = GetBlockLight(worldX, y, worldZ);
+            return s > b ? s : b;
+        }
+
+        /// <summary>Sky-light channel (0..15). Outside the computed region, assume open sky.</summary>
+        public int GetSkyLight(int worldX, int y, int worldZ)
+        {
             int lx = worldX - minX;
             int lz = worldZ - minZ;
             if (lx < 0 || lx >= dimX || lz < 0 || lz >= dimZ || y < 0 || y >= height)
@@ -409,37 +416,43 @@ namespace Cubuild
                 // Outside the region: unknown terrain. Assume open sky above the region floor.
                 return MaxLight;
             }
+            return sky[Index(lx, y, lz)];
+        }
 
-            int s = sky[Index(lx, y, lz)];
-            int b = block[Index(lx, y, lz)];
-            return s > b ? s : b;
+        /// <summary>Emitted/block-light channel (0..15). Outside the computed region, assume dark.</summary>
+        public int GetBlockLight(int worldX, int y, int worldZ)
+        {
+            int lx = worldX - minX;
+            int lz = worldZ - minZ;
+            if (lx < 0 || lx >= dimX || lz < 0 || lz >= dimZ || y < 0 || y >= height)
+            {
+                return 0;
+            }
+            return block[Index(lx, y, lz)];
         }
 
         /// <summary>
-        /// Maps a discrete light level to a brightness multiplier. The curve is a smooth power law
+        /// Maps a light level to a brightness multiplier. The curve is a smooth power law
         /// with a shallow low-end so dark caves read as genuinely dark while near-full light is
         /// bright: brightness = (light/15)^1.4 with a slight knee lifted by 0.04*light/15 so level
         /// 1 isn't pure black. Level 15 = 1.0, level 0 = 0.0 (deep caves are pitch black).
         ///
         /// When <see cref="Fullbright"/> is set (F6 debug/peek mode), every light level maps to
         /// 1.0 so the whole world renders as if fully lit - lets you see into the pitch-black
-        /// deep without torches. The mesher bakes brightness per face, so toggling it must also
-        /// flag all loaded chunks for remesh.
+        /// deep without torches. Terrain meshes retain raw light channels and the renderer applies
+        /// the matching fullbright override.
         /// </summary>
         public static bool Fullbright { get; set; }
 
-        /// <summary>
-        /// Night dim level (0..11): how much daylight is removed after the sun goes down. We bake
-        /// light into meshes, so this lowers the DAYLIGHT SEED (15 - dim) and the flood fill
-        /// propagates dimmer light everywhere. Changing it must re-mesh all loaded chunks.
-        /// </summary>
-        public static int NightDimLevel { get; set; }
-
         public static float Brightness(int lightLevel)
+            => Brightness((float)lightLevel);
+
+        /// <summary>Brightness curve evaluated continuously for the renderer's smooth day/night uniform.</summary>
+        public static float Brightness(float lightLevel)
         {
             if (Fullbright) return 1.0f;
-            int clamped = Math.Clamp(lightLevel, 0, MaxLight);
-            float t = clamped / (float)MaxLight;
+            float clamped = Math.Clamp(lightLevel, 0f, MaxLight);
+            float t = clamped / MaxLight;
             // Power curve + a small linear knee: brighter near the top, dark near the bottom.
             return t * t * t * 0.55f + t * 0.45f;
         }

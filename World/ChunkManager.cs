@@ -135,6 +135,7 @@ namespace Cubuild
                     {
                         Array.Copy(cached.Blocks, result.RawBlocks, Math.Min(cached.Blocks.Length, result.RawBlocks.Length));
                         Array.Copy(cached.Meta, result.RawMeta, Math.Min(cached.Meta.Length, result.RawMeta.Length));
+                        result.HasRuntimeEdits = true;
                         _unloadedModifiedChunks.Remove(key);
                         result.NeedsRemesh = true;
                         WireDirty(result);
@@ -214,6 +215,8 @@ namespace Cubuild
             var chunk = GetOrCreateChunk(layer, chunkX, chunkZ);
             if (blocks != null) Array.Copy(blocks, chunk.RawBlocks, Math.Min(blocks.Length, chunk.RawBlocks.Length));
             if (meta != null) Array.Copy(meta, chunk.RawMeta, Math.Min(meta.Length, chunk.RawMeta.Length));
+            chunk.HasRuntimeEdits = true;
+            chunk.SurfaceLodFaces = null;
             chunk.NeedsRemesh = true;
             _modifiedChunks.Add(new ChunkCoordinates(layer, chunkX, chunkZ));
         }
@@ -343,6 +346,8 @@ namespace Cubuild
 
             _modifiedChunks.Add(new ChunkCoordinates(layer, chunkX, chunkZ));
 
+            chunk.HasRuntimeEdits = true;
+            chunk.SurfaceLodFaces = null;
             chunk.NeedsRemesh = true;
 
             // Light-emitting blocks (torches, glowstone) spread light across the entire 3×3
@@ -456,6 +461,14 @@ namespace Cubuild
             return TryGetLoadedBlockAndMeta(worldX, worldY, worldZ, out _, out var meta) ? meta : (byte)0;
         }
 
+        /// <summary>Authoritative biome definition for a world column, when the ground provider exposes terrain biomes.</summary>
+        public BiomeDefinition BiomeAt(int worldX, int worldZ)
+        {
+            return chunkProviders[GroundLayer] is TerrainChunkProvider terrainProvider
+                ? terrainProvider.BiomeAt(worldX, worldZ)
+                : BiomeRegistry.Get("plains");
+        }
+
         public bool TryGetLoadedChunk(ChunkCoordinates coords, out Chunk chunk)
         {
             return loadedChunks.TryGetValue(coords, out chunk);
@@ -492,8 +505,8 @@ namespace Cubuild
             int sky = GetSkyLightEstimate(x, y, z, skylightSubtracted);
             if (sky > 0) return sky; // sees the sky: time of day is the only factor
 
-            // Shaded: the cached LightGrid here is exactly block light (baked sky is 0 under a
-            // roof), i.e. torch/glow light. O(1) lookup when the chunk has meshed.
+            // Shaded: use the block-light nibble only. Daylight is a separate nibble, and is
+            // deliberately excluded here so skylight does not masquerade as torch light.
             int layer = LayerForWorldY(y);
             int cx = FloorDiv(x, ChunkSize);
             int cz = FloorDiv(z, ChunkSize);
@@ -504,7 +517,7 @@ namespace Cubuild
                 int localZ = z - chunk.OriginZ;
                 if (localX >= 0 && localX < ChunkSize && localY >= 0 && localY < chunk.Height && localZ >= 0 && localZ < ChunkSize)
                 {
-                    return chunk.LightGrid[(localX * chunk.Depth + localZ) * chunk.Height + localY];
+                    return chunk.LightGrid[(localX * chunk.Depth + localZ) * chunk.Height + localY] & 0x0F;
                 }
             }
             return 0;

@@ -14,6 +14,9 @@ namespace Cubuild
         // their faces toward a fluid through the normal RendersToward rules.
         private static readonly int WaterId = BlockRegistry.GetId("water");
         private static readonly int LavaId = BlockRegistry.GetId("lava");
+        private static readonly int GrassId = BlockRegistry.GetId("grass");
+        private static readonly int GrassSpreadingId = BlockRegistry.GetId("grass_spreading");
+        private static readonly int LeavesId = BlockRegistry.GetId("leaves");
         private static readonly TextureRect WaterBaseTile = BlockRegistry.Get("water").AllTexture ?? default;
         private static readonly TextureRect LavaBaseTile = BlockRegistry.Get("lava").AllTexture ?? default;
 
@@ -70,8 +73,39 @@ namespace Cubuild
         }
 
         public static IReadOnlyList<MeshFace> GenerateMesh(IEnumerable<Chunk> chunks)
+            => GenerateMesh(chunks, out _);
+
+        /// <summary>Builds a full-detail mesh with an optional biome-id lookup for face tints.</summary>
+        public static IReadOnlyList<MeshFace> GenerateMesh(IEnumerable<Chunk> chunks, Func<int, int, string>? biomeIdAt)
+            => GenerateMesh(chunks, biomeIdAt, out _);
+
+        public static IReadOnlyList<MeshFace> GenerateMesh(IEnumerable<Chunk> chunks, out IReadOnlyList<MeshFace>? surfaceLod)
+            => GenerateMesh(chunks, null, out surfaceLod);
+
+        /// <summary>Builds the full gameplay mesh and an optional far-field surface LOD derived
+        /// from this exact live chunk data. The LOD is only a visual approximation; full meshes
+        /// remain authoritative for nearby rendering and gameplay.</summary>
+        public static IReadOnlyList<MeshFace> GenerateMesh(IEnumerable<Chunk> chunks,
+            Func<int, int, string>? biomeIdAt, out IReadOnlyList<MeshFace>? surfaceLod)
         {
+            surfaceLod = null;
             var mesh = new List<MeshFace>();
+            var hillsBiomeColumns = biomeIdAt == null ? null : new Dictionary<(int X, int Z), bool>();
+            bool IsHillsGreenTint(int blockId, int worldX, int worldZ)
+            {
+                if ((blockId != GrassId && blockId != GrassSpreadingId && blockId != LeavesId)
+                    || biomeIdAt == null || hillsBiomeColumns == null)
+                    return false;
+
+                var column = (worldX, worldZ);
+                if (!hillsBiomeColumns.TryGetValue(column, out bool isHills))
+                {
+                    isHills = string.Equals(biomeIdAt(worldX, worldZ), "hills", StringComparison.OrdinalIgnoreCase);
+                    hillsBiomeColumns.Add(column, isHills);
+                }
+                return isHills;
+            }
+
             var chunkList = new List<Chunk>(chunks);
             if (chunkList.Count == 0)
             {
@@ -138,6 +172,7 @@ namespace Cubuild
             // occlude a huge area behind it. A majority height (where most columns are solid) keeps
             // the cull effective for real mountains while valleys/trees stop hiding things.
             int[] columnTop = new int[width * depth];
+            byte[] columnTopBlock = LodSettings.SurfaceLodEnabled ? new byte[width * depth] : Array.Empty<byte>();
             int stride = depth * height;
             for (int x = 0; x < width; x++)
             {
@@ -147,7 +182,13 @@ namespace Cubuild
                     int top = -1;
                     for (int y = height - 1; y >= 0; y--)
                     {
-                        if (raw[colBase + z * height + y] != BlockRegistry.AirId) { top = y; break; }
+                        byte id = raw[colBase + z * height + y];
+                        if (id != BlockRegistry.AirId)
+                        {
+                            top = y;
+                            if (LodSettings.SurfaceLodEnabled) columnTopBlock[x * depth + z] = id;
+                            break;
+                        }
                     }
                     columnTop[x * depth + z] = top;
                     if (top > topSolidLocalY) topSolidLocalY = top;
@@ -187,7 +228,7 @@ namespace Cubuild
                 // transparency: water|air emits water's +d face only; stone|water emits stone's
                 // +d face only; stone|air emits stone's +d face; glass|stone emits glass's +d face,
                 // etc. Each cell is 0 (no face) or bit-packed: bit0=set, bits1-8=block id,
-                // bit9=positive normal, bits10-13=light. Merge equality is a single int compare.
+                // bit9=positive normal, bits10-13=light, bit14=hills grass tint. Merge equality is a single int compare.
                 var maskPos = new int[dimU * dimV];
                 var maskNeg = new int[dimU * dimV];
 
@@ -231,8 +272,8 @@ namespace Cubuild
                                     ? (rawPosX != null ? rawPosX[jv * height + iu] : BlockRegistry.AirId)
                                     : raw[((slice + 1) * depth + jv) * height + iu];
                                 int cell = iu * dimV + jv;
-                                if (!HasDedicatedPass(A) && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + slice + 1, iu, chunk.OriginZ + jv));
-                                if (!HasDedicatedPass(B) && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + slice, iu, chunk.OriginZ + jv));
+                                if (!HasDedicatedPass(A) && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetSkyLight(chunk.OriginX + slice + 1, iu, chunk.OriginZ + jv), lighting.GetBlockLight(chunk.OriginX + slice + 1, iu, chunk.OriginZ + jv), IsHillsGreenTint(A, chunk.OriginX + slice, chunk.OriginZ + jv));
+                                if (!HasDedicatedPass(B) && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetSkyLight(chunk.OriginX + slice, iu, chunk.OriginZ + jv), lighting.GetBlockLight(chunk.OriginX + slice, iu, chunk.OriginZ + jv), IsHillsGreenTint(B, chunk.OriginX + slice + 1, chunk.OriginZ + jv));
                             }
                         }
                     }
@@ -252,8 +293,8 @@ namespace Cubuild
                                     ? (rawPosY != null ? rawPosY[(jv * depth + iu) * aboveHeight + 0] : BlockRegistry.AirId)
                                     : raw[baseIdx + 1];
                                 int cell = iu * dimV + jv;
-                                if (!HasDedicatedPass(A) && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu));
-                                if (!HasDedicatedPass(B) && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + jv, slice, chunk.OriginZ + iu));
+                                if (!HasDedicatedPass(A) && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetSkyLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu), lighting.GetBlockLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu), IsHillsGreenTint(A, chunk.OriginX + jv, chunk.OriginZ + iu));
+                                if (!HasDedicatedPass(B) && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetSkyLight(chunk.OriginX + jv, slice, chunk.OriginZ + iu), lighting.GetBlockLight(chunk.OriginX + jv, slice, chunk.OriginZ + iu), IsHillsGreenTint(B, chunk.OriginX + jv, chunk.OriginZ + iu));
                             }
                         }
                     }
@@ -270,8 +311,8 @@ namespace Cubuild
                                     ? (rawPosZ != null ? rawPosZ[iu * depth * height + jv] : BlockRegistry.AirId)
                                     : raw[(iu * depth + slice + 1) * height + jv];
                                 int cell = iu * dimV + jv;
-                                if (!HasDedicatedPass(A) && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice + 1));
-                                if (!HasDedicatedPass(B) && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice));
+                                if (!HasDedicatedPass(A) && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetSkyLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice + 1), lighting.GetBlockLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice + 1), IsHillsGreenTint(A, chunk.OriginX + iu, chunk.OriginZ + slice));
+                                if (!HasDedicatedPass(B) && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetSkyLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice), lighting.GetBlockLight(chunk.OriginX + iu, jv, chunk.OriginZ + slice), IsHillsGreenTint(B, chunk.OriginX + iu, chunk.OriginZ + slice + 1));
                             }
                         }
                     }
@@ -282,14 +323,14 @@ namespace Cubuild
                 }
             }
 
-            // Cache the per-block combined light for entity sampling (mobs read the light of the
-            // block they stand on). Reuses the flood fill already computed for faces - no extra
+            // Cache the per-block sky/block light channels for entity sampling (mobs read the light
+            // of the block they stand on). Reuses the flood fill already computed for faces - no extra
             // lighting pass. Written under the same lock as MeshFaces. This has to cover the WHOLE
             // column including the air above the terrain, because mobs sample the light where they
             // stand, so it can't stop at the top block - but it does have to visit every cell
             // regardless, which makes it the cheapest place to also census which special passes
             // this chunk needs at all.
-            bool hasWater = false, hasLava = false, hasCross = false, hasSpecial = false;
+            bool hasWater = false, hasLava = false, hasCross = false, hasSpecial = false, hasNonOpaque = false;
             lock (chunk.MeshLock)
             {
                 var grid = chunk.LightGrid;
@@ -301,16 +342,33 @@ namespace Cubuild
                         int column = (x * depth + z) * height;
                         for (int y = 0; y < height; y++)
                         {
-                            grid[column + y] = (byte)lighting.GetLight(chunk.OriginX + x, y, chunk.OriginZ + z);
+                            int sky = lighting.GetSkyLight(chunk.OriginX + x, y, chunk.OriginZ + z);
+                            int block = lighting.GetBlockLight(chunk.OriginX + x, y, chunk.OriginZ + z);
+                            grid[column + y] = (byte)((sky << 4) | block);
                             int id = raw[column + y];
                             if (id == WaterId) hasWater = true;
                             else if (id == LavaId) hasLava = true;
                             else if (BlockRegistry.IsCross(id)) hasCross = true;
                             else if (BlockRegistry.IsPartialShape(id)) hasSpecial = true;
+                            if (LodSettings.SurfaceLodEnabled && id != BlockRegistry.AirId && (!BlockRegistry.IsOpaque(id)
+                                || BlockRegistry.IsTransparent(id) || BlockRegistry.IsCutout(id)
+                                || BlockRegistry.IsGlass(id) || BlockRegistry.IsTranslucent(id)))
+                            {
+                                hasNonOpaque = true;
+                            }
                         }
                     }
                 }
                 chunk.LightGrid = grid;
+            }
+
+            // Only use the surface representation for untouched, ground-layer chunks containing
+            // opaque full cubes. Fluids, cutouts, glass, partial shapes, and edits keep the exact
+            // existing mesh so their special geometry and player-built detail cannot disappear.
+            if (LodSettings.SurfaceLodEnabled && targetLayer == ChunkManager.GroundLayer && !chunk.HasRuntimeEdits
+                && !hasWater && !hasLava && !hasCross && !hasSpecial && !hasNonOpaque)
+            {
+                surfaceLod = BuildSurfaceLod(chunk, chunkLookup, lighting, columnTop, columnTopBlock, biomeIdAt);
             }
 
             // The four passes below are each a full-column scan, and most chunks need none of them:
@@ -335,6 +393,114 @@ namespace Cubuild
             if (hasSpecial) EmitSpecialFaces(chunk, chunkLookup, lighting, mesh, topSolidLocalY);
 
             return mesh;
+        }
+
+        private const int SurfaceLodStep = 4;
+
+        private static IReadOnlyList<MeshFace>? BuildSurfaceLod(Chunk chunk,
+            Dictionary<ChunkCoordinates, Chunk> chunkLookup, ChunkLighting lighting,
+            int[] columnTop, byte[] columnTopBlock, Func<int, int, string>? biomeIdAt)
+        {
+            int cellsX = chunk.Width / SurfaceLodStep;
+            int cellsZ = chunk.Depth / SurfaceLodStep;
+            if (cellsX == 0 || cellsZ == 0 || chunk.Width % SurfaceLodStep != 0 || chunk.Depth % SurfaceLodStep != 0)
+                return null;
+
+            // A shared, globally aligned height grid means adjacent LOD chunks sample the same
+            // border columns and meet without cracks. Missing neighbors use the nearest local edge
+            // until the normal neighbor-dirty path remeshes this chunk.
+            var heights = new double[cellsX + 1, cellsZ + 1];
+            for (int gx = 0; gx <= cellsX; gx++)
+            {
+                for (int gz = 0; gz <= cellsZ; gz++)
+                {
+                    int worldX = chunk.OriginX + gx * SurfaceLodStep;
+                    int worldZ = chunk.OriginZ + gz * SurfaceLodStep;
+                    heights[gx, gz] = GetSurfaceColumn(chunk, chunkLookup, columnTop, columnTopBlock, worldX, worldZ).TopY;
+                }
+            }
+
+            var faces = new List<MeshFace>(cellsX * cellsZ);
+            for (int gx = 0; gx < cellsX; gx++)
+            {
+                for (int gz = 0; gz < cellsZ; gz++)
+                {
+                    int centerX = gx * SurfaceLodStep + SurfaceLodStep / 2;
+                    int centerZ = gz * SurfaceLodStep + SurfaceLodStep / 2;
+                    int centerIndex = centerX * chunk.Depth + centerZ;
+                    int centerTop = columnTop[centerIndex];
+                    byte id = columnTopBlock[centerIndex];
+                    if (id == BlockRegistry.AirId || !BlockRegistry.IsOpaque(id)) continue;
+
+                    double x0 = chunk.OriginX + gx * SurfaceLodStep;
+                    double x1 = x0 + SurfaceLodStep;
+                    double z0 = chunk.OriginZ + gz * SurfaceLodStep;
+                    double z1 = z0 + SurfaceLodStep;
+                    var p0 = new Point3D(x0, heights[gx, gz], z0);
+                    var p1 = new Point3D(x0, heights[gx, gz + 1], z1);
+                    var p2 = new Point3D(x1, heights[gx + 1, gz + 1], z1);
+                    var p3 = new Point3D(x1, heights[gx + 1, gz], z0);
+                    var normal = Cross(p1 - p0, p2 - p1).Normalized();
+                    if (normal.Y < 0) normal = new Point3D(-normal.X, -normal.Y, -normal.Z);
+
+                    // Use the block's top tile even where the coarse surface is steep enough that
+                    // its geometric normal would otherwise select the side texture.
+                    var tile = BlockRegistry.FaceTexture(id, new Point3D(0, 1, 0));
+                    var blockPosition = new Point3D((x0 + x1) * 0.5,
+                        (heights[gx, gz] + heights[gx + 1, gz] + heights[gx, gz + 1] + heights[gx + 1, gz + 1]) * 0.25,
+                        (z0 + z1) * 0.5);
+                    bool biomeHillsGreenTint = (id == GrassId || id == GrassSpreadingId)
+                        && biomeIdAt != null
+                        && string.Equals(biomeIdAt(chunk.OriginX + centerX, chunk.OriginZ + centerZ), "hills", StringComparison.OrdinalIgnoreCase);
+                    int lightX = chunk.OriginX + centerX;
+                    int lightY = centerTop + 1;
+                    int lightZ = chunk.OriginZ + centerZ;
+                    faces.Add(new MeshFace(p0, p1, p2, p3, tile, normal, blockPosition,
+                        1f, SurfaceLodStep, SurfaceLodStep,
+                        lighting.GetSkyLight(lightX, lightY, lightZ), lighting.GetBlockLight(lightX, lightY, lightZ),
+                        biomeHillsGreenTint: biomeHillsGreenTint));
+                }
+            }
+            return faces.Count == 0 ? null : faces;
+        }
+
+        private static (double TopY, byte BlockId) GetSurfaceColumn(Chunk target,
+            Dictionary<ChunkCoordinates, Chunk> chunkLookup, int[] targetTop, byte[] targetTopBlock,
+            int worldX, int worldZ)
+        {
+            int localX = worldX - target.OriginX;
+            int localZ = worldZ - target.OriginZ;
+            if ((uint)localX < (uint)target.Width && (uint)localZ < (uint)target.Depth)
+            {
+                int index = localX * target.Depth + localZ;
+                int top = targetTop[index];
+                return (top >= 0 ? target.OriginY + top + 1 : target.OriginY, targetTopBlock[index]);
+            }
+
+            int chunkX = FloorDiv(worldX, ChunkManager.ChunkSize);
+            int chunkZ = FloorDiv(worldZ, ChunkManager.ChunkSize);
+            int layer = ChunkManager.LayerForWorldY(target.OriginY);
+            if (chunkLookup.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var neighbor))
+            {
+                int nx = worldX - neighbor.OriginX;
+                int nz = worldZ - neighbor.OriginZ;
+                int column = (nx * neighbor.Depth + nz) * neighbor.Height;
+                byte[] raw = neighbor.RawBlocks;
+                for (int y = neighbor.Height - 1; y >= 0; y--)
+                {
+                    byte id = raw[column + y];
+                    if (id != BlockRegistry.AirId) return (neighbor.OriginY + y + 1, id);
+                }
+                return (neighbor.OriginY, BlockRegistry.AirId);
+            }
+
+            // If the neighbor is not loaded yet, extend the closest edge sample temporarily. The
+            // neighbor-dirty path will replace it with the exact shared border when it arrives.
+            int clampedX = Math.Clamp(localX, 0, target.Width - 1);
+            int clampedZ = Math.Clamp(localZ, 0, target.Depth - 1);
+            int fallback = clampedX * target.Depth + clampedZ;
+            int fallbackTop = targetTop[fallback];
+            return (fallbackTop >= 0 ? target.OriginY + fallbackTop + 1 : target.OriginY, targetTopBlock[fallback]);
         }
 
         /// <summary>
@@ -439,14 +605,14 @@ namespace Cubuild
             {
                 var topTile = GetFlowVector(lookup, waterId, wx, wy, wz) ? sideTile : baseTile;
                 int ly = wy - lighting.OriginY;
-                int topLight = Math.Max(lighting.GetLight(wx, ly, wz), lighting.GetLight(wx, ly + 1, wz));
-                double brightness = 1.0 * ChunkLighting.Brightness(topLight);
+                int topSky = Math.Max(lighting.GetSkyLight(wx, ly, wz), lighting.GetSkyLight(wx, ly + 1, wz));
+                int topBlock = Math.Max(lighting.GetBlockLight(wx, ly, wz), lighting.GetBlockLight(wx, ly + 1, wz));
                 mesh.Add(new MeshFace(
                     new Point3D(wx + 0, wy + h00, wz + 0),
                     new Point3D(wx + 0, wy + h01, wz + 1),
                     new Point3D(wx + 1, wy + h11, wz + 1),
                     new Point3D(wx + 1, wy + h10, wz + 0),
-                    topTile, new Point3D(0, 1, 0), new Point3D(wx, wy, wz), (float)brightness, 1, 1, alpha));
+                    topTile, new Point3D(0, 1, 0), new Point3D(wx, wy, wz), 1f, 1, 1, topSky, topBlock, alpha));
             }
         }
 
@@ -458,13 +624,14 @@ namespace Cubuild
             if (below != waterId && (!BlockRegistry.IsSolid(below) || BlockRegistry.IsTransparent(below)))
             {
                 int ly = wy - lighting.OriginY;
-                double brightness = 0.5 * ChunkLighting.Brightness(lighting.GetLight(wx, ly - 1, wz));
+                int skyLight = lighting.GetSkyLight(wx, ly - 1, wz);
+                int blockLight = lighting.GetBlockLight(wx, ly - 1, wz);
                 mesh.Add(new MeshFace(
                     new Point3D(wx + 0, wy + 0, wz + 0),
                     new Point3D(wx + 1, wy + 0, wz + 0),
                     new Point3D(wx + 1, wy + 0, wz + 1),
                     new Point3D(wx + 0, wy + 0, wz + 1),
-                    baseTile, new Point3D(0, -1, 0), new Point3D(wx, wy, wz), (float)brightness, 1, 1, alpha));
+                    baseTile, new Point3D(0, -1, 0), new Point3D(wx, wy, wz), 0.5f, 1, 1, skyLight, blockLight, alpha));
             }
         }
 
@@ -519,13 +686,13 @@ namespace Cubuild
             // the cave walls behind show through untinted ("air pocket" artifact). The top face
             // already uses max(self, above); this keeps side walls consistent with it.
             int ly = wy - lighting.OriginY;
-            int sideLight = Math.Max(lighting.GetLight(wx, ly, wz), lighting.GetLight(neighborX, ly, neighborZ));
-            double brightness = shade * ChunkLighting.Brightness(sideLight);
+            int sideSky = Math.Max(lighting.GetSkyLight(wx, ly, wz), lighting.GetSkyLight(neighborX, ly, neighborZ));
+            int sideBlock = Math.Max(lighting.GetBlockLight(wx, ly, wz), lighting.GetBlockLight(neighborX, ly, neighborZ));
             var blockPos = new Point3D(wx, wy, wz);
             WindTowardNormal(normal, ref p0, ref p1, ref p2, ref p3);
             mesh.Add(new MeshFace(
                 p0, p1, p2, p3,
-                tile, normal, blockPos, (float)brightness, 1, 1, alpha, anchorVBottom: true));
+                tile, normal, blockPos, (float)shade, 1, 1, sideSky, sideBlock, alpha, anchorVBottom: true));
         }
 
 // ---- Lava pass (same as water but with lava properties) ----
@@ -594,14 +761,14 @@ namespace Cubuild
             {
                 var topTile = GetFlowVector(lookup, lavaId, wx, wy, wz) ? sideTile : baseTile;
                 int ly = wy - lighting.OriginY;
-                int topLight = Math.Max(lighting.GetLight(wx, ly, wz), lighting.GetLight(wx, ly + 1, wz));
-                double brightness = 1.0 * ChunkLighting.Brightness(topLight);
+                int topSky = Math.Max(lighting.GetSkyLight(wx, ly, wz), lighting.GetSkyLight(wx, ly + 1, wz));
+                int topBlock = Math.Max(lighting.GetBlockLight(wx, ly, wz), lighting.GetBlockLight(wx, ly + 1, wz));
                 mesh.Add(new MeshFace(
                     new Point3D(wx + 0, wy + h00, wz + 0),
                     new Point3D(wx + 0, wy + h01, wz + 1),
                     new Point3D(wx + 1, wy + h11, wz + 1),
                     new Point3D(wx + 1, wy + h10, wz + 0),
-                    topTile, new Point3D(0, 1, 0), new Point3D(wx, wy, wz), (float)brightness, 1, 1, alpha));
+                    topTile, new Point3D(0, 1, 0), new Point3D(wx, wy, wz), 1f, 1, 1, topSky, topBlock, alpha));
             }
         }
 
@@ -612,13 +779,14 @@ namespace Cubuild
             if (below != LavaId && (!BlockRegistry.IsSolid(below) || BlockRegistry.IsTransparent(below)))
             {
                 int ly = wy - lighting.OriginY;
-                double brightness = 0.5 * ChunkLighting.Brightness(lighting.GetLight(wx, ly - 1, wz));
+                int skyLight = lighting.GetSkyLight(wx, ly - 1, wz);
+                int blockLight = lighting.GetBlockLight(wx, ly - 1, wz);
                 mesh.Add(new MeshFace(
                     new Point3D(wx + 0, wy + 0, wz + 0),
                     new Point3D(wx + 1, wy + 0, wz + 0),
                     new Point3D(wx + 1, wy + 0, wz + 1),
                     new Point3D(wx + 0, wy + 0, wz + 1),
-                    baseTile, new Point3D(0, -1, 0), new Point3D(wx, wy, wz), (float)brightness, 1, 1, alpha));
+                    baseTile, new Point3D(0, -1, 0), new Point3D(wx, wy, wz), 0.5f, 1, 1, skyLight, blockLight, alpha));
             }
         }
 
@@ -664,13 +832,13 @@ namespace Cubuild
             }
 
             int ly = wy - lighting.OriginY;
-            int sideLight = Math.Max(lighting.GetLight(wx, ly, wz), lighting.GetLight(neighborX, ly, neighborZ));
-            double brightness = shade * ChunkLighting.Brightness(sideLight);
+            int sideSky = Math.Max(lighting.GetSkyLight(wx, ly, wz), lighting.GetSkyLight(neighborX, ly, neighborZ));
+            int sideBlock = Math.Max(lighting.GetBlockLight(wx, ly, wz), lighting.GetBlockLight(neighborX, ly, neighborZ));
             var blockPos = new Point3D(wx, wy, wz);
             WindTowardNormal(normal, ref p0, ref p1, ref p2, ref p3);
             mesh.Add(new MeshFace(
                 p0, p1, p2, p3,
-                tile, normal, blockPos, (float)brightness, 1, 1, alpha, anchorVBottom: true));
+                tile, normal, blockPos, (float)shade, 1, 1, sideSky, sideBlock, alpha, anchorVBottom: true));
         }
 
         // ---- Cross-shape pass (saplings, flowers, mushrooms, spikes) -------------------
@@ -707,7 +875,8 @@ namespace Cubuild
                         int wy = chunk.OriginY + y;
                         int wz = chunk.OriginZ + z;
                         int ly = wy - lighting.OriginY;
-                        double brightness = ChunkLighting.Brightness(lighting.GetLight(wx, ly, wz));
+                        int skyLight = lighting.GetSkyLight(wx, ly, wz);
+                        int blockLight = lighting.GetBlockLight(wx, ly, wz);
                         var blockPos = new Point3D(wx, wy, wz);
 
                         // Torches with wall meta (1-4, set by placement against a side face)
@@ -718,7 +887,7 @@ namespace Cubuild
                             int meta = GetMetaAt(lookup, wx, wy, wz);
                             if (meta >= 1 && meta <= 4)
                             {
-                                EmitTorchWallFace(mesh, wx, wy, wz, tile, alpha, (float)brightness, meta);
+                                EmitTorchWallFace(mesh, wx, wy, wz, tile, alpha, skyLight, blockLight, meta);
                                 continue;
                             }
                         }
@@ -729,14 +898,14 @@ namespace Cubuild
                             new Point3D(wx + 0, wy + 1, wz + 0),
                             new Point3D(wx + 0, wy + 0, wz + 0),
                             new Point3D(wx + 1, wy + 0, wz + 1),
-                            tile, new Point3D(1, 0, -1), blockPos, (float)brightness, 1, 1, alpha));
+                            tile, new Point3D(1, 0, -1), blockPos, 1f, 1, 1, skyLight, blockLight, alpha));
                         // Diagonal 0,1 -> 1,0.
                         mesh.Add(new MeshFace(
                             new Point3D(wx + 1, wy + 1, wz + 0),
                             new Point3D(wx + 0, wy + 1, wz + 1),
                             new Point3D(wx + 0, wy + 0, wz + 1),
                             new Point3D(wx + 1, wy + 0, wz + 0),
-                            tile, new Point3D(1, 0, 1), blockPos, (float)brightness, 1, 1, alpha));
+                            tile, new Point3D(1, 0, 1), blockPos, 1f, 1, 1, skyLight, blockLight, alpha));
                     }
                 }
             }
@@ -752,7 +921,7 @@ namespace Cubuild
         // axis-aligned normal gives clean axis UVs. Top vertices first, matching the cross
         // plants.
         private static void EmitTorchWallFace(List<MeshFace> mesh, int wx, int wy, int wz,
-            TextureRect tile, float alpha, float brightness, int meta)
+            TextureRect tile, float alpha, int skyLight, int blockLight, int meta)
         {
             const float lean = 0.414f;  // tan(22.5deg) - the classic wall-torch tilt
             const float wallLift = 0.2f; // wall torches hang slightly higher than floor torches
@@ -791,7 +960,7 @@ namespace Cubuild
                     break;
             }
 
-            mesh.Add(new MeshFace(p0, p1, p2, p3, tile, normal, blockPos, brightness, 1, 1, alpha));
+            mesh.Add(new MeshFace(p0, p1, p2, p3, tile, normal, blockPos, 1f, 1, 1, skyLight, blockLight, alpha));
 
             // Fold copy: the same sprite folded 90deg around the front quad's art line so the
             // torch reads solid from the sides. It's a tilted RECTANGLE (edges perpendicular,
@@ -831,7 +1000,7 @@ namespace Cubuild
                     break;
             }
 
-            mesh.Add(new MeshFace(q0, q1, q2, q3, tile, foldNormal, blockPos, brightness, 1, 1, alpha));
+            mesh.Add(new MeshFace(q0, q1, q2, q3, tile, foldNormal, blockPos, 1f, 1, 1, skyLight, blockLight, alpha));
         }
 
         // ---- Special-solid pass (slabs, stairs) ---------------------------------------
@@ -985,7 +1154,8 @@ namespace Cubuild
 
                 int nly = ny - lighting.OriginY;
                 double shade = off.dy > 0 ? 1.0 : (off.dy < 0 ? 0.5 : (off.dx != 0 ? 0.6 : 0.8));
-                double brightness = shade * ChunkLighting.Brightness(lighting.GetLight(nx, nly, nz));
+                int skyLight = lighting.GetSkyLight(nx, nly, nz);
+                int blockLight = lighting.GetBlockLight(nx, nly, nz);
 
                 var normal = new Point3D(off.dx, off.dy, off.dz);
                 var verts = FaceVertices[i];
@@ -1005,7 +1175,8 @@ namespace Cubuild
                 }
 
                 var src = texOverride ?? def.FaceTexture(normal);
-                mesh.Add(new MeshFace(p0, p1, p2, p3, src, normal, new Point3D(wx, wy, wz), (float)brightness, 1, 1, alpha, false, textureRotation));
+                mesh.Add(new MeshFace(p0, p1, p2, p3, src, normal, new Point3D(wx, wy, wz), (float)shade, 1, 1,
+                    skyLight, blockLight, alpha, false, textureRotation));
             }
         }
 
@@ -1163,8 +1334,10 @@ namespace Cubuild
             return m >= 8 ? 0 : m;
         }
 
-        private static int Pack(int blockId, bool positive, int light)
-            => 1 | (blockId << 1) | (positive ? 0x200 : 0) | (light << 10);
+        private static int Pack(int blockId, bool positive, int skyLight, int blockLight, bool biomeHillsGreenTint = false)
+            => 1 | (blockId << 1) | (positive ? 0x200 : 0)
+                | ((skyLight & 0xF) << 10) | (biomeHillsGreenTint ? 1 << 14 : 0)
+                | ((blockLight & 0xF) << 15);
 
         /// <summary>
         /// Greedy-merges a mask of packed face codes into rectangles and appends them as
@@ -1189,7 +1362,9 @@ namespace Cubuild
 
                     int entryType = (entry >> 1) & 0xFF;
                     bool entryPositive = (entry & 0x200) != 0;
-                    int entryLight = (entry >> 10) & 0xF;
+                    int entrySkyLight = (entry >> 10) & 0xF;
+                    int entryBlockLight = (entry >> 15) & 0xF;
+                    bool entryBiomeHillsGreenTint = (entry & (1 << 14)) != 0;
 
                     // compute width
                     int w;
@@ -1289,9 +1464,6 @@ namespace Cubuild
                     else if (axisNormal.Y < -0.5) shade = 0.5;
                     else if (Math.Abs(axisNormal.X) > 0.5) shade = 0.6;
 
-                    // combine directional shade with the flood-filled light level
-                    double brightness = shade * ChunkLighting.Brightness(entryLight);
-
                     // per-block atlas tile (honouring top/bottom/side overrides) and render alpha.
                     // The alpha sign routes the face to its pass in the renderer:
                     //   cutout blocks (leaves)      -> negative alpha
@@ -1306,7 +1478,9 @@ namespace Cubuild
                     if (BlockRegistry.IsTranslucent(entryType)) alpha = -alpha - 200f;
                     else if (BlockRegistry.IsGlass(entryType)) alpha = -alpha - 100f;
                     else if (BlockRegistry.IsCutout(entryType)) alpha = -alpha;
-                    mesh.Add(new MeshFace(corners[0], corners[1], corners[2], corners[3], src, axisNormal, blockPos, (float)brightness, tileWidth, tileHeight, alpha));
+                    mesh.Add(new MeshFace(corners[0], corners[1], corners[2], corners[3], src, axisNormal, blockPos,
+                        (float)shade, tileWidth, tileHeight, entrySkyLight, entryBlockLight, alpha,
+                        biomeHillsGreenTint: entryBiomeHillsGreenTint));
 
                     // zero-out mask
                     for (int aOff = 0; aOff < w; aOff++)
@@ -1350,9 +1524,10 @@ namespace Cubuild
             // top of the cell above; taking the brighter of the two keeps a slope from being
             // darker than the flat track it continues from. Shade 1.0: a ramp faces up.
             int ly = wy - lighting.OriginY;
-            int rampLight = Math.Max(lighting.GetLight(wx, ly, wz), lighting.GetLight(wx, ly + 1, wz));
-            double brightness = ChunkLighting.Brightness(rampLight);
-            mesh.Add(new MeshFace(p0, p1, p2, p3, tex, normal, new Point3D(wx, wy, wz), (float)brightness, 1, 1, -1f, false, textureRotation));
+            int rampSky = Math.Max(lighting.GetSkyLight(wx, ly, wz), lighting.GetSkyLight(wx, ly + 1, wz));
+            int rampBlock = Math.Max(lighting.GetBlockLight(wx, ly, wz), lighting.GetBlockLight(wx, ly + 1, wz));
+            mesh.Add(new MeshFace(p0, p1, p2, p3, tex, normal, new Point3D(wx, wy, wz), 1f, 1, 1,
+                rampSky, rampBlock, -1f, false, textureRotation));
         }
 
         /// <summary>Largest droop among the rail neighbours this cell links to (same Y only). Used
@@ -1420,8 +1595,10 @@ namespace Cubuild
             var normal = new Point3D(0, 1, 0);
 
             int nly = wy + 1 - lighting.OriginY;
-            double brightness = ChunkLighting.Brightness(lighting.GetLight(wx, nly, wz));
-            mesh.Add(new MeshFace(p0, p1, p2, p3, tex, normal, new Point3D(wx, wy, wz), (float)brightness, 1, 1, -1f, false, textureRotation));
+            int skyLight = lighting.GetSkyLight(wx, nly, wz);
+            int blockLight = lighting.GetBlockLight(wx, nly, wz);
+            mesh.Add(new MeshFace(p0, p1, p2, p3, tex, normal, new Point3D(wx, wy, wz), 1f, 1, 1,
+                skyLight, blockLight, -1f, false, textureRotation));
         }
 
         private static double Dot(Point3D a, Point3D b)

@@ -42,17 +42,12 @@ namespace Cubuild
                 return;
             }
 
-            // Day/night: lower the daylight seed when the sun crosses into a new night-dim level,
-            // then re-mesh so the flood fill bakes the dimmer light.
+            // Keep the discrete day/night value for gameplay light checks. Visual daylight is
+            // scaled continuously by the renderer, so time changes do not dirty every chunk mesh.
             int sub = World.NightDimLevel(deltaSeconds);
             if (sub != _lastSkylightSubtracted)
             {
                 _lastSkylightSubtracted = sub;
-                ChunkLighting.NightDimLevel = sub;
-                foreach (var c in World.Chunks.GetLoadedChunks())
-                {
-                    c.NeedsRemesh = true;
-                }
             }
 
             UpdateCaveAmbience(deltaSeconds);

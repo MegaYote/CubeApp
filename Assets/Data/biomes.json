@@ -2,9 +2,9 @@
   // ============================================================================
   // biomes.json — terrain biome definitions.
   //
-  // Every world column gets exactly one biome, chosen by matching its noise
-  // temperature and humidity against the ranges below (first match wins in
-  // file order). Tune the ranges to reshape the world's layout.
+  // Every world column gets exactly one biome. Ocean/land is selected independently by
+  // continentalness; land biomes use the temperature/humidity ranges below (first match wins).
+  // This follows the broad legacy Java balance: about one-third ocean, with climate zones on land.
   //
   // FIELDS:
   //   id              unique lowercase id (used in code/debug)
@@ -29,17 +29,16 @@
   // "grass", fillBlock "dirt", fillDepth 3, treeDensity 0, treeType "oak".
   // ============================================================================
 
-  // ORDER: first-match-wins. Non-overlapping bands tile the humidity axis for warm
-  // temps (0.0-1.0). Classic and anomaly are narrow intentional overlaps listed early
-  // so they claim small rare pockets. Cold biomes (mountains, ocean) fill the left end.
+  // ORDER: first-match-wins. Ocean is selected by a separate continentalness layer. Land
+  // temperatures/humidity then select climate biomes; leftover climate edges are smoothly blended.
   //
-  // HUMIDITY PARTITION (warm temps):
-  //   desert      -1.00 to -0.30  (dry end)
-  //   paradise    -0.30 to  0.10  (warm moderate)
-  //   alpha        0.10 to  0.45  (temperate)
-  //   hills        0.45 to  0.55  (narrow ridge)
-  //   lowlands     0.55 to  0.85  (humid; twice the band of plains)
-  //   plains       0.85 to  1.00  (humid, far end)
+  // HUMIDITY PARTITION (warm temps; first-match overlaps matter):
+  //   paradise    -0.30  to  0.10  (warm moderate; listed before alpha)
+  //   alpha       -0.375 to  0.10  (common temperate/forest analogue)
+  //   desert      -1.00  to -0.30  (dry end; alpha takes a narrow overlap)
+  //   hills        0.45  to  0.539 (narrow ridge)
+  //   lowlands     0.10  to  0.85  (plains analogue; hills claims its overlap first)
+  //   plains       0.85  to  1.00  (far-humid sliver)
   // ===========================================================================
 
   "biomes": [
@@ -94,15 +93,14 @@
       "fillMixBlock": "dirt",
       "fillMixChance": 0.5
     },
-    // ---- ALPHA: the most common biome. Wide temperate band, classic Minecraft terrain.
-    // Byte-faithful port of Alpha v1.1.2_01 terrain generator.
-    // Humidity extends down to -0.30 so it covers the paradise gap at temp 0.0-0.20
-    // and 0.60-1.0 (paradise listed first still claims its region).
+  // ---- ALPHA: common forest/temperate analogue, including a little cool climate.
+  // Byte-faithful port of Alpha v1.1.2_01 terrain generator.
+  // Paradise is listed first and still claims its warm/moderate overlap.
     {
       "id": "alpha",
       "displayName": "Alpha",
-      "temperature": { "min": 0.0, "max": 1.0 },
-      "humidity": { "min": -0.30, "max": 0.45 },
+      "temperature": { "min": -0.2, "max": 1.0 },
+      "humidity": { "min": -0.375, "max": 0.1 },
       "water": false,
       "baseHeight": 0.5,
       "heightVariation": 0.25,
@@ -130,8 +128,8 @@
     {
       "id": "hills",
       "displayName": "Hills",
-      "temperature": { "min": 0.0, "max": 1.0 },
-      "humidity": { "min": 0.45, "max": 0.55 },
+      "temperature": { "min": -0.2, "max": 1.0 },
+      "humidity": { "min": 0.45, "max": 0.539 },
       "water": false,
       "baseHeight": 0.93,
       "heightVariation": 0.75,
@@ -142,14 +140,14 @@
       "treeDensity": 1
     },
     // ---- LOWLANDS: plains' bigger sibling - same flat grass country, ~2 blocks
-    // lower, oak trees instead of willows, and twice the humidity band (0.55-0.85 vs
-    // 0.85-1.0) so it's the common wet biome and plains is the rare far-humid sliver.
+    // lower, oak trees instead of willows. It occupies the humid warmer-land band; plains
+    // remains the far-humid sliver.
     // baseHeight: 1 unit = 128 blocks, so 0.545 vs plains' 0.56 = ~1.9 blocks lower.
     {
       "id": "lowlands",
       "displayName": "Lowlands",
       "temperature": { "min": 0.0, "max": 1.0 },
-      "humidity": { "min": 0.55, "max": 0.85 },
+      "humidity": { "min": 0.1, "max": 0.85 },
       "water": false,
       "baseHeight": 0.545,
       "heightVariation": 0.08,
@@ -160,7 +158,7 @@
       "treeType": "oak"
     },
     // ---- PLAINS: flat willow lowlands at the far humid end. Narrower band since lowlands
-    // (its oak twin) claims the wider 0.55-0.85 slice.
+    // (its oak twin) claims the wider 0.539-0.85 slice.
     {
       "id": "plains",
       "displayName": "Plains",
@@ -191,11 +189,11 @@
       "treeDensity": 0
     },
     // ---- COLD BIOMES: ocean and mountains fill the cold end of the temperature spectrum.
-    // Ocean covers the cool band as water; mountains fills the deep-cold strip.
+    // Ocean coverage comes from the independent continentalness layer, not this climate rectangle.
     {
       "id": "ocean",
       "displayName": "Ocean",
-      "temperature": { "min": -0.6, "max": -0.1 },
+      "temperature": { "min": -0.4, "max": -0.1 },
       "humidity": { "min": -1.0, "max": 1.0 },
       "water": true,
       "baseHeight": 0.28,
@@ -208,7 +206,7 @@
     {
       "id": "mountains",
       "displayName": "Mountains",
-      "temperature": { "min": -1.0, "max": -0.6 },
+      "temperature": { "min": -1.0, "max": -0.2 },
       "humidity": { "min": -1.0, "max": 1.0 },
       "water": false,
       "baseHeight": 0.85,

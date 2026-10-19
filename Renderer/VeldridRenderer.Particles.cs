@@ -9,7 +9,7 @@ namespace Cubuild.Renderer
 {
     public sealed partial class VeldridRenderer : IRenderer, IDisposable
     {
-        private void SortPassBackToFront(int passId, System.Collections.Generic.List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands)
+        private void SortPassBackToFront(int passId, System.Collections.Generic.List<DrawEntry> commands)
         {
             if (!_cameraPosition.HasValue) return;
             var cam = _cameraPosition.Value;

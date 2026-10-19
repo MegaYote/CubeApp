@@ -164,25 +164,32 @@ namespace Cubuild
         /// <summary>Returns the biome matching a (temperature, humidity) pair. When the point
         /// falls outside every biome's rectangle, blends the two nearest biomes by
         /// inverse-distance weighting so the transition looks natural.</summary>
-        public static BiomeDefinition Match(float temperature, float humidity)
+        public static BiomeDefinition Match(float temperature, float humidity) => Match(temperature, humidity, includeWater: true);
+
+        /// <summary>Matches a land biome, excluding water definitions from exact matches and
+        /// nearest-biome fallback.</summary>
+        public static BiomeDefinition MatchLand(float temperature, float humidity) => Match(temperature, humidity, includeWater: false);
+
+        private static BiomeDefinition Match(float temperature, float humidity, bool includeWater)
         {
             // Fast path: first exact match wins.
             foreach (var b in _biomes)
             {
+                if (!includeWater && b.IsWater) continue;
                 if (temperature >= b.Temperature.Min && temperature <= b.Temperature.Max
                     && humidity >= b.Humidity.Min && humidity <= b.Humidity.Max)
                 {
                     return b;
                 }
             }
-            if (_biomes.Count == 0) return Fallback;
-            if (_biomes.Count == 1) return _biomes[0];
-
             // Find the two closest biomes by distance from the point to each biome rectangle.
             float bestDist1 = float.MaxValue, bestDist2 = float.MaxValue;
             BiomeDefinition? best1 = null, best2 = null;
+            int candidateCount = 0;
             foreach (var b in _biomes)
             {
+                if (!includeWater && b.IsWater) continue;
+                candidateCount++;
                 float dx = DistToRange(temperature, b.Temperature.Min, b.Temperature.Max);
                 float dy = DistToRange(humidity, b.Humidity.Min, b.Humidity.Max);
                 float dist = MathF.Sqrt(dx * dx + dy * dy);
@@ -197,6 +204,7 @@ namespace Cubuild
                 }
             }
             if (best1 == null) return Fallback;
+            if (candidateCount == 1) return best1;
             if (best2 == null || bestDist2 < 1e-6f) return best1;
 
             // Inverse-distance blend between the two nearest biomes.

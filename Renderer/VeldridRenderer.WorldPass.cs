@@ -11,7 +11,7 @@ namespace Cubuild.Renderer
     {
         private void DrawWorldPass(
             CommandList cl,
-            System.Collections.Generic.List<(Cubuild.ChunkCoordinates Coord, IndirectDrawIndexedArguments Cmd)> commands,
+            System.Collections.Generic.List<DrawEntry> commands,
             IndirectDrawIndexedArguments[] scratch,
             Pipeline pipeline,
             ref uint[] cullData)
@@ -103,8 +103,8 @@ namespace Cubuild.Renderer
         // clip-space depth bias (the C++ glPolygonOffset(-1,-1) equivalent, ~1 ULP) so nothing
         // coplanar can ever z-fight. No walls, no fake faces.
         // C++ Game.cpp startBreaking light capture: sample the 6 neighbors' combined light and
-        // keep the brightest, so the shrink cube matches the block's surroundings (the block
-        // itself is solid -> light 0 inside). ChunkLighting is a full 3x3-chunk flood fill, so
+        // keep the brightest channel pair, so the shrink cube matches the block's surroundings
+        // (the block itself is solid -> light 0 inside). ChunkLighting is a full 3x3-chunk flood fill, so
         // cache the result PER CHUNK: walking across blocks in the same chunk (rapidly re-targeting
         // while holding mine) reuses the cached light instead of recomputing ~590k cells every
         // few frames. Only crossing into a new chunk (or a new mining block in a different chunk)
@@ -116,7 +116,11 @@ namespace Cubuild.Renderer
                 return; // already captured for this chunk
             }
             _miningLightChunkKey = chunkKey;
-            _miningLightLevel = 15;
+            _miningSkyLightLevel = 15;
+            _miningBlockLightLevel = 0;
+            Array.Clear(_miningNeighborSkyLights, 0, _miningNeighborSkyLights.Length);
+            Array.Clear(_miningNeighborBlockLights, 0, _miningNeighborBlockLights.Length);
+            _miningNeighborSkyLights[0] = 15;
             if (_chunkManager == null) return;
 
             try
@@ -138,27 +142,52 @@ namespace Cubuild.Renderer
                 if (region.Count == 0) return;
 
                 var lighting = new ChunkLighting(region, ChunkManager.ChunkSize, ChunkManager.HeightForLayer(layer));
-                int best = 0;
                 (int dx, int dy, int dz)[] dirs =
                 {
                     (-1,0,0), (1,0,0), (0,-1,0), (0,1,0), (0,0,-1), (0,0,1)
                 };
-                foreach (var d in dirs)
+                for (int i = 0; i < dirs.Length; i++)
                 {
-                    int l = lighting.GetLight(bx + d.dx, by - lighting.OriginY + d.dy, bz + d.dz);
-                    if (l > best) best = l;
+                    var d = dirs[i];
+                    int x = bx + d.dx;
+                    int y = by - lighting.OriginY + d.dy;
+                    int z = bz + d.dz;
+                    _miningNeighborSkyLights[i] = lighting.GetSkyLight(x, y, z);
+                    _miningNeighborBlockLights[i] = lighting.GetBlockLight(x, y, z);
                 }
-                _miningLightLevel = best;
             }
             catch
             {
-                _miningLightLevel = 15; // fail safe: full bright
+                Array.Clear(_miningNeighborSkyLights, 0, _miningNeighborSkyLights.Length);
+                Array.Clear(_miningNeighborBlockLights, 0, _miningNeighborBlockLights.Length);
+                _miningNeighborSkyLights[0] = 15; // fail safe: full sky
             }
         }
 
-        // Returns the brightness multiplier (0..1) at a world position using the SAME baked light
-        // rules as block faces: ChunkLighting.Brightness(light) where light comes from the chunk's
-        // cached per-block LightGrid (filled by the mesher's existing flood fill). This is a plain
+        // Select the brightest neighbor using the same current sky scale and brightness curve as
+        // the shader. The six channel pairs are cached per mining chunk, but this inexpensive
+        // selection runs each frame so the overlay stays correct as day turns to night.
+        private void SelectMiningLightForCurrentTime()
+        {
+            float best = -1f;
+            for (int i = 0; i < _miningNeighborSkyLights.Length; i++)
+            {
+                int sky = _miningNeighborSkyLights[i];
+                int block = _miningNeighborBlockLights[i];
+                float brightness = Math.Max(
+                    ChunkLighting.Brightness(sky) * _nightDim,
+                    ChunkLighting.Brightness(block));
+                if (brightness > best)
+                {
+                    best = brightness;
+                    _miningSkyLightLevel = sky;
+                    _miningBlockLightLevel = block;
+                }
+            }
+        }
+
+        // Returns the brightness multiplier (0..1) at a world position using the same separate sky
+        // and block channels as terrain. The chunk LightGrid packs both nibbles, so this is a plain
         // array lookup - no lighting rebuild at render time. Falls back to the global _nightDim
         // when the chunk isn't loaded / hasn't meshed yet.
         private float GetMobLight(double x, double y, double z)
@@ -182,7 +211,10 @@ namespace Cubuild.Renderer
             }
 
             int idx = (localX * chunk.Depth + localZ) * chunk.Height + localY;
-            return ChunkLighting.MobBrightness(chunk.LightGrid[idx]);
+            byte packed = chunk.LightGrid[idx];
+            int sky = (packed >> 4) & 0x0F;
+            int block = packed & 0x0F;
+            return Math.Max(ChunkLighting.MobBrightness(block), ChunkLighting.MobBrightness(sky) * _nightDim);
         }
 
         private void DrawShrinkCube(CommandList cl)
@@ -196,14 +228,13 @@ namespace Cubuild.Renderer
 
             // Capture the mining block's light once per mining CHUNK (C++ startBreaking does the
             // same) and shade the overlay like the world mesh: brightness = faceShade *
-            // Brightness(light). Cached per chunk so rapid re-targeting while walking doesn't
+            // sky/block levels. Cached per chunk so rapid re-targeting while walking doesn't
             // rebuild the 3x3 flood-fill light every few frames.
             var mbp = _hud.MiningBlockPos;
             long mchunkKey = ((long)(int)Math.Floor(mbp.X / (double)ChunkManager.ChunkSize) << 32)
                            | (uint)(int)Math.Floor(mbp.Z / (double)ChunkManager.ChunkSize);
             CaptureMiningLight(mbp, mchunkKey);
-            float lightMult = ChunkLighting.Brightness(_miningLightLevel);
-
+            SelectMiningLightForCurrentTime();
             var center = _hud.MiningBlockPos + new Vector3(0.5f);
             var def = BlockRegistry.GetById(_hud.MiningBlockId);
             // Per-face shade (top 1.0 / bottom 0.5 / N+S 0.8 / E+W 0.6), same as the mesher.
@@ -261,8 +292,10 @@ namespace Cubuild.Renderer
                 uint tileW = (uint)Math.Clamp(Math.Max(1, tr.Width), 0, 255);
                 uint tileH = (uint)Math.Clamp(Math.Max(1, tr.Height), 0, 255);
                 uint pack2 = (tileX << 24) | (tileY << 16) | (tileW << 8) | tileH;
-                uint shadeByte = (uint)Math.Clamp((int)Math.Round(faceShade[face] * lightMult * 255f), 0, 255);
-                uint pack3 = shadeByte | (255u << 8); // opaque
+                uint shadeByte = (uint)Math.Clamp((int)Math.Round(faceShade[face] * 255f), 0, 255);
+                uint pack3 = shadeByte | (255u << 8)
+                    | ((uint)(_miningSkyLightLevel & 0xF) << 19)
+                    | ((uint)(_miningBlockLightLevel & 0xF) << 23); // opaque + separate light channels
 
                 var src = faces[face];
                 // UVs from the SAME axis projection the world mesher uses (TryGetCubuildFaceAxes
@@ -344,8 +377,10 @@ namespace Cubuild.Renderer
                     uint tileW = (uint)Math.Clamp(Math.Max(1, tr.Width), 0, 255);
                     uint tileH = (uint)Math.Clamp(Math.Max(1, tr.Height), 0, 255);
                     uint pack2 = (tileX << 24) | (tileY << 16) | (tileW << 8) | tileH;
-                    uint shadeByte = (uint)Math.Clamp((int)Math.Round(neighbors[i].brightness * lightMult * 255f), 0, 255);
-                    uint pack3 = shadeByte | (255u << 8); // opaque
+                    uint shadeByte = (uint)Math.Clamp((int)Math.Round(neighbors[i].brightness * 255f), 0, 255);
+                    uint pack3 = shadeByte | (255u << 8)
+                        | ((uint)(_miningSkyLightLevel & 0xF) << 19)
+                        | ((uint)(_miningBlockLightLevel & 0xF) << 23); // opaque + separate light channels
 
                     var src = faces[nFace];
                     // Same axis-projection UV baking as the cube + world mesher: the wall is the

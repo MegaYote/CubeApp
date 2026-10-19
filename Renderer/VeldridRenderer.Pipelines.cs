@@ -13,11 +13,12 @@ namespace Cubuild.Renderer
         {
             var factory = _gd.ResourceFactory;
             // Packed chunk vertex format (24 bytes vs the old 52): the vertex shader decodes
-            // everything back into the same varyings, so the fragment shaders are unchanged.
+            // the packed fields into fragment inputs, including the per-face biome grass tint bit.
             //   aPosition  : world-space Float3 (12 bytes)
             //   aPack1     : du/dv as 8.8 fixed point (uint16 each)
             //   aPack2     : tile rect as 4x uint8 ATLAS TEXELS (x,y,w,h)
-            //   aPack3     : shade(8) | alphaByte(8) | alphaMode(2) | pad(14)
+            //   aPack3     : directionalShade(8) | alphaByte(8) | alphaMode(2) | hillsTint(1)
+            //                | skyLight(4) | blockLight(4) | pad(5)
             //                alphaMode 0 = real alpha (opaque/water), 1 = glass frame (-100
             //                sentinel), 2 = translucent glass tint (-200 sentinel).
             // Atlas size is baked in (atlas loads before CreatePipeline) so the texel decode is exact.
@@ -32,6 +33,8 @@ layout(location=0) out vec2 vLocalUV;
 layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
 layout(location=3) out vec3 vWorldPos;
+layout(location=4) flat out uint vBiomeHillsGreenTint;
+layout(location=5) flat out uint vLightPacked;
 layout(set=0, binding=0) uniform ProjectionView {{ mat4 projView; }};
 const float ATLAS_INV_X = 1.0 / {atlasW.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
 const float ATLAS_INV_Y = 1.0 / {atlasH.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
@@ -51,6 +54,10 @@ void main() {{
     float shade = float(aPack3 & 0xFFu) / 255.0;
     uint alphaByte = (aPack3 >> 8) & 0xFFu;
     uint mode = (aPack3 >> 16) & 0x3u;
+    vBiomeHillsGreenTint = (aPack3 >> 18) & 0x1u;
+    uint skyLight = (aPack3 >> 19) & 0xFu;
+    uint blockLight = (aPack3 >> 23) & 0xFu;
+    vLightPacked = skyLight | (blockLight << 4);
     float alpha = mode == 0u ? float(alphaByte) / 255.0 : (mode == 1u ? -100.0 : -200.0);
     vColor = vec4(shade, shade, shade, alpha);
     vWorldPos = aPosition;
@@ -62,14 +69,27 @@ layout(location=0) in vec2 vLocalUV;
 layout(location=1) in vec4 vTileRect;
 layout(location=2) in vec4 vColor;
 layout(location=3) in vec3 vWorldPos;
+layout(location=4) flat in uint vBiomeHillsGreenTint;
+layout(location=5) flat in uint vLightPacked;
 layout(set=1, binding=0) uniform sampler2D uAtlas;
 layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;   // rgb + pad
     vec2 fogRange;   // start, end
+    vec2 lightParams; // sky-light scale, fullbright override
     vec4 cameraPos;  // xyz + pad
     vec4 hiddenCell; // xyz = mining cell (floor), w = 1 when a block is being hidden
 };
 layout(location=0) out vec4 outColor;
+float lightBrightness(uint level) {
+    float t = float(level) / 15.0;
+    return t * t * t * 0.55 + t * 0.45;
+}
+float worldLight() {
+    if (lightParams.y > 0.5) return 1.0;
+    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x;
+    float block = lightBrightness((vLightPacked >> 4) & 0xFu);
+    return max(sky, block);
+}
 void main() {
     // Discard the mining cell with a tiny epsilon past the boundary. Exact bounds let neighbor
     // boundary faces (float-precision fragments landing a hair outside the cell) survive and
@@ -85,9 +105,15 @@ void main() {
     // fract() tiles the same atlas tile regardless of how many blocks the face spans.
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
     vec4 tex = texture(uAtlas, atlasUV);
+    vec3 sampledRgb = tex.rgb;
+    // The terrain grass tiles have green pixels whose green channel distinctly exceeds red/blue;
+    // dirt pixels remain red/brown and therefore retain their exact atlas color.
+    if (vBiomeHillsGreenTint != 0u && tex.g > tex.r * 1.2 && tex.g > tex.b * 1.2) {
+        sampledRgb *= vec3(0.55, 0.76, 0.55);
+    }
     // Block alpha (vColor.a) governs opacity - transparent tiles (water) are tinted by their
     // configured alpha; opaque blocks (alpha 1) sample the tile fully.
-    outColor = vec4(tex.rgb * vColor.rgb, vColor.a);
+    outColor = vec4(sampledRgb * vColor.rgb * worldLight(), vColor.a);
     // Linear distance fog: fully fogged at fogRange.y, clear at fogRange.x.
     float dist = length(vWorldPos - cameraPos.xyz);
     float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
@@ -151,14 +177,27 @@ layout(location=0) in vec2 vLocalUV;
 layout(location=1) in vec4 vTileRect;
 layout(location=2) in vec4 vColor;
 layout(location=3) in vec3 vWorldPos;
+layout(location=4) flat in uint vBiomeHillsGreenTint;
+layout(location=5) flat in uint vLightPacked;
 layout(set=1, binding=0) uniform sampler2D uAtlas;
 layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;
     vec2 fogRange;
+    vec2 lightParams;
     vec4 cameraPos;
     vec4 hiddenCell;
 };
 layout(location=0) out vec4 outColor;
+float lightBrightness(uint level) {
+    float t = float(level) / 15.0;
+    return t * t * t * 0.55 + t * 0.45;
+}
+float worldLight() {
+    if (lightParams.y > 0.5) return 1.0;
+    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x;
+    float block = lightBrightness((vLightPacked >> 4) & 0xFu);
+    return max(sky, block);
+}
 void main() {
     // Discard the mining cell with a tiny epsilon past the boundary (matches the opaque shader):
     // exact bounds let neighbor boundary faces survive and z-fight the shrink cube; 0.002 is
@@ -172,8 +211,12 @@ void main() {
     }
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
     vec4 tex = texture(uAtlas, atlasUV);
+    vec3 sampledRgb = tex.rgb;
+    if (vBiomeHillsGreenTint != 0u && tex.g > tex.r * 1.2 && tex.g > tex.b * 1.2) {
+        sampledRgb *= vec3(0.55, 0.76, 0.55);
+    }
     if (tex.a < 0.5) discard; // sprite background falls away; no blending
-    outColor = vec4(tex.rgb * vColor.rgb, 1.0);
+    outColor = vec4(sampledRgb * vColor.rgb * worldLight(), 1.0);
     float dist = length(vWorldPos - cameraPos.xyz);
     float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
     outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);
@@ -220,14 +263,26 @@ layout(location=0) in vec2 vLocalUV;
 layout(location=1) in vec4 vTileRect;
 layout(location=2) in vec4 vColor;
 layout(location=3) in vec3 vWorldPos;
+layout(location=5) flat in uint vLightPacked;
 layout(set=1, binding=0) uniform sampler2D uAtlas;
 layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;
     vec2 fogRange;
+    vec2 lightParams;
     vec4 cameraPos;
     vec4 hiddenCell;
 };
 layout(location=0) out vec4 outColor;
+float lightBrightness(uint level) {
+    float t = float(level) / 15.0;
+    return t * t * t * 0.55 + t * 0.45;
+}
+float worldLight() {
+    if (lightParams.y > 0.5) return 1.0;
+    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x;
+    float block = lightBrightness((vLightPacked >> 4) & 0xFu);
+    return max(sky, block);
+}
 void main() {
     // Discard the mining cell with a tiny epsilon past the boundary (matches the opaque shader):
     // exact bounds let neighbor boundary faces survive and z-fight the shrink cube; 0.002 is
@@ -243,7 +298,7 @@ void main() {
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
     vec4 tex = texture(uAtlas, atlasUV);
     if (tex.a >= 0.5) discard;      // opaque frame pixels already drawn by the glass pass
-    outColor = vec4(tex.rgb * vColor.rgb, tex.a);
+    outColor = vec4(tex.rgb * vColor.rgb * worldLight(), tex.a);
     float dist = length(vWorldPos - cameraPos.xyz);
     float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
     outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);
@@ -290,6 +345,8 @@ layout(location=0) out vec2 vLocalUV;
 layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
 layout(location=3) out vec3 vWorldPos;
+layout(location=4) flat out uint vBiomeHillsGreenTint;
+layout(location=5) flat out uint vLightPacked;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() {
     vec3 worldPos = aCorner + iWorldPos;
@@ -297,6 +354,8 @@ void main() {
     vTileRect = iTileRect;
     vColor = aShade;
     vWorldPos = worldPos;
+    vBiomeHillsGreenTint = 0u;
+    vLightPacked = 15u; // moving blocks use the shared sky-only day/night scale
     gl_Position = projView * vec4(worldPos, 1.0);
 }";
             var fallingVsSpirv = SpirvCompilation.CompileGlslToSpirv(fallingVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
@@ -340,6 +399,8 @@ layout(location=0) out vec2 vLocalUV;
 layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
 layout(location=3) out vec3 vWorldPos;
+layout(location=4) flat out uint vBiomeHillsGreenTint;
+layout(location=5) flat out uint vLightPacked;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() {
     vec3 local = aCorner - vec3(0.15);
@@ -351,6 +412,8 @@ void main() {
     vTileRect = iTileRect;
     vColor = aShade;
     vWorldPos = worldPos;
+    vBiomeHillsGreenTint = 0u;
+    vLightPacked = 15u;
     gl_Position = projView * vec4(worldPos, 1.0);
 }";
                 var itemDropVsSpirv = SpirvCompilation.CompileGlslToSpirv(itemDropVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
@@ -393,6 +456,8 @@ layout(location=0) out vec2 vLocalUV;
 layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
 layout(location=3) out vec3 vWorldPos;
+layout(location=4) flat out uint vBiomeHillsGreenTint;
+layout(location=5) flat out uint vLightPacked;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() {
     // projView's top 3x3 rows are the camera basis scaled by the projection factors;
@@ -405,6 +470,8 @@ void main() {
     vTileRect = iTileRect;
     vColor = aShade;
     vWorldPos = worldPos;
+    vBiomeHillsGreenTint = 0u;
+    vLightPacked = 15u;
     gl_Position = projView * vec4(worldPos, 1.0);
 }";
                 var spriteVsSpirv = SpirvCompilation.CompileGlslToSpirv(spriteVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
@@ -929,7 +996,7 @@ void main() {
                 //    is a plain for-loop), so the GPU path's "submit every command and let culled
                 //    chunks cull themselves down to InstanceCount = 0" costs one real driver call per
                 //    LOADED chunk per pass - three quarters of the world's ~12.9k chunks at the
-                //    64-chunk Extreme preset, which is exactly the cost the GPU path exists to avoid.
+                //    former 64-chunk maximum, which is exactly the cost the GPU path exists to avoid.
                 //    Compacting on the CPU issues only the chunks actually in view.
                 //  - Vulkan/OpenGL have real multi-draw, where submitting everything really is
                 //    cheaper than a per-frame CPU scan.
@@ -1192,6 +1259,7 @@ layout(location=0) out vec2 vLocalUV;
 layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
 layout(location=3) out vec3 vWorldPos;
+layout(location=5) flat out uint vLightPacked;
 layout(set=0, binding=0) uniform ProjectionView {{ mat4 projView; }};
 const float ATLAS_INV_X = 1.0 / {shrinkAtlasW.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
 const float ATLAS_INV_Y = 1.0 / {shrinkAtlasH.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
@@ -1208,6 +1276,9 @@ void main() {{
     uint alphaByte = (aPack3 >> 8) & 0xFFu;
     uint mode = (aPack3 >> 16) & 0x3u;
     float alpha = mode == 0u ? float(alphaByte) / 255.0 : (mode == 1u ? -100.0 : -200.0);
+    uint skyLight = (aPack3 >> 19) & 0xFu;
+    uint blockLight = (aPack3 >> 23) & 0xFu;
+    vLightPacked = skyLight | (blockLight << 4);
     vColor = vec4(shade, shade, shade, alpha);
     vWorldPos = aPosition;
     vec4 clip = projView * vec4(aPosition, 1.0);
@@ -1222,19 +1293,31 @@ layout(location=0) in vec2 vLocalUV;
 layout(location=1) in vec4 vTileRect;
 layout(location=2) in vec4 vColor;
 layout(location=3) in vec3 vWorldPos;
+layout(location=5) flat in uint vLightPacked;
 layout(set=1, binding=0) uniform sampler2D uAtlas;
 layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;
     vec2 fogRange;
+    vec2 lightParams;
     vec4 cameraPos;
     vec4 hiddenCell;
 };
 layout(location=0) out vec4 outColor;
+float lightBrightness(uint level) {
+    float t = float(level) / 15.0;
+    return t * t * t * 0.55 + t * 0.45;
+}
+float worldLight() {
+    if (lightParams.y > 0.5) return 1.0;
+    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x;
+    float block = lightBrightness((vLightPacked >> 4) & 0xFu);
+    return max(sky, block);
+}
 void main() {
     // No hidden-cell discard here - the shrink cube must draw inside the mined cell.
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
     vec4 tex = texture(uAtlas, atlasUV);
-    outColor = vec4(tex.rgb * vColor.rgb, 1.0);
+    outColor = vec4(tex.rgb * vColor.rgb * worldLight(), 1.0);
     float dist = length(vWorldPos - cameraPos.xyz);
     float fog = clamp((fogRange.y - dist) / max(fogRange.y - fogRange.x, 1e-5), 0.0, 1.0);
     outColor.rgb = mix(fogColor.rgb, outColor.rgb, fog);

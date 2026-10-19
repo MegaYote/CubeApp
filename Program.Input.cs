@@ -91,12 +91,8 @@ namespace Cubuild
                 if (frameInput.ToggleFullbrightPressed)
                 {
                     ChunkLighting.Fullbright = !ChunkLighting.Fullbright;
-                    // Brightness is baked into each face's shade at mesh time, so flipping the
-                    // flag must re-mesh every loaded chunk to take effect.
-                    foreach (var c in World.Chunks.GetLoadedChunks())
-                    {
-                        c.NeedsRemesh = true;
-                    }
+                    // Fullbright is a renderer light uniform now; the mesh and its light channels
+                    // remain stable, so toggling it does not require a chunk remesh.
                 }
                 if (frameInput.ToggleInventoryPressed)
                 {
