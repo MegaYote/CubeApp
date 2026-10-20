@@ -17,7 +17,7 @@ namespace Cubuild.World
     /// </summary>
     public sealed class AlphaBiomeGenerator
     {
-        private const int AlphaBandBlocks = 128;   // alpha y 0..127 == our local Y 0..127
+        private readonly int _bandBlocks;   // alpha y 0.._bandBlocks-1 == our local Y band (128 original, 256 doubled)
         private const int SeaLevel = 64;           // alpha sea level == our local Y 64
         private const double BodyDivisor = 512.0;  // the famous /512.0
         private const double SelectorDivisor = 2.0;
@@ -26,9 +26,10 @@ namespace Cubuild.World
         private readonly JavaOctaves _low, _high, _selector, _sandGravel, _dirtDepth, _trees;
         private readonly JavaRandom _rand = new JavaRandom(0); // re-seeded per chunk
 
-        public AlphaBiomeGenerator(long worldSeed, AlphaTerrainParams p)
+        public AlphaBiomeGenerator(long worldSeed, AlphaTerrainParams p, int bandBlocks = 128)
         {
             _p = p;
+            _bandBlocks = bandBlocks;
             // Faithful init order from the 20100415 decompile: 16/16/8/4/4, an anonymous
             // 5-octave stack is CREATED AND DISCARDED (consuming its draws), then 5 more for
             // mobSpawnerNoise. Every JavaPerlin consumes 3 nextDouble draws.
@@ -75,7 +76,8 @@ namespace Cubuild.World
         // node (neighbor-aware across chunk edges). Fully-alpha nodes stay byte-faithful;
         // the ramp kills the cliff where alpha meets other biomes.
         public void FillOverride(Chunk chunk, int chunkX, int chunkZ, bool[,] alphaCell,
-            Func<int, int, string> biomeIdAt, double[] engineField, int idStone, int idWater)
+            Func<int, int, string> biomeIdAt, double[] engineField, int idStone, int idWater,
+            string targetBiomeId = "alpha")
         {
             byte[] blocks = chunk.RawBlocks;
             const int height = ChunkManager.ChunkHeight;
@@ -86,7 +88,7 @@ namespace Cubuild.World
             for (int gx = 0; gx < 6; gx++)
                 for (int gz = 0; gz < 6; gz++)
                     cellMask[gx, gz] = string.Equals(
-                        biomeIdAt(chunkX * 4 + gx - 1, chunkZ * 4 + gz - 1), "alpha", StringComparison.OrdinalIgnoreCase);
+                        biomeIdAt(chunkX * 4 + gx - 1, chunkZ * 4 + gz - 1), targetBiomeId, StringComparison.OrdinalIgnoreCase);
 
             // Smooth blend weight of a field node: alpha share of its 4 surrounding cells,
             // S-curved so the transition is flat at both ends (alpha inside, engine outside).
@@ -118,7 +120,7 @@ namespace Cubuild.World
 
                     // The 4 corner field nodes of this cell (node coords 0..4 in the chunk).
                     int[,] node = { { fx, fz }, { fx, fz + 1 }, { fx + 1, fz }, { fx + 1, fz + 1 } };
-                    var c = new double[4, 33];
+                    var c = new double[4, 65];
                     var cw = new double[4];
                     bool fullAlpha = true;
                     for (int n = 0; n < 4; n++)
@@ -127,7 +129,7 @@ namespace Cubuild.World
                         double wn = NodeWeight(nfx, nfz);
                         cw[n] = wn;
                         if (wn < 1.0) fullAlpha = false;
-                        for (int y = 0; y < 33; y++)
+                        for (int y = 0; y < 65; y++)
                         {
                             double alpha = FieldSample(chunkX * 4 + nfx, y, chunkZ * 4 + nfz);
                             double eng = EngineAt(nfx, y, nfz);
@@ -143,12 +145,12 @@ namespace Cubuild.World
                     {
                         for (int x = ox; x < ox + 4; x++)
                             for (int z = oz; z < oz + 4; z++)
-                                for (int ly = AlphaBandBlocks; ly < TerrainChunkProvider.TerrainBandBlocks; ly++)
+                                for (int ly = _bandBlocks; ly < TerrainChunkProvider.TerrainBandBlocks; ly++)
                                     blocks[(x * 16 + z) * height + ly] = 0;
                     }
 
                     // Plain trilinear over the 4x4x4 sub-cells, exactly like the original.
-                    for (int seg = 0; seg < 32; seg++)
+                    for (int seg = 0; seg < 64; seg++)
                     {
                         double v00 = c[0, seg], v01 = c[1, seg], v10 = c[2, seg], v11 = c[3, seg];
                         double w00 = c[0, seg + 1], w01 = c[1, seg + 1], w10 = c[2, seg + 1], w11 = c[3, seg + 1];
@@ -220,7 +222,7 @@ namespace Cubuild.World
                     int fillBlock = idDirt;
                     int remaining = -1;
 
-                    for (int ly = AlphaBandBlocks - 1; ly >= 0; ly--)
+                    for (int ly = _bandBlocks - 1; ly >= 0; ly--)
                     {
                         int idx = (x * 16 + z) * height + ly;
                         byte id = blocks[idx];
@@ -272,13 +274,13 @@ namespace Cubuild.World
             _rand.SetSeed((long)chunkX * 318279123L + (long)chunkZ * 919871212L);
 
             for (int i = 0; i < 20; i++)
-                Minable(blocks, chunkX, chunkZ, alphaCell, idStone, _rand.NextInt(16), _rand.NextInt(128), _rand.NextInt(16), idCoal);
+                Minable(blocks, chunkX, chunkZ, alphaCell, idStone, _rand.NextInt(16), _rand.NextInt(256), _rand.NextInt(16), idCoal);
             for (int i = 0; i < 10; i++)
-                Minable(blocks, chunkX, chunkZ, alphaCell, idStone, _rand.NextInt(16), _rand.NextInt(64), _rand.NextInt(16), idIron);
+                Minable(blocks, chunkX, chunkZ, alphaCell, idStone, _rand.NextInt(16), _rand.NextInt(128), _rand.NextInt(16), idIron);
             if (_rand.NextInt(2) == 0)
-                Minable(blocks, chunkX, chunkZ, alphaCell, idStone, _rand.NextInt(16), _rand.NextInt(32), _rand.NextInt(16), idGold);
+                Minable(blocks, chunkX, chunkZ, alphaCell, idStone, _rand.NextInt(16), _rand.NextInt(64), _rand.NextInt(16), idGold);
             if (_rand.NextInt(8) == 0)
-                Minable(blocks, chunkX, chunkZ, alphaCell, idStone, _rand.NextInt(16), _rand.NextInt(16), _rand.NextInt(16), idDiamond);
+                Minable(blocks, chunkX, chunkZ, alphaCell, idStone, _rand.NextInt(16), _rand.NextInt(32), _rand.NextInt(16), idDiamond);
         }
 
         private void Minable(byte[] blocks, int chunkX, int chunkZ, bool[,] alphaCell,
@@ -309,7 +311,7 @@ namespace Cubuild.World
                     {
                         for (int bz = (int)(cz - rx / 2.0); bz <= (int)(cz + rx / 2.0); bz++)
                         {
-                            if (bx < 0 || bx >= 16 || bz < 0 || bz >= 16 || by < 0 || by >= AlphaBandBlocks) continue;
+                            if (bx < 0 || bx >= 16 || bz < 0 || bz >= 16 || by < 0 || by >= _bandBlocks) continue;
                             if (!alphaCell[bx >> 2, bz >> 2]) continue;
 
                             double dx = (bx + 0.5 - cx) / (rx / 2.0);
@@ -340,7 +342,7 @@ namespace Cubuild.World
             int count = (int)_trees.Noise2D(chunkX * 4.0, chunkZ * 4.0) << 3; // x*0.25 == (chunkX*16)*0.25
             if (count <= 0) return;
 
-            var tree = new BigTree(blocks, idWood, idLeaves, idGrass, idDirt);
+            var tree = new BigTree(blocks, idWood, idLeaves, idGrass, idDirt, _bandBlocks);
             for (int i = 0; i < count; i++)
             {
                 int lx = _rand.NextInt(16) + 8; // 8..23 like the original
@@ -349,7 +351,7 @@ namespace Cubuild.World
                 if (!isAlphaColumn(chunkX * 16 + lx, chunkZ * 16 + lz)) continue;
 
                 int surfaceY = -1;
-                for (int y = AlphaBandBlocks - 1; y >= 0; y--)
+                for (int y = _bandBlocks - 1; y >= 0; y--)
                 {
                     if (blocks[(lx * 16 + lz) * ChunkManager.ChunkHeight + y] != 0)
                     {
@@ -378,6 +380,7 @@ namespace Cubuild.World
 
             private readonly byte[] _blocks;
             private readonly byte _wood, _leaves, _grass, _dirt;
+            private readonly int _bandBlocks;
             private readonly JavaRandom _rand = new JavaRandom(0);
             private readonly int[] _base = new int[3];
             private int _heightLimit;
@@ -387,24 +390,25 @@ namespace Cubuild.World
             private const int LeafDistanceLimit = 5;  // setScale(1,1,1) sets this to 5
             private const int HeightLimitLimit = 12;
 
-            public BigTree(byte[] blocks, int wood, int leaves, int grass, int dirt)
+            public BigTree(byte[] blocks, int wood, int leaves, int grass, int dirt, int bandBlocks)
             {
                 _blocks = blocks;
                 _wood = (byte)wood;
                 _leaves = (byte)leaves;
                 _grass = (byte)grass;
                 _dirt = (byte)dirt;
+                _bandBlocks = bandBlocks;
             }
 
             private int Get(int x, int y, int z)
             {
-                if (x < 0 || x >= 16 || z < 0 || z >= 16 || y < 0 || y >= AlphaBandBlocks) return 0; // air
+                if (x < 0 || x >= 16 || z < 0 || z >= 16 || y < 0 || y >= _bandBlocks) return 0; // air
                 return _blocks[(x * 16 + z) * ChunkManager.ChunkHeight + y];
             }
 
             private void Set(int x, int y, int z, int id)
             {
-                if (x < 0 || x >= 16 || z < 0 || z >= 16 || y < 0 || y >= AlphaBandBlocks) return;
+                if (x < 0 || x >= 16 || z < 0 || z >= 16 || y < 0 || y >= _bandBlocks) return;
                 _blocks[(x * 16 + z) * ChunkManager.ChunkHeight + y] = (byte)id;
             }
 

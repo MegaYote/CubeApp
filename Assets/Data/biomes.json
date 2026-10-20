@@ -42,6 +42,39 @@
   // ===========================================================================
 
   "biomes": [
+    // ---- POCKET: faithful-ish port of Minecraft Pocket Edition's very first terrain
+    // generator (pre-0.9.0): flat grassland with gentle rolling hills, sand beaches,
+    // simple oak trees, no overhangs. A nostalgic, simple landscape.
+    {
+      "id": "pocket",
+      "displayName": "Pocket",
+      "temperature": { "min": 0.4, "max": 0.8 },
+      "humidity": { "min": 0.4, "max": 0.8 },
+      "water": false,
+      "baseHeight": 0.5,
+      "heightVariation": 0.03,
+      "surfaceBlock": "grass",
+      "fillBlock": "dirt",
+      "fillDepth": 3,
+      "treeDensity": 1,
+      "treeType": "oak"
+    },
+    // ---- CHAOS: extremely rare pocket of absolutely chaotic terrain. Wild overhangs,
+    // floating shards, deep chasms and spires. Tiny climate sliver so it stays rare.
+    {
+      "id": "chaos",
+      "displayName": "Chaos",
+      "temperature": { "min": 0.92, "max": 0.96 },
+      "humidity": { "min": 0.92, "max": 0.96 },
+      "water": false,
+      "baseHeight": 0.9,
+      "heightVariation": 0.9,
+      "amplified": true,
+      "surfaceBlock": "stone",
+      "fillBlock": "stone",
+      "fillDepth": 0,
+      "treeDensity": 0
+    },
     // ---- ANOMALY: extremely rare pocket. Macro climate bias shifts effective ranges by
     // ±0.55 so the raw bands must be tiny. Listed first so it claims its sliver.
     {
@@ -93,13 +126,41 @@
       "fillMixBlock": "dirt",
       "fillMixChance": 0.5
     },
+  // ---- BIGLANDS: rare pocket of doubled-height alpha terrain (tall alpha forests).
+  {
+      "id": "biglands",
+      "displayName": "Biglands",
+      "temperature": { "min": 0.0, "max": 0.3 },
+      "humidity": { "min": 0.0, "max": 0.3 },
+      "water": false,
+      "baseHeight": 0.5,
+      "heightVariation": 0.25,
+      "surfaceBlock": "grass",
+      "fillBlock": "dirt",
+      "fillDepth": 3,
+      "treeDensity": 2,
+      "treeType": "round",
+      "alpha": {
+        "lowNoiseOctaves": 16,
+        "highNoiseOctaves": 16,
+        "selectorNoiseOctaves": 8,
+        "sandGravelNoiseOctaves": 4,
+        "dirtDepthNoiseOctaves": 4,
+        "treeNoiseOctaves": 5,
+        "coordinateScale": 684.412,
+        "heightScale": 984.412,
+        "mainNoiseScaleXZ": 8.55515,
+        "mainNoiseScaleY": 1.71103,
+        "heightStretch": 2.0
+      }
+  },
   // ---- ALPHA: common forest/temperate analogue, including a little cool climate.
   // Byte-faithful port of Alpha v1.1.2_01 terrain generator.
   // Paradise is listed first and still claims its warm/moderate overlap.
     {
       "id": "alpha",
       "displayName": "Alpha",
-      "temperature": { "min": -0.2, "max": 1.0 },
+      "temperature": { "min": -0.6, "max": 1.0 },
       "humidity": { "min": -0.375, "max": 0.1 },
       "water": false,
       "baseHeight": 0.5,
@@ -146,7 +207,7 @@
     {
       "id": "lowlands",
       "displayName": "Lowlands",
-      "temperature": { "min": 0.0, "max": 1.0 },
+      "temperature": { "min": -0.6, "max": 1.0 },
       "humidity": { "min": 0.1, "max": 0.85 },
       "water": false,
       "baseHeight": 0.545,
@@ -162,7 +223,7 @@
     {
       "id": "plains",
       "displayName": "Plains",
-      "temperature": { "min": 0.0, "max": 1.0 },
+      "temperature": { "min": -0.6, "max": 1.0 },
       "humidity": { "min": 0.85, "max": 1.0 },
       "water": false,
       "baseHeight": 0.56,
@@ -178,7 +239,7 @@
     {
       "id": "desert",
       "displayName": "Desert",
-      "temperature": { "min": 0.0, "max": 1.0 },
+      "temperature": { "min": -0.6, "max": 1.0 },
       "humidity": { "min": -1.0, "max": -0.30 },
       "water": false,
       "baseHeight": 0.55,
@@ -206,11 +267,12 @@
     {
       "id": "mountains",
       "displayName": "Mountains",
-      "temperature": { "min": -1.0, "max": -0.2 },
+      "temperature": { "min": -1.0, "max": -0.6 },
       "humidity": { "min": -1.0, "max": 1.0 },
       "water": false,
-      "baseHeight": 0.85,
-      "heightVariation": 0.22,
+      "baseHeight": 0.9,
+      "heightVariation": 0.45,
+      "amplified": true,
       "surfaceBlock": "stone",
       "fillBlock": "stone",
       "fillDepth": 0,

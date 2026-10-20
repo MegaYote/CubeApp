@@ -209,7 +209,7 @@ namespace Cubuild
         public void Dispose()
         {
             _cts.Cancel();
-            try { Task.WaitAll(_workerTasks, 1000); } catch { }
+            try { Task.WaitAll(_workerTasks, 5000); } catch { }
             _cts.Dispose();
             _workAvailable.Dispose();
         }

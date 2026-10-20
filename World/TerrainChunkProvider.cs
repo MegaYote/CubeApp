@@ -24,7 +24,14 @@ namespace Cubuild.World
         // shards instead of smooth slopes. Non-amplified columns are untouched.
         private const double CarveFrequency = 0.32;
         private const double CarveStrength = 34.0;
+        private const double ChaosCarveStrength = 70.0; // heavier carve for the chaos biome (shatters into shards)
         private const double CarveYStretch = 0.15; // vertical wavelength = 1/(freq*stretch)
+        // Blend biomes (synthetic transition zones between two real biomes) are otherwise
+        // just a smooth interpolated slope. Give them a mild density carve of their own so
+        // biome borders develop ledges/overhangs instead of a boring ramp. Only land blends
+        // away from water get this (beaches stay smooth). Weight is kept below 1 so the
+        // carve is gentler than the full amplified (hills) treatment.
+        private const double BlendCarveWeight = 0.4;
         private readonly int seed;
         private readonly BiomeMap _biomeMap;
         private readonly NoiseOctaves _amplifiedCarve;
@@ -33,7 +40,10 @@ namespace Cubuild.World
         // registry must be loaded first so custom knobs from biomes.json can be applied.
         private AlphaBiomeGenerator? _alphaGen;
         private AlphaBiomeGenerator AlphaGen => _alphaGen ??= new AlphaBiomeGenerator(seed,
-            BiomeRegistry.Get("alpha").AlphaParams ?? new AlphaTerrainParams());
+            BiomeRegistry.Get("alpha").AlphaParams ?? new AlphaTerrainParams(), 128);
+        private AlphaBiomeGenerator? _biglandsGen;
+        private AlphaBiomeGenerator BiglandsGen => _biglandsGen ??= new AlphaBiomeGenerator(seed,
+            BiomeRegistry.Get("biglands").AlphaParams ?? new AlphaTerrainParams(), 256);
 
         /// <summary>Controllable monolith feature (see MonolithSculptor). A tunable tower/column
         /// feature: frequency/size/height/carve, seed-driven.</summary>
@@ -91,11 +101,17 @@ namespace Cubuild.World
         // through 4D space (w follows y with a slow sine fold) -> folded, weaving strata
         // that plain 3D noise cannot express.
         private readonly NoiseOctaves4D _anomalyNoise;
+        // Chaotic biome: 4D density field with a different, more extreme slice so the
+        // terrain folds into wild overhangs, floating shards and deep chasms.
+        private readonly NoiseOctaves4D _chaosNoise;
         // Forest density field: low-frequency 2D noise that makes some regions DENSE
         // woodland and others sparse clearings. Sampled per tree candidate (continuous
         // across chunk borders); neutral areas keep the biome's normal tree rate.
         private readonly NoiseOctaves _forestDensity;
+        // Pocket biome: simple 2D heightmap for gentle rolling hills (MCPE-style).
+        private readonly NoiseOctaves _pocketHeight;
         private const double ForestFrequency = 0.015; // ~250-block woodland patches
+        private const double PocketHeightFrequency = 0.008; // broad, gentle hills
         private const double ForestGain = 5.0;        // -1..1 noise -> 0.1x .. 6x tree rate
 
         /// <summary>Height of the terrain band in blocks (world -64 .. +191). Taller than the
@@ -118,8 +134,12 @@ namespace Cubuild.World
             _relief = new NoiseOctaves(rand, 7, 9);
             _classicHeight = new NoiseOctaves(rand, 3, 1);
             _anomalyNoise = new NoiseOctaves4D(rand, 9, 7);
+            var chaosRand = new Random(unchecked(seed ^ 0x4348414F)); // "CHAO"
+            _chaosNoise = new NoiseOctaves4D(chaosRand, 9, 7);
             _amplifiedCarve = new NoiseOctaves(rand, 4, 3);
             _forestDensity = new NoiseOctaves(rand, 3, 0);
+            var pocketRand = new Random(unchecked(seed ^ 0x504F434B)); // "POCK"
+            _pocketHeight = new NoiseOctaves(pocketRand, 3, 0);
             Monoliths = new MonolithSculptor(seed);
             QuartzVeins = new QuartzVeinGenerator(seed);
             Serpentines = new SerpentineGenerator(seed);
@@ -165,18 +185,27 @@ namespace Cubuild.World
             // their center; a chunk is "fullyAlpha" when all 16 cells are alpha (then every
             // engine-only feature is skipped for purity - no monoliths/pyramids in Alpha).
             var alphaCell = new bool[4, 4];
+            var alphaOnlyCell = new bool[4, 4];
+            var biglandsCell = new bool[4, 4];
             bool hasAlpha = false, fullyAlpha = true;
             for (int fx = 0; fx < 4; fx++)
             {
                 for (int fz = 0; fz < 4; fz++)
                 {
-                    alphaCell[fx, fz] = _biomeMap.BiomeAt(chunkX * 16 + fx * 4 + 2, chunkZ * 16 + fz * 4 + 2).Id == "alpha";
+                    var biomeId = _biomeMap.BiomeAt(chunkX * 16 + fx * 4 + 2, chunkZ * 16 + fz * 4 + 2).Id;
+                    bool isAlpha = biomeId == "alpha";
+                    bool isBiglands = biomeId == "biglands";
+                    alphaOnlyCell[fx, fz] = isAlpha;
+                    biglandsCell[fx, fz] = isBiglands;
+                    alphaCell[fx, fz] = isAlpha || isBiglands;
                     if (alphaCell[fx, fz]) hasAlpha = true;
-                    else fullyAlpha = false;
+                    if (!isAlpha) fullyAlpha = false;
                 }
             }
-            bool[,] cellMask = alphaCell; // captured for the per-column lookup below
-            Func<int, int, bool> isAlphaColumn = (wx, wz) => cellMask[((wx - chunkX * 16) & 15) >> 2, ((wz - chunkZ * 16) & 15) >> 2];
+            bool[,] cellMaskAlpha = alphaOnlyCell; // captured for the per-column lookup below
+            bool[,] cellMaskBiglands = biglandsCell;
+            Func<int, int, bool> isAlphaColumn = (wx, wz) => cellMaskAlpha[((wx - chunkX * 16) & 15) >> 2, ((wz - chunkZ * 16) & 15) >> 2];
+            Func<int, int, bool> isBiglandsColumn = (wx, wz) => cellMaskBiglands[((wx - chunkX * 16) & 15) >> 2, ((wz - chunkZ * 16) & 15) >> 2];
 
             // ---- Build the 5 x 17 x 5 density field ----
             // Field x/z are in 4-block units (5 samples cover the chunk's 16 blocks), field y
@@ -189,6 +218,7 @@ namespace Cubuild.World
             // block-level carve band in the fill loop below.
             double[] colHeights = new double[fxCount * fzCount];
             double[] colAmp = new double[fxCount * fzCount];
+            double[] colChaos = new double[fxCount * fzCount];
 
             for (int fx = 0; fx < fxCount; fx++)
             {
@@ -249,6 +279,11 @@ namespace Cubuild.World
                     bool anomalyColumn = string.Equals(biome.Id, "anomaly", StringComparison.OrdinalIgnoreCase);
                     // The Classic biome replaces the surface line with a quantized 2D heightmap.
                     bool classicColumn = string.Equals(biome.Id, "classic", StringComparison.OrdinalIgnoreCase);
+                    // The Chaos biome: absolutely chaotic terrain (wild overhangs, floating shards,
+                    // deep chasms). Uses a dedicated 4D density field + heavy carving.
+                    bool chaosColumn = string.Equals(biome.Id, "chaos", StringComparison.OrdinalIgnoreCase);
+                    // The Pocket biome: simple MCPE-style gentle rolling hills.
+                    bool pocketColumn = string.Equals(biome.Id, "pocket", StringComparison.OrdinalIgnoreCase);
                     // ---- SMOOTHED BIOME SURFACE LINE ----
                     // A raw biome.BaseHeight is a step function: the instant you cross a biome
                     // border the target surface snaps from ocean-low (~0.28) to land-high (~0.56+),
@@ -259,6 +294,8 @@ namespace Cubuild.World
                     double blendedBase = 0.0;
                     double blendedVariation = 0.0;
                     double blendedAmplified = 0.0;   // 0..1; how strongly amplified terrain is mixed in
+                    double blendedBlend = 0.0;       // 0..1; how much of the neighbourhood is the synthetic "blend" biome (transition zone)
+                    double blendedChaos = 0.0;       // 0..1; how much of the neighbourhood is the chaos biome
                     double weightSum = 0.0;
                     const int blendCells = 4;            // look 4 field cells out (= 16 blocks)
                     const double blendSigma = 12.0;      // falloff width in world blocks
@@ -273,12 +310,25 @@ namespace Cubuild.World
                             blendedBase += b.BaseHeight * w;
                             blendedVariation += b.HeightVariation * w;
                             blendedAmplified += (b.Amplified ? 1.0 : 0.0) * w;
+                            // Blend biome carve eligibility: only land blends away from water, and
+                            // only those that aren't already amplified (avoid double-counting).
+                            bool blendCarveEligible = string.Equals(b.Id, "blend", StringComparison.OrdinalIgnoreCase)
+                                && !b.Amplified
+                                && !b.IsWater
+                                && !_biomeMap.IsNearWater((int)(xq * 4.0 + dx), (int)(zq * 4.0 + dz), 4, 2);
+                            blendedBlend += (blendCarveEligible ? 1.0 : 0.0) * w;
+                            blendedChaos += (string.Equals(b.Id, "chaos", StringComparison.OrdinalIgnoreCase) ? 1.0 : 0.0) * w;
                             weightSum += w;
                         }
                     }
                     blendedBase /= weightSum;
                     blendedVariation /= weightSum;
                     blendedAmplified /= weightSum;
+                    blendedBlend /= weightSum;
+                    blendedChaos /= weightSum;
+                    // Effective amplification: amplified biomes keep full strength; blend biomes
+                    // get a gentler density carve so transition zones aren't flat ramps.
+                    double effAmp = Math.Min(1.0, blendedAmplified + blendedBlend * BlendCarveWeight);
 
                     // ---- AMPLIFIED RELIEF ----
                     // Normal terrain relief only carves downward (reliefShaped <= 0) AND its
@@ -290,14 +340,15 @@ namespace Cubuild.World
                     // (blendedAmplified ~ 0 => identical behavior).
                     const double amplifiedGain = 1.2; // field-y of swing per relief unit (valleys plunge ~50 below sea)
                     double reliefMagnitude = -reliefShaped; // 0..~0.26
-                    reliefShaped = reliefMagnitude * (1.0 - blendedAmplified)
-                        + relief * amplifiedGain * blendedAmplified;
+                    reliefShaped = reliefMagnitude * (1.0 - effAmp)
+                        + relief * amplifiedGain * effAmp;
 
                     double centerHeight = blendedBase * 16.0
                         + reliefShaped * (blendedVariation * 16.0);
 
                     colHeights[fx * fzCount + fz] = centerHeight;
-                    colAmp[fx * fzCount + fz] = blendedAmplified;
+                    colAmp[fx * fzCount + fz] = effAmp;
+                    colChaos[fx * fzCount + fz] = blendedChaos;
 
                     // ---- BEACH SHELF ----
                     // Sea level is field-y 8 (world 64). Land biome targets sit only ~1 field-y
@@ -336,13 +387,32 @@ namespace Cubuild.World
                         }
                     }
 
+                    // ---- POCKET BIOME: simple MCPE-style gentle rolling hills ----
+                    // Overrides the surface line with a low-amplitude 2D heightmap: broad,
+                    // gentle hills near sea level, no overhangs, no quantized steps.
+                    if (pocketColumn)
+                    {
+                        double h = _pocketHeight.Noise2DNormalized(xq * PocketHeightFrequency, zq * PocketHeightFrequency);
+                        centerHeight = 8.0 + h * 0.75; // sea level +/- ~6 blocks
+                    }
+
                     for (int fy = 0; fy < fyCount; fy++)
                     {
                         int idx = col + fy;
                         double yq = fy; // y field coord = worldY/8
 
                         double density;
-                        if (anomalyColumn)
+                        if (chaosColumn)
+                        {
+                            // ---- CHAOS: absolutely chaotic 4D density ----
+                            // High-amplitude, tightly-folded 4D slice: wild overhangs, floating
+                            // shards, deep chasms. Bigger amplitude than anomaly so the surface
+                            // shatters into shards. Same falloff envelope so water/air behave.
+                            double w4 = yq * baseFreq * 2.0 + (xq + zq) * baseFreq * 0.6
+                                + Math.Sin(xq * 1.2 + zq * 0.9 + yq * 0.7) * 6.0;
+                            density = _chaosNoise.Noise4D(xq * baseFreq * 1.4, yq * baseFreq * 1.4, zq * baseFreq * 1.4, w4) / 240.0;
+                        }
+                        else if (anomalyColumn)
                         {
                             // ---- ANOMALY: 4D DENSITY FIELD ----
                             // Sample 4D simplex on a curved slice through 4D space: w follows y
@@ -425,7 +495,13 @@ namespace Cubuild.World
                         double amp = Lerp(
                             Lerp(colAmp[fx0 * fzCount + fz0], colAmp[fx1 * fzCount + fz0], tx),
                             Lerp(colAmp[fx0 * fzCount + fz1], colAmp[fx1 * fzCount + fz1], tx), tz);
-                        if (amp > 0.01)
+                        double chaos = Lerp(
+                            Lerp(colChaos[fx0 * fzCount + fz0], colChaos[fx1 * fzCount + fz0], tx),
+                            Lerp(colChaos[fx0 * fzCount + fz1], colChaos[fx1 * fzCount + fz1], tx), tz);
+                        // Effective carve strength: amplified biomes use CarveStrength, chaos uses
+                        // a heavier ChaosCarveStrength. Summed so borders blend smoothly.
+                        double carveStrength = CarveStrength * amp + ChaosCarveStrength * chaos;
+                        if (carveStrength > 0.01)
                         {
                             double surf = Lerp(
                                 Lerp(colHeights[fx0 * fzCount + fz0], colHeights[fx1 * fzCount + fz0], tx),
@@ -438,7 +514,7 @@ namespace Cubuild.World
                                 int wy = chunk.OriginY + localY;
                                 double carve = _amplifiedCarve.Noise3DNormalized(
                                     wx * CarveFrequency, wy * CarveFrequency * CarveYStretch, wz * CarveFrequency);
-                                density += carve * CarveStrength * amp;
+                                density += carve * carveStrength;
                             }
                         }
 
@@ -460,8 +536,12 @@ namespace Cubuild.World
             {
                 AlphaGen.FillOverride(chunk, chunkX, chunkZ, alphaCell,
                     (cx, cz) => _biomeMap.BiomeAt(cx * 4 + 2, cz * 4 + 2).Id,
-                    field, idStone, idWater);
+                    field, idStone, idWater, "alpha");
+                BiglandsGen.FillOverride(chunk, chunkX, chunkZ, alphaCell,
+                    (cx, cz) => _biomeMap.BiomeAt(cx * 4 + 2, cz * 4 + 2).Id,
+                    field, idStone, idWater, "biglands");
                 AlphaGen.SurfacePass(chunk, chunkX, chunkZ, isAlphaColumn, idStone, idGrass, idDirt, idSand, idGravel, idWater);
+                BiglandsGen.SurfacePass(chunk, chunkX, chunkZ, isBiglandsColumn, idStone, idGrass, idDirt, idSand, idGravel, idWater);
             }
 
             // ---- Surface materials pass ----
@@ -480,7 +560,9 @@ namespace Cubuild.World
             if (hasAlpha)
             {
                 AlphaGen.GenerateTrees(chunk, chunkX, chunkZ, isAlphaColumn, idLog, idLeaves, idGrass, idDirt);
+                BiglandsGen.GenerateTrees(chunk, chunkX, chunkZ, isBiglandsColumn, idLog, idLeaves, idGrass, idDirt);
                 AlphaGen.GenerateOres(chunk, chunkX, chunkZ, alphaCell, idStone, idCoal, idIron, idGold, idDiamond);
+                BiglandsGen.GenerateOres(chunk, chunkX, chunkZ, biglandsCell, idStone, idCoal, idIron, idGold, idDiamond);
             }
 
             // ---- engine-only features ----

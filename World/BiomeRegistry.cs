@@ -172,61 +172,38 @@ namespace Cubuild
 
         private static BiomeDefinition Match(float temperature, float humidity, bool includeWater)
         {
-            // Fast path: first exact match wins.
+            // Proper partition: every (temp, hum) point maps to exactly ONE biome, chosen by
+            // nearest centre in climate space. No gaps, no giant blend regions. When the point
+            // falls inside one or more biome rectangles, prefer the containing biome whose
+            // centre is closest (so overlapping ranges resolve deterministically instead of
+            // by JSON order). Otherwise snap to the nearest biome centre.
+            BiomeDefinition? best = null;
+            float bestDist = float.MaxValue;
+            bool anyContain = false;
             foreach (var b in _biomes)
             {
                 if (!includeWater && b.IsWater) continue;
-                if (temperature >= b.Temperature.Min && temperature <= b.Temperature.Max
-                    && humidity >= b.Humidity.Min && humidity <= b.Humidity.Max)
+                bool contains = temperature >= b.Temperature.Min && temperature <= b.Temperature.Max
+                    && humidity >= b.Humidity.Min && humidity <= b.Humidity.Max;
+                float cx = (b.Temperature.Min + b.Temperature.Max) * 0.5f;
+                float cy = (b.Humidity.Min + b.Humidity.Max) * 0.5f;
+                float d = MathF.Sqrt((temperature - cx) * (temperature - cx) + (humidity - cy) * (humidity - cy));
+                if (contains)
                 {
-                    return b;
+                    if (!anyContain || d < bestDist)
+                    {
+                        anyContain = true;
+                        bestDist = d;
+                        best = b;
+                    }
+                }
+                else if (!anyContain && d < bestDist)
+                {
+                    bestDist = d;
+                    best = b;
                 }
             }
-            // Find the two closest biomes by distance from the point to each biome rectangle.
-            float bestDist1 = float.MaxValue, bestDist2 = float.MaxValue;
-            BiomeDefinition? best1 = null, best2 = null;
-            int candidateCount = 0;
-            foreach (var b in _biomes)
-            {
-                if (!includeWater && b.IsWater) continue;
-                candidateCount++;
-                float dx = DistToRange(temperature, b.Temperature.Min, b.Temperature.Max);
-                float dy = DistToRange(humidity, b.Humidity.Min, b.Humidity.Max);
-                float dist = MathF.Sqrt(dx * dx + dy * dy);
-                if (dist < bestDist1)
-                {
-                    bestDist2 = bestDist1; best2 = best1;
-                    bestDist1 = dist; best1 = b;
-                }
-                else if (dist < bestDist2)
-                {
-                    bestDist2 = dist; best2 = b;
-                }
-            }
-            if (best1 == null) return Fallback;
-            if (candidateCount == 1) return best1;
-            if (best2 == null || bestDist2 < 1e-6f) return best1;
-
-            // Inverse-distance blend between the two nearest biomes.
-            float w1 = 1f / MathF.Max(bestDist1, 1e-6f);
-            float w2 = 1f / MathF.Max(bestDist2, 1e-6f);
-            float sum = w1 + w2;
-            w1 /= sum; w2 /= sum;
-
-            float bh = w1 * best1.BaseHeight + w2 * best2.BaseHeight;
-            float hv = w1 * best1.HeightVariation + w2 * best2.HeightVariation;
-            int fd = (int)MathF.Round(w1 * best1.FillDepth + w2 * best2.FillDepth);
-            int td = (int)MathF.Round(w1 * best1.TreeDensity + w2 * best2.TreeDensity);
-            string sb = bestDist1 <= bestDist2 ? best1.SurfaceBlock : best2.SurfaceBlock;
-            string fb = bestDist1 <= bestDist2 ? best1.FillBlock : best2.FillBlock;
-            string tt = bestDist1 <= bestDist2 ? best1.TreeType : best2.TreeType;
-            string mixB = bestDist1 <= bestDist2 ? best1.FillMixBlock : best2.FillMixBlock;
-            float mixC = w1 * best1.FillMixChance + w2 * best2.FillMixChance;
-
-            return new BiomeDefinition("blend", "Blend",
-                (temperature, temperature), (humidity, humidity),
-                false, bh, hv, sb, fb, fd, td, tt,
-                "", 0f, mixB, mixC, best1.Amplified || best2.Amplified);
+            return best ?? Fallback;
         }
 
         private static float DistToRange(float v, float min, float max)

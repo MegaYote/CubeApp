@@ -18,7 +18,15 @@ namespace Cubuild
         private void StartNewWorld(int seed, string name, GameMode mode = GameMode.Creative, bool isMinecraftMode = false)
         {
             EnsureRegistries(isMinecraftMode);
-            World?.Dispose();
+            if (World != null)
+            {
+                // Unsubscribe before disposing so a late chunk from the dying world can't
+                // poke the new world's mesher / renderer.
+                World.ChunkGenerated -= OnChunkGenerated;
+                World.ChunkUnloaded -= OnChunkUnloaded;
+                World.Dispose();
+                World = null;
+            }
             World = new GameWorld(seed, name, () => gpuRenderer, ChunkRenderRadius, Math.Max(1, Environment.ProcessorCount - 2));
             World.Mode = mode;
             World.IsMinecraftMode = isMinecraftMode;
@@ -199,6 +207,11 @@ namespace Cubuild
                             _loadPhase = 3;
                         }
                         else if (_loadMeshedCount == _loadLastMeshedCount && _loadPhaseStart >= 2.0f)
+                        {
+                            _loadPhaseStart = 0f;
+                            _loadPhase = 3;
+                        }
+                        else if (_loadPhaseStart >= 30.0f)
                         {
                             _loadPhaseStart = 0f;
                             _loadPhase = 3;
