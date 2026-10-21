@@ -20,6 +20,7 @@ namespace Cubuild
         private static string[] _category = Array.Empty<string>();
         private static string[] _toolType = Array.Empty<string>();
         private static int[] _toolLevel = Array.Empty<int>();
+        private static float[] _miningSpeed = Array.Empty<float>();
         private static int[] _durability = Array.Empty<int>();
         private static int[] _foodValue = Array.Empty<int>();
         private static int[] _stackSize = Array.Empty<int>();
@@ -52,6 +53,7 @@ namespace Cubuild
             public bool InInventory { get; set; } = true;
             public string? ToolType { get; set; }
             public int ToolLevel { get; set; }
+            public float MiningSpeed { get; set; } = 1f;
             public int Durability { get; set; }
             public int FoodValue { get; set; }
             public string? MapColor { get; set; }
@@ -132,6 +134,7 @@ namespace Cubuild
                             existing.InInventory = dto.InInventory;
                             existing.ToolType = dto.ToolType ?? "";
                             existing.ToolLevel = dto.ToolLevel;
+                            existing.MiningSpeed = dto.MiningSpeed > 0 ? dto.MiningSpeed : 1f;
                             existing.Durability = dto.Durability;
                             existing.FoodValue = dto.FoodValue;
                             existing.MapColor = ParseMapColor(dto.MapColor ?? "#7F7F7F");
@@ -159,6 +162,7 @@ namespace Cubuild
                             InInventory = dto.InInventory,
                             ToolType = dto.ToolType ?? "",
                             ToolLevel = dto.ToolLevel,
+                            MiningSpeed = dto.MiningSpeed > 0 ? dto.MiningSpeed : 1f,
                             Durability = dto.Durability,
                             FoodValue = dto.FoodValue,
                             MapColor = ParseMapColor(dto.MapColor ?? "#7F7F7F"),
@@ -171,11 +175,20 @@ namespace Cubuild
                 }
             }
 
+            // Validate optional block drop overrides after all genuine items are appended.
+            for (int i = 1; i < BlockRegistry.Count; i++)
+            {
+                string dropItem = BlockRegistry.DropItemOf(i);
+                if (!string.IsNullOrWhiteSpace(dropItem) && !_byName.ContainsKey(dropItem))
+                    throw new InvalidDataException($"Block \"{BlockRegistry.GetName(i)}\" drops unknown item \"{dropItem}\".");
+            }
+
             // Fast array lookups keyed by numeric id.
             int n = _items.Count;
             _category = new string[n];
             _toolType = new string[n];
             _toolLevel = new int[n];
+            _miningSpeed = new float[n];
             _durability = new int[n];
             _foodValue = new int[n];
             _stackSize = new int[n];
@@ -190,6 +203,7 @@ namespace Cubuild
                 _category[i] = it.Category ?? "misc";
                 _toolType[i] = it.ToolType ?? "";
                 _toolLevel[i] = it.ToolLevel;
+                _miningSpeed[i] = it.MiningSpeed > 0 ? it.MiningSpeed : 1f;
                 _durability[i] = it.Durability;
                 _foodValue[i] = it.FoodValue;
                 _stackSize[i] = it.StackSize > 0 ? it.StackSize : 64;
@@ -256,6 +270,7 @@ namespace Cubuild
         public static string CategoryOf(int itemId) => itemId >= 0 && itemId < _items.Count ? _category[itemId] : "misc";
         public static string ToolTypeOf(int itemId) => itemId >= 0 && itemId < _items.Count ? _toolType[itemId] : "";
         public static int ToolLevelOf(int itemId) => itemId >= 0 && itemId < _items.Count ? _toolLevel[itemId] : 0;
+        public static float MiningSpeedOf(int itemId) => itemId >= 0 && itemId < _items.Count ? _miningSpeed[itemId] : 1f;
         public static int DurabilityOf(int itemId) => itemId >= 0 && itemId < _items.Count ? _durability[itemId] : 0;
         public static int FoodValueOf(int itemId) => itemId >= 0 && itemId < _items.Count ? _foodValue[itemId] : 0;
         public static int StackSizeOf(int itemId) => itemId >= 0 && itemId < _items.Count ? _stackSize[itemId] : 64;

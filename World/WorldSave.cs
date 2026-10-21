@@ -22,6 +22,8 @@ namespace Cubuild
         public int Health = 10;
         /// <summary>Rare brute variant (1 in 50 zombies): 2x size, half speed, double health.</summary>
         public bool Brute;
+        /// <summary>Successful melee hits received by a vehicle before this save.</summary>
+        public int VehicleMeleeHitCount;
     }
 
     /// <summary>
@@ -31,7 +33,7 @@ namespace Cubuild
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 7;
+        public const int Version = 8;
 
         public string Name = "World 1";
         public int Seed;
@@ -122,6 +124,7 @@ namespace Cubuild
                     w.Write(m.Yaw);
                     w.Write(m.Health);
                     w.Write(m.Brute);
+                    w.Write(m.VehicleMeleeHitCount);
                 }
             }
 
@@ -200,6 +203,7 @@ namespace Cubuild
                         Health = reader.ReadInt32(),
                     };
                     if (version >= 4) m.Brute = reader.ReadBoolean();
+                    if (version >= 8) m.VehicleMeleeHitCount = reader.ReadInt32();
                     save.Mobs.Add(m);
                 }
                 return save;

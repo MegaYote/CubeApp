@@ -74,9 +74,16 @@ namespace Cubuild
         /// <summary>
         /// Whether the matching tool is REQUIRED for this block to drop an item when broken.
         /// False (default) = it always drops; true = breaking without the right tool drops
-        /// nothing. Configurable in blocks.json as <c>"toolRequired": true</c>.
+        /// nothing. Configurable in blocks.json as <c>"toolRequired": true</c>; a separate
+        /// <see cref="HarvestLevel"/> can set the minimum matching tier as well.
         /// </summary>
         public bool ToolRequired { get; set; } = false;
+
+        /// <summary>Minimum matching tool level needed to harvest this block (0 = no tier gate).</summary>
+        public int HarvestLevel { get; set; } = 0;
+
+        /// <summary>Optional item id dropped when mined instead of the block's own item.</summary>
+        public string DropItem { get; set; } = "";
 
 /// <summary>Whether zombies can path through this block by breaking it.</summary>
         public bool ZombieCanBreak { get; set; } = false;

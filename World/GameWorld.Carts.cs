@@ -10,12 +10,7 @@ namespace Cubuild
     /// </summary>
     public sealed partial class GameWorld : IDisposable
     {
-        private static int _cartItemIdCache = -1;
-        private static int CartItemId
-        {
-            get { if (_cartItemIdCache < 0) _cartItemIdCache = ItemRegistry.TryGet("cart", out var d) ? d.NumericId : 0; return _cartItemIdCache; }
-            set => _cartItemIdCache = value;
-        }
+        private static int CartItemId => ItemRegistry.TryGet("cart", out var d) ? d.NumericId : 0;
 
         private static int _railIdCache = -1;
         private static int RailBlockId
@@ -160,6 +155,13 @@ namespace Cubuild
                     loco.Occupied = false;
                     loco._driveFwd = 0f;
                 }
+                else if (Entities.LocallyDrivenMob is LocomotiveEntity drivenLoco)
+                {
+                    // A destroyed cart may already have had its links severed. Clear the locomotive
+                    // that was driving this rider before the coupling disappeared.
+                    drivenLoco.Occupied = false;
+                    drivenLoco._driveFwd = 0f;
+                }
                 double sx = c.Position.X + Math.Cos(c.Yaw) * 1.1;
                 double sz = c.Position.Z - Math.Sin(c.Yaw) * 1.1;
                 LocalPlayer.Position = new Point3D(sx, c.Position.Y + 0.2 + EyeHeight, sz);
@@ -180,6 +182,12 @@ namespace Cubuild
         public void StepRidingCart(TickInputState tickInput, float deltaSeconds)
         {
             if (RidingCart is not { } cart) { StepPlayer(LocalPlayer, tickInput, deltaSeconds); return; }
+            if (cart.Removed || cart.IsDead)
+            {
+                DismountCart();
+                StepPlayer(LocalPlayer, tickInput, deltaSeconds);
+                return;
+            }
 
             float drive = (tickInput.MoveForward ? 1f : 0f) - (tickInput.MoveBackward ? 1f : 0f);
 

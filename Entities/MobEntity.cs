@@ -72,6 +72,22 @@ namespace Cubuild
         public bool Removed { get; protected set; }
         public bool IsDead => _dead;
 
+        /// <summary>Successful melee hits received by a vehicle. Vehicle melee deliberately does
+        /// not use the ordinary mob invulnerability window.</summary>
+        public int VehicleMeleeHitCount { get; private set; }
+
+        /// <summary>Records one successful vehicle melee hit and marks the vehicle for removal
+        /// once the current game mode's hit threshold is reached.</summary>
+        public bool RegisterVehicleMeleeHit(int hitsToBreak)
+        {
+            if (Removed || IsDead || hitsToBreak <= 0 || (this is not CartEntity && this is not BoatEntity))
+                return false;
+
+            VehicleMeleeHitCount++;
+            if (VehicleMeleeHitCount >= hitsToBreak) Removed = true;
+            return true;
+        }
+
         // A* pathfinding. Lazily built per-mob when a path goal is requested; a fresh PathFinder
         // and NodeProcessor are cheap (they hold no world state).
         private PathFinder? _pathFinder;
@@ -125,11 +141,12 @@ namespace Cubuild
         public Action? OnAttack { get; set; }
 
         // Restores saved state after spawning (world load).
-        public void RestoreState(Point3D position, float yaw, int health)
+        public void RestoreState(Point3D position, float yaw, int health, int vehicleMeleeHitCount = 0)
         {
             Position = position;
             Yaw = yaw;
             Health = Math.Max(1, health);
+            VehicleMeleeHitCount = Math.Max(0, vehicleMeleeHitCount);
         }
 
         public int Health { get; protected set; } = 10;

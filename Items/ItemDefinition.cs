@@ -26,8 +26,10 @@ namespace Cubuild
         public bool InInventory { get; set; } = true;
         /// <summary>Mining tool family this item belongs to ("pickaxe"/"axe"/"shovel"). Empty = not a tool.</summary>
         public string ToolType { get; set; } = "";
-        /// <summary>Mining power tier (1 = wood, 2 = stone, 3 = iron, ...). Higher breaks harder blocks.</summary>
+        /// <summary>Harvest tier (1 = wood/flint/gold, 2 = stone/copper/quartz, 3 = iron/bluestone, 4 = diamond).</summary>
         public int ToolLevel { get; set; } = 0;
+        /// <summary>Speed multiplier applied when this tool's type matches a block's configured toolType.</summary>
+        public float MiningSpeed { get; set; } = 1f;
         /// <summary>Uses before the tool breaks. 0 = unbreakable.</summary>
         public int Durability { get; set; } = 0;
         /// <summary>Hunger/health restored when eaten. 0 = not edible.</summary>

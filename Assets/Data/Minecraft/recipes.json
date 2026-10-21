@@ -53,6 +53,20 @@
     { "input": ["diamond", "diamond", "", "diamond", "stick", "", "", "stick", ""], "output": "diamond_axe", "count": 1 },
     { "input": ["", "diamond", "", "", "stick", "", "", "stick", ""], "output": "diamond_shovel", "count": 1 },
 
+    // ---- copper and quartz alternatives; gold is fast but remains wood-tier ----
+    { "input": ["copper", "copper", "copper", "", "stick", "", "", "stick", ""], "output": "copper_pickaxe", "count": 1 },
+    { "input": ["copper", "copper", "", "copper", "stick", "", "", "stick", ""], "output": "copper_axe", "count": 1 },
+    { "input": ["", "copper", "", "", "stick", "", "", "stick", ""], "output": "copper_shovel", "count": 1 },
+    { "input": ["gold", "gold", "gold", "", "stick", "", "", "stick", ""], "output": "gold_pickaxe", "count": 1 },
+    { "input": ["gold", "gold", "", "gold", "stick", "", "", "stick", ""], "output": "gold_axe", "count": 1 },
+    { "input": ["", "gold", "", "", "stick", "", "", "stick", ""], "output": "gold_shovel", "count": 1 },
+    { "input": ["quartz_shard", "quartz_shard", "quartz_shard", "", "stick", "", "", "stick", ""], "output": "quartz_pickaxe", "count": 1 },
+    { "input": ["quartz_shard", "quartz_shard", "", "quartz_shard", "stick", "", "", "stick", ""], "output": "quartz_axe", "count": 1 },
+    { "input": ["", "quartz_shard", "", "", "stick", "", "", "stick", ""], "output": "quartz_shovel", "count": 1 },
+    { "input": ["bluestone", "bluestone", "bluestone", "", "stick", "", "", "stick", ""], "output": "bluestone_pickaxe", "count": 1 },
+    { "input": ["bluestone", "bluestone", "", "bluestone", "stick", "", "", "stick", ""], "output": "bluestone_axe", "count": 1 },
+    { "input": ["", "bluestone", "", "", "stick", "", "", "stick", ""], "output": "bluestone_shovel", "count": 1 },
+
     // ---- light (2x2) ------------------------------------------------------
     // coal/charcoal over a stick -> 4 torches, like Minecraft
     { "input": ["coal", "", "stick", ""], "output": "torch", "count": 4 },
@@ -107,6 +121,7 @@
     { "input": "goldore",     "output": "gold",            "time": 10 },
     { "input": "diamondore",  "output": "diamond",         "time": 10 },
     { "input": "copperore",   "output": "copper",          "time": 10 },
+    { "input": "bluestoneore", "output": "bluestone",      "time": 10 },
     { "input": "cobblestone", "output": "stone",           "time": 10 },
     { "input": "sand",        "output": "glass",           "time": 10 },
     { "input": "log",         "output": "charcoal",        "time": 10 },

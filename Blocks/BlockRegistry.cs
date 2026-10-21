@@ -41,6 +41,7 @@ namespace Cubuild
         private static float[] _hardness = Array.Empty<float>();
         private static string[] _toolType = Array.Empty<string>();
         private static bool[] _toolRequired = Array.Empty<bool>();
+        private static int[] _harvestLevel = Array.Empty<int>();
         private static bool[] _zombieCanBreak = Array.Empty<bool>();
         private static ZombieBreakSpeed[] _zombieBreakSpeed = Array.Empty<ZombieBreakSpeed>();
         private static uint[] _mapColor = Array.Empty<uint>();
@@ -83,6 +84,8 @@ namespace Cubuild
             public double Hardness { get; set; } = 0; // 0 => code default
             public string? ToolType { get; set; } = ""; // "pickaxe"/"axe"/"shovel"/... empty = none
             public bool ToolRequired { get; set; } = false; // true = needs the tool to drop items
+            public int HarvestLevel { get; set; } = 0; // minimum matching tool level needed for drops
+            public string? DropItem { get; set; } // optional item id dropped instead of this block
             public bool ZombieCanBreak { get; set; } = false;
             public string? ZombieBreakSpeed { get; set; } = "Medium"; // Slow / Medium / Fast
             public string? Base { get; set; } // inherit texture/top/bottom/side/colour from another block id
@@ -239,6 +242,8 @@ namespace Cubuild
                     Hardness = dto.Hardness > 0 ? (float)dto.Hardness : DefaultHardness(dto.Id),
                     ToolType = dto.ToolType ?? "",
                     ToolRequired = dto.ToolRequired,
+                    HarvestLevel = Math.Max(0, dto.HarvestLevel),
+                    DropItem = dto.DropItem ?? "",
                     ZombieCanBreak = dto.ZombieCanBreak,
                     ZombieBreakSpeed = ParseZombieBreakSpeed(dto.ZombieBreakSpeed),
                     DoorHalf = dto.DoorHalf ?? "bottom",
@@ -279,6 +284,7 @@ namespace Cubuild
             _hardness = new float[Count];
             _toolType = new string[Count];
             _toolRequired = new bool[Count];
+            _harvestLevel = new int[Count];
             _zombieCanBreak = new bool[Count];
             _zombieBreakSpeed = new ZombieBreakSpeed[Count];
             _mapColor = new uint[Count];
@@ -304,6 +310,7 @@ namespace Cubuild
                 _hardness[i] = defs[i].Hardness;
                 _toolType[i] = defs[i].ToolType ?? "";
                 _toolRequired[i] = defs[i].ToolRequired;
+                _harvestLevel[i] = defs[i].HarvestLevel;
                 _zombieCanBreak[i] = defs[i].ZombieCanBreak;
                 _zombieBreakSpeed[i] = defs[i].ZombieBreakSpeed;
                 _mapColor[i] = defs[i].MapColor;
@@ -435,6 +442,10 @@ namespace Cubuild
         public static string ToolTypeOf(int id) => id > 0 && id < Count ? _toolType[id] : "";
         /// <summary>True when the matching tool is required for this block to drop an item.</summary>
         public static bool ToolRequiredOf(int id) => id > 0 && id < Count && _toolRequired[id];
+        /// <summary>Minimum matching tool tier needed to receive a drop from this block.</summary>
+        public static int HarvestLevelOf(int id) => id > 0 && id < Count ? _harvestLevel[id] : 0;
+        /// <summary>Optional item id dropped instead of this block's own item.</summary>
+        public static string DropItemOf(int id) => id > 0 && id < Count ? _defs[id].DropItem : "";
 
         // ---- Doors ---------------------------------------------------------------
         //

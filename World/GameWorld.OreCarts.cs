@@ -9,12 +9,7 @@ namespace Cubuild
     /// </summary>
     public sealed partial class GameWorld : IDisposable
     {
-        private static int _oreCartItemIdCache = -1;
-        private static int OreCartItemId
-        {
-            get { if (_oreCartItemIdCache < 0) _oreCartItemIdCache = ItemRegistry.TryGet("orecart", out var d) ? d.NumericId : 0; return _oreCartItemIdCache; }
-            set => _oreCartItemIdCache = value;
-        }
+        private static int OreCartItemId => ItemRegistry.TryGet("orecart", out var d) ? d.NumericId : 0;
 
         public bool HoldingOreCart => OreCartItemId > 0 && SelectedBlock == OreCartItemId;
 

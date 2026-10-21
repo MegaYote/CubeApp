@@ -186,7 +186,7 @@ namespace Cubuild
                 {
                     _handSwingTimer = HandSwingDuration;
                 }
-                else if (!World.Entities.TryAttackMob(World.PlayerPosition, World.GetCameraForward(), null))
+                else if (!World.TryMeleeAttackEntity(World.PlayerPosition, World.GetCameraForward()))
                 {
                     // No mob hit: mining is driven by BreakHeld in StepSimulation, but the click
                     // primes the target so progress starts immediately this frame.

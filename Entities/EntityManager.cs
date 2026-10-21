@@ -290,6 +290,19 @@ namespace Cubuild
         {
             _entityWatch.Restart();
 
+            // Vehicles do not run the ordinary death animation. Remove any vehicle that was
+            // marked dead/removed by another damage source before chunk streaming can snapshot it.
+            for (int i = _mobs.Count - 1; i >= 0; i--)
+            {
+                if (_mobs[i] is not MobEntity vehicle
+                    || (vehicle is not CartEntity && vehicle is not BoatEntity)
+                    || (!vehicle.IsDead && !vehicle.Removed)) continue;
+                if (vehicle is CartEntity cart) SeverCartLink(cart);
+                _idleTimeAccum.Remove(vehicle);
+                _mobs.RemoveAt(i);
+                if (ReferenceEquals(LocallyDrivenMob, vehicle)) LocallyDrivenMob = null;
+            }
+
             // World-streaming persistence: detach mobs whose chunk just unloaded (they'd otherwise
             // keep simulating against empty air and fall into the void), and restore mobs saved
             // for chunks the player just returned to.
@@ -783,20 +796,34 @@ namespace Cubuild
         // next frame and immediately re-despawned, flickering forever.
         private const double RestoreRadiusBlocks = 48.0;
 
-        public bool TryAttackMob(Point3D cameraPosition, Point3D forward, BlockInteractionSystem.PickBlockResult? blockHit)
+        public bool TryAttackMob(Point3D cameraPosition, Point3D forward,
+            double blockDistance, bool creative, out MobEntity? brokenVehicle)
         {
+            brokenVehicle = null;
             var mob = TryPickMob(cameraPosition, forward, out double mobDistance);
             if (mob == null) return false;
 
-            if (blockHit.HasValue)
-            {
-                if (mobDistance > blockHit.Value.Distance + 0.02) return false;
-            }
+            if (mobDistance > blockDistance + 0.02) return false;
 
-            // Every mob is a MobEntity now (Duck, Coyote, SteveMob, generic) - one universal damage
-            // path with a real attacker source for knockback/panic direction.
             if (mob is MobEntity mobEntity)
             {
+                if (mobEntity is CartEntity or BoatEntity)
+                {
+                    // Vehicles use discrete successful melee hits, not MobEntity's hurt cooldown:
+                    // a rejected generic damage event must never consume hit progress.
+                    if (!mobEntity.RegisterVehicleMeleeHit(creative ? 1 : 3)) return false;
+                    if (mobEntity.Removed)
+                    {
+                        if (mobEntity is CartEntity cart) SeverCartLink(cart);
+                        _idleTimeAccum.Remove(mobEntity);
+                        _mobs.Remove(mobEntity);
+                        if (ReferenceEquals(LocallyDrivenMob, mobEntity)) LocallyDrivenMob = null;
+                        brokenVehicle = mobEntity;
+                    }
+                    return true;
+                }
+
+                // Ordinary mobs retain the existing damage / invulnerability behavior.
                 mobEntity.Damage(1, cameraPosition.X, cameraPosition.Z, true);
             }
             return true;
@@ -810,7 +837,7 @@ namespace Cubuild
 
             foreach (var mob in _mobs)
             {
-                if (mob.IsDead) continue;
+                if (mob.IsDead || mob is MobEntity { Removed: true }) continue;
 
                 // Every mob is a MobEntity now - one universal dimension source.
                 if (mob is not MobEntity mobEntity) continue;
@@ -850,7 +877,7 @@ namespace Cubuild
 
             foreach (var mob in _mobs)
             {
-                if (mob.IsDead) continue;
+                if (mob.IsDead || mob is MobEntity { Removed: true }) continue;
                 if (mob is not MobEntity mobEntity) continue;
 
                 float half = mobEntity.Width * 0.5f;
@@ -921,6 +948,8 @@ namespace Cubuild
             var result = new List<SavedMob>();
             foreach (var mob in _mobs)
             {
+                if (mob is MobEntity { Removed: true }) continue;
+                if (mob is MobEntity { IsDead: true } && (mob is CartEntity or BoatEntity)) continue;
                 result.Add(SnapshotMob(mob));
             }
             foreach (var list in _detachedMobs.Values)
@@ -942,7 +971,12 @@ namespace Cubuild
             };
             int health = mob is MobEntity me2 ? me2.Health : 10;
             bool brute = mob is GenericMobEntity g2 && g2.IsBrute;
-            return new SavedMob { Type = type, X = mob.Position.X, Y = mob.Position.Y, Z = mob.Position.Z, Yaw = mob.Yaw, Health = health, Brute = brute };
+            return new SavedMob
+            {
+                Type = type, X = mob.Position.X, Y = mob.Position.Y, Z = mob.Position.Z,
+                Yaw = mob.Yaw, Health = health, Brute = brute,
+                VehicleMeleeHitCount = mob is MobEntity me3 ? me3.VehicleMeleeHitCount : 0,
+            };
         }
 
         // Restores mobs from a world save.
@@ -1053,25 +1087,25 @@ namespace Cubuild
             if (m.Type == "duck")
             {
                 var mob = new Duck(pos, m.Yaw);
-                mob.RestoreState(pos, m.Yaw, m.Health);
+                mob.RestoreState(pos, m.Yaw, m.Health, m.VehicleMeleeHitCount);
                 _mobs.Add(mob);
             }
             else if (m.Type == "coyote" || m.Type == "coyotemob")
             {
                 var mob = new Coyote(pos, m.Yaw);
-                mob.RestoreState(pos, m.Yaw, m.Health);
+                mob.RestoreState(pos, m.Yaw, m.Health, m.VehicleMeleeHitCount);
                 _mobs.Add(mob);
             }
             else if (m.Type == "steve")
             {
                 var mob = new SteveMob(pos, m.Yaw);
-                mob.RestoreState(pos, m.Yaw, m.Health);
+                mob.RestoreState(pos, m.Yaw, m.Health, m.VehicleMeleeHitCount);
                 _mobs.Add(mob);
             }
             else if (m.Type == "cart")
             {
                 var cart = new CartEntity(pos, m.Yaw);
-                cart.RestoreState(pos, m.Yaw, m.Health);
+                cart.RestoreState(pos, m.Yaw, m.Health, m.VehicleMeleeHitCount);
                 _mobs.Add(cart);
             }
             else if (m.Type == "orecart")
@@ -1079,7 +1113,7 @@ namespace Cubuild
                 // Explicit branch for the same reason as the boat below: without it an ore cart
                 // would fall through to the generic path and be rebuilt as an AI mob.
                 var cart = new OreCartEntity(pos, m.Yaw);
-                cart.RestoreState(pos, m.Yaw, m.Health);
+                cart.RestoreState(pos, m.Yaw, m.Health, m.VehicleMeleeHitCount);
                 _mobs.Add(cart);
             }
             else if (m.Type == "boat")
@@ -1087,7 +1121,7 @@ namespace Cubuild
                 // Boats have no MobRegistry entry, so without this branch they would fall
                 // through to the generic path below and be silently dropped on load.
                 var boat = new BoatEntity(pos, m.Yaw);
-                boat.RestoreState(pos, m.Yaw, m.Health);
+                boat.RestoreState(pos, m.Yaw, m.Health, m.VehicleMeleeHitCount);
                 _mobs.Add(boat);
             }
             else if (m.Type == "locomotivehot" || m.Type == "locomotivecold")
@@ -1095,7 +1129,7 @@ namespace Cubuild
                 // Same reasoning as the ore cart above: a locomotive is a built-in vehicle with no
                 // MobRegistry entry, so the generic fallback would rebuild it as an AI mob.
                 var loco = new LocomotiveEntity(pos, m.Yaw, m.Type);
-                loco.RestoreState(pos, m.Yaw, m.Health);
+                loco.RestoreState(pos, m.Yaw, m.Health, m.VehicleMeleeHitCount);
                 _mobs.Add(loco);
             }
             else
@@ -1103,7 +1137,7 @@ namespace Cubuild
                 var def = MobRegistry.Get(m.Type);
                 if (def == null) return;
                 var generic = new GenericMobEntity(def, pos, m.Yaw, m.Brute);
-                generic.RestoreState(pos, m.Yaw, m.Health);
+                generic.RestoreState(pos, m.Yaw, m.Health, m.VehicleMeleeHitCount);
                 _mobs.Add(generic);
             }
         }

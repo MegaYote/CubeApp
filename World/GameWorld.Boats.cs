@@ -12,23 +12,9 @@ namespace Cubuild
     /// </summary>
     public sealed partial class GameWorld : IDisposable
     {
-        // Resolved LAZILY and defensively. ItemRegistry.GetId is a dictionary indexer that THROWS on
-        // an unknown name, and the boat item only exists in the Classic (Minecraft) pack - a
-        // static readonly initialiser would therefore throw TypeInitializationException for
-        // every GameWorld created in the default pack, and 0 if it silently resolved.
-        private static int _boatItemIdCache = -1;
-        private static int BoatItemId
-        {
-            get
-            {
-                if (_boatItemIdCache < 0)
-                    _boatItemIdCache = ItemRegistry.TryGet("boat", out var d) ? d.NumericId : 0;
-                return _boatItemIdCache;
-            }
-            // The registry is swapped wholesale on a gamemode change, so the cached id must be
-            // dropped with it or Classic's id would leak into a default-pack world.
-            set => _boatItemIdCache = value;
-        }
+        // Resolve against the active pack each time: registries can be swapped between modes and
+        // boat is absent from some packs (where it safely resolves to air/zero).
+        private static int BoatItemId => ItemRegistry.TryGet("boat", out var d) ? d.NumericId : 0;
 
         private static int _idWater = -1;
         private static int WaterBlockId
@@ -163,6 +149,12 @@ namespace Cubuild
         public void StepRiding(TickInputState tickInput, float deltaSeconds)
         {
             if (Riding is not { } boat) { StepPlayer(LocalPlayer, tickInput, deltaSeconds); return; }
+            if (boat.Removed || boat.IsDead)
+            {
+                DismountBoat();
+                StepPlayer(LocalPlayer, tickInput, deltaSeconds);
+                return;
+            }
 
             // Steering axes, relative to the boat's own heading.
             float fwd = (tickInput.MoveForward ? 1f : 0f) - (tickInput.MoveBackward ? 1f : 0f);

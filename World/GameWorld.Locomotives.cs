@@ -9,12 +9,7 @@ namespace Cubuild
     /// </summary>
     public sealed partial class GameWorld
     {
-        private static int _locomotiveItemIdCache = -1;
-        private static int LocomotiveItemId
-        {
-            get { if (_locomotiveItemIdCache < 0) _locomotiveItemIdCache = ItemRegistry.TryGet("locomotive", out var d) ? d.NumericId : 0; return _locomotiveItemIdCache; }
-            set => _locomotiveItemIdCache = value;
-        }
+        private static int LocomotiveItemId => ItemRegistry.TryGet("locomotive", out var d) ? d.NumericId : 0;
 
         public bool HoldingLocomotive => LocomotiveItemId > 0 && SelectedBlock == LocomotiveItemId;
 

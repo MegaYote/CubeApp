@@ -63,6 +63,8 @@ namespace Cubuild
             // -> 1-4 planks, plank -> 1-4 sticks; flint: log -> 1 workbench) can produce
             // multiple items, unlike every other drop.
             int dropId = removedBlockId;
+            string configuredDrop = BlockRegistry.DropItemOf(removedBlockId);
+            if (!string.IsNullOrEmpty(configuredDrop)) dropId = ItemRegistry.GetId(configuredDrop);
             int dropCount = 1;
             // Either half of a door yields the bottom-half item, which is the one that places.
             if (BlockRegistry.IsDoor(removedBlockId)) dropId = DoorBottomIdFor(removedBlockId);
@@ -97,11 +99,9 @@ namespace Cubuild
             // below then removes it entirely unless a pickaxe is held.
             else if (dropId == _idStone && IsMinecraftMode) dropId = _idCobblestone;
             else if (dropId == _idStone && SelectedBlock <= 0) dropId = _regenRandom.Next(10) == 0 ? _idGravel : 0;
-            // Obsidian yields nothing - it's too hard to extract anything from it
-            else if (dropId == _idObsidian) dropId = 0;
             // Minecraft tool gate: a block flagged toolRequired only yields its drop while a
-            // tool of the matching type is held. Bare hands - or the wrong tool - still break
-            // the block, it just gives nothing back, exactly like vanilla survival.
+            // tool of the matching type and sufficient harvest tier is held. Bare hands, a
+            // wrong tool, or an under-tier tool still break the block but receive no drop.
             if (dropId > 0 && !CanHarvest(removedBlockId, SelectedBlock)) dropId = 0;
             if (!IsCreative && dropId > 0)
             {
@@ -189,19 +189,21 @@ namespace Cubuild
         /// <summary>
         /// Minecraft's "correct tool" rule: can the block actually be harvested while holding
         /// <paramref name="heldItemId"/>? A block that opts into <c>toolRequired</c> only drops
-        /// when the held item is a tool whose <c>toolType</c> matches the block's (a pickaxe for
-        /// the stone family and every ore, an axe for wood, a shovel for soil). Holding a block
-        /// or the wrong tool is not enough - and an empty hand never satisfies a requirement.
-        /// The block still BREAKS either way; only the drop is withheld, like vanilla.
+        /// when the held item is a tool whose <c>toolType</c> matches the block's and whose
+        /// <c>toolLevel</c> reaches its configured harvestLevel. Holding a block, wrong tool,
+        /// or under-tier tool is not enough. The block still BREAKS either way; only the drop
+        /// is withheld, like vanilla.
         /// </summary>
         public static bool CanHarvest(int blockId, int heldItemId)
         {
-            if (!BlockRegistry.ToolRequiredOf(blockId)) return true;
+            int requiredLevel = BlockRegistry.HarvestLevelOf(blockId);
+            if (!BlockRegistry.ToolRequiredOf(blockId) && requiredLevel <= 0) return true;
             string required = BlockRegistry.ToolTypeOf(blockId);
-            if (string.IsNullOrEmpty(required)) return true;   // required, but no type named -> any tool
+            if (string.IsNullOrEmpty(required)) return requiredLevel <= 0; // legacy: no named type means any tool
             string held = ItemRegistry.ToolTypeOf(heldItemId);
             return !string.IsNullOrEmpty(held)
-                && string.Equals(held, required, StringComparison.OrdinalIgnoreCase);
+                && string.Equals(held, required, StringComparison.OrdinalIgnoreCase)
+                && ItemRegistry.ToolLevelOf(heldItemId) >= requiredLevel;
         }
 
         // ---- leaf decay (Minecraft-style) ----
@@ -913,6 +915,35 @@ var place = pickResult.Value.Place;
         // ------------------------------------------------------------------
 
         public PickBlockResult? TryPickBlock(Point3D origin, Point3D direction) => TryPickBlock(origin, direction, out _);
+
+        /// <summary>Attacks the nearest entity under the crosshair, respecting solid blocks. Vehicles
+        /// break after one Creative hit or three Survival hits and drop their matching item only in
+        /// Survival.</summary>
+        public bool TryMeleeAttackEntity(Point3D origin, Point3D direction)
+        {
+            TryPickBlock(origin, direction, out double blockDistance);
+            if (!Entities.TryAttackMob(origin, direction, blockDistance, IsCreative, out var brokenVehicle))
+                return false;
+
+            if (brokenVehicle is CartEntity cart && ReferenceEquals(RidingCart, cart)) DismountCart();
+            else if (brokenVehicle is BoatEntity boat && ReferenceEquals(Riding, boat)) DismountBoat();
+
+            if (!IsCreative && brokenVehicle != null)
+            {
+                string itemName = brokenVehicle switch
+                {
+                    BoatEntity => "boat",
+                    LocomotiveEntity => "locomotive",
+                    OreCartEntity => "orecart",
+                    CartEntity => "cart",
+                    _ => "",
+                };
+                if (itemName.Length > 0 && ItemRegistry.TryGet(itemName, out var item))
+                    SpawnItemDrop(item.NumericId, 1, brokenVehicle.Position);
+            }
+
+            return true;
+        }
 
         public PickBlockResult? TryPickBlock(Point3D origin, Point3D direction, out double hitDistance)
         {

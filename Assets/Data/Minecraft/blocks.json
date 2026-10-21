@@ -59,7 +59,8 @@
       "hardness": 1.5,
       "mapColor": "#808080",
       "toolType": "pickaxe",
-      "toolRequired": true
+      "toolRequired": true,
+      "harvestLevel": 1
     },
     {
       "id": "cobblestone",
@@ -68,7 +69,8 @@
       "hardness": 1.5,
       "mapColor": "#707070",
       "toolType": "pickaxe",
-      "toolRequired": true
+      "toolRequired": true,
+      "harvestLevel": 1
     },
     {
       "id": "sand",
@@ -114,7 +116,8 @@
       "hardness": 50,
       "mapColor": "#3C2D5A",
       "toolType": "pickaxe",
-      "toolRequired": true
+      "toolRequired": true,
+      "harvestLevel": 4
     },
     {
       "id": "mossycobblestone",
@@ -284,7 +287,8 @@
       "mapColor": "#6C6C6C",
       "hardness": 3.0,
       "toolType": "pickaxe",
-      "toolRequired": true
+      "toolRequired": true,
+      "harvestLevel": 1
     },
     {
       "id": "ironore",
@@ -293,7 +297,8 @@
       "mapColor": "#A08E7E",
       "hardness": 3.0,
       "toolType": "pickaxe",
-      "toolRequired": true
+      "toolRequired": true,
+      "harvestLevel": 2
     },
     {
       "id": "goldore",
@@ -302,7 +307,8 @@
       "mapColor": "#8E8670",
       "hardness": 3.0,
       "toolType": "pickaxe",
-      "toolRequired": true
+      "toolRequired": true,
+      "harvestLevel": 3
     },
     {
       "id": "diamondore",
@@ -311,7 +317,8 @@
       "mapColor": "#828F8F",
       "hardness": 3.0,
       "toolType": "pickaxe",
-      "toolRequired": true
+      "toolRequired": true,
+      "harvestLevel": 3
     },
     {
       "id": "bluestoneore",
@@ -320,7 +327,8 @@
       "mapColor": "#6E7090",
       "hardness": 3.0,
       "toolType": "pickaxe",
-      "toolRequired": true
+      "toolRequired": true,
+      "harvestLevel": 3
     },
     {
       "id": "copperore",
@@ -329,7 +337,8 @@
       "mapColor": "#827268",
       "hardness": 3.0,
       "toolType": "pickaxe",
-      "toolRequired": true
+      "toolRequired": true,
+      "harvestLevel": 2
     },
     {
       "id": "iron",
@@ -340,7 +349,8 @@
       "mapColor": "#E8E8E8",
       "hardness": 5.0,
       "toolType": "pickaxe",
-      "toolRequired": true
+      "toolRequired": true,
+      "harvestLevel": 2
     },
     {
       "id": "gold",
@@ -351,7 +361,8 @@
       "mapColor": "#F7E040",
       "hardness": 5.0,
       "toolType": "pickaxe",
-      "toolRequired": true
+      "toolRequired": true,
+      "harvestLevel": 2
     },
     {
       "id": "diamond",
@@ -362,7 +373,8 @@
       "mapColor": "#66E8E0",
       "hardness": 5.0,
       "toolType": "pickaxe",
-      "toolRequired": true
+      "toolRequired": true,
+      "harvestLevel": 2
     },
     {
       "id": "bookshelf",
@@ -609,7 +621,9 @@
       "hardness": 0.8,
       "mapColor": "#F1EBE2",
       "toolType": "pickaxe",
-      "toolRequired": true
+      "toolRequired": true,
+      "harvestLevel": 2,
+      "dropItem": "quartz_shard"
     },
     {
       "id": "copper",
