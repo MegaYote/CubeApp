@@ -33,6 +33,8 @@ namespace Cubuild
         private readonly int height;
         private readonly int dimX;
         private readonly int dimZ;
+        private readonly bool isDeepLayer;
+        private readonly byte[] deepTopSkyLight;
         private readonly byte[] opacity;   // per-cell light opacity (0..255)
         private readonly byte[] sky;       // per-cell sky light (0..15)
         private readonly byte[] block;     // per-cell block light (0..15)
@@ -85,6 +87,8 @@ namespace Cubuild
             minZ = minChunkZ * chunkSize;
             dimX = (maxChunkX - minChunkX + 1) * chunkSize;
             dimZ = (maxChunkZ - minChunkZ + 1) * chunkSize;
+            isDeepLayer = OriginY == ChunkManager.DeepOriginY;
+            deepTopSkyLight = isDeepLayer ? new byte[dimX * dimZ] : Array.Empty<byte>();
 
             int cells = dimX * height * dimZ;
             if (_opacityPool == null || _opacityPool.Length < cells)
@@ -106,6 +110,12 @@ namespace Cubuild
             sky = _skyPool!;
             block = _blockPool!;
             heightMap = _heightMapPool!;
+
+            // Block light has actual point sources (torches, lava, etc.), unlike sky light.
+            // The arrays are thread-pooled, and PropagateBlock scans for nonzero cells across
+            // the whole chunk height; clearing only the active terrain band leaves old emitter
+            // values outside that band able to seed phantom light at the lower/upper boundary.
+            Array.Clear(block, 0, cells);
 
             // LAZY-BAND: with 448-tall chunks the region arrays are ~3M cells but only the terrain
             // band has blocks. Light can only travel MaxLight cells from a source, so everything
@@ -183,6 +193,16 @@ namespace Cubuild
                 byte[] rawMeta = c.RawMeta;
                 int baseLX = kv.Key.X * chunkSize - minX;
                 int baseLZ = kv.Key.Z * chunkSize - minZ;
+                if (isDeepLayer)
+                {
+                    for (int x = 0; x < c.Width; x++)
+                    {
+                        for (int z = 0; z < c.Depth; z++)
+                        {
+                            deepTopSkyLight[(baseLX + x) * dimZ + baseLZ + z] = c.GetDeepTopSkyLight(x, z);
+                        }
+                    }
+                }
                 for (int x = 0; x < chunkSize; x++)
                 {
                     for (int z = 0; z < chunkSize; z++)
@@ -280,6 +300,22 @@ namespace Cubuild
                 {
                     int hm = heightMap[lx * dimZ + lz]; // x-major, matches the fill
                     int colBase = Index(lx, 0, lz);
+                    if (isDeepLayer)
+                    {
+                        // Deep is not an exposed world top. Start only with the actual sky-light
+                        // level measured in the paired ground seam cell; an air opening with no
+                        // arriving sky contributes nothing. Normal flood propagation then
+                        // attenuates the light through deep-layer air as it does elsewhere.
+                        byte source = deepTopSkyLight[lx * dimZ + lz];
+                        int topIdx = colBase + height - 1;
+                        if (source > 0 && opacity[topIdx] < 255)
+                        {
+                            sky[topIdx] = source;
+                            queue.Enqueue(topIdx);
+                        }
+                        continue;
+                    }
+
                     for (int y = startY; y >= bandLo; y--)
                     {
                         if (y > hm)
@@ -406,14 +442,20 @@ namespace Cubuild
             return s > b ? s : b;
         }
 
-        /// <summary>Sky-light channel (0..15). Outside the computed region, assume open sky.</summary>
+        /// <summary>Sky-light channel (0..15). Above the computed region assumes open sky;
+        /// below it is dark so the lower boundary cannot invent daylight.</summary>
         public int GetSkyLight(int worldX, int y, int worldZ)
         {
             int lx = worldX - minX;
             int lz = worldZ - minZ;
-            if (lx < 0 || lx >= dimX || lz < 0 || lz >= dimZ || y < 0 || y >= height)
+            // Outside the vertical region is directional: above its top can see open sky,
+            // but below its bottom must not become an imaginary daylight source. In the
+            // layered world this lower sample is often the face just beyond a chunk/layer's
+            // bottom boundary; returning MaxLight there made unsupported lower faces glow.
+            if (y < 0) return 0;
+            if (y >= height || lx < 0 || lx >= dimX || lz < 0 || lz >= dimZ)
             {
-                // Outside the region: unknown terrain. Assume open sky above the region floor.
+                // Unknown space above / outside the horizontal light region is treated as sky.
                 return MaxLight;
             }
             return sky[Index(lx, y, lz)];

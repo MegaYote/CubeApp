@@ -40,6 +40,8 @@ namespace Cubuild
         private static float[] _alpha = Array.Empty<float>();
         private static float[] _hardness = Array.Empty<float>();
         private static string[] _toolType = Array.Empty<string>();
+        private static string[] _material = Array.Empty<string>();
+        private static string[] _wrongToolDrop = Array.Empty<string>();
         private static bool[] _toolRequired = Array.Empty<bool>();
         private static int[] _harvestLevel = Array.Empty<int>();
         private static bool[] _zombieCanBreak = Array.Empty<bool>();
@@ -83,6 +85,8 @@ namespace Cubuild
             public string? MapColor { get; set; }
             public double Hardness { get; set; } = 0; // 0 => code default
             public string? ToolType { get; set; } = ""; // "pickaxe"/"axe"/"shovel"/... empty = none
+            public string? Material { get; set; }
+            public string? WrongToolDrop { get; set; }
             public bool ToolRequired { get; set; } = false; // true = needs the tool to drop items
             public int HarvestLevel { get; set; } = 0; // minimum matching tool level needed for drops
             public string? DropItem { get; set; } // optional item id dropped instead of this block
@@ -223,6 +227,15 @@ namespace Cubuild
 
                 ApplyShapeDefaults(dto); // fill omitted fields from the entry's "shape"
 
+                string material = (dto.Material ?? "").Trim().ToLowerInvariant();
+                if (material.Length > 0 && material is not ("rock" or "soil" or "wood" or "plant" or "misc" or "fluid" or "nothing"))
+                    throw new InvalidDataException($"Block \"{dto.Id}\" has unknown material \"{dto.Material}\".");
+                string wrongToolDrop = (dto.WrongToolDrop ?? "").Trim().ToLowerInvariant();
+                if (wrongToolDrop.Length > 0 && wrongToolDrop is not ("self" or "nothing"))
+                    throw new InvalidDataException($"Block \"{dto.Id}\" has invalid wrongToolDrop \"{dto.WrongToolDrop}\".");
+                if (material == "rock" && wrongToolDrop.Length == 0)
+                    throw new InvalidDataException($"Rock block \"{dto.Id}\" must define wrongToolDrop as \"self\" or \"nothing\".");
+
                 var def = new BlockDefinition
                 {
                     Id = dto.Id,
@@ -240,6 +253,8 @@ namespace Cubuild
                     Gravity = dto.Gravity,
                     MapColor = dto.MapColor != null ? ParseMapColor(dto.MapColor) : 0xFF000000u,
                     Hardness = dto.Hardness > 0 ? (float)dto.Hardness : DefaultHardness(dto.Id),
+                    Material = material,
+                    WrongToolDrop = wrongToolDrop,
                     ToolType = dto.ToolType ?? "",
                     ToolRequired = dto.ToolRequired,
                     HarvestLevel = Math.Max(0, dto.HarvestLevel),
@@ -283,6 +298,8 @@ namespace Cubuild
             _alpha = new float[Count];
             _hardness = new float[Count];
             _toolType = new string[Count];
+            _material = new string[Count];
+            _wrongToolDrop = new string[Count];
             _toolRequired = new bool[Count];
             _harvestLevel = new int[Count];
             _zombieCanBreak = new bool[Count];
@@ -309,6 +326,8 @@ namespace Cubuild
                 _alpha[i] = defs[i].Alpha;
                 _hardness[i] = defs[i].Hardness;
                 _toolType[i] = defs[i].ToolType ?? "";
+                _material[i] = defs[i].Material;
+                _wrongToolDrop[i] = defs[i].WrongToolDrop;
                 _toolRequired[i] = defs[i].ToolRequired;
                 _harvestLevel[i] = defs[i].HarvestLevel;
                 _zombieCanBreak[i] = defs[i].ZombieCanBreak;
@@ -438,8 +457,25 @@ namespace Cubuild
         public static int LightEmissionOf(int id) => id > 0 && id < Count ? _lightEmission[id] : 0;
         public static float Alpha(int id) => _alpha[id];
         public static float HardnessOf(int id) => id >= 0 && id < Count ? _hardness[id] : 1f;
-        /// <summary>Tool type that mines this block most efficiently ("" = none/any tool).</summary>
-        public static string ToolTypeOf(int id) => id > 0 && id < Count ? _toolType[id] : "";
+        /// <summary>Material class used for tool-family behavior; empty for legacy definitions.</summary>
+        public static string MaterialOf(int id) => id >= 0 && id < Count ? _material[id] : "";
+        public static bool HasMaterialOf(int id) => id >= 0 && id < Count && _material[id].Length > 0;
+        /// <summary>Drop policy for a rock mined without a pickaxe ("self" or "nothing").</summary>
+        public static string WrongToolDropOf(int id) => id > 0 && id < Count ? _wrongToolDrop[id] : "";
+        /// <summary>Tool type that mines this block most efficiently ("" = none/any tool).
+        /// Material classes take precedence; old toolType data is used only when material is absent.</summary>
+        public static string ToolTypeOf(int id)
+        {
+            if (id < 0 || id >= Count) return "";
+            return _material[id] switch
+            {
+                "rock" => "pickaxe",
+                "soil" => "shovel",
+                "wood" => "axe",
+                "" => _toolType[id],
+                _ => "",
+            };
+        }
         /// <summary>True when the matching tool is required for this block to drop an item.</summary>
         public static bool ToolRequiredOf(int id) => id > 0 && id < Count && _toolRequired[id];
         /// <summary>Minimum matching tool tier needed to receive a drop from this block.</summary>

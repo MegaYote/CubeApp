@@ -93,6 +93,7 @@ namespace Cubuild
 
                         // Track whether we need to clear IsMeshingQueued
                         bool needsFlagReset = false;
+                        bool meshCompleted = false;
                         Chunk? chunk = null;
                         try
                         {
@@ -131,10 +132,17 @@ namespace Cubuild
                                 if (layer > 0 && _manager.TryGetLoadedChunk(new ChunkCoordinates(layer - 1, chunkX, chunkZ), out var below)) chunksToPass.Add(below);
                                 if (layer < 2 && _manager.TryGetLoadedChunk(new ChunkCoordinates(layer + 1, chunkX, chunkZ), out var above)) chunksToPass.Add(above);
 
+                                long lightingRevision = chunk.LightingRevision;
                                 var renderer = _getRenderer();
                                 var faces = Mesher.GenerateMesh(chunksToPass,
                                     (worldX, worldZ) => _manager.BiomeAt(worldX, worldZ).Id,
                                     out var surfaceLodFaces);
+                                if (layer == ChunkManager.GroundLayer)
+                                {
+                                    // Ground's LightGrid is freshly rebuilt by the mesher above.
+                                    // Only now can it safely seed the paired deep boundary.
+                                    _manager.RefreshDeepTopSkyLightFromGround(chunk);
+                                }
 
                                 // Lock to ensure atomic mesh update. Mesher.GenerateMesh always
                                 // returns a List<MeshFace>, and the worker owns it exclusively here,
@@ -145,7 +153,11 @@ namespace Cubuild
                                     chunk.MeshFaces = faces as List<MeshFace> ?? new List<MeshFace>(faces);
                                     chunk.SurfaceLodFaces = surfaceLodFaces;
                                     chunk.MeshVersion++;
-                                    chunk.NeedsRemesh = false;
+                                    // A seam source or block edit may have changed while this
+                                    // mesh was being built. Leave it dirty and schedule one fresh
+                                    // pass rather than losing that invalidation.
+                                    chunk.NeedsRemesh = chunk.LightingRevision != lightingRevision;
+                                    meshCompleted = true;
                                     facesToUpload = chunk.MeshFaces;
                                 }
 
@@ -188,6 +200,11 @@ namespace Cubuild
                                 chunk.IsMeshingQueued = false;
                             }
                         }
+
+                        // A dirty event that arrived during this job may have been dequeued while
+                        // the chunk was still in _processing. Requeue after releasing the claim.
+                        if (meshCompleted && chunk != null && chunk.NeedsRemesh)
+                            Enqueue(coords);
 
                         continue;
                     }

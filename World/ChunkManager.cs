@@ -35,6 +35,16 @@ namespace Cubuild
         public const int WorldOriginY = GroundOriginY;
         public const int ChunkHeight = GroundHeight;
 
+        // Keep transition support small: at most the center chunk and its four cardinals are
+        // prefetched before a layer change. A separate camera ray can queue the same tiny
+        // neighborhood below/above a visible seam opening, even when it is far from the player.
+        private const int VerticalBoundaryPrefetchDistance = 32;
+        private const int VerticalBoundaryPrefetchRadiusChunks = 1;
+        private const int DeepBoundaryRayMaxDistance = 128;
+        private const int OtherBoundaryRayMaxDistance = 64;
+        private const int NearBoundaryRayMaxDistance = 128;
+        private const double VerticalRayStep = 0.25;
+
         private static readonly int[] LayerOriginY = { DeepOriginY, GroundOriginY, SkyOriginY };
         private static readonly int[] LayerHeight = { DeepHeight, GroundHeight, SkyHeight };
 
@@ -108,6 +118,21 @@ namespace Cubuild
             _ => GroundHeight,
         };
 
+        /// <summary>Returns the immediately adjacent layer when the player is within the small
+        /// transition band at either end of the current layer; otherwise returns -1.</summary>
+        public static int AdjacentLayerNearBoundary(int layer, double worldY)
+        {
+            if (layer < DeepLayer || layer > SkyLayer) return -1;
+
+            int originY = OriginYForLayer(layer);
+            int height = HeightForLayer(layer);
+            if (layer > DeepLayer && worldY <= originY + VerticalBoundaryPrefetchDistance)
+                return layer - 1;
+            if (layer < SkyLayer && worldY >= originY + height - 1 - VerticalBoundaryPrefetchDistance)
+                return layer + 1;
+            return -1;
+        }
+
         public Chunk GetOrCreateChunk(int chunkX, int chunkZ) => GetOrCreateChunk(GroundLayer, chunkX, chunkZ);
 
         public Chunk GetOrCreateChunk(int layer, int chunkX, int chunkZ)
@@ -159,6 +184,9 @@ namespace Cubuild
                         SyncDeepAccess(chunkX, chunkZ, deep);
                     }
                 }
+                // A seam is meshed from the lower chunk's perspective. When either side changes
+                // residency, the other side must rebuild its border faces against the new state.
+                MarkVerticalNeighborsDirty(layer, chunkX, chunkZ);
                 // A newly loaded chunk can expose faces on adjacent, already-meshed chunks
                 // (border faces are culled against neighbors, and an absent neighbor is treated
                 // as air). Mark those neighbors dirty so their border faces get rebuilt now,
@@ -179,6 +207,18 @@ namespace Cubuild
             return result;
         }
 
+        private void MarkVerticalNeighborDirty(int layer, int chunkX, int chunkZ)
+        {
+            if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var neighbor))
+                neighbor.NeedsRemesh = true;
+        }
+
+        private void MarkVerticalNeighborsDirty(int layer, int chunkX, int chunkZ)
+        {
+            if (layer > DeepLayer) MarkVerticalNeighborDirty(layer - 1, chunkX, chunkZ);
+            if (layer < SkyLayer) MarkVerticalNeighborDirty(layer + 1, chunkX, chunkZ);
+        }
+
         /// <summary>
         /// When the deep chunk below a ground chunk is created, mirror any cave openings that
         /// broke through the ground bedrock floor (world -64 = ground local 0) onto the deep
@@ -188,37 +228,135 @@ namespace Cubuild
         /// </summary>
         private void SyncDeepAccess(int chunkX, int chunkZ, Chunk deepChunk)
         {
-            if (!loadedChunks.TryGetValue(new ChunkCoordinates(GroundLayer, chunkX, chunkZ), out var ground)) return;
-
-            byte[] groundRaw = ground.RawBlocks;
             byte[] deepRaw = deepChunk.RawBlocks;
-            int groundH = ground.Height;
             int deepH = deepChunk.Height;
-            for (int x = 0; x < ChunkSize; x++)
+            bool haveGround = loadedChunks.TryGetValue(new ChunkCoordinates(GroundLayer, chunkX, chunkZ), out var ground);
+            int groundH = haveGround ? ground!.Height : 0;
+            int width = haveGround ? Math.Min(deepChunk.Width, ground!.Width) : deepChunk.Width;
+            int depth = haveGround ? Math.Min(deepChunk.Depth, ground!.Depth) : deepChunk.Depth;
+            bool metadataChanged = false;
+            bool geometryChanged = false;
+
+            void SyncColumns()
             {
-                for (int z = 0; z < ChunkSize; z++)
+                byte[]? groundRaw = haveGround ? ground!.RawBlocks : null;
+                byte[]? lightGrid = null;
+                bool currentLightGrid = haveGround && ground!.TryGetCurrentLightGrid(out lightGrid)
+                    && lightGrid!.Length == groundRaw!.Length;
+
+                for (int x = 0; x < deepChunk.Width; x++)
                 {
-                    int groundIdx = (x * ChunkSize + z) * groundH + 0;   // world -64
-                    int deepIdx = (x * ChunkSize + z) * deepH + (deepH - 1); // world -65
-                    if (groundRaw[groundIdx] == BlockRegistry.AirId)
+                    for (int z = 0; z < deepChunk.Depth; z++)
                     {
-                        deepRaw[deepIdx] = 0;
+                        bool seamIsAir = haveGround && x < width && z < depth
+                            && groundRaw![(x * ground!.Depth + z) * groundH] == BlockRegistry.AirId; // ground local y=0 (world -64)
+                        byte skySource = 0;
+                        if (seamIsAir && currentLightGrid)
+                        {
+                            int groundIdx = (x * ground!.Depth + z) * groundH;
+                            skySource = (byte)(lightGrid![groundIdx] >> 4);
+                        }
+                        metadataChanged |= deepChunk.SetDeepTopSkyLight(x, z, skySource);
+
+                        if (seamIsAir)
+                        {
+                            int deepIdx = (x * deepChunk.Depth + z) * deepH + (deepH - 1); // deep top (world -65)
+                            if (deepRaw[deepIdx] != BlockRegistry.AirId)
+                            {
+                                // Direct storage write is intentional: routing this synchronization
+                                // through block-edit callbacks would recursively dirty the paired seam.
+                                deepRaw[deepIdx] = (byte)BlockRegistry.AirId;
+                                geometryChanged = true;
+                            }
+                        }
                     }
                 }
             }
-            deepChunk.NeedsRemesh = true;
+
+            if (haveGround)
+            {
+                // Mesh generation writes LightGrid under this same lock. If a recent edit/load
+                // invalidated it, the source remains conservatively zero until the next ground mesh.
+                lock (ground!.MeshLock) SyncColumns();
+            }
+            else
+            {
+                SyncColumns();
+            }
+
+            if (metadataChanged || geometryChanged)
+            {
+                deepChunk.InvalidateLightGrid();
+                deepChunk.NeedsRemesh = true;
+            }
+            if (geometryChanged && haveGround) ground!.NeedsRemesh = true;
+        }
+
+        private void SyncDeepAccessIfLoaded(int chunkX, int chunkZ)
+        {
+            if (loadedChunks.TryGetValue(new ChunkCoordinates(DeepLayer, chunkX, chunkZ), out var deepChunk))
+                SyncDeepAccess(chunkX, chunkZ, deepChunk);
+        }
+
+        /// <summary>Copies freshly meshed ground seam sky values to the paired deep chunk.
+        /// Called after the ground target's ChunkLighting pass has populated its LightGrid.</summary>
+        public void RefreshDeepTopSkyLightFromGround(Chunk groundChunk)
+        {
+            if (groundChunk == null || LayerForWorldY(groundChunk.OriginY) != GroundLayer) return;
+
+            int chunkX = FloorDiv(groundChunk.OriginX, ChunkSize);
+            int chunkZ = FloorDiv(groundChunk.OriginZ, ChunkSize);
+            var groundKey = new ChunkCoordinates(GroundLayer, chunkX, chunkZ);
+            var deepKey = new ChunkCoordinates(DeepLayer, chunkX, chunkZ);
+            if (!loadedChunks.TryGetValue(groundKey, out var loadedGround)
+                || !ReferenceEquals(loadedGround, groundChunk)
+                || !loadedChunks.TryGetValue(deepKey, out var deepChunk))
+                return;
+
+            bool changed = false;
+            lock (groundChunk.MeshLock)
+            {
+                byte[] raw = groundChunk.RawBlocks;
+                byte[]? grid;
+                bool currentGrid = groundChunk.TryGetCurrentLightGrid(out grid)
+                    && grid!.Length == raw.Length;
+                for (int x = 0; x < Math.Min(groundChunk.Width, deepChunk.Width); x++)
+                {
+                    for (int z = 0; z < Math.Min(groundChunk.Depth, deepChunk.Depth); z++)
+                    {
+                        int groundIdx = (x * groundChunk.Depth + z) * groundChunk.Height;
+                        byte level = raw[groundIdx] == BlockRegistry.AirId && currentGrid
+                            ? (byte)(grid![groundIdx] >> 4)
+                            : (byte)0;
+                        changed |= deepChunk.SetDeepTopSkyLight(x, z, level);
+                    }
+                }
+            }
+
+            if (changed)
+            {
+                deepChunk.InvalidateLightGrid();
+                deepChunk.NeedsRemesh = true;
+            }
         }
 
         // Stamps a saved chunk's block+meta data over the (re)generated chunk on world load.
         public void ApplySavedChunk(int layer, int chunkX, int chunkZ, byte[] blocks, byte[] meta)
         {
             var chunk = GetOrCreateChunk(layer, chunkX, chunkZ);
+            chunk.InvalidateLightGrid();
             if (blocks != null) Array.Copy(blocks, chunk.RawBlocks, Math.Min(blocks.Length, chunk.RawBlocks.Length));
             if (meta != null) Array.Copy(meta, chunk.RawMeta, Math.Min(meta.Length, chunk.RawMeta.Length));
+            chunk.InvalidateLightGrid();
             chunk.HasRuntimeEdits = true;
             chunk.SurfaceLodFaces = null;
             chunk.NeedsRemesh = true;
             _modifiedChunks.Add(new ChunkCoordinates(layer, chunkX, chunkZ));
+            // Saved block arrays can change either seam row, even though their individual edits
+            // are not replayed through MarkDirty.
+            if (layer == GroundLayer || layer == DeepLayer)
+                SyncDeepAccessIfLoaded(chunkX, chunkZ);
+            MarkVerticalNeighborsDirty(layer, chunkX, chunkZ);
         }
 
         public void ApplySavedChunk(int chunkX, int chunkZ, byte[] blocks, byte[] meta)
@@ -262,9 +400,10 @@ namespace Cubuild
             }
 
             int oldId = chunk[localX, localY, localZ];
+            chunk.InvalidateLightGrid();
             chunk[localX, localY, localZ] = blockId;
             chunk.SetMeta(localX, localY, localZ, (byte)meta);
-            MarkDirty(chunkX, chunkZ, localX, localZ, layer, blockId, oldId);
+            MarkDirty(chunkX, chunkZ, localX, localY, localZ, layer, blockId, oldId);
             return true;
         }
 
@@ -291,9 +430,10 @@ namespace Cubuild
                 return false;
             }
 
+            chunk.InvalidateLightGrid();
             chunk[localX, localY, localZ] = blockId;
             chunk.SetMeta(localX, localY, localZ, (byte)meta);
-            MarkDirty(chunkX, chunkZ, localX, localZ, layer);
+            MarkDirty(chunkX, chunkZ, localX, localY, localZ, layer);
             return true;
         }
 
@@ -337,7 +477,7 @@ namespace Cubuild
             return true;
         }
 
-        private void MarkDirty(int chunkX, int chunkZ, int localX, int localZ, int layer, int blockId = 0, int oldId = 0)
+        private void MarkDirty(int chunkX, int chunkZ, int localX, int localY, int localZ, int layer, int blockId = 0, int oldId = 0)
         {
             if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk))
             {
@@ -348,7 +488,24 @@ namespace Cubuild
 
             chunk.HasRuntimeEdits = true;
             chunk.SurfaceLodFaces = null;
+            // Any block edit can change the sky flood reaching the seam. Never let the paired
+            // deep chunk continue using a LightGrid baked from pre-edit terrain.
+            chunk.InvalidateLightGrid();
             chunk.NeedsRemesh = true;
+
+            // Only seam-row edits affect the vertically adjacent mesh; preserve the existing
+            // horizontal-neighbor invalidation rules below.
+            if (localY == 0 && layer > DeepLayer)
+                MarkVerticalNeighborDirty(layer - 1, chunkX, chunkZ);
+            if (localY == chunk.Height - 1 && layer < SkyLayer)
+                MarkVerticalNeighborDirty(layer + 1, chunkX, chunkZ);
+
+            // Deep seam sky is sampled from a fresh ground LightGrid only through an open bottom
+            // cell. Recompute the source and mirrored geometry after edits; SyncDeepAccess writes
+            // raw arrays directly and never re-enters BlockEdit/MarkDirty.
+            if (layer == GroundLayer
+                || (layer == DeepLayer && localY == chunk.Height - 1))
+                SyncDeepAccessIfLoaded(chunkX, chunkZ);
 
             // Light-emitting blocks (torches, glowstone) spread light across the entire 3×3
             // lighting region, not just border faces. Always wake neighbours so their LightGrids
@@ -588,18 +745,109 @@ namespace Cubuild
 
                     int chunkX = centerChunkX + dx;
                     int chunkZ = centerChunkZ + dz;
-                    var key = new ChunkCoordinates(layer, chunkX, chunkZ);
-                    if (loadedChunks.ContainsKey(key))
-                    {
-                        continue;
-                    }
-
-                    if (pendingGeneration.TryAdd(key, 0))
-                    {
-                        EnqueueChunk(layer, chunkX, chunkZ, cameraPosition);
-                    }
+                    RequestChunkIfNeeded(layer, chunkX, chunkZ, cameraPosition);
                 }
             }
+        }
+
+        /// <summary>Queues a bounded amount of support for an imminent or visible vertical layer
+        /// change. Requests use the normal priority queue; no terrain generation runs on the caller.</summary>
+        public void RequestVerticalBoundarySupport(int currentLayer, int centerChunkX, int centerChunkZ,
+            Point3D cameraPosition, Point3D cameraForward)
+        {
+            if (currentLayer < DeepLayer || currentLayer > SkyLayer) return;
+
+            int nearLayer = AdjacentLayerNearBoundary(currentLayer, cameraPosition.Y);
+            if (nearLayer >= 0)
+            {
+                // A five-chunk ring smooths transitions even when there is no visible opening.
+                RequestChunksAround(centerChunkX, centerChunkZ, VerticalBoundaryPrefetchRadiusChunks,
+                    cameraPosition, nearLayer);
+            }
+
+            Point3D direction = cameraForward.Normalized();
+            int adjacentLayer = direction.Y < 0 && currentLayer > DeepLayer
+                ? currentLayer - 1
+                : direction.Y > 0 && currentLayer < SkyLayer
+                    ? currentLayer + 1
+                    : -1;
+            if (adjacentLayer < 0) return;
+
+            bool towardLowerBoundary = adjacentLayer < currentLayer;
+            double directionY = direction.Y;
+            if (Math.Abs(directionY) < 1e-6) return;
+
+            double boundaryY = towardLowerBoundary
+                ? OriginYForLayer(currentLayer)
+                : OriginYForLayer(currentLayer) + HeightForLayer(currentLayer);
+            double distance = (boundaryY - cameraPosition.Y) / directionY;
+            if (distance < 0) return;
+
+            int maxDistance = adjacentLayer == DeepLayer
+                ? DeepBoundaryRayMaxDistance
+                : nearLayer == adjacentLayer
+                    ? NearBoundaryRayMaxDistance
+                    : OtherBoundaryRayMaxDistance;
+            if (distance > maxDistance) return;
+
+            double hitX = cameraPosition.X + direction.X * distance;
+            double hitZ = cameraPosition.Z + direction.Z * distance;
+            int apertureX = (int)Math.Floor(hitX);
+            int apertureZ = (int)Math.Floor(hitZ);
+            int boundaryCellY = towardLowerBoundary
+                ? OriginYForLayer(currentLayer)
+                : OriginYForLayer(currentLayer) + HeightForLayer(currentLayer) - 1;
+
+            // The ray cannot infer unseen terrain: every cell it crosses in the current layer
+            // must already be loaded and free of opaque solid blocks, and the seam cell itself
+            // must be air. This also avoids treating absent chunks as empty shafts.
+            if (!IsClearLoadedRayToBoundary(currentLayer, cameraPosition, direction, distance,
+                    apertureX, boundaryCellY, apertureZ))
+                return;
+
+            // Request only the aperture's adjacent-layer chunk and its four cardinals.
+            int apertureChunkX = FloorDiv(apertureX, ChunkSize);
+            int apertureChunkZ = FloorDiv(apertureZ, ChunkSize);
+            RequestChunksAround(apertureChunkX, apertureChunkZ, VerticalBoundaryPrefetchRadiusChunks,
+                cameraPosition, adjacentLayer);
+        }
+
+        private bool IsClearLoadedRayToBoundary(int currentLayer, Point3D origin, Point3D direction,
+            double distance, int apertureX, int boundaryCellY, int apertureZ)
+        {
+            int layerOriginY = OriginYForLayer(currentLayer);
+            int layerEndY = layerOriginY + HeightForLayer(currentLayer);
+            int lastX = int.MinValue;
+            int lastY = int.MinValue;
+            int lastZ = int.MinValue;
+
+            // Short fixed steps are smaller than a voxel, so the ray cannot skip an intervening
+            // cell. Use floor for all voxel addressing, including negative world coordinates.
+            for (double t = 0; t < distance; t += VerticalRayStep)
+            {
+                int x = (int)Math.Floor(origin.X + direction.X * t);
+                int y = (int)Math.Floor(origin.Y + direction.Y * t);
+                int z = (int)Math.Floor(origin.Z + direction.Z * t);
+                if (y < layerOriginY || y >= layerEndY) return false;
+                if (x == lastX && y == lastY && z == lastZ) continue;
+
+                if (!TryGetLoadedBlock(x, y, z, out int blockId)) return false;
+                if (BlockRegistry.IsSolid(blockId) && BlockRegistry.IsOpaque(blockId)) return false;
+                lastX = x;
+                lastY = y;
+                lastZ = z;
+            }
+
+            if (!TryGetLoadedBlock(apertureX, boundaryCellY, apertureZ, out int boundaryBlock))
+                return false;
+            return boundaryBlock == BlockRegistry.AirId;
+        }
+
+        private void RequestChunkIfNeeded(int layer, int chunkX, int chunkZ, Point3D cameraPosition)
+        {
+            var key = new ChunkCoordinates(layer, chunkX, chunkZ);
+            if (loadedChunks.ContainsKey(key)) return;
+            if (pendingGeneration.TryAdd(key, 0)) EnqueueChunk(layer, chunkX, chunkZ, cameraPosition);
         }
 
         /// <summary>
@@ -631,43 +879,43 @@ namespace Cubuild
                 long dz = key.Z - (long)centerChunkZ;
                 if (dx * dx + dz * dz > radiusSq)
                 {
-if (loadedChunks.TryRemove(key, out var removedChunk))
-                {
-                    removed.Add(key);
-                    pendingGeneration.TryRemove(key, out _);
-
-                    // Preserve player edits: snapshot modified chunks before discarding them so
-                    // their data survives until the next world save, and can be re-applied when
-                    // the player returns. Unmodified chunks regenerate identically from the seed,
-                    // so they don't need caching.
-                    if (_modifiedChunks.Contains(key))
+                    if (loadedChunks.TryRemove(key, out var removedChunk))
                     {
-                        lock (_unloadCacheLock)
+                        removed.Add(key);
+                        pendingGeneration.TryRemove(key, out _);
+
+                        // Preserve player edits: snapshot modified chunks before discarding them so
+                        // their data survives until the next world save, and can be re-applied when
+                        // the player returns. Unmodified chunks regenerate identically from the seed,
+                        // so they don't need caching.
+                        if (_modifiedChunks.Contains(key))
                         {
-                            _unloadedModifiedChunks[key] = (
-                                ++_unloadCacheStamp,
-                                (byte[])removedChunk.RawBlocks.Clone(),
-                                (byte[])removedChunk.RawMeta.Clone());
-                            // Oldest-first eviction when over the cap.
-                            while (_unloadedModifiedChunks.Count > UnloadCacheMaxChunks)
+                            lock (_unloadCacheLock)
                             {
-                                ChunkCoordinates oldest = default;
-                                long oldestStamp = long.MaxValue;
-                                foreach (var kv in _unloadedModifiedChunks)
+                                _unloadedModifiedChunks[key] = (
+                                    ++_unloadCacheStamp,
+                                    (byte[])removedChunk.RawBlocks.Clone(),
+                                    (byte[])removedChunk.RawMeta.Clone());
+                                // Oldest-first eviction when over the cap.
+                                while (_unloadedModifiedChunks.Count > UnloadCacheMaxChunks)
                                 {
-                                    if (kv.Value.Stamp < oldestStamp)
+                                    ChunkCoordinates oldest = default;
+                                    long oldestStamp = long.MaxValue;
+                                    foreach (var kv in _unloadedModifiedChunks)
                                     {
-                                        oldestStamp = kv.Value.Stamp;
-                                        oldest = kv.Key;
+                                        if (kv.Value.Stamp < oldestStamp)
+                                        {
+                                            oldestStamp = kv.Value.Stamp;
+                                            oldest = kv.Key;
+                                        }
                                     }
+                                    if (oldestStamp == long.MaxValue) break;
+                                    _unloadedModifiedChunks.Remove(oldest);
                                 }
-                                if (oldestStamp == long.MaxValue) break;
-                                _unloadedModifiedChunks.Remove(oldest);
                             }
                         }
-                    }
 
-                    if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X - 1, key.Z), out var left))
+                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X - 1, key.Z), out var left))
                             left.NeedsRemesh = true;
                         if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X + 1, key.Z), out var right))
                             right.NeedsRemesh = true;
@@ -675,6 +923,9 @@ if (loadedChunks.TryRemove(key, out var removedChunk))
                             back.NeedsRemesh = true;
                         if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X, key.Z + 1), out var front))
                             front.NeedsRemesh = true;
+                        if (key.Layer == GroundLayer)
+                            SyncDeepAccessIfLoaded(key.X, key.Z); // no loaded source => clear deep sky access
+                        MarkVerticalNeighborsDirty(key.Layer, key.X, key.Z);
                     }
                 }
             }

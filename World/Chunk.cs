@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace Cubuild
 {
@@ -21,7 +22,12 @@ namespace Cubuild
         // chunk reloads, so there is nothing worth saving (leaf-decay timers work the same way).
         // Zero means "flat" - every rail that has never been solved, and every anchored rail.
         private readonly byte[] railDroop;
+        // Per-column sky light reaching the ground/deep seam (0..15). Runtime-only and
+        // conservatively zero until ChunkManager has a current ground LightGrid to sample.
+        private readonly byte[] deepTopSkyLight;
         private readonly object _meshLock = new();
+        private long _lightingRevision;
+        private long _lightGridRevision = -1;
 
         public int Width { get; }
         public int Height { get; }
@@ -115,6 +121,53 @@ namespace Cubuild
 
         public object MeshLock => _meshLock;
 
+        /// <summary>Invalidates cached lighting after block data changes.</summary>
+        public void InvalidateLightGrid()
+        {
+            Interlocked.Increment(ref _lightingRevision);
+            lock (_meshLock)
+            {
+                LightGrid = null;
+                _lightGridRevision = -1;
+            }
+        }
+
+        /// <summary>Revision to capture before computing the chunk's next LightGrid.</summary>
+        public long LightingRevision => Volatile.Read(ref _lightingRevision);
+
+        /// <summary>Publishes a LightGrid only if no block edit invalidated the lighting pass.</summary>
+        public void CommitLightGrid(byte[] grid, long sourceRevision)
+        {
+            lock (_meshLock)
+            {
+                if (LightingRevision != sourceRevision)
+                {
+                    LightGrid = null;
+                    _lightGridRevision = -1;
+                    return;
+                }
+
+                LightGrid = grid;
+                Volatile.Write(ref _lightGridRevision, sourceRevision);
+            }
+        }
+
+        /// <summary>Reads the cached grid only when it still matches the current block revision.</summary>
+        public bool TryGetCurrentLightGrid(out byte[]? grid)
+        {
+            lock (_meshLock)
+            {
+                if (LightGrid != null && _lightGridRevision == LightingRevision)
+                {
+                    grid = LightGrid;
+                    return true;
+                }
+
+                grid = null;
+                return false;
+            }
+        }
+
         public Chunk(int width, int height, int depth, int originX, int originY, int originZ)
         {
             Width = width;
@@ -126,6 +179,26 @@ namespace Cubuild
             blocks = new byte[width * height * depth];
             meta = new byte[width * height * depth];
             railDroop = new byte[width * height * depth];
+            deepTopSkyLight = new byte[width * depth];
+        }
+
+        /// <summary>Sky-light level at the ground/deep seam for this column. Zero until verified.</summary>
+        public byte GetDeepTopSkyLight(int x, int z)
+        {
+            if (x < 0 || x >= Width || z < 0 || z >= Depth) return 0;
+            return Volatile.Read(ref deepTopSkyLight[x * Depth + z]);
+        }
+
+        /// <summary>Updates runtime seam-light metadata. Returns true when the level changed.</summary>
+        public bool SetDeepTopSkyLight(int x, int z, byte skyLight)
+        {
+            if (x < 0 || x >= Width || z < 0 || z >= Depth) return false;
+            skyLight = (byte)Math.Min(15, (int)skyLight);
+            ref byte level = ref deepTopSkyLight[x * Depth + z];
+            byte previous = Volatile.Read(ref level);
+            if (previous == skyLight) return false;
+            Volatile.Write(ref level, skyLight);
+            return true;
         }
 
         /// <summary>Flat index of a local block coordinate (column-major; y contiguous).</summary>

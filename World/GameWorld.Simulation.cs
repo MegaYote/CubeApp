@@ -244,7 +244,13 @@ namespace Cubuild
             double py = LocalPlayer.Position.Y;
             int playerLayer = ChunkManager.LayerForWorldY((int)py);
             bool crossedLayer = playerLayer != _lastPlayerLayer;
-            if (_forceChunkStream || chunkX != _lastStreamChunkX || chunkZ != _lastStreamChunkZ || crossedLayer)
+            bool streamCurrentLayer = _forceChunkStream || chunkX != _lastStreamChunkX || chunkZ != _lastStreamChunkZ || crossedLayer;
+            int adjacentLayer = ChunkManager.AdjacentLayerNearBoundary(playerLayer, py);
+            bool refreshVerticalSupport = streamCurrentLayer
+                || adjacentLayer != _lastAdjacentBoundaryLayer
+                || _verticalBoundaryRefreshTimer <= 0f;
+
+            if (streamCurrentLayer)
             {
                 _forceChunkStream = false;
                 _lastStreamChunkX = chunkX;
@@ -257,10 +263,25 @@ namespace Cubuild
                 var unloaded = Chunks.UnloadChunksOutside(chunkX, chunkZ, ChunkRenderRadius);
                 foreach (var uc in unloaded) ChunkUnloaded?.Invoke(uc);
             }
+
+            // Keep the normal render-radius disk exclusive to the player's current layer. A
+            // throttled camera-ray probe runs in every layer; near a seam it also queues a tiny
+            // adjacent-layer prefetch ring, even when the ray does not find an opening.
+            if (refreshVerticalSupport)
+            {
+                Chunks.RequestVerticalBoundarySupport(playerLayer, chunkX, chunkZ,
+                    LocalPlayer.Position, GetCameraForward());
+                _verticalBoundaryRefreshTimer = VerticalBoundaryRefreshSeconds;
+            }
+            else _verticalBoundaryRefreshTimer = Math.Max(0f, _verticalBoundaryRefreshTimer - deltaSeconds);
+            _lastAdjacentBoundaryLayer = adjacentLayer;
             UpdateHighFill();
         }
 
         private int _lastPlayerLayer = ChunkManager.GroundLayer;
+        private int _lastAdjacentBoundaryLayer = -1;
+        private const float VerticalBoundaryRefreshSeconds = 0.5f;
+        private float _verticalBoundaryRefreshTimer;
 
         /// <summary>Day/night clock in world ticks. Full cycle = 24000 ticks.</summary>
         public long WorldTime { get; private set; }

@@ -57,9 +57,9 @@ namespace Cubuild
             }
             // Survival: mining a block drops a physical item you have to collect - no teleporting
             // into the inventory. Leaves drop a sapling 1-in-10, otherwise nothing; gravel
-            // drops flint 1-in-10 (like Minecraft) and otherwise drops itself. Stone mined
-            // with a bare FIST (no tool in hand) drops gravel 1-in-10, otherwise nothing;
-            // with any tool it drops itself as normal. Right-click CHOP drops (hatchet: log
+            // drops flint 1-in-10 (like Minecraft) and otherwise drops itself. The old stone-fist
+            // behavior below is superseded by material-classed rock's wrong-tool drop policy.
+            // Right-click CHOP drops (hatchet: log
             // -> 1-4 planks, plank -> 1-4 sticks; flint: log -> 1 workbench) can produce
             // multiple items, unlike every other drop.
             int dropId = removedBlockId;
@@ -95,14 +95,28 @@ namespace Cubuild
                 dropId = RollLeafDrop(flintBonus: true, naturalDecay: false);
             }
             else if (dropId == _idGravel) dropId = _regenRandom.Next(10) == 0 ? _idFlint : _idGravel;
-            // Minecraft mode: vanilla stone drops cobblestone, never itself. The tool gate
-            // below then removes it entirely unless a pickaxe is held.
+            // Minecraft mode: vanilla stone drops cobblestone when its intended drop is allowed;
+            // the material-class policy below applies the configured wrong-tool fallback.
             else if (dropId == _idStone && IsMinecraftMode) dropId = _idCobblestone;
             else if (dropId == _idStone && SelectedBlock <= 0) dropId = _regenRandom.Next(10) == 0 ? _idGravel : 0;
-            // Minecraft tool gate: a block flagged toolRequired only yields its drop while a
-            // tool of the matching type and sufficient harvest tier is held. Bare hands, a
-            // wrong tool, or an under-tier tool still break the block but receive no drop.
-            if (dropId > 0 && !CanHarvest(removedBlockId, SelectedBlock)) dropId = 0;
+            if (BlockRegistry.MaterialOf(removedBlockId) == "rock")
+            {
+                // Rock always needs a pickaxe for its intended drop. Tool tier is deliberately
+                // irrelevant: it affects mining speed only. A wrong family (including hand)
+                // follows this block's explicit fallback instead.
+                if (!string.Equals(ItemRegistry.ToolTypeOf(SelectedBlock), "pickaxe", StringComparison.OrdinalIgnoreCase))
+                {
+                    string wrongToolDrop = BlockRegistry.WrongToolDropOf(removedBlockId);
+                    dropId = wrongToolDrop == "self" ? removedBlockId : 0;
+                    dropCount = 1;
+                }
+            }
+            else if (!BlockRegistry.HasMaterialOf(removedBlockId)
+                && dropId > 0 && !CanHarvest(removedBlockId, SelectedBlock))
+            {
+                // Legacy definitions without a material class retain the old tool/tier gate.
+                dropId = 0;
+            }
             if (!IsCreative && dropId > 0)
             {
                 SpawnItemDrop(dropId, dropCount, new Point3D(x + 0.5, y + 0.5, z + 0.5));
@@ -196,6 +210,10 @@ namespace Cubuild
         /// </summary>
         public static bool CanHarvest(int blockId, int heldItemId)
         {
+            // Material-classed blocks use their explicit family/drop rules, not the legacy
+            // toolRequired/harvestLevel settings. Rock's wrong-family behavior is handled by
+            // the block-break path above; correct pickaxes have no tier restriction.
+            if (BlockRegistry.HasMaterialOf(blockId)) return true;
             int requiredLevel = BlockRegistry.HarvestLevelOf(blockId);
             if (!BlockRegistry.ToolRequiredOf(blockId) && requiredLevel <= 0) return true;
             string required = BlockRegistry.ToolTypeOf(blockId);

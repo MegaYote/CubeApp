@@ -64,6 +64,13 @@ namespace Cubuild
         /// while, bedrocks are unbreakable.</summary>
         public float Hardness { get; set; } = 1f;
 
+        /// <summary>Data-driven material class (rock, soil, wood, plant, misc, fluid, nothing).
+        /// Empty means this definition predates material classes and may use legacy tool settings.</summary>
+        public string Material { get; set; } = "";
+
+        /// <summary>Drop behavior for a rock mined without a pickaxe: "self" or "nothing".</summary>
+        public string WrongToolDrop { get; set; } = "";
+
         /// <summary>
         /// Which tool type mines this block more efficiently (e.g. "pickaxe", "axe", "shovel").
         /// Empty string = no tool preference (mines at base speed with anything). Configurable per

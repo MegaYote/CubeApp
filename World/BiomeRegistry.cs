@@ -47,6 +47,10 @@ namespace Cubuild
         public string FillMixBlock { get; }
         /// <summary>Chance (0..1) that a fill layer becomes FillMixBlock instead of FillBlock.</summary>
         public float FillMixChance { get; }
+        /// <summary>Per-attempt chance for surface flower scatter (0 disables flowers).</summary>
+        public float FlowerDensity { get; }
+        /// <summary>Per-attempt chance for shaded mushroom scatter (0 disables mushrooms).</summary>
+        public float MushroomDensity { get; }
         /// <summary>Optional knobs for the byte-faithful Alpha biome generator (null = the exact
         /// 2010 constants).</summary>
         public AlphaTerrainParams? AlphaParams { get; }
@@ -57,7 +61,8 @@ namespace Cubuild
             string surfaceBlock, string fillBlock, int fillDepth, int treeDensity,
             string treeType = "oak", string treeTypeSecondary = "", float treeSecondaryChance = 0f,
             string fillMixBlock = "", float fillMixChance = 0.5f,
-            bool amplified = false, AlphaTerrainParams? alphaParams = null)
+            bool amplified = false, AlphaTerrainParams? alphaParams = null,
+            float flowerDensity = 0.1f, float mushroomDensity = 0.02f)
         {
             Id = id;
             DisplayName = displayName;
@@ -76,6 +81,8 @@ namespace Cubuild
             TreeSecondaryChance = treeSecondaryChance;
             FillMixBlock = fillMixBlock;
             FillMixChance = fillMixChance;
+            FlowerDensity = flowerDensity;
+            MushroomDensity = mushroomDensity;
             AlphaParams = alphaParams;
         }
     }
@@ -126,6 +133,8 @@ namespace Cubuild
                 string treeType = b.TryGetProperty("treeType", out var tt) ? tt.GetString() ?? "oak" : "oak";
                 string fillMix = b.TryGetProperty("fillMixBlock", out var fm) ? fm.GetString() ?? "" : "";
                 float mixChance = b.TryGetProperty("fillMixChance", out var mc) ? mc.GetSingle() : 0.5f;
+                float flowerDensity = b.TryGetProperty("flowerDensity", out var fl) ? fl.GetSingle() : 0.1f;
+                float mushroomDensity = b.TryGetProperty("mushroomDensity", out var md) ? md.GetSingle() : 0.02f;
                 string treeTypeSec = b.TryGetProperty("treeTypeSecondary", out var tts) ? tts.GetString() ?? "" : "";
                 float treeSecChance = b.TryGetProperty("treeSecondaryChance", out var tsc) ? tsc.GetSingle() : 0f;
                 bool amplified = b.TryGetProperty("amplified", out var amp) && amp.GetBoolean();
@@ -145,7 +154,7 @@ namespace Cubuild
                     if (ap.TryGetProperty("mainNoiseScaleY", out dv)) alphaParams.MainNoiseScaleY = dv.GetDouble();
                     if (ap.TryGetProperty("heightStretch", out dv)) alphaParams.HeightStretch = dv.GetDouble();
                 }
-                _biomes.Add(new BiomeDefinition(id, display, temp, hum, water, baseH, varH, surface, fill, depth, trees, treeType, treeTypeSec, treeSecChance, fillMix, mixChance, amplified, alphaParams));
+                _biomes.Add(new BiomeDefinition(id, display, temp, hum, water, baseH, varH, surface, fill, depth, trees, treeType, treeTypeSec, treeSecChance, fillMix, mixChance, amplified, alphaParams, flowerDensity, mushroomDensity));
             }
             Loaded = true;
         }

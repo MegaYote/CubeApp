@@ -626,6 +626,11 @@ namespace Cubuild.World
                 Pyramids.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
             }
 
+            // Decoration is deliberately last: mushrooms need the final tree canopy and plants
+            // must not be overwritten by later terrain/features. Its RNG is separate from all
+            // existing world-generation streams.
+            GenerateVegetation(chunkX, chunkZ, chunk);
+
             chunk.NeedsRemesh = true;
             return chunk;
         }
@@ -1065,6 +1070,144 @@ break;
                 }
                 if (++treeCount >= maxTrees) break;
             }
+        }
+
+        // Small old-Minecraft-style flower patches and sparse shaded mushroom patches. The
+        // independent salted stream means adding or tuning vegetation cannot shift any other
+        // world-generation randomness. Every candidate is clipped to this chunk so placement
+        // never depends on which neighboring chunks happen to be loaded.
+        private void GenerateVegetation(int chunkX, int chunkZ, Chunk chunk)
+        {
+            const int flowerPatchCount = 2;
+            const int flowerAttemptsPerPatch = 32;
+            const int maxFlowersPerChunk = 4;
+            const int mushroomPatchCount = 1;
+            const int mushroomAttemptsPerPatch = 48;
+            const int maxMushroomsPerChunk = 3;
+            const int vegetationSalt = unchecked((int)0x6D2B79F5);
+
+            byte[] blocks = chunk.RawBlocks;
+            int idGrass = BlockRegistry.GetId("grass");
+            int idRedFlower = BlockRegistry.GetId("red_flower");
+            int idYellowFlower = BlockRegistry.GetId("yellow_flower");
+            int idBlueFlower = BlockRegistry.GetId("blue_flower");
+            int idRedMushroom = BlockRegistry.GetId("red_mushroom");
+            int idWhiteMushroom = BlockRegistry.GetId("white_mushroom");
+            int idPoisonMushroom = BlockRegistry.GetId("poison_mushroom");
+            int idWater = BlockRegistry.GetId("water");
+            int idLava = BlockRegistry.GetId("lava");
+            int width = chunk.Width;
+            int depth = chunk.Depth;
+            int height = chunk.Height;
+            int bandHeight = Math.Min(TerrainBandBlocks, height);
+            var rand = new Random(unchecked((chunkX * 401719 + chunkZ * 811543 ^ seed) ^ vegetationSalt));
+
+            int flowerCount = 0;
+            for (int patch = 0; patch < flowerPatchCount && flowerCount < maxFlowersPerChunk; patch++)
+            {
+                int centerX = rand.Next(width);
+                int centerZ = rand.Next(depth);
+                for (int attempt = 0; attempt < flowerAttemptsPerPatch && flowerCount < maxFlowersPerChunk; attempt++)
+                {
+                    int x = centerX + rand.Next(8) - rand.Next(8);
+                    int z = centerZ + rand.Next(8) - rand.Next(8);
+                    if (x < 0 || x >= width || z < 0 || z >= depth) continue;
+
+                    // Only the exposed top block of a column is eligible. The actual block check
+                    // also excludes beaches, deserts, stone surfaces, water, and other materials.
+                    int surfaceY = -1;
+                    int column = (x * depth + z) * height;
+                    for (int y = bandHeight - 1; y >= 0; y--)
+                    {
+                        if (blocks[column + y] != 0)
+                        {
+                            surfaceY = y;
+                            break;
+                        }
+                    }
+                    if (surfaceY < 0 || surfaceY + 1 >= bandHeight
+                        || blocks[column + surfaceY] != idGrass
+                        || blocks[column + surfaceY + 1] != 0) continue;
+
+                    var biome = _biomeMap.BiomeAt(chunk.OriginX + x, chunk.OriginZ + z);
+                    if (biome.IsWater || !RollVegetationDensity(rand, biome.FlowerDensity)) continue;
+                    int flower = rand.Next(3) switch
+                    {
+                        0 => idRedFlower,
+                        1 => idYellowFlower,
+                        _ => idBlueFlower,
+                    };
+                    blocks[column + surfaceY + 1] = (byte)flower;
+                    flowerCount++;
+                }
+            }
+
+            // Cache shaded solid floors per column. Looking down from the terrain-band top marks
+            // underground, overhang, and canopy-covered floors with a block above them, without
+            // repeatedly rescanning hundreds of vertical cells for every scatter attempt.
+            var shadedFloors = new List<int>?[width * depth];
+            for (int x = 0; x < width; x++)
+            {
+                for (int z = 0; z < depth; z++)
+                {
+                    int column = (x * depth + z) * height;
+                    bool hasCoverAbove = false;
+                    for (int y = bandHeight - 1; y >= 1; y--)
+                    {
+                        int block = blocks[column + y];
+                        bool canSupportMushroom = block != 0 && block != idWater && block != idLava
+                            && BlockRegistry.IsSolid(block) && !BlockRegistry.IsCross(block);
+                        if (hasCoverAbove && canSupportMushroom && y + 1 < height
+                            && blocks[column + y + 1] == 0)
+                        {
+                            int index = x * depth + z;
+                            (shadedFloors[index] ??= new List<int>()).Add(y);
+                        }
+                        if (block != 0 && block != idWater && block != idLava
+                            && BlockRegistry.IsSolid(block) && !BlockRegistry.IsCross(block))
+                            hasCoverAbove = true;
+                    }
+                }
+            }
+
+            int mushroomCount = 0;
+            for (int patch = 0; patch < mushroomPatchCount && mushroomCount < maxMushroomsPerChunk; patch++)
+            {
+                int centerX = rand.Next(width);
+                int centerZ = rand.Next(depth);
+                for (int attempt = 0; attempt < mushroomAttemptsPerPatch && mushroomCount < maxMushroomsPerChunk; attempt++)
+                {
+                    int x = centerX + rand.Next(8) - rand.Next(8);
+                    int z = centerZ + rand.Next(8) - rand.Next(8);
+                    if (x < 0 || x >= width || z < 0 || z >= depth) continue;
+
+                    var biome = _biomeMap.BiomeAt(chunk.OriginX + x, chunk.OriginZ + z);
+                    if (!RollVegetationDensity(rand, biome.MushroomDensity)) continue;
+                    List<int>? floors = shadedFloors[x * depth + z];
+                    if (floors == null || floors.Count == 0) continue;
+
+                    int y = floors[rand.Next(floors.Count)];
+                    int index = (x * depth + z) * height + y;
+                    int support = blocks[index];
+                    if (support == 0 || support == idWater || support == idLava
+                        || !BlockRegistry.IsSolid(support) || BlockRegistry.IsCross(support)
+                        || blocks[index + 1] != 0) continue;
+
+                    // Poison mushrooms are an uncommon random variant of any valid mushroom
+                    // habitat; this choice intentionally has no biome or anomaly gate.
+                    int mushroom = rand.Next(64) == 0
+                        ? idPoisonMushroom
+                        : (rand.Next(2) == 0 ? idRedMushroom : idWhiteMushroom);
+                    blocks[index + 1] = (byte)mushroom;
+                    mushroomCount++;
+                }
+            }
+        }
+
+        private static bool RollVegetationDensity(Random rand, float density)
+        {
+            if (density <= 0f) return false;
+            return density >= 1f || rand.NextDouble() < density;
         }
 
         // One tree rooted with its trunk base at (x, baseY, z) - baseY is the first trunk cell,

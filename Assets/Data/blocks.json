@@ -14,6 +14,7 @@
   "blocks": [
     {
       "id": "air",
+      "material": "nothing",
       "displayName": "Air",
       "solid": false,
       "opaque": false,
@@ -23,6 +24,7 @@
     },
     {
       "id": "grass",
+      "material": "soil",
       "displayName": "Grass",
       "texture": "0,0",
       "mapColor": "#228B22",
@@ -30,6 +32,7 @@
     },
     {
       "id": "grass_spreading",
+      "material": "soil",
       "displayName": "Grass (Spreading)",
       "texture": "2,0",
       "top": "0,0",
@@ -41,6 +44,7 @@
     },
     {
       "id": "dirt",
+      "material": "soil",
       "displayName": "Dirt",
       "texture": "2,0",
       "gravity": true,
@@ -52,6 +56,8 @@
     },
     {
       "id": "stone",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Stone",
       "texture": "1,0",
       "hardness": 3.0,
@@ -62,6 +68,8 @@
     },
     {
       "id": "cobblestone",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Cobblestone",
       "texture": "0,1",
       "hardness": 3.0,
@@ -72,6 +80,7 @@
     },
     {
       "id": "sand",
+      "material": "soil",
       "displayName": "Sand",
       "texture": "2,1",
       "gravity": true,
@@ -83,6 +92,7 @@
     },
     {
       "id": "planks",
+      "material": "wood",
       "displayName": "Planks",
       "texture": "4,0",
       "hardness": 1.5,
@@ -93,6 +103,8 @@
     },
     {
       "id": "bedrock",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Bedrock",
       "texture": "1,1",
       "hardness": 9999,
@@ -100,6 +112,7 @@
     },
     {
       "id": "gravel",
+      "material": "soil",
       "displayName": "Gravel",
       "texture": "3,1",
       "gravity": true,
@@ -109,6 +122,8 @@
     },
     {
       "id": "obsidian",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Obsidian",
       "texture": "5,2",
       "hardness": 6.0,
@@ -119,6 +134,8 @@
     },
     {
       "id": "mossycobblestone",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Mossy Cobblestone",
       "texture": "4,2",
       "hardness": 3.0,
@@ -128,6 +145,7 @@
     },
     {
       "id": "water",
+      "material": "fluid",
       "displayName": "Water",
       "texture": "12,14",
       "solid": false,
@@ -138,6 +156,7 @@
     },
     {
       "id": "lava",
+      "material": "fluid",
       "displayName": "Lava",
       "texture": "12,15",
       "solid": false,
@@ -149,6 +168,7 @@
     },
     {
       "id": "rail",
+      "material": "misc",
       "displayName": "Rail",
       "shape": "rail",
       "texture": "3,9",
@@ -162,6 +182,7 @@
     },
     {
       "id": "oak_door_bottom",
+      "material": "wood",
       "displayName": "Oak Door",
       "texture": "12,4",
       "top": "12,4",
@@ -183,6 +204,7 @@
     },
     {
       "id": "oak_door_top",
+      "material": "wood",
       "displayName": "Oak Door Top",
       "texture": "12,3",
       "top": "12,3",
@@ -204,6 +226,8 @@
     },
     {
       "id": "bricks",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Bricks",
       "texture": "8,4",
       "mapColor": "#964640",
@@ -213,6 +237,7 @@
     },
     {
       "id": "log",
+      "material": "wood",
       "displayName": "Log",
       "texture": "4,1",
       "top": "5,1",
@@ -225,6 +250,7 @@
     },
     {
       "id": "leaves",
+      "material": "plant",
       "displayName": "Leaves",
       "texture": "4,3",
       "shape": "cutout",
@@ -234,6 +260,7 @@
     },
     {
       "id": "glass",
+      "material": "misc",
       "displayName": "Glass",
       "texture": "0,5",
       "shape": "glass",
@@ -243,6 +270,7 @@
     },
     {
       "id": "bomb",
+      "material": "misc",
       "displayName": "Bomb",
       "texture": "8,0",
       "top": "9,0",
@@ -250,6 +278,7 @@
     },
     {
       "id": "full_grass",
+      "material": "soil",
       "displayName": "Full Grass",
       "texture": "0,0",
       "mapColor": "#228B22",
@@ -257,18 +286,22 @@
     },
     {
       "id": "sponge",
+      "material": "misc",
       "displayName": "Sponge",
       "texture": "3,3",
       "mapColor": "#C8B54A"
     },
     {
       "id": "wool",
+      "material": "misc",
       "displayName": "Wool",
       "texture": "3,6",
       "mapColor": "#EDEDED"
     },
     {
       "id": "ceramic",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Ceramic Block",
       "texture": "11,5",
       "mapColor": "#C86A00",
@@ -278,6 +311,8 @@
     },
     {
       "id": "darkstone",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Darkstone",
       "texture": "7,0",
       "mapColor": "#333333",
@@ -287,6 +322,8 @@
     },
     {
       "id": "bluebrick",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Blue Brick",
       "texture": "5,4",
       "mapColor": "#5160D0",
@@ -296,6 +333,8 @@
     },
     {
       "id": "greenbrick",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Green Brick",
       "texture": "6,4",
       "mapColor": "#4AA052",
@@ -305,6 +344,8 @@
     },
     {
       "id": "yellowbrick",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Yellow Brick",
       "texture": "7,4",
       "mapColor": "#E8C446",
@@ -314,6 +355,7 @@
     },
     {
       "id": "sap",
+      "material": "misc",
       "displayName": "Sap",
       "texture": "9,4",
       "opaque": false,
@@ -322,6 +364,7 @@
     },
     {
       "id": "rottingwood",
+      "material": "wood",
       "displayName": "Rotting Wood",
       "texture": "0,4",
       "mapColor": "#4A4030",
@@ -330,6 +373,8 @@
     },
     {
       "id": "coalore",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Coal Ore",
       "texture": "2,2",
       "mapColor": "#6C6C6C",
@@ -340,6 +385,8 @@
     },
     {
       "id": "ironore",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Iron Ore",
       "texture": "1,2",
       "mapColor": "#A08E7E",
@@ -350,6 +397,8 @@
     },
     {
       "id": "goldore",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Gold Ore",
       "texture": "0,2",
       "mapColor": "#8E8670",
@@ -360,6 +409,8 @@
     },
     {
       "id": "diamondore",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Diamond Ore",
       "texture": "1,3",
       "mapColor": "#828F8F",
@@ -370,6 +421,8 @@
     },
     {
       "id": "bluestoneore",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Bluestone Ore",
       "texture": "2,3",
       "mapColor": "#6E7090",
@@ -380,6 +433,8 @@
     },
     {
       "id": "copperore",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Copper Ore",
       "texture": "0,3",
       "mapColor": "#827268",
@@ -390,6 +445,8 @@
     },
     {
       "id": "iron",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Iron Block",
       "texture": "6,2",
       "top": "6,1",
@@ -402,6 +459,8 @@
     },
     {
       "id": "gold",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Gold Block",
       "texture": "7,2",
       "top": "7,1",
@@ -414,6 +473,8 @@
     },
     {
       "id": "diamond",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Diamond Block",
       "texture": "8,2",
       "top": "8,1",
@@ -426,6 +487,7 @@
     },
     {
       "id": "bookshelf",
+      "material": "wood",
       "displayName": "Bookshelf",
       "texture": "3,2",
       "top": "4,0",
@@ -436,6 +498,7 @@
     },
     {
       "id": "sapling",
+      "material": "plant",
       "displayName": "Sapling",
       "texture": "15,0",
       "shape": "cross",
@@ -443,6 +506,7 @@
     },
     {
       "id": "red_flower",
+      "material": "plant",
       "displayName": "Red Flower",
       "texture": "12,0",
       "shape": "cross",
@@ -450,6 +514,7 @@
     },
     {
       "id": "yellow_flower",
+      "material": "plant",
       "displayName": "Yellow Flower",
       "texture": "13,0",
       "shape": "cross",
@@ -457,6 +522,7 @@
     },
     {
       "id": "blue_flower",
+      "material": "plant",
       "displayName": "Blue Flower",
       "texture": "14,0",
       "shape": "cross",
@@ -464,6 +530,7 @@
     },
     {
       "id": "red_mushroom",
+      "material": "plant",
       "displayName": "Red Mushroom",
       "texture": "12,1",
       "shape": "cross",
@@ -471,6 +538,7 @@
     },
     {
       "id": "white_mushroom",
+      "material": "plant",
       "displayName": "White Mushroom",
       "texture": "13,1",
       "shape": "cross",
@@ -478,6 +546,7 @@
     },
     {
       "id": "poison_mushroom",
+      "material": "plant",
       "displayName": "Poison Mushroom",
       "texture": "14,1",
       "shape": "cross",
@@ -485,6 +554,7 @@
     },
     {
       "id": "spikes",
+      "material": "misc",
       "displayName": "Spikes",
       "texture": "15,2",
       "shape": "cross",
@@ -493,6 +563,8 @@
     },
     {
       "id": "stone_slab",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Stone Slab",
       "base": "stone",
       "shape": "slab",
@@ -502,6 +574,8 @@
     },
     {
       "id": "stone_slab_top",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Stone Slab (Top)",
       "base": "stone",
       "shape": "slab_top",
@@ -511,6 +585,8 @@
     },
     {
       "id": "stone_stairs",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Stone Stairs",
       "base": "stone",
       "shape": "stairs",
@@ -520,6 +596,7 @@
     },
     {
       "id": "planks_slab",
+      "material": "wood",
       "displayName": "Planks Slab",
       "base": "planks",
       "shape": "slab",
@@ -528,6 +605,7 @@
     },
     {
       "id": "planks_slab_top",
+      "material": "wood",
       "displayName": "Planks Slab (Top)",
       "base": "planks",
       "shape": "slab_top",
@@ -536,6 +614,7 @@
     },
     {
       "id": "planks_stairs",
+      "material": "wood",
       "displayName": "Planks Stairs",
       "base": "planks",
       "shape": "stairs",
@@ -544,6 +623,8 @@
     },
     {
       "id": "cobblestone_slab",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Cobblestone Slab",
       "base": "cobblestone",
       "shape": "slab",
@@ -553,6 +634,8 @@
     },
     {
       "id": "cobblestone_slab_top",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Cobblestone Slab (Top)",
       "base": "cobblestone",
       "shape": "slab_top",
@@ -562,6 +645,8 @@
     },
     {
       "id": "cobblestone_stairs",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Cobblestone Stairs",
       "base": "cobblestone",
       "shape": "stairs",
@@ -571,6 +656,7 @@
     },
     {
       "id": "sand_slab",
+      "material": "soil",
       "displayName": "Sand Slab",
       "base": "sand",
       "shape": "slab",
@@ -579,6 +665,7 @@
     },
     {
       "id": "sand_slab_top",
+      "material": "soil",
       "displayName": "Sand Slab (Top)",
       "base": "sand",
       "shape": "slab_top",
@@ -587,6 +674,7 @@
     },
     {
       "id": "sand_stairs",
+      "material": "soil",
       "displayName": "Sand Stairs",
       "base": "sand",
       "shape": "stairs",
@@ -595,6 +683,7 @@
     },
     {
       "id": "dirt_slab",
+      "material": "soil",
       "displayName": "Dirt Slab",
       "base": "dirt",
       "shape": "slab",
@@ -603,6 +692,7 @@
     },
     {
       "id": "dirt_slab_top",
+      "material": "soil",
       "displayName": "Dirt Slab (Top)",
       "base": "dirt",
       "shape": "slab_top",
@@ -611,6 +701,7 @@
     },
     {
       "id": "dirt_stairs",
+      "material": "soil",
       "displayName": "Dirt Stairs",
       "base": "dirt",
       "shape": "stairs",
@@ -619,6 +710,8 @@
     },
     {
       "id": "bricks_slab",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Bricks Slab",
       "base": "bricks",
       "shape": "slab",
@@ -628,6 +721,8 @@
     },
     {
       "id": "bricks_slab_top",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Bricks Slab (Top)",
       "base": "bricks",
       "shape": "slab_top",
@@ -637,6 +732,8 @@
     },
     {
       "id": "bricks_stairs",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Bricks Stairs",
       "base": "bricks",
       "shape": "stairs",
@@ -646,6 +743,8 @@
     },
     {
       "id": "smoothstone",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Smooth Stone",
       "texture": "6,0",
       "hardness": 3.5,
@@ -655,6 +754,8 @@
     },
     {
       "id": "shimmerrock",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Shimmerrock",
       "texture": "10,0",
       "hardness": 3.5,
@@ -664,6 +765,8 @@
     },
     {
       "id": "quartz",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Quartz",
       "texture": "11,0",
       "hardness": 3.5,
@@ -675,6 +778,8 @@
     },
     {
       "id": "copper",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Copper Block",
       "texture": "9,2",
       "top": "9,1",
@@ -686,6 +791,7 @@
     },
     {
       "id": "treated_planks",
+      "material": "wood",
       "displayName": "Treated Planks",
       "texture": "12,8",
       "hardness": 1.5,
@@ -694,6 +800,8 @@
     },
     {
       "id": "tiledstone",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Tiled Stone",
       "texture": "5,3",
       "hardness": 3.5,
@@ -703,6 +811,7 @@
     },
     {
       "id": "workbench",
+      "material": "wood",
       "displayName": "Workbench",
       "texture": "11,3",
       "top": "11,2",
@@ -713,6 +822,7 @@
     },
     {
       "id": "rottingwood_2",
+      "material": "wood",
       "displayName": "Rotting Wood 2",
       "texture": "1,4",
       "hardness": 1.5,
@@ -721,6 +831,7 @@
     },
     {
       "id": "rottingwood_3",
+      "material": "wood",
       "displayName": "Rotting Wood 3",
       "texture": "2,4",
       "hardness": 1.5,
@@ -729,6 +840,7 @@
     },
     {
       "id": "rottingwood_4",
+      "material": "wood",
       "displayName": "Rotting Wood 4",
       "texture": "3,4",
       "hardness": 1.5,
@@ -737,6 +849,7 @@
     },
     {
       "id": "rottingwood_5",
+      "material": "wood",
       "displayName": "Rotting Wood 5",
       "texture": "4,4",
       "hardness": 1.5,
@@ -745,6 +858,7 @@
     },
     {
       "id": "rubberblock",
+      "material": "misc",
       "displayName": "Rubber Block",
       "texture": "10,4",
       "hardness": 1.5,
@@ -753,6 +867,7 @@
     },
     {
       "id": "redclay",
+      "material": "soil",
       "displayName": "Red Clay",
       "texture": "11,4",
       "gravity": true,
@@ -762,6 +877,8 @@
     },
     {
       "id": "pinkbrick",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Pink Brick",
       "texture": "5,5",
       "hardness": 4.0,
@@ -771,6 +888,8 @@
     },
     {
       "id": "cyanbrick",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Cyan Brick",
       "texture": "6,5",
       "hardness": 4.0,
@@ -780,6 +899,8 @@
     },
     {
       "id": "blackbrick",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Black Brick",
       "texture": "7,5",
       "hardness": 4.0,
@@ -789,6 +910,8 @@
     },
     {
       "id": "whitebrick",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "White Brick",
       "texture": "8,5",
       "hardness": 4.0,
@@ -798,6 +921,7 @@
     },
     {
       "id": "corn_block",
+      "material": "plant",
       "displayName": "Corn Block",
       "texture": "10,5",
       "top": "9,5",
@@ -807,6 +931,7 @@
     },
     {
       "id": "blackcloth",
+      "material": "misc",
       "displayName": "Black Cloth",
       "texture": "0,6",
       "hardness": 1.0,
@@ -814,6 +939,7 @@
     },
     {
       "id": "darkgraycloth",
+      "material": "misc",
       "displayName": "Dark Gray Cloth",
       "texture": "1,6",
       "hardness": 1.0,
@@ -821,6 +947,7 @@
     },
     {
       "id": "graycloth",
+      "material": "misc",
       "displayName": "Gray Cloth",
       "texture": "2,6",
       "hardness": 1.0,
@@ -828,6 +955,7 @@
     },
     {
       "id": "whitecloth",
+      "material": "misc",
       "displayName": "White Cloth",
       "texture": "3,6",
       "hardness": 1.0,
@@ -835,6 +963,7 @@
     },
     {
       "id": "redcloth",
+      "material": "misc",
       "displayName": "Red Cloth",
       "texture": "0,7",
       "hardness": 1.0,
@@ -842,6 +971,7 @@
     },
     {
       "id": "orangecloth",
+      "material": "misc",
       "displayName": "Orange Cloth",
       "texture": "1,7",
       "hardness": 1.0,
@@ -849,6 +979,7 @@
     },
     {
       "id": "yellowcloth",
+      "material": "misc",
       "displayName": "Yellow Cloth",
       "texture": "2,7",
       "hardness": 1.0,
@@ -856,6 +987,7 @@
     },
     {
       "id": "limecloth",
+      "material": "misc",
       "displayName": "Lime Cloth",
       "texture": "3,7",
       "hardness": 1.0,
@@ -863,6 +995,7 @@
     },
     {
       "id": "greencloth",
+      "material": "misc",
       "displayName": "Green Cloth",
       "texture": "4,7",
       "hardness": 1.0,
@@ -870,6 +1003,7 @@
     },
     {
       "id": "darkgreencloth",
+      "material": "misc",
       "displayName": "Dark Green Cloth",
       "texture": "5,7",
       "hardness": 1.0,
@@ -877,6 +1011,7 @@
     },
     {
       "id": "neongreencloth",
+      "material": "misc",
       "displayName": "Neon Green Cloth",
       "texture": "6,7",
       "hardness": 1.0,
@@ -884,6 +1019,7 @@
     },
     {
       "id": "lightbluecloth",
+      "material": "misc",
       "displayName": "Light Blue Cloth",
       "texture": "7,7",
       "hardness": 1.0,
@@ -891,6 +1027,7 @@
     },
     {
       "id": "cyancloth",
+      "material": "misc",
       "displayName": "Cyan Cloth",
       "texture": "8,7",
       "hardness": 1.0,
@@ -898,6 +1035,7 @@
     },
     {
       "id": "bluecloth",
+      "material": "misc",
       "displayName": "Blue Cloth",
       "texture": "9,7",
       "hardness": 1.0,
@@ -905,6 +1043,7 @@
     },
     {
       "id": "cobaltcloth",
+      "material": "misc",
       "displayName": "Cobalt Cloth",
       "texture": "10,7",
       "hardness": 1.0,
@@ -912,6 +1051,7 @@
     },
     {
       "id": "darkbluecloth",
+      "material": "misc",
       "displayName": "Dark Blue Cloth",
       "texture": "11,7",
       "hardness": 1.0,
@@ -919,6 +1059,7 @@
     },
     {
       "id": "indigo_cloth",
+      "material": "misc",
       "displayName": "Indigo Cloth",
       "texture": "12,7",
       "hardness": 1.0,
@@ -926,6 +1067,7 @@
     },
     {
       "id": "purple_cloth",
+      "material": "misc",
       "displayName": "Purple Cloth",
       "texture": "13,7",
       "hardness": 1.0,
@@ -933,6 +1075,7 @@
     },
     {
       "id": "magenta_cloth",
+      "material": "misc",
       "displayName": "Magenta Cloth",
       "texture": "14,7",
       "hardness": 1.0,
@@ -940,6 +1083,7 @@
     },
     {
       "id": "blue_glass",
+      "material": "misc",
       "displayName": "Blue Glass",
       "texture": "1,5",
       "shape": "glass",
@@ -949,6 +1093,7 @@
     },
     {
       "id": "red_glass",
+      "material": "misc",
       "displayName": "Red Glass",
       "texture": "2,5",
       "shape": "glass",
@@ -958,6 +1103,7 @@
     },
     {
       "id": "green_glass",
+      "material": "misc",
       "displayName": "Green Glass",
       "texture": "3,5",
       "shape": "glass",
@@ -967,6 +1113,7 @@
     },
     {
       "id": "yellow_glass",
+      "material": "misc",
       "displayName": "Yellow Glass",
       "texture": "4,5",
       "shape": "glass",
@@ -976,6 +1123,7 @@
     },
     {
       "id": "mosaic_glass",
+      "material": "misc",
       "displayName": "Mosaic Glass",
       "texture": "4,6",
       "shape": "glass",
@@ -984,6 +1132,8 @@
     },
     {
       "id": "purple_bricks",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Purple Bricks",
       "texture": "5,6",
       "hardness": 4.0,
@@ -993,6 +1143,8 @@
     },
     {
       "id": "orange_bricks",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Orange Bricks",
       "texture": "6,6",
       "hardness": 4.0,
@@ -1002,6 +1154,8 @@
     },
     {
       "id": "cobble_bricks",
+      "material": "rock",
+      "wrongToolDrop": "self",
       "displayName": "Cobblestone Bricks",
       "texture": "7,6",
       "hardness": 4.0,
@@ -1011,6 +1165,8 @@
     },
     {
       "id": "gray_bricks",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Gray Bricks",
       "texture": "8,6",
       "hardness": 4.0,
@@ -1020,6 +1176,8 @@
     },
     {
       "id": "cobbled_quartz",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Cobbled Quartz",
       "texture": "15,7",
       "hardness": 3.5,
@@ -1029,6 +1187,7 @@
     },
     {
       "id": "white_plastic",
+      "material": "misc",
       "displayName": "White Plastic",
       "texture": "1,8",
       "top": "0,8",
@@ -1038,6 +1197,7 @@
     },
     {
       "id": "yellow_plastic",
+      "material": "misc",
       "displayName": "Yellow Plastic",
       "texture": "1,9",
       "top": "0,9",
@@ -1047,6 +1207,7 @@
     },
     {
       "id": "blue_plastic",
+      "material": "misc",
       "displayName": "Blue Plastic",
       "texture": "1,10",
       "top": "0,10",
@@ -1056,6 +1217,7 @@
     },
     {
       "id": "green_plastic",
+      "material": "misc",
       "displayName": "Green Plastic",
       "texture": "1,11",
       "top": "0,11",
@@ -1065,6 +1227,7 @@
     },
     {
       "id": "red_plastic",
+      "material": "misc",
       "displayName": "Red Plastic",
       "texture": "1,12",
       "top": "0,12",
@@ -1074,6 +1237,7 @@
     },
     {
       "id": "black_plastic",
+      "material": "misc",
       "displayName": "Black Plastic",
       "texture": "1,13",
       "top": "0,13",
@@ -1083,6 +1247,7 @@
     },
     {
       "id": "green_mushroom",
+      "material": "plant",
       "displayName": "Green Mushroom",
       "texture": "15,1",
       "shape": "cross",
@@ -1091,6 +1256,7 @@
     },
     {
       "id": "torch",
+      "material": "wood",
       "displayName": "Torch",
       "texture": "12,2",
       "shape": "cross",
@@ -1100,6 +1266,7 @@
     },
     {
       "id": "sap_torch",
+      "material": "wood",
       "displayName": "Sap Torch",
       "texture": "13,2",
       "shape": "cross",
@@ -1109,6 +1276,7 @@
     },
     {
       "id": "burnt_torch",
+      "material": "wood",
       "displayName": "Burnt Torch",
       "texture": "11,8",
       "shape": "cross",
@@ -1118,6 +1286,7 @@
     },
     {
       "id": "carpenters_workbench",
+      "material": "wood",
       "displayName": "Carpenter's Workbench",
       "texture": "14,8",
       "top": "13,8",
@@ -1128,6 +1297,8 @@
     },
     {
       "id": "masons_workbench",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Mason's Workbench",
       "texture": "10,8",
       "top": "9,8",
@@ -1138,6 +1309,8 @@
     },
     {
       "id": "serpentine",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Serpentine",
       "texture": "15,8",
       "hardness": 3.0,
@@ -1147,6 +1320,8 @@
     },
     {
       "id": "kiln",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "texture": "5,8",
       "mapColor": "#FF00FF",
       "hardness": 4.0,
@@ -1159,6 +1334,8 @@
     },
     {
       "id": "forge",
+      "material": "rock",
+      "wrongToolDrop": "nothing",
       "displayName": "Forge",
       "texture": "8,9",
       "mapColor": "#FF00FF",

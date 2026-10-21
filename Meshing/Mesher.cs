@@ -123,6 +123,7 @@ namespace Cubuild
 
             // The first chunk is the target to mesh; additional chunks are neighbors used only for border occlusion checks.
             var chunk = chunkList[0];
+            long lightGridRevision = chunk.LightingRevision;
             int width = chunk.Width;
             int height = chunk.Height;
             int depth = chunk.Depth;
@@ -359,7 +360,7 @@ namespace Cubuild
                         }
                     }
                 }
-                chunk.LightGrid = grid;
+                chunk.CommitLightGrid(grid, lightGridRevision);
             }
 
             // Only use the surface representation for untouched, ground-layer chunks containing

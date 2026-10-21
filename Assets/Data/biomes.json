@@ -20,6 +20,8 @@
   //   fillBlock       block id for the layers below the surface
   //   fillDepth       how many layers of fillBlock under the surface block
   //   treeDensity     0..n trees per chunk attempt rate (0 = no trees)
+  //   flowerDensity   0..1 chance per flower-patch attempt (0 = no flowers)
+  //   mushroomDensity 0..1 chance per shaded mushroom-patch attempt (0 = none)
   //   treeType        "oak" | "pine" | "round" | "tall" | "dead" | "willow"
   //                   (which tree style to spawn)
   //   fillMixBlock    optional second fill block scattered through the fill
@@ -57,6 +59,8 @@
       "fillBlock": "dirt",
       "fillDepth": 3,
       "treeDensity": 1,
+      "flowerDensity": 0.04,
+      "mushroomDensity": 0.025,
       "treeType": "oak"
     },
     // ---- CHAOS: extremely rare pocket of absolutely chaotic terrain. Wild overhangs,
@@ -73,7 +77,9 @@
       "surfaceBlock": "stone",
       "fillBlock": "stone",
       "fillDepth": 0,
-      "treeDensity": 0
+      "treeDensity": 0,
+      "flowerDensity": 0.0,
+      "mushroomDensity": 0.02
     },
     // ---- ANOMALY: extremely rare pocket. Macro climate bias shifts effective ranges by
     // ±0.55 so the raw bands must be tiny. Listed first so it claims its sliver.
@@ -90,6 +96,8 @@
       "fillBlock": "dirt",
       "fillDepth": 3,
       "treeDensity": 8,
+      "flowerDensity": 0.04,
+      "mushroomDensity": 0.03,
       "treeType": "tall"
     },
     // ---- CLASSIC: rare blocky-plateau pocket inside alpha's humidity band. Listed early
@@ -106,6 +114,8 @@
       "fillBlock": "dirt",
       "fillDepth": 3,
       "treeDensity": 1,
+      "flowerDensity": 0.04,
+      "mushroomDensity": 0.025,
       "treeType": "round"
     },
     // ---- PARADISE: warm + moderate humidity. Red-clay surface, pine trees, foothills.
@@ -122,6 +132,8 @@
       "fillBlock": "redclay",
       "fillDepth": 5,
       "treeDensity": 2,
+      "flowerDensity": 0.0,
+      "mushroomDensity": 0.025,
       "treeType": "pine",
       "fillMixBlock": "dirt",
       "fillMixChance": 0.5
@@ -139,6 +151,8 @@
       "fillBlock": "dirt",
       "fillDepth": 3,
       "treeDensity": 2,
+      "flowerDensity": 0.04,
+      "mushroomDensity": 0.03,
       "treeType": "round",
       "alpha": {
         "lowNoiseOctaves": 16,
@@ -169,6 +183,8 @@
       "fillBlock": "dirt",
       "fillDepth": 3,
       "treeDensity": 2,
+      "flowerDensity": 0.04,
+      "mushroomDensity": 0.03,
       "treeType": "round",
       "alpha": {
         "lowNoiseOctaves": 16,
@@ -198,7 +214,9 @@
       "surfaceBlock": "grass",
       "fillBlock": "dirt",
       "fillDepth": 3,
-      "treeDensity": 1
+      "treeDensity": 1,
+      "flowerDensity": 0.03,
+      "mushroomDensity": 0.025
     },
     // ---- LOWLANDS: plains' bigger sibling - same flat grass country, ~2 blocks
     // lower, oak trees instead of willows. It occupies the humid warmer-land band; plains
@@ -216,6 +234,8 @@
       "fillBlock": "dirt",
       "fillDepth": 3,
       "treeDensity": 1,
+      "flowerDensity": 0.04,
+      "mushroomDensity": 0.025,
       "treeType": "oak"
     },
     // ---- PLAINS: flat willow lowlands at the far humid end. Narrower band since lowlands
@@ -232,6 +252,8 @@
       "fillBlock": "dirt",
       "fillDepth": 3,
       "treeDensity": 1,
+      "flowerDensity": 0.04,
+      "mushroomDensity": 0.02,
       "treeType": "willow"
     },
     // ---- DESERT: dry end of the spectrum. Sand dunes, no trees. Common in dry macro
@@ -247,7 +269,9 @@
       "surfaceBlock": "sand",
       "fillBlock": "sand",
       "fillDepth": 6,
-      "treeDensity": 0
+      "treeDensity": 0,
+      "flowerDensity": 0.0,
+      "mushroomDensity": 0.02
     },
     // ---- COLD BIOMES: ocean and mountains fill the cold end of the temperature spectrum.
     // Ocean coverage comes from the independent continentalness layer, not this climate rectangle.
@@ -262,7 +286,9 @@
       "surfaceBlock": "sand",
       "fillBlock": "dirt",
       "fillDepth": 3,
-      "treeDensity": 0
+      "treeDensity": 0,
+      "flowerDensity": 0.0,
+      "mushroomDensity": 0.02
     },
     {
       "id": "mountains",
@@ -276,7 +302,9 @@
       "surfaceBlock": "stone",
       "fillBlock": "stone",
       "fillDepth": 0,
-      "treeDensity": 0
+      "treeDensity": 0,
+      "flowerDensity": 0.0,
+      "mushroomDensity": 0.02
     }
   ]
 }
