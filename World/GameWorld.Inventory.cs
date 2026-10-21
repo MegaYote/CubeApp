@@ -32,9 +32,15 @@ namespace Cubuild
         private static readonly int _idStone = BlockRegistry.GetId("stone");
         private static readonly int _idCobblestone = BlockRegistry.GetId("cobblestone");
         private static readonly int _idPlanks = BlockRegistry.GetId("planks");
-        private static readonly int _idWorkbench = BlockRegistry.GetId("workbench");
-        private static readonly int _idCarpentersWorkbench = BlockRegistry.GetId("carpenters_workbench");
-        private static readonly int _idMasonsWorkbench = BlockRegistry.GetId("masons_workbench");
+        private int _idWorkbench;
+        private int _idCarpentersWorkbench;
+        private int _idMasonsWorkbench;
+        private void RefreshWorkbenchIds()
+        {
+            _idWorkbench = BlockRegistry.GetId("workbench");
+            _idCarpentersWorkbench = BlockRegistry.GetId("carpenters_workbench");
+            _idMasonsWorkbench = BlockRegistry.GetId("masons_workbench");
+        }
         private static readonly int _idObsidian = BlockRegistry.GetId("obsidian");
         // Flint is a GENUINE item (items.json), not a block - resolve through the item registry.
         private static readonly int _idFlint = ItemRegistry.GetId("flint");
@@ -621,6 +627,7 @@ namespace Cubuild
             ChunkRenderRadius = chunkRenderRadius;
             _getRenderer = getRenderer ?? throw new ArgumentNullException(nameof(getRenderer));
 
+            RefreshWorkbenchIds();
             ChunkProvider = new World.TerrainChunkProvider(seed);
             SkyChunkProvider = new World.SkyChunkProvider(seed);
             Chunks = new ChunkManager(new World.DeepChunkProvider(seed), ChunkProvider, SkyChunkProvider);
