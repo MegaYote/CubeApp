@@ -220,26 +220,25 @@ _wasCreativeBreakHeld = breakHeldNow;
                     }
 
                     float breakTime = BaseBreakTime * _miningBlockHardness;
-                    // Left-click speed bonuses (chops stay normal speed):
-                    // hatchet: ~32% faster on logs + planks; flint: 5% faster on logs.
-                    // pickaxe: 25% faster on stone-types; shovel: 15% on soily/gravelly blocks.
+                    // Tool speed bonus: a matching tool type mines its material class faster,
+                    // scaled by tool level (wood 1.2x, stone/flint 1.5x, iron 2.0x, diamond 3.0x).
+                    // hatchet/flint keep their legacy chop bonuses on top.
                     if (chopKind == GameWorld.WoodChopKind.None)
                     {
-                        if (hatchetHeld && (_miningBlockId == _logBlockId || _miningBlockId == _plankBlockId))
+                        string heldType = ItemRegistry.ToolTypeOf(World.SelectedBlock);
+                        int heldLevel = ItemRegistry.ToolLevelOf(World.SelectedBlock);
+                        bool isWood = _miningBlockId == _logBlockId || _miningBlockId == _plankBlockId;
+                        bool typeMatches = (heldType == "axe" && isWood)
+                            || (heldType == "pickaxe" && IsStoneType(_miningBlockId))
+                            || (heldType == "shovel" && IsSoilyBlock(_miningBlockId));
+                        if (typeMatches && heldLevel >= 1)
                         {
-                            breakTime /= _hatchetSpeedMul;
+                            float mul = heldLevel switch { 1 => 1.2f, 2 => 1.5f, 3 => 2.0f, 4 => 3.0f, _ => 1.2f };
+                            breakTime /= mul;
                         }
                         else if (flintHeld && _miningBlockId == _logBlockId)
                         {
                             breakTime /= FlintLogSpeedMul;
-                        }
-                        else if (pickaxeHeld && IsStoneType(_miningBlockId))
-                        {
-                            breakTime /= PickaxeStoneSpeedMul;
-                        }
-                        else if (shovelHeld && IsSoilyBlock(_miningBlockId))
-                        {
-                            breakTime /= ShovelDirtSpeedMul;
                         }
                     }
                     float oldProgress = _miningProgress;
