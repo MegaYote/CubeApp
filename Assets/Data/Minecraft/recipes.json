@@ -33,6 +33,26 @@
     // Spear (this pack's sword stand-in): 2 flint over a stick
     { "input": ["", "flint", "", "", "flint", "", "", "stick", ""], "output": "flint_spear", "count": 1 },
 
+    // ---- wood tier ----
+    { "input": ["planks", "planks", "planks", "", "stick", "", "", "stick", ""], "output": "wood_pickaxe", "count": 1 },
+    { "input": ["planks", "planks", "", "planks", "stick", "", "", "stick", ""], "output": "wood_axe", "count": 1 },
+    { "input": ["", "planks", "", "", "stick", "", "", "stick", ""], "output": "wood_shovel", "count": 1 },
+
+    // ---- stone tier ----
+    { "input": ["cobblestone", "cobblestone", "cobblestone", "", "stick", "", "", "stick", ""], "output": "stone_pickaxe", "count": 1 },
+    { "input": ["cobblestone", "cobblestone", "", "cobblestone", "stick", "", "", "stick", ""], "output": "stone_axe", "count": 1 },
+    { "input": ["", "cobblestone", "", "", "stick", "", "", "stick", ""], "output": "stone_shovel", "count": 1 },
+
+    // ---- iron tier ----
+    { "input": ["iron", "iron", "iron", "", "stick", "", "", "stick", ""], "output": "iron_pickaxe", "count": 1 },
+    { "input": ["iron", "iron", "", "iron", "stick", "", "", "stick", ""], "output": "iron_axe", "count": 1 },
+    { "input": ["", "iron", "", "", "stick", "", "", "stick", ""], "output": "iron_shovel", "count": 1 },
+
+    // ---- diamond tier ----
+    { "input": ["diamond", "diamond", "diamond", "", "stick", "", "", "stick", ""], "output": "diamond_pickaxe", "count": 1 },
+    { "input": ["diamond", "diamond", "", "diamond", "stick", "", "", "stick", ""], "output": "diamond_axe", "count": 1 },
+    { "input": ["", "diamond", "", "", "stick", "", "", "stick", ""], "output": "diamond_shovel", "count": 1 },
+
     // ---- light (2x2) ------------------------------------------------------
     // coal/charcoal over a stick -> 4 torches, like Minecraft
     { "input": ["coal", "", "stick", ""], "output": "torch", "count": 4 },

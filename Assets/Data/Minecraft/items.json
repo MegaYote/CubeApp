@@ -33,6 +33,26 @@
     { "id": "flint_hatchet",    "displayName": "Flint Hatchet",   "category": "tool",     "itemTile": "1,0",  "stackSize": 1,  "toolType": "axe",     "toolLevel": 1, "durability": 60, "mapColor": "#8A8A8A" },
     { "id": "flint_pickaxe",    "displayName": "Flint Pick",   "category": "tool",     "itemTile": "2,0",  "stackSize": 1,  "toolType": "pickaxe",  "toolLevel": 1, "durability": 60, "mapColor": "#8A8A8A" },
     { "id": "flint_shovel",     "displayName": "Flint Shovel",     "category": "tool",     "itemTile": "3,0",  "stackSize": 1,  "toolType": "shovel",   "toolLevel": 1, "durability": 60, "mapColor": "#8A8A8A" },
+
+    // ---- wood tier (toolLevel 1) ----
+    { "id": "wood_pickaxe",  "displayName": "Wood Pickaxe",  "category": "tool", "itemTile": "1,0", "stackSize": 1, "toolType": "pickaxe", "toolLevel": 1, "durability": 60, "mapColor": "#8A5A2B" },
+    { "id": "wood_axe",      "displayName": "Wood Axe",      "category": "tool", "itemTile": "1,0", "stackSize": 1, "toolType": "axe",     "toolLevel": 1, "durability": 60, "mapColor": "#8A5A2B" },
+    { "id": "wood_shovel",   "displayName": "Wood Shovel",   "category": "tool", "itemTile": "1,0", "stackSize": 1, "toolType": "shovel",  "toolLevel": 1, "durability": 60, "mapColor": "#8A5A2B" },
+
+    // ---- stone tier (toolLevel 2) ----
+    { "id": "stone_pickaxe", "displayName": "Stone Pickaxe", "category": "tool", "itemTile": "2,0", "stackSize": 1, "toolType": "pickaxe", "toolLevel": 2, "durability": 130, "mapColor": "#8A8A8A" },
+    { "id": "stone_axe",     "displayName": "Stone Axe",     "category": "tool", "itemTile": "2,0", "stackSize": 1, "toolType": "axe",     "toolLevel": 2, "durability": 130, "mapColor": "#8A8A8A" },
+    { "id": "stone_shovel",  "displayName": "Stone Shovel",  "category": "tool", "itemTile": "2,0", "stackSize": 1, "toolType": "shovel",  "toolLevel": 2, "durability": 130, "mapColor": "#8A8A8A" },
+
+    // ---- iron tier (toolLevel 3) ----
+    { "id": "iron_pickaxe",  "displayName": "Iron Pickaxe",  "category": "tool", "itemTile": "2,0", "stackSize": 1, "toolType": "pickaxe", "toolLevel": 3, "durability": 250, "mapColor": "#C9C9C9" },
+    { "id": "iron_axe",      "displayName": "Iron Axe",      "category": "tool", "itemTile": "2,0", "stackSize": 1, "toolType": "axe",     "toolLevel": 3, "durability": 250, "mapColor": "#C9C9C9" },
+    { "id": "iron_shovel",   "displayName": "Iron Shovel",   "category": "tool", "itemTile": "2,0", "stackSize": 1, "toolType": "shovel",  "toolLevel": 3, "durability": 250, "mapColor": "#C9C9C9" },
+
+    // ---- diamond tier (toolLevel 4) ----
+    { "id": "diamond_pickaxe","displayName": "Diamond Pickaxe","category": "tool", "itemTile": "2,0", "stackSize": 1, "toolType": "pickaxe", "toolLevel": 4, "durability": 1560, "mapColor": "#4AE8E0" },
+    { "id": "diamond_axe",   "displayName": "Diamond Axe",   "category": "tool", "itemTile": "2,0", "stackSize": 1, "toolType": "axe",     "toolLevel": 4, "durability": 1560, "mapColor": "#4AE8E0" },
+    { "id": "diamond_shovel","displayName": "Diamond Shovel","category": "tool", "itemTile": "2,0", "stackSize": 1, "toolType": "shovel",  "toolLevel": 4, "durability": 1560, "mapColor": "#4AE8E0" },
     { "id": "flint_spear",      "displayName": "Flint Spear",      "category": "tool",     "itemTile": "4,0",  "stackSize": 1,  "durability": 80, "mapColor": "#8A8A8A" },
     { "id": "persimmon",        "displayName": "Persimmon",        "category": "food",     "itemTile": "0,2",  "stackSize": 64, "foodValue": 4, "mapColor": "#D2691E" },
 
