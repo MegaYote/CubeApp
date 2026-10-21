@@ -35,15 +35,12 @@ namespace Cubuild.World
         private readonly int seed;
         private readonly BiomeMap _biomeMap;
         private readonly NoiseOctaves _amplifiedCarve;
+        // Biome id -> terrain behavior. Plain biomes resolve to DefaultBiomeBehavior.
+        private readonly System.Collections.Generic.Dictionary<string, IBiomeTerrainBehavior> _behaviors = new(System.StringComparer.OrdinalIgnoreCase);
 
         // Byte-faithful 2010 old-terrain-generator port (the Alpha biome). Lazy: the biome
         // registry must be loaded first so custom knobs from biomes.json can be applied.
-        private AlphaBiomeGenerator? _alphaGen;
-        private AlphaBiomeGenerator AlphaGen => _alphaGen ??= new AlphaBiomeGenerator(seed,
-            BiomeRegistry.Get("alpha").AlphaParams ?? new AlphaTerrainParams(), 128);
-        private AlphaBiomeGenerator? _biglandsGen;
-        private AlphaBiomeGenerator BiglandsGen => _biglandsGen ??= new AlphaBiomeGenerator(seed,
-            BiomeRegistry.Get("biglands").AlphaParams ?? new AlphaTerrainParams(), 256);
+        // Alpha-style generators are now owned by AlphaStyleBehavior instances in _behaviors.
 
         /// <summary>Controllable monolith feature (see MonolithSculptor). A tunable tower/column
         /// feature: frequency/size/height/carve, seed-driven.</summary>
@@ -149,6 +146,53 @@ namespace Cubuild.World
             RegularPyramids = new RegularPyramidGenerator(seed);
             ClayDiscs = new ClayDiscGenerator(seed);
             RedClayBlobs = new RedClayBlobGenerator(seed);
+
+            // Register biome terrain behaviors. Plain biomes not listed here resolve to the default.
+            _behaviors["anomaly"] = new AnomalyBehavior(this);
+            _behaviors["chaos"] = new ChaosBehavior(this);
+            _behaviors["classic"] = new ClassicBehavior(this);
+            _behaviors["pocket"] = new PocketBehavior(this);
+            // Alpha-style biomes: each wraps its own generator instance with its own band size.
+            _behaviors["alpha"] = new AlphaStyleBehavior(seed,
+                BiomeRegistry.Get("alpha").AlphaParams, 128, "alpha");
+            _behaviors["biglands"] = new AlphaStyleBehavior(seed,
+                BiomeRegistry.Get("biglands").AlphaParams, 256, "biglands");
+        }
+
+        // ---- Biome behavior helpers (called by IBiomeTerrainBehavior implementations) ----
+        public void ApplyClassicSurface(ref double centerHeight, double xq, double zq)
+        {
+            double easedLine = centerHeight;
+            double h = _classicHeight.Noise2DNormalized(xq * ClassicHeightFrequency, zq * ClassicHeightFrequency);
+            double hf = 7.5 + (h * 0.5 + 0.5) * 4.0;
+            double classicH = Math.Floor(hf / ClassicStep) * ClassicStep;
+            centerHeight = classicH;
+            double wx = xq * 4.0, wz = zq * 4.0;
+            if (_biomeMap.IsNearWater((int)wx, (int)wz, 6, 2))
+            {
+                double beachBlend = _biomeMap.IsNearWater((int)wx, (int)wz, 2, 1) ? 1.0 : 0.4;
+                centerHeight = classicH + (easedLine - classicH) * beachBlend;
+            }
+        }
+
+        public void ApplyPocketSurface(ref double centerHeight, double xq, double zq)
+        {
+            double h = _pocketHeight.Noise2DNormalized(xq * PocketHeightFrequency, zq * PocketHeightFrequency);
+            centerHeight = 8.0 + h * 0.75;
+        }
+
+        public double AnomalyDensity(double xq, double yq, double zq, double baseFreq)
+        {
+            double w4 = yq * baseFreq * 1.3 + (xq + zq) * baseFreq * 0.2
+                + Math.Sin(xq * 0.5 + zq * 0.5 + yq * 0.4) * 3.0;
+            return _anomalyNoise.Noise4D(xq * baseFreq, yq * baseFreq, zq * baseFreq, w4) / 480.0;
+        }
+
+        public double ChaosDensity(double xq, double yq, double zq, double baseFreq)
+        {
+            double w4 = yq * baseFreq * 2.0 + (xq + zq) * baseFreq * 0.6
+                + Math.Sin(xq * 1.2 + zq * 0.9 + yq * 0.7) * 6.0;
+            return _chaosNoise.Noise4D(xq * baseFreq * 1.4, yq * baseFreq * 1.4, zq * baseFreq * 1.4, w4) / 240.0;
         }
 
         public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeight)
@@ -185,27 +229,39 @@ namespace Cubuild.World
             // their center; a chunk is "fullyAlpha" when all 16 cells are alpha (then every
             // engine-only feature is skipped for purity - no monoliths/pyramids in Alpha).
             var alphaCell = new bool[4, 4];
-            var alphaOnlyCell = new bool[4, 4];
-            var biglandsCell = new bool[4, 4];
+            // Per-biome cell masks for alpha-style biomes (so the override pipeline can
+            // dispatch to each biome's own generator instead of hardcoding ids).
+            var alphaStyleCells = new System.Collections.Generic.Dictionary<string, bool[,]>(System.StringComparer.OrdinalIgnoreCase);
             bool hasAlpha = false, fullyAlpha = true;
             for (int fx = 0; fx < 4; fx++)
             {
                 for (int fz = 0; fz < 4; fz++)
                 {
                     var biomeId = _biomeMap.BiomeAt(chunkX * 16 + fx * 4 + 2, chunkZ * 16 + fz * 4 + 2).Id;
-                    bool isAlpha = biomeId == "alpha";
-                    bool isBiglands = biomeId == "biglands";
-                    alphaOnlyCell[fx, fz] = isAlpha;
-                    biglandsCell[fx, fz] = isBiglands;
-                    alphaCell[fx, fz] = isAlpha || isBiglands;
-                    if (alphaCell[fx, fz]) hasAlpha = true;
-                    if (!isAlpha) fullyAlpha = false;
+                    var cellBehavior = _behaviors.TryGetValue(biomeId, out var cb) ? cb : DefaultBiomeBehavior.Instance;
+                    bool isAlphaStyle = cellBehavior.IsAlphaStyle;
+                    alphaCell[fx, fz] = isAlphaStyle;
+                    if (isAlphaStyle)
+                    {
+                        hasAlpha = true;
+                        if (!alphaStyleCells.TryGetValue(biomeId, out var mask))
+                        {
+                            mask = new bool[4, 4];
+                            alphaStyleCells[biomeId] = mask;
+                        }
+                        mask[fx, fz] = true;
+                    }
+                    else
+                    {
+                        fullyAlpha = false;
+                    }
+                    // fullyAlpha only stays true if EVERY cell is the plain "alpha" biome
+                    // (byte-faithful). Biglands/other alpha-style biomes break faithfulness.
+                    if (biomeId != "alpha") fullyAlpha = false;
                 }
             }
-            bool[,] cellMaskAlpha = alphaOnlyCell; // captured for the per-column lookup below
-            bool[,] cellMaskBiglands = biglandsCell;
-            Func<int, int, bool> isAlphaColumn = (wx, wz) => cellMaskAlpha[((wx - chunkX * 16) & 15) >> 2, ((wz - chunkZ * 16) & 15) >> 2];
-            Func<int, int, bool> isBiglandsColumn = (wx, wz) => cellMaskBiglands[((wx - chunkX * 16) & 15) >> 2, ((wz - chunkZ * 16) & 15) >> 2];
+            bool[,] cellMaskCombined = alphaCell; // captured for the per-column lookup below (any alpha-style biome)
+            Func<int, int, bool> isAlphaColumn = (wx, wz) => cellMaskCombined[((wx - chunkX * 16) & 15) >> 2, ((wz - chunkZ * 16) & 15) >> 2];
 
             // ---- Build the 5 x 17 x 5 density field ----
             // Field x/z are in 4-block units (5 samples cover the chunk's 16 blocks), field y
@@ -275,15 +331,7 @@ namespace Cubuild.World
                     // level -> water fills. Terrain height and biome label can never desync
                     // because both come from the same BiomeMap.
                     var biome = _biomeMap.BiomeAt(xq * 4.0, zq * 4.0);
-                    // The Anomaly biome replaces the 3D body field with a 4D one (see below).
-                    bool anomalyColumn = string.Equals(biome.Id, "anomaly", StringComparison.OrdinalIgnoreCase);
-                    // The Classic biome replaces the surface line with a quantized 2D heightmap.
-                    bool classicColumn = string.Equals(biome.Id, "classic", StringComparison.OrdinalIgnoreCase);
-                    // The Chaos biome: absolutely chaotic terrain (wild overhangs, floating shards,
-                    // deep chasms). Uses a dedicated 4D density field + heavy carving.
-                    bool chaosColumn = string.Equals(biome.Id, "chaos", StringComparison.OrdinalIgnoreCase);
-                    // The Pocket biome: simple MCPE-style gentle rolling hills.
-                    bool pocketColumn = string.Equals(biome.Id, "pocket", StringComparison.OrdinalIgnoreCase);
+                    var behavior = _behaviors.TryGetValue(biome.Id, out var bh) ? bh : DefaultBiomeBehavior.Instance;
                     // ---- SMOOTHED BIOME SURFACE LINE ----
                     // A raw biome.BaseHeight is a step function: the instant you cross a biome
                     // border the target surface snaps from ocean-low (~0.28) to land-high (~0.56+),
@@ -372,29 +420,9 @@ namespace Cubuild.World
                     // shores with the odd 6-block step inland instead of 96-block coastal
                     // cliffs. Where the shore meets a water biome, ease toward the
                     // beach-smoothed line so classic coasts slope into the ocean.
-                    if (classicColumn)
-                    {
-                        double easedLine = centerHeight; // the beach-smoothed line, pre-classic
-                        double h = _classicHeight.Noise2DNormalized(xq * ClassicHeightFrequency, zq * ClassicHeightFrequency);
-                        double hf = 7.5 + (h * 0.5 + 0.5) * 4.0; // world -4 .. ~28
-                        double classicH = Math.Floor(hf / ClassicStep) * ClassicStep;
-                        centerHeight = classicH;
-                        double wx = xq * 4.0, wz = zq * 4.0;
-                        if (_biomeMap.IsNearWater((int)wx, (int)wz, 6, 2))
-                        {
-                            double beachBlend = _biomeMap.IsNearWater((int)wx, (int)wz, 2, 1) ? 1.0 : 0.4;
-                            centerHeight = classicH + (easedLine - classicH) * beachBlend;
-                        }
-                    }
-
-                    // ---- POCKET BIOME: simple MCPE-style gentle rolling hills ----
-                    // Overrides the surface line with a low-amplitude 2D heightmap: broad,
-                    // gentle hills near sea level, no overhangs, no quantized steps.
-                    if (pocketColumn)
-                    {
-                        double h = _pocketHeight.Noise2DNormalized(xq * PocketHeightFrequency, zq * PocketHeightFrequency);
-                        centerHeight = 8.0 + h * 0.75; // sea level +/- ~6 blocks
-                    }
+                    // Biome-specific surface-line overrides (classic heightmap, pocket hills, ...).
+                    // Default behavior is a no-op.
+                    behavior.ModifySurfaceLine(ref centerHeight, xq, zq);
 
                     for (int fy = 0; fy < fyCount; fy++)
                     {
@@ -402,28 +430,10 @@ namespace Cubuild.World
                         double yq = fy; // y field coord = worldY/8
 
                         double density;
-                        if (chaosColumn)
+                        var customDensity = behavior.ComputeDensity(xq, yq, zq, baseFreq);
+                        if (customDensity.HasValue)
                         {
-                            // ---- CHAOS: absolutely chaotic 4D density ----
-                            // High-amplitude, tightly-folded 4D slice: wild overhangs, floating
-                            // shards, deep chasms. Bigger amplitude than anomaly so the surface
-                            // shatters into shards. Same falloff envelope so water/air behave.
-                            double w4 = yq * baseFreq * 2.0 + (xq + zq) * baseFreq * 0.6
-                                + Math.Sin(xq * 1.2 + zq * 0.9 + yq * 0.7) * 6.0;
-                            density = _chaosNoise.Noise4D(xq * baseFreq * 1.4, yq * baseFreq * 1.4, zq * baseFreq * 1.4, w4) / 240.0;
-                        }
-                        else if (anomalyColumn)
-                        {
-                            // ---- ANOMALY: 4D DENSITY FIELD ----
-                            // Sample 4D simplex on a curved slice through 4D space: w follows y
-                            // (twisting the vertical axis) plus a slow sine fold through the
-                            // hyperplane. The resulting density folds and weaves into twisted
-                            // strata, wrapped bands and alien structures - shapes 3D noise
-                            // physically cannot produce. Same weight envelope as the 3D body
-                            // (/480), so the surface line and falloff behave identically.
-                            double w4 = yq * baseFreq * 1.3 + (xq + zq) * baseFreq * 0.2
-                                + Math.Sin(xq * 0.5 + zq * 0.5 + yq * 0.4) * 3.0;
-                            density = _anomalyNoise.Noise4D(xq * baseFreq, yq * baseFreq, zq * baseFreq, w4) / 480.0;
+                            density = customDensity.Value;
                         }
                         else
                         {
@@ -534,14 +544,25 @@ namespace Cubuild.World
             // smooth transitions instead of cliffs. ----
             if (hasAlpha)
             {
-                AlphaGen.FillOverride(chunk, chunkX, chunkZ, alphaCell,
-                    (cx, cz) => _biomeMap.BiomeAt(cx * 4 + 2, cz * 4 + 2).Id,
-                    field, idStone, idWater, "alpha");
-                BiglandsGen.FillOverride(chunk, chunkX, chunkZ, alphaCell,
-                    (cx, cz) => _biomeMap.BiomeAt(cx * 4 + 2, cz * 4 + 2).Id,
-                    field, idStone, idWater, "biglands");
-                AlphaGen.SurfacePass(chunk, chunkX, chunkZ, isAlphaColumn, idStone, idGrass, idDirt, idSand, idGravel, idWater);
-                BiglandsGen.SurfacePass(chunk, chunkX, chunkZ, isBiglandsColumn, idStone, idGrass, idDirt, idSand, idGravel, idWater);
+                foreach (var kv in alphaStyleCells)
+                {
+                    var styleBehavior = _behaviors[kv.Key] as AlphaStyleBehavior;
+                    if (styleBehavior == null) continue;
+                    var mask = kv.Value;
+                    styleBehavior.Generator.FillOverride(chunk, chunkX, chunkZ, mask,
+                        (cx, cz) => _biomeMap.BiomeAt(cx * 4 + 2, cz * 4 + 2).Id,
+                        field, idStone, idWater, styleBehavior.AlphaTargetId);
+                }
+                // Surface pass: dress each alpha-style biome's cells with its own generator
+                // (so the band size and params match that biome).
+                foreach (var kv in alphaStyleCells)
+                {
+                    var styleBehavior = _behaviors[kv.Key] as AlphaStyleBehavior;
+                    if (styleBehavior == null) continue;
+                    var mask = kv.Value;
+                    Func<int, int, bool> colFunc = (wx, wz) => mask[((wx - chunkX * 16) & 15) >> 2, ((wz - chunkZ * 16) & 15) >> 2];
+                    styleBehavior.Generator.SurfacePass(chunk, chunkX, chunkZ, colFunc, idStone, idGrass, idDirt, idSand, idGravel, idWater);
+                }
             }
 
             // ---- Surface materials pass ----
@@ -559,10 +580,15 @@ namespace Cubuild.World
             // original pipeline) ----
             if (hasAlpha)
             {
-                AlphaGen.GenerateTrees(chunk, chunkX, chunkZ, isAlphaColumn, idLog, idLeaves, idGrass, idDirt);
-                BiglandsGen.GenerateTrees(chunk, chunkX, chunkZ, isBiglandsColumn, idLog, idLeaves, idGrass, idDirt);
-                AlphaGen.GenerateOres(chunk, chunkX, chunkZ, alphaCell, idStone, idCoal, idIron, idGold, idDiamond);
-                BiglandsGen.GenerateOres(chunk, chunkX, chunkZ, biglandsCell, idStone, idCoal, idIron, idGold, idDiamond);
+                foreach (var kv in alphaStyleCells)
+                {
+                    var styleBehavior = _behaviors[kv.Key] as AlphaStyleBehavior;
+                    if (styleBehavior == null) continue;
+                    var mask = kv.Value;
+                    Func<int, int, bool> colFunc = (wx, wz) => mask[((wx - chunkX * 16) & 15) >> 2, ((wz - chunkZ * 16) & 15) >> 2];
+                    styleBehavior.Generator.GenerateTrees(chunk, chunkX, chunkZ, colFunc, idLog, idLeaves, idGrass, idDirt);
+                    styleBehavior.Generator.GenerateOres(chunk, chunkX, chunkZ, mask, idStone, idCoal, idIron, idGold, idDiamond);
+                }
             }
 
             // ---- engine-only features ----
