@@ -23,6 +23,7 @@ namespace Cubuild
         private static float[] _miningSpeed = Array.Empty<float>();
         private static int[] _durability = Array.Empty<int>();
         private static int[] _foodValue = Array.Empty<int>();
+        private static int[] _weight = Array.Empty<int>();
         private static int[] _stackSize = Array.Empty<int>();
         private static bool[] _inInventory = Array.Empty<bool>();
         private static bool[] _fromItemsAtlas = Array.Empty<bool>();
@@ -56,6 +57,7 @@ namespace Cubuild
             public float MiningSpeed { get; set; } = 1f;
             public int Durability { get; set; }
             public int FoodValue { get; set; }
+            public int Weight { get; set; } = 0; // carry weight of one piece, in weight units
             public string? MapColor { get; set; }
         }
 
@@ -90,6 +92,8 @@ namespace Cubuild
                     StackSize = 64,
                     InInventory = def.Inventory,
                     MapColor = def.MapColor,
+                    // A block's item inherits the block's carry weight (ore blocks weigh 8).
+                    Weight = def.Weight,
                 });
                 _byName[def.Id] = i;
             }
@@ -138,6 +142,8 @@ namespace Cubuild
                             existing.Durability = dto.Durability;
                             existing.FoodValue = dto.FoodValue;
                             existing.MapColor = ParseMapColor(dto.MapColor ?? "#7F7F7F");
+                            // 0 means "not specified", so the block's own weight survives.
+                            existing.Weight = dto.Weight > 0 ? dto.Weight : existing.Weight;
                             // PlacedBlock intentionally stays the block's own id: redefining the
                             // item does not change what it places. UNLESS the entry explicitly
                             // declares "placedBlock": "" - that clears placement so crafting-only
@@ -166,6 +172,7 @@ namespace Cubuild
                             Durability = dto.Durability,
                             FoodValue = dto.FoodValue,
                             MapColor = ParseMapColor(dto.MapColor ?? "#7F7F7F"),
+                            Weight = Math.Max(0, dto.Weight),
                         };
                         if (item.Category != "block" && dto.ItemTile == null)
                             throw new InvalidDataException($"Item \"{dto.Id}\" has no itemTile (items.png atlas tile).");
@@ -191,6 +198,7 @@ namespace Cubuild
             _miningSpeed = new float[n];
             _durability = new int[n];
             _foodValue = new int[n];
+            _weight = new int[n];
             _stackSize = new int[n];
             _inInventory = new bool[n];
             _fromItemsAtlas = new bool[n];
@@ -206,6 +214,7 @@ namespace Cubuild
                 _miningSpeed[i] = it.MiningSpeed > 0 ? it.MiningSpeed : 1f;
                 _durability[i] = it.Durability;
                 _foodValue[i] = it.FoodValue;
+                _weight[i] = it.Weight;
                 _stackSize[i] = it.StackSize > 0 ? it.StackSize : 64;
                 _inInventory[i] = it.InInventory;
                 _placedBlock[i] = it.PlacedBlock ?? "";
@@ -273,6 +282,8 @@ namespace Cubuild
         public static float MiningSpeedOf(int itemId) => itemId >= 0 && itemId < _items.Count ? _miningSpeed[itemId] : 1f;
         public static int DurabilityOf(int itemId) => itemId >= 0 && itemId < _items.Count ? _durability[itemId] : 0;
         public static int FoodValueOf(int itemId) => itemId >= 0 && itemId < _items.Count ? _foodValue[itemId] : 0;
+        /// <summary>Carry weight of one piece of this item, in weight units (0 = weightless).</summary>
+        public static int WeightOf(int itemId) => itemId >= 0 && itemId < _items.Count ? _weight[itemId] : 0;
         public static int StackSizeOf(int itemId) => itemId >= 0 && itemId < _items.Count ? _stackSize[itemId] : 64;
         public static bool IsInInventory(int itemId) => itemId >= 0 && itemId < _items.Count && _inInventory[itemId];
         public static uint MapColorOf(int itemId) => itemId >= 0 && itemId < _items.Count ? _mapColor[itemId] : 0;

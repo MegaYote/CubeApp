@@ -1602,6 +1602,19 @@ namespace Cubuild.Renderer
                 : ImGui.ColorConvertFloat4ToU32(new Vector4(0.35f, 0.8f, 0.45f, 1f));
             drawList.AddText(new Vector2(startX, hotbarY - 20f), modeColor, modeLabel);
 
+            // Encumbrance readout next to the mode label: how much ore is being carried and how
+            // much that load is costing the player. Only shown once something is actually
+            // weighing them down, so an empty inventory stays clean.
+            if (_hud.WeightLevel > 0)
+            {
+                string weightLabel = $"WEIGHT {_hud.WeightLevel}/{GameWorld.MaxWeightLevel} ({_hud.CarriedWeightUnits})";
+                uint weightColor = _hud.WeightLevel >= GameWorld.MaxWeightLevel
+                    ? ImGui.ColorConvertFloat4ToU32(new Vector4(0.95f, 0.35f, 0.25f, 1f))
+                    : ImGui.ColorConvertFloat4ToU32(new Vector4(0.95f, 0.78f, 0.35f, 1f));
+                var modeSize = ImGui.CalcTextSize(modeLabel);
+                drawList.AddText(new Vector2(startX + modeSize.X + 14f, hotbarY - 20f), weightColor, weightLabel);
+            }
+
             // Healthbar: one heart centered directly above the hotbar. Health 10..1 maps to the ten
             // filled hearts in reading order (top row left->right skipping the blank cell, then
             // middle row left->right); health 0 (death) is the dark r1c5 heart. Each point of

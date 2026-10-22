@@ -102,6 +102,10 @@ namespace Cubuild.Renderer
 
         /// <summary>Player health 0..10, drives the healthbar heart slice (10 = full heart).</summary>
         public int PlayerHealth;
+        /// <summary>Encumbrance level from carried ore (0 = unencumbered, 3 = can't swim).</summary>
+        public int WeightLevel;
+        /// <summary>Total carried weight in units (8 units = one encumbrance level).</summary>
+        public int CarriedWeightUnits;
         /// <summary>How the player last died (for the respawn screen message).</summary>
         public DeathCause DeathCause;
 
@@ -210,6 +214,8 @@ namespace Cubuild.Renderer
             IsMinecraftMode = false,
             SaplingGrowthText = string.Empty,
             PlayerHealth = 20,
+            WeightLevel = 0,
+            CarriedWeightUnits = 0,
             DeathCause = DeathCause.Unknown,
             HighlightWorldQuad = null,
             LinkBeams = null,

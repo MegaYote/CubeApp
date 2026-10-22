@@ -138,6 +138,10 @@ namespace Cubuild
             bool bodyInWater = PlayerSampleInWater(p, PlayerHeight * 0.4);
             bool headInWater = PlayerSampleInWater(p, PlayerHeight * 0.85);
             bool inWater = feetInWater || bodyInWater || headInWater;
+            // Encumbrance from carried ore: the load slows the player down, and at the top level
+            // it takes swimming away entirely.
+            float encSpeed = WeightSpeedMultiplier(p.WeightLevel);
+            bool noSwim = WeightBlocksSwimming(p.WeightLevel);
             if (inWater)
             {
                 double submerged = (feetInWater ? 0.25 : 0) + (bodyInWater ? 0.5 : 0) + (headInWater ? 0.25 : 0);
@@ -153,7 +157,7 @@ namespace Cubuild
                 // wading (feet only) — prevents the surface-glide exploit.
                 if (desiredDirection.X != 0 || desiredDirection.Z != 0)
                 {
-                    double swimH = bodyInWater ? WalkSpeed * 0.5 : WalkSpeed * 0.35;
+                    double swimH = (bodyInWater ? WalkSpeed * 0.5 : WalkSpeed * 0.35) * encSpeed;
                     double hx = desiredDirection.X * swimH - vx;
                     double hz = desiredDirection.Z * swimH - vz;
                     double hDist = Math.Sqrt(hx * hx + hz * hz);
@@ -167,11 +171,12 @@ namespace Cubuild
 
                 // Buoyancy: gentle upward force, but WEAKER than water gravity so the
                 // player sinks when not pressing swim-up. Feels like treading water.
-                vy += submerged * 2.5 * deltaSeconds;
+                // Too heavy to swim: no buoyancy at all, so the load drags the player down.
+                vy += (noSwim ? 0.0 : submerged * 2.5) * deltaSeconds;
 
                 // Swim up: only when body+ is submerged. Prevents gliding on the surface.
                 // Must HOLD space to stay up — release and you sink.
-                if (tickInput.MoveUp && bodyInWater) vy = Math.Max(vy, 2.0);
+                if (tickInput.MoveUp && bodyInWater && !noSwim) vy = Math.Max(vy, 2.0);
 
                 // Swim down: remove any upward velocity and let gravity pull you down.
                 if (tickInput.MoveDown) vy = Math.Min(vy, 0.0);
@@ -193,7 +198,7 @@ namespace Cubuild
             // of snapping, and coast to a stop with friction when nothing is held. Walking
             // backward is a touch slower, which reads as more human.
             var horizontalVelocity = new Point3D(p.Velocity.X, 0, p.Velocity.Z);
-            float speed = WalkSpeed;
+            float speed = WalkSpeed * encSpeed;
             if (tickInput.MoveBackward) speed *= 0.72f;
             var targetH = desiredDirection * speed;
             bool moving = tickInput.MoveForward || tickInput.MoveBackward || tickInput.MoveLeft || tickInput.MoveRight;
@@ -262,6 +267,8 @@ namespace Cubuild
                         && !PlayerSampleInWater(p, 0.05))
                     {
                         int damage = Math.Max(1, (int)Math.Round((impactSpeed - FallDamageThreshold) / FallDamageScale));
+                        // A body overloaded with ore hits the ground twice as hard.
+                        damage = (int)Math.Round(damage * WeightFallDamageMultiplier(p.WeightLevel));
                         DamagePlayer(damage, DeathCause.Fall);
                     }
                 }

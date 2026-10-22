@@ -92,6 +92,23 @@ namespace Cubuild
         /// <summary>Optional item id dropped when mined instead of the block's own item.</summary>
         public string DropItem { get; set; } = "";
 
+        /// <summary>
+        /// How many items a correct-tool break of this block drops. 0 = a single item.
+        /// When the max is above the min the count is rolled at random, weighted toward the
+        /// low end (see <see cref="DropRoll.WeightedCount"/>): ore drops 1-8 raw chunks.
+        /// </summary>
+        public int DropCountMin { get; set; } = 0;
+
+        /// <summary>Upper bound of the random drop count. 0 = no range (a single drop).</summary>
+        public int DropCountMax { get; set; } = 0;
+
+        /// <summary>
+        /// Carry weight of this block's ITEM, in weight units. Raw ore chunks weigh 1 and an
+        /// ore block weighs 8, so a block of ore is worth exactly one encumbrance level.
+        /// 0 = weightless (the default for every ordinary block).
+        /// </summary>
+        public int Weight { get; set; } = 0;
+
 /// <summary>Whether zombies can path through this block by breaking it.</summary>
         public bool ZombieCanBreak { get; set; } = false;
 

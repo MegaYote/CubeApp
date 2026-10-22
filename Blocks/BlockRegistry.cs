@@ -42,6 +42,9 @@ namespace Cubuild
         private static string[] _toolType = Array.Empty<string>();
         private static string[] _material = Array.Empty<string>();
         private static string[] _wrongToolDrop = Array.Empty<string>();
+        private static int[] _dropCountMin = Array.Empty<int>();
+        private static int[] _dropCountMax = Array.Empty<int>();
+        private static int[] _weight = Array.Empty<int>();
         private static bool[] _toolRequired = Array.Empty<bool>();
         private static int[] _harvestLevel = Array.Empty<int>();
         private static bool[] _zombieCanBreak = Array.Empty<bool>();
@@ -90,6 +93,9 @@ namespace Cubuild
             public bool ToolRequired { get; set; } = false; // true = needs the tool to drop items
             public int HarvestLevel { get; set; } = 0; // minimum matching tool level needed for drops
             public string? DropItem { get; set; } // optional item id dropped instead of this block
+            public int DropCountMin { get; set; } = 0; // smallest number of items a break drops (0 = one)
+            public int DropCountMax { get; set; } = 0; // largest number of items a break drops (0 = one)
+            public int Weight { get; set; } = 0; // carry weight of this block's item, in weight units
             public bool ZombieCanBreak { get; set; } = false;
             public string? ZombieBreakSpeed { get; set; } = "Medium"; // Slow / Medium / Fast
             public string? Base { get; set; } // inherit texture/top/bottom/side/colour from another block id
@@ -259,6 +265,9 @@ namespace Cubuild
                     ToolRequired = dto.ToolRequired,
                     HarvestLevel = Math.Max(0, dto.HarvestLevel),
                     DropItem = dto.DropItem ?? "",
+                    DropCountMin = Math.Max(0, dto.DropCountMin),
+                    DropCountMax = Math.Max(0, dto.DropCountMax),
+                    Weight = Math.Max(0, dto.Weight),
                     ZombieCanBreak = dto.ZombieCanBreak,
                     ZombieBreakSpeed = ParseZombieBreakSpeed(dto.ZombieBreakSpeed),
                     DoorHalf = dto.DoorHalf ?? "bottom",
@@ -300,6 +309,9 @@ namespace Cubuild
             _toolType = new string[Count];
             _material = new string[Count];
             _wrongToolDrop = new string[Count];
+            _dropCountMin = new int[Count];
+            _dropCountMax = new int[Count];
+            _weight = new int[Count];
             _toolRequired = new bool[Count];
             _harvestLevel = new int[Count];
             _zombieCanBreak = new bool[Count];
@@ -328,6 +340,9 @@ namespace Cubuild
                 _toolType[i] = defs[i].ToolType ?? "";
                 _material[i] = defs[i].Material;
                 _wrongToolDrop[i] = defs[i].WrongToolDrop;
+                _dropCountMin[i] = defs[i].DropCountMin;
+                _dropCountMax[i] = defs[i].DropCountMax;
+                _weight[i] = defs[i].Weight;
                 _toolRequired[i] = defs[i].ToolRequired;
                 _harvestLevel[i] = defs[i].HarvestLevel;
                 _zombieCanBreak[i] = defs[i].ZombieCanBreak;
@@ -482,6 +497,12 @@ namespace Cubuild
         public static int HarvestLevelOf(int id) => id > 0 && id < Count ? _harvestLevel[id] : 0;
         /// <summary>Optional item id dropped instead of this block's own item.</summary>
         public static string DropItemOf(int id) => id > 0 && id < Count ? _defs[id].DropItem : "";
+        /// <summary>Smallest number of items a correct-tool break of this block drops (0 = one).</summary>
+        public static int DropCountMinOf(int id) => id > 0 && id < Count ? _dropCountMin[id] : 0;
+        /// <summary>Largest number of items a correct-tool break of this block drops (0 = one).</summary>
+        public static int DropCountMaxOf(int id) => id > 0 && id < Count ? _dropCountMax[id] : 0;
+        /// <summary>Carry weight of this block's item, in weight units (0 = weightless).</summary>
+        public static int WeightOf(int id) => id > 0 && id < Count ? _weight[id] : 0;
 
         // ---- Doors ---------------------------------------------------------------
         //

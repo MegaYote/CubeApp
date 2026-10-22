@@ -42,6 +42,11 @@ namespace Cubuild
         public float RegenAccumulator;
         /// <summary>Seconds until the next heart slice restores (8.5 + random 1..2 fluctuation).</summary>
         public float NextRegenInterval = 8.5f;
+        /// <summary>
+        /// Encumbrance level from the carried ore: 0 = unencumbered, 1 = slightly slower,
+        /// 2 = half speed, 3 = quarter speed, doubled fall damage and no swimming.
+        /// </summary>
+        public int WeightLevel;
     }
 
     /// <summary>

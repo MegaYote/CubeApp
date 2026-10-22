@@ -158,6 +158,8 @@ namespace Cubuild
                 IsMinecraftMode = World.IsMinecraftMode,
                 SaplingGrowthText = saplingText,
                 PlayerHealth = World.LocalPlayer.Health,
+                WeightLevel = World.CarryWeightLevel,
+                CarriedWeightUnits = World.CarriedWeightUnits,
                 DeathCause = World.LocalPlayer.DeathCause,
                 PlayerX = World.PlayerPosition.X,
                 PlayerY = World.PlayerPosition.Y,

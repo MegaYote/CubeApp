@@ -382,7 +382,10 @@
       "toolType": "pickaxe",
       "toolRequired": true,
       "harvestLevel": 1,
-      "dropItem": "raw_coal"
+      "dropItem": "raw_coal",
+      "dropCountMin": 1,
+      "dropCountMax": 8,
+      "weight": 8
     },
     {
       "id": "ironore",
@@ -395,7 +398,10 @@
       "toolType": "pickaxe",
       "toolRequired": true,
       "harvestLevel": 2,
-      "dropItem": "raw_iron"
+      "dropItem": "raw_iron",
+      "dropCountMin": 1,
+      "dropCountMax": 8,
+      "weight": 8
     },
     {
       "id": "goldore",
@@ -408,7 +414,10 @@
       "toolType": "pickaxe",
       "toolRequired": true,
       "harvestLevel": 3,
-      "dropItem": "raw_gold"
+      "dropItem": "raw_gold",
+      "dropCountMin": 1,
+      "dropCountMax": 8,
+      "weight": 8
     },
     {
       "id": "diamondore",
@@ -421,7 +430,10 @@
       "toolType": "pickaxe",
       "toolRequired": true,
       "harvestLevel": 3,
-      "dropItem": "raw_diamond"
+      "dropItem": "raw_diamond",
+      "dropCountMin": 1,
+      "dropCountMax": 8,
+      "weight": 8
     },
     {
       "id": "bluestoneore",
@@ -434,7 +446,10 @@
       "toolType": "pickaxe",
       "toolRequired": true,
       "harvestLevel": 3,
-      "dropItem": "raw_bluestone"
+      "dropItem": "raw_bluestone",
+      "dropCountMin": 1,
+      "dropCountMax": 8,
+      "weight": 8
     },
     {
       "id": "copperore",
@@ -447,7 +462,10 @@
       "toolType": "pickaxe",
       "toolRequired": true,
       "harvestLevel": 2,
-      "dropItem": "raw_copper"
+      "dropItem": "raw_copper",
+      "dropCountMin": 1,
+      "dropCountMax": 8,
+      "weight": 8
     },
     {
       "id": "iron",

@@ -203,6 +203,14 @@ namespace Cubuild
             if (LocalPlayer.Health <= 0)
                 LocalPlayer.DeathTimer = Math.Min(1f, LocalPlayer.DeathTimer + deltaSeconds);
             StepItemDrops(deltaSeconds);
+            // Encumbrance from carried ore. Recomputed every tick so a pickup or a drop
+            // changes the player's speed right away. Creative is a sandbox: never encumbered.
+            if (IsCreative) LocalPlayer.WeightLevel = 0;
+            else
+            {
+                UpdateCarryWeight();
+                LocalPlayer.WeightLevel = CarryWeightLevel;
+            }
             BlockTicks?.Tick(deltaSeconds);
             UpdateLeafDecay(deltaSeconds);
             UpdateRailSag(deltaSeconds);

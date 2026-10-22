@@ -34,6 +34,12 @@ namespace Cubuild
         public int Durability { get; set; } = 0;
         /// <summary>Hunger/health restored when eaten. 0 = not edible.</summary>
         public int FoodValue { get; set; } = 0;
+        /// <summary>
+        /// Carry weight of one piece, in weight units. Every <see cref="GameWorld.WeightUnitsPerLevel"/>
+        /// units in the player's inventory add one encumbrance level (slower walking, and at the
+        /// top level doubled fall damage and no swimming). 0 = weightless (the default).
+        /// </summary>
+        public int Weight { get; set; } = 0;
         /// <summary>Swatch colour for the E-menu/debug, ImGui packed U32.</summary>
         public uint MapColor { get; set; }
     }

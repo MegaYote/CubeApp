@@ -64,7 +64,8 @@ namespace Cubuild
             // multiple items, unlike every other drop.
             int dropId = removedBlockId;
             string configuredDrop = BlockRegistry.DropItemOf(removedBlockId);
-            if (!string.IsNullOrEmpty(configuredDrop)) dropId = ItemRegistry.GetId(configuredDrop);
+            bool dropsConfiguredItem = !string.IsNullOrEmpty(configuredDrop);
+            if (dropsConfiguredItem) dropId = ItemRegistry.GetId(configuredDrop);
             int dropCount = 1;
             // Either half of a door yields the bottom-half item, which is the one that places.
             if (BlockRegistry.IsDoor(removedBlockId)) dropId = DoorBottomIdFor(removedBlockId);
@@ -109,6 +110,9 @@ namespace Cubuild
                     string wrongToolDrop = BlockRegistry.WrongToolDropOf(removedBlockId);
                     dropId = wrongToolDrop == "self" ? removedBlockId : 0;
                     dropCount = 1;
+                    // The wrong-tool path yields the BLOCK itself, never the configured item,
+                    // so the variable drop count below must not apply to it.
+                    dropsConfiguredItem = false;
                 }
             }
             else if (!BlockRegistry.HasMaterialOf(removedBlockId)
@@ -116,6 +120,17 @@ namespace Cubuild
             {
                 // Legacy definitions without a material class retain the old tool/tier gate.
                 dropId = 0;
+                dropsConfiguredItem = false;
+            }
+            // Blocks that declare a drop-count range drop a variable stack: an ore block broken
+            // with a pickaxe yields 1-8 raw chunks, rolled with a bias toward the low end.
+            // Only the CONFIGURED drop uses the range - a wrong-tool break still drops exactly
+            // one block, and every other block keeps dropping a single item.
+            if (dropsConfiguredItem && dropId > 0)
+            {
+                int countMin = BlockRegistry.DropCountMinOf(removedBlockId);
+                int countMax = BlockRegistry.DropCountMaxOf(removedBlockId);
+                if (countMax > countMin) dropCount = DropRoll.WeightedCount(_regenRandom, countMin, countMax);
             }
             if (!IsCreative && dropId > 0)
             {
