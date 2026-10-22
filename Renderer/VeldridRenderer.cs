@@ -658,8 +658,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         // The player picks the mode in Settings (Auto/Cpu/Gpu); Auto avoids the measured-slower
         // D3D11 GPU path and known-problematic Intel compute path, while explicit modes remain
         // available for testing on supported devices.
-        private CullingMode _cullMode = CullingMode.Auto;
-        private bool _gpuCullEnabled = false;
+        private CullingMode _cullMode = CullingMode.Gpu;
+        private bool _gpuCullEnabled = true;
         private bool _gpuCullSupported;
         private Pipeline _cullPipeline;
         private ResourceLayout _cullDataLayout;   // set 0: frustum planes (uniform)

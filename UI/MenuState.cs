@@ -85,10 +85,10 @@ namespace Cubuild
         /// <summary>The screen to return to after closing settings (Title or Paused).</summary>
         public GameScreen SettingsReturnTo = GameScreen.Title;
         /// <summary>Culling mode the player chose (Auto/Cpu/Gpu). Applied via the renderer.</summary>
-        public CullingMode SelectedCullingMode = CullingMode.Auto;
+        public CullingMode SelectedCullingMode = CullingMode.Gpu;
         /// <summary>Set when the culling mode radio changed; Program applies it to the renderer.</summary>
         public bool CullingModeChanged;
-        /// <summary>Render distance index the player chose (0=Far,1=Normal,2=Short,3=Tiny).</summary>
+        /// <summary>Render distance index the player chose (0=Extreme,1=Far,2=Normal,3=Short,4=Tiny).</summary>
         public int SelectedRenderDistance = 0;
         /// <summary>Set when the render distance radio changed; Program applies it.</summary>
         public bool RenderDistanceChanged;

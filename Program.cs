@@ -90,7 +90,7 @@ namespace Cubuild
         private const double MaxFrameDeltaSeconds = 0.25;
         private static readonly int[] RenderDistances = { 32, 16, 8, 4, 2 };
         private static readonly string[] RenderDistanceNames = { "Extreme", "Far", "Normal", "Short", "Tiny" };
-        private int renderDistanceIndex = 1; // Far by default (index 0 is the 32-chunk Extreme preset)
+        private int renderDistanceIndex = 0; // Extreme (32 chunks) by default (index 0)
         private int ChunkRenderRadius => RenderDistances[renderDistanceIndex];
         private string RenderDistanceName => RenderDistanceNames[renderDistanceIndex];
         private int _ignoreInteractFrames; // skips break/place right after a menu click

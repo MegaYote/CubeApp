@@ -88,8 +88,9 @@ namespace Cubuild
         public int[] Hotbar;
 
         // ---- game mode ----
-        /// <summary>Creative (sandbox) or Survival (resource loop). Creative players fly, can't
-        /// die, and place blocks freely; survival players must mine to collect before placing.</summary>
+        /// <summary>Creative (sandbox) or Survival (resource loop). Creative players may fly (off by
+        /// default; use the fly toggle), can't die, and place blocks freely; survival players must mine
+        /// to collect before placing.</summary>
         public GameMode Mode { get; set; } = GameMode.Creative;
         public bool IsCreative => Mode == GameMode.Creative;
         /// <summary>Minecraft faithful fork flag (persisted in save).</summary>

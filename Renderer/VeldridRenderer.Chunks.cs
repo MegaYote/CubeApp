@@ -685,10 +685,13 @@ namespace Cubuild.Renderer
             if (dist < NearSkipChunks + 1.0) return false; // too close to the camera to ever hide
             if (dist > OcclusionMaxChunks) return false;   // too far for the horizon test to pay for itself
 
-            // Target chunk terrain top (world Y). Unknown = don't occlude (conservative).
+            // Use the target's actual maximum height, not its representative height: the
+            // representative can sit below a narrow mountain summit, causing this whole chunk
+            // to be hidden while that summit is still visible above the nearer hill. Overstating
+            // target height only reduces culling, which is the safe direction.
             if (!_chunkManager.TryGetLoadedChunk(coord, out var targetChunk)) return false;
-            if (targetChunk.TopSolidY == int.MinValue) return false;
-            double targetTop = targetChunk.TopSolidY;
+            if (targetChunk.MaxSolidY == int.MinValue) return false;
+            double targetTop = targetChunk.MaxSolidY;
 
             // Camera above the target's terrain can always see it (looking down).
             if (cam.Y >= targetTop) return false;

@@ -30,19 +30,12 @@ namespace Cubuild
             World = new GameWorld(seed, name, () => gpuRenderer, ChunkRenderRadius, Math.Max(1, Environment.ProcessorCount - 2));
             World.Mode = mode;
             World.IsMinecraftMode = isMinecraftMode;
-            // Both modes start with an empty hotbar; creative also gets flying.
-            World.FlyMode = mode == GameMode.Creative;
+            // Both modes start with an empty hotbar; creative starts grounded unless fly is toggled.
+            World.FlyMode = false;
             for (int i = 0; i < GameWorld.HotbarSlots; i++) World.Hotbar[i] = BlockRegistry.AirId;
             World.SelectedBlock = BlockRegistry.AirId;
             World.SelectedSlot = 0;
-            if (mode == GameMode.Survival)
-            {
-                // Survival starts grounded; creative gets flying
-            }
-            else
-            {
-                World.FlyMode = true;
-            }
+            // Both modes start grounded unless fly is toggled.
             World.ChunkGenerated += OnChunkGenerated;
             World.ChunkUnloaded += OnChunkUnloaded;
             if (gpuRenderer != null)
@@ -67,7 +60,7 @@ namespace Cubuild
             _loadLastMeshedCount = 0;
             _loadMeshedCount = 0;
             _loadGroundRequested = 0;
-            // Prepare a full render-distance radius (the default "Far") so the spawn view is done.
+            // Prepare a full render-distance radius (the default "Extreme") so the spawn view is done.
             _loadTargetRadius = ChunkRenderRadius;
             // Ground chunks in a circle of that radius: ~pi*r^2.
             _loadGroundTotal = 0;
