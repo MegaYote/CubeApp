@@ -1767,12 +1767,27 @@ namespace Cubuild.Renderer
                 ImGui.SliderFloat("sz (forward)", ref _handSz, -1.0f, -0.2f);
                 ImGui.SliderFloat("basePitch", ref _handBasePitch, -1.4f, 0.2f);
                 ImGui.SliderFloat("baseYaw", ref _handBaseYaw, -0.9f, 0.9f);
-ImGui.Separator();
+                ImGui.Separator();
+                ImGui.Text("Held item / block (in the fist)");
+                ImGui.SliderFloat("heldX (left/right)", ref _heldOffsetX, -0.4f, 0.4f);
+                ImGui.SliderFloat("heldY (up/down)", ref _heldOffsetY, -0.4f, 0.4f);
+                ImGui.SliderFloat("heldZ (forward)", ref _heldOffsetZ, -0.6f, 0.2f);
+                ImGui.SliderFloat("heldBlockScale", ref _heldBlockScale, 0.3f, 3f);
+                ImGui.SliderFloat("heldItemScale", ref _heldItemScale, 0.05f, 0.8f);
+                ImGui.SliderFloat("heldThickness (sprite px)", ref _heldThickness, 0f, 3f);
+                ImGui.SliderFloat("heldYaw", ref _heldYaw, -1.6f, 1.6f);
+                ImGui.SliderFloat("heldPitch", ref _heldPitch, -1.6f, 1.6f);
+                ImGui.SliderFloat("heldRoll", ref _heldRoll, -1.6f, 1.6f);
+                ImGui.Separator();
                 string copyLine = string.Format(
                     "handScale={0:0.###}f, sx={1:0.###}f, sy={2:0.###}f, sz={3:0.###}f, basePitch={4:0.###}f, baseYaw={5:0.###}f",
                     _handScale, _handSx, _handSy, _handSz, _handBasePitch, _handBaseYaw);
+                string heldCopyLine = string.Format(
+                    "heldX={0:0.###}f, heldY={1:0.###}f, heldZ={2:0.###}f, heldBlockScale={3:0.###}f, heldItemScale={4:0.###}f, heldThickness={5:0.###}f, heldYaw={6:0.###}f, heldPitch={7:0.###}f, heldRoll={8:0.###}f",
+                    _heldOffsetX, _heldOffsetY, _heldOffsetZ, _heldBlockScale, _heldItemScale, _heldThickness, _heldYaw, _heldPitch, _heldRoll);
                 ImGui.Text("Copy this:");
                 ImGui.TextWrapped(copyLine);
+                ImGui.TextWrapped(heldCopyLine);
                 ImGui.End();
             }
 

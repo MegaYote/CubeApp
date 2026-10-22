@@ -302,6 +302,32 @@ namespace Cubuild.Renderer
         private float _handSz = -0.623f;       // shoulder anchor Z (forward)
         private float _handBasePitch = -0.678f; // idle arm pitch
         private float _handBaseYaw = 0.010f;   // idle arm yaw (toward center)
+
+        // ---- Held item / block in the first-person hand -------------------------------
+        // Whatever is selected in the hotbar is drawn in the fist: a textured CUBE for plain
+        // blocks (terrain atlas) and a flat CARD for genuine items (items.png). Both live in
+        // CAMERA space with depth OFF, exactly like the arm, so they can never be swallowed by
+        // terrain. The grip point is derived from the arm mesh itself (the far end of the arm
+        // cube), so the item stays in the fist no matter how the arm pose is tuned.
+        private Pipeline? _heldBlockPipeline;      // camera-space cube (a held block)
+        private Pipeline? _heldItemPipeline;       // camera-space prism (a held flat item)
+        private DeviceBuffer? _heldInstanceBuffer; // pos3 + tileRect4 + rot4 + scale1 + thick1 = 13 floats
+        private DeviceBuffer? _heldPrismVertexBuffer;  // the flat item, extruded to a thin slab
+        private DeviceBuffer? _heldPrismIndexBuffer;
+        private readonly float[] _heldInstanceScratch = new float[13];
+        private float _gripX, _gripY, _gripZ;      // fist position in arm-local space
+        private bool _gripComputed;
+
+        // ---- Tunable held-item params (F8 Hand Editor) -------------------------------
+        private float _heldOffsetX = -0.05f;   // shift the item toward the screen center
+        private float _heldOffsetY = 0.04f;    // nudge up out of the fist
+        private float _heldOffsetZ = -0.10f;   // push forward (toward the block being mined)
+        private float _heldBlockScale = 1.45f; // held block cube size (1 = the 0.3 drop cube)
+        private float _heldItemScale = 0.30f;  // held flat item half-size in camera units
+        private float _heldThickness = 1.0f;   // flat item slab thickness, in sprite pixels (1 = MC-like)
+        private float _heldYaw = 0.55f;        // turn the item so it reads as a 3D object
+        private float _heldPitch = 0.42f;      // tip the top toward the camera
+        private float _heldRoll = 0f;
         private uint _playerIndexCapacity;
         private IReadOnlyList<Cubuild.DuckInstance> _playerInstances = Array.Empty<Cubuild.DuckInstance>();
         private float[] _playerVertexScratch = Array.Empty<float>();

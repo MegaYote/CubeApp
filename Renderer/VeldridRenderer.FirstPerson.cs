@@ -84,8 +84,8 @@ namespace Cubuild.Renderer
             float cy = (float)Math.Cos(yaw), syy = (float)Math.Sin(yaw);
             float cr = (float)Math.Cos(roll), sr = (float)Math.Sin(roll);
 
-            // The arm is the whole first-person model now. Held items and blocks are no longer
-            // drawn in the hand at all.
+            // The arm is the first-person model. The selected hotbar stack (block or item) is
+            // drawn on top of it, in the fist - see DrawHeldItem.
             float[] verts = new float[_handMesh.Length];
             {
                 for (int i = 0; i < _handMesh.Length; i += 9)
@@ -155,6 +155,15 @@ namespace Cubuild.Renderer
                 cl.SetIndexBuffer(_handIndexBuffer, IndexFormat.UInt16);
                 cl.DrawIndexed((uint)_handIndices.Length, 1, 0, 0, 0);
             }
+
+            // The held item / block rides in the fist: the grip point comes from the arm mesh
+            // itself and goes through the SAME pose transform, so it follows the arm exactly -
+            // idle sway, walk bob and the mining chop included.
+            ComputeGripPoint();
+            Vector3 grip = ArmToCamera(_gripX, _gripY, _gripZ, handScale,
+                cp, sp, cy, syy, cr, sr,
+                sx + tx + handSway, sy + ty + handBob, sz + tz);
+            DrawHeldItem(cl, grip, env);
         }
 
         private void DrawCrosshair(CommandList cl)

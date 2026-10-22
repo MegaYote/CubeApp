@@ -1152,6 +1152,193 @@ void main() {
             _handProjBuffer = factory.CreateBuffer(new BufferDescription(64, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
             _handProjSet = factory.CreateResourceSet(new ResourceSetDescription(_projViewLayout, _handProjBuffer));
 
+            // ---- Held item / block in the fist (camera space, depth OFF) ----------------
+            // The selected hotbar stack is drawn in the hand: a textured CUBE for plain blocks
+            // and a flat CARD for genuine items. Both share one instance layout -
+            // iPos(3) + iTileRect(4) + iRot(4) + iScale(1) - and the camera-space projection
+            // (set 0 = the hand's), so they can never be clipped by terrain or fogged.
+            // The cube pass reuses the item-drop cube mesh (0.3 units, per-face shading, 0..1
+            // local UVs); the card pass reuses the flat unit quad the ground sprites use.
+            string heldBlockVsCode = @"#version 450
+layout(location=0) in vec3 aCorner;
+layout(location=1) in vec2 aLocalUV;
+layout(location=2) in vec4 aShade;
+layout(location=3) in vec3 iPos;
+layout(location=4) in vec4 iTileRect;
+layout(location=5) in vec4 iRot;
+layout(location=6) in float iScale;
+layout(location=0) out vec2 vLocalUV;
+layout(location=1) out vec4 vTileRect;
+layout(location=2) out vec4 vColor;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() {
+    // The cube mesh spans 0..0.3 - center it on the origin, then apply the held size.
+    vec3 local = (aCorner - vec3(0.15)) * iScale;
+    vec3 qv = iRot.xyz;
+    vec3 t = 2.0 * cross(qv, local);
+    vec3 rotated = local + iRot.w * t + cross(qv, t);
+    vec3 pos = rotated + iPos;
+    vLocalUV = aLocalUV;
+    vTileRect = iTileRect;
+    vColor = aShade;
+    gl_Position = projView * vec4(pos, 1.0);
+}";
+            string heldCardVsCode = @"#version 450
+layout(location=0) in vec3 aCorner;
+layout(location=1) in vec2 aLocalUV;
+layout(location=2) in vec4 aShade;
+layout(location=3) in vec3 iPos;
+layout(location=4) in vec4 iTileRect;
+layout(location=5) in vec4 iRot;
+layout(location=6) in float iScale;
+layout(location=7) in float iThickness;
+layout(location=0) out vec2 vLocalUV;
+layout(location=1) out vec4 vTileRect;
+layout(location=2) out vec4 vColor;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() {
+    // The held flat item is a PRISM: the sprite quad extruded to a thin slab, so the item
+    // has real edges instead of reading as a decal. iThickness scales the slab depth only
+    // (0 = a perfectly flat card, 1 = one sprite pixel, like Minecraft's extruded items).
+    vec3 local = aCorner * iScale;
+    local.z *= iThickness;
+    vec3 qv = iRot.xyz;
+    vec3 t = 2.0 * cross(qv, local);
+    vec3 rotated = local + iRot.w * t + cross(qv, t);
+    vec3 pos = rotated + iPos;
+    vLocalUV = aLocalUV;
+    vTileRect = iTileRect;
+    vColor = aShade;
+    gl_Position = projView * vec4(pos, 1.0);
+}";
+            // One unfogged cutout fragment shader for both passes: item art is transparent
+            // around the shape, block tiles are opaque (the discard never fires for them).
+            string heldFsCode = @"#version 450
+layout(location=0) in vec2 vLocalUV;
+layout(location=1) in vec4 vTileRect;
+layout(location=2) in vec4 vColor;
+layout(set=1, binding=0) uniform sampler2D uTex;
+layout(location=0) out vec4 outColor;
+void main() {
+    vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
+    vec4 tex = texture(uTex, atlasUV);
+    if (tex.a < 0.5) discard;
+    outColor = tex * vColor;
+}";
+            var heldBlockVsSpirv = SpirvCompilation.CompileGlslToSpirv(heldBlockVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var heldCardVsSpirv = SpirvCompilation.CompileGlslToSpirv(heldCardVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var heldFsSpirv = SpirvCompilation.CompileGlslToSpirv(heldFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var heldBlockShaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, heldBlockVsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, heldFsSpirv.SpirvBytes, "main"));
+            var heldCardShaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, heldCardVsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, heldFsSpirv.SpirvBytes, "main"));
+
+            var heldVertexLayout = new VertexLayoutDescription(
+                new VertexElementDescription("aCorner", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                new VertexElementDescription("aLocalUV", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float2),
+                new VertexElementDescription("aShade", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
+            var heldInstanceLayout = new VertexLayoutDescription(
+                new VertexElementDescription("iPos", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                new VertexElementDescription("iTileRect", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4),
+                new VertexElementDescription("iRot", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4),
+                new VertexElementDescription("iScale", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float1),
+                new VertexElementDescription("iThickness", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float1));
+            heldInstanceLayout.InstanceStepRate = 1;
+
+            _heldBlockPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleAlphaBlend,
+                DepthStencilState = DepthStencilStateDescription.Disabled,
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout },
+                ShaderSet = new ShaderSetDescription(new[] { heldVertexLayout, heldInstanceLayout }, new[] { heldBlockShaders[0], heldBlockShaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
+            _heldItemPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                BlendState = BlendStateDescription.SingleAlphaBlend,
+                DepthStencilState = DepthStencilStateDescription.Disabled,
+                // Double-sided: the card is a flat quad and must read from either side.
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout },
+                ShaderSet = new ShaderSetDescription(new[] { heldVertexLayout, heldInstanceLayout }, new[] { heldCardShaders[0], heldCardShaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
+            _heldInstanceBuffer = factory.CreateBuffer(new BufferDescription(13 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+
+            // ---- Held item prism (a flat item given real thickness) --------------------
+            // A flat sprite in the hand reads like a decal. Minecraft extrudes flat items
+            // into a 1/16-block slab: the front and back show the whole sprite and the four
+            // rim faces show the sprite's OWN edge pixels, so the item looks physical.
+            // Local space: x/y span -1..1 (the shader scales it), z spans +/-1/32 so the
+            // slab is exactly 1/16 of the card's width = one sprite pixel.
+            {
+                const float h = 1f / 32f;   // half the slab depth (1 sprite pixel of 16)
+                const float uvMax = 0.999f; // keep the max edge off fract()'s wrap point
+                var pv = new float[24 * (3 + 2 + 4)];
+                int p = 0;
+                void P(float x, float y, float z, float u, float v, float shade)
+                {
+                    pv[p++] = x; pv[p++] = y; pv[p++] = z;
+                    pv[p++] = u; pv[p++] = v;
+                    pv[p++] = shade; pv[p++] = shade; pv[p++] = shade; pv[p++] = 1f;
+                }
+                // 0: front (+z) - the sprite, upright
+                P(-1f, -1f, h, 0f, uvMax, 1.00f);
+                P(1f, -1f, h, uvMax, uvMax, 1.00f);
+                P(1f, 1f, h, uvMax, 0f, 1.00f);
+                P(-1f, 1f, h, 0f, 0f, 1.00f);
+                // 1: back (-z) - the same sprite seen from behind
+                P(-1f, -1f, -h, 0f, uvMax, 0.85f);
+                P(1f, -1f, -h, uvMax, uvMax, 0.85f);
+                P(1f, 1f, -h, uvMax, 0f, 0.85f);
+                P(-1f, 1f, -h, 0f, 0f, 0.85f);
+                // 2: left rim - the sprite's left column
+                P(-1f, -1f, -h, 0f, uvMax, 0.80f);
+                P(-1f, -1f, h, 0f, uvMax, 0.80f);
+                P(-1f, 1f, h, 0f, 0f, 0.80f);
+                P(-1f, 1f, -h, 0f, 0f, 0.80f);
+                // 3: right rim - the sprite's right column
+                P(1f, -1f, -h, uvMax, uvMax, 0.90f);
+                P(1f, -1f, h, uvMax, uvMax, 0.90f);
+                P(1f, 1f, h, uvMax, 0f, 0.90f);
+                P(1f, 1f, -h, uvMax, 0f, 0.90f);
+                // 4: top rim - the sprite's top row
+                P(-1f, 1f, h, 0f, 0f, 0.95f);
+                P(1f, 1f, h, uvMax, 0f, 0.95f);
+                P(1f, 1f, -h, uvMax, 0f, 0.95f);
+                P(-1f, 1f, -h, 0f, 0f, 0.95f);
+                // 5: bottom rim - the sprite's bottom row
+                P(-1f, -1f, -h, 0f, uvMax, 0.70f);
+                P(1f, -1f, -h, uvMax, uvMax, 0.70f);
+                P(1f, -1f, h, uvMax, uvMax, 0.70f);
+                P(-1f, -1f, h, 0f, uvMax, 0.70f);
+
+                var pi = new ushort[36];
+                int q = 0;
+                void Quad(int face)
+                {
+                    int b = face * 4;
+                    pi[q++] = (ushort)(b + 0); pi[q++] = (ushort)(b + 1); pi[q++] = (ushort)(b + 2);
+                    pi[q++] = (ushort)(b + 0); pi[q++] = (ushort)(b + 2); pi[q++] = (ushort)(b + 3);
+                }
+                // Back first, then the rims, then the front LAST: the held pass runs with
+                // depth testing off, so the front face has to be the one that survives the
+                // overlap with the back face - the item always shows its sprite.
+                Quad(1);
+                Quad(2); Quad(3); Quad(4); Quad(5);
+                Quad(0);
+
+                _heldPrismVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)pv.Length * sizeof(float), BufferUsage.VertexBuffer));
+                _gd.UpdateBuffer(_heldPrismVertexBuffer, 0, pv);
+                _heldPrismIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)pi.Length * sizeof(ushort), BufferUsage.IndexBuffer));
+                _gd.UpdateBuffer(_heldPrismIndexBuffer, 0, pi);
+            }
+
 
             // Size from the actual hand mesh (24 verts / 36 indices for the arm cube) - the mesh
             // is built in LoadPlayerResources which runs before this.
