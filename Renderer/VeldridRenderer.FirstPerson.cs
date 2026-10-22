@@ -70,25 +70,12 @@ namespace Cubuild.Renderer
             }
             s = Math.Min(1f, s + pokeS);
 
-            // ---- The chop: Minecraft's exact first-person swing --------------------------
-            // Vanilla never re-poses the arm for a swing. The whole arm+item assembly first
-            // drifts with the swing bob, then rotates TOGETHER around the FIST by the attack
-            // transform: pitch dips 80° deep, yaw flicks 20° off its 45° base, roll sweeps
-            // 20°. The item is glued to the fist, so it inherits all of it (DrawHeldItem
-            // takes the same rotation) and arm + object chop as one rigid piece.
-            const float D2R = (float)(Math.PI / 180.0);
-            float f4 = (float)Math.Sin(s * s * Math.PI);                      // quick yaw flick
-            float f5 = (float)Math.Sin((float)Math.Sqrt(Math.Max(s, 0f)) * Math.PI); // chop envelope
-            float bobX = -0.4f * f5;
-            float bobY = 0.2f * (float)Math.Sin((float)Math.Sqrt(Math.Max(s, 0f)) * Math.PI * 2f);
-            float bobZ = -0.2f * (float)Math.Sin(Math.Max(s, 0f) * Math.PI);
-            // Attack chain in vanilla's mulPose order: yaw1 -> roll -> pitch -> yaw2 (right
-            // hand). Quaternion.Multiply(A, B) here rotates by B first, so the innermost yaw1
-            // is multiplied in last and the wrap-up yaw2 goes on outermost.
-            Quaternion qFist = Quaternion.CreateFromYawPitchRoll((45f - f4 * 20f) * D2R, 0f, 0f);
-            qFist = Quaternion.Multiply(Quaternion.CreateFromYawPitchRoll(0f, 0f, -20f * f5 * D2R), qFist);
-            qFist = Quaternion.Multiply(Quaternion.CreateFromYawPitchRoll(0f, -80f * f5 * D2R, 0f), qFist);
-            qFist = Quaternion.Multiply(Quaternion.CreateFromYawPitchRoll(-45f * D2R, 0f, 0f), qFist);
+            // The punch aims the arm itself down the view-center ray. Rotating the current
+            // arm direction toward that ray is important: a Z-only item nudge reads as a
+            // sideways swipe, while rotating around the fist makes the shoulder sweep.
+            // Keep the shoulder anchor fixed, rotate the whole solid arm from there, and let
+            // the held item inherit that exact same shoulder rotation.
+            float punch = (float)Math.Sin(Math.Sqrt(Math.Max(s, 0f)) * Math.PI);
 
             // The pose is purely the IDLE pose now: the swing doesn't re-angle the shoulder -
             // the vanilla chop lives entirely in the fist rotation + bob above.
@@ -102,16 +89,17 @@ namespace Cubuild.Renderer
 
             // The arm is the first-person model. The selected hotbar stack (block or item) is
             // drawn on top of it, in the fist - see DrawHeldItem.
-            // The held item AND the swing's pivot both hang on the fist: derive the grip point
-            // (the arm mesh's far end through the idle pose) first, so the verts can rotate
-            // around it exactly like vanilla rotates around its hand anchor.
+            // The fist and shoulder are both measured from the idle pose. Shoulder stays
+            // planted; the arm is aimed from that anchor toward the view-center ray.
             ComputeGripPoint();
             Vector3 grip = ArmToCamera(_gripX, _gripY, _gripZ, handScale,
                 cp, sp, cy, syy, cr, sr,
                 sx + handSway, sy + handBob, sz);
-            // Pivot near the shoulder so it stays planted and the fist punches.
             Vector3 shoulder = new Vector3(sx + handSway, sy + handBob, sz);
-            Vector3 pivot = shoulder + (grip - shoulder) * 0.25f;
+            Vector3 targetOnViewRay = new Vector3(0f, 0f, shoulder.Z - 2.0f);
+            Quaternion qAim = RotationBetween(grip - shoulder, targetOnViewRay - shoulder);
+            Quaternion qArm = Quaternion.Slerp(Quaternion.Identity, qAim, punch);
+            Vector3 punchLunge = new Vector3(0f, 0f, -0.08f * punch);
 
             float[] verts = new float[_handMesh.Length];
             {
@@ -131,19 +119,8 @@ namespace Cubuild.Renderer
                     float z2 = -xf * syy + z1 * cy;
                     float x3 = x2 * cr - y1 * sr;
                     float y3 = x2 * sr + y1 * cr;
-                    // Swing bob first: the whole assembly (arm, fist, item) drifts together.
-                    var v = new Vector3(x3 + sx + handSway + bobX, y3 + sy + handBob + bobY, z2 + sz + bobZ);
-                    // The chop pivots at the fist - but rotating the arm RIGIDLY around it
-                    // sweeps the far (shoulder) end in a wide arc, so the shoulder thrusts
-                    // itself outward instead of the fist. Vanilla gets away with it because
-                    // most of its arm is off-screen; ours is not. Blend the rotation out
-                    // Rotate the whole arm rigidly around the fist (vanilla style). Per-vertex
-                    // blending sheared the arm faces (looked like stretching). Rigid rotation
-                    // Don't rotate the arm mesh at all - keep it in idle pose. Only the item
-                    // rotates (full -80 chop around the fist). This matches MC where the arm
-                    // is mostly off-screen and only the item is visible chopping. The shoulder
-                    // stays planted, no stretching, no sweep.
-                    // (v already has the idle pose + bob, no rotation applied)
+                    var v = new Vector3(x3 + sx + handSway, y3 + sy + handBob, z2 + sz);
+                    v = shoulder + Vector3.Transform(v - shoulder, qArm) + punchLunge;
                     verts[i] = v.X;
                     verts[i + 1] = v.Y;
                     verts[i + 2] = v.Z;
@@ -196,11 +173,28 @@ namespace Cubuild.Renderer
                 cl.DrawIndexed((uint)_handIndices.Length, 1, 0, 0, 0);
             }
 
-            // The held item / block rides in the fist: the fist stays in its idle position
-            // (arm doesn't rotate), and only the item rotates (full -80 chop around the fist).
-            // The held item / block rides in the fist: the fist stays in idle pose,
-            // and the item does a forward PUNCH (thrust), not a rotation.
-            DrawHeldItem(cl, grip, s);
+            Vector3 fistAfter = shoulder + Vector3.Transform(grip - shoulder, qArm) + punchLunge;
+            DrawHeldItem(cl, fistAfter, qArm);
+        }
+
+        private static Quaternion RotationBetween(Vector3 from, Vector3 to)
+        {
+            if (from.LengthSquared() < 1e-8f || to.LengthSquared() < 1e-8f)
+                return Quaternion.Identity;
+
+            from = Vector3.Normalize(from);
+            to = Vector3.Normalize(to);
+            float dot = Math.Clamp(Vector3.Dot(from, to), -1f, 1f);
+            if (dot > 0.99999f) return Quaternion.Identity;
+            if (dot < -0.99999f)
+            {
+                Vector3 axis = Vector3.Cross(from, Vector3.UnitY);
+                if (axis.LengthSquared() < 1e-8f) axis = Vector3.Cross(from, Vector3.UnitX);
+                return Quaternion.CreateFromAxisAngle(Vector3.Normalize(axis), MathF.PI);
+            }
+
+            Vector3 cross = Vector3.Cross(from, to);
+            return Quaternion.Normalize(new Quaternion(cross, 1f + dot));
         }
 
         private void DrawCrosshair(CommandList cl)

@@ -76,11 +76,11 @@ namespace Cubuild.Renderer
         }
 
         /// <summary>
-        /// Draws the selected hotbar stack in the fist. <paramref name="grip"/> is the fist in
-        /// camera space (idle pose); <paramref name="s"/> is the swing progress (0..1).
-        /// The item does a forward PUNCH (thrust toward the block), not a rotation/swipe.
+        /// Draws the selected hotbar stack at the transformed fist. The item inherits the
+        /// shoulder-anchored arm aim rotation so it stays attached and points down the same
+        /// view-center ray as the punching hand.
         /// </summary>
-        private void DrawHeldItem(CommandList cl, Vector3 grip, float s)
+        private void DrawHeldItem(CommandList cl, Vector3 grip, Quaternion qArm)
         {
             var hotbar = _hud.Hotbar;
             if (hotbar == null || hotbar.Count == 0) return;
@@ -132,33 +132,22 @@ namespace Cubuild.Renderer
                     dRot.y * Deg2Rad, dRot.x * Deg2Rad, dRot.z * Deg2Rad);
             }
 
-            // ---- Punch: forward thrust (not a rotation/swipe) ------------------------
-            // A punch is a forward jab: the item thrusts toward the block and pulls back.
-            // The vanilla swing envelope (sin(sqrt(s)*pi)) gives a smooth out-and-back.
-            float f5 = (float)Math.Sin(Math.Sqrt(Math.Max(s, 0f)) * Math.PI);
-            float punchZ = -0.4f * f5;   // forward (negative Z) thrust at peak
-            float punchY = 0.05f * f5;   // slight upward lift
-            // Small downward tilt so it reads as a punch, not just a slide.
-            float tilt = -0.25f * f5;    // radians, ~-14 degrees at peak
-
-            // Total rotation: display transform (vanilla item tilt) + small punch tilt + F8 nudge.
-            // NO -80 chop rotation - that's what made it look like a swipe.
-            Quaternion q = Quaternion.Multiply(qDisplay, Quaternion.Identity);
-            q = Quaternion.Multiply(Quaternion.CreateFromYawPitchRoll(0f, tilt, 0f), q);
+            // Arm aim rotation wraps the vanilla display transform: the object follows the
+            // fist's shoulder-anchored motion instead of receiving an independent screen-space
+            // swipe/thrust.
+            Quaternion q = Quaternion.Multiply(qArm, qDisplay);
             q = Quaternion.Multiply(
                 Quaternion.CreateFromYawPitchRoll(_heldYaw, _heldPitch, _heldRoll), q);
 
             float scale = (sprite ? _heldItemScale : _heldBlockScale) * dScale;
 
             // ---- Position ----------------------------------------------------------------
-            // Vanilla display translation, plus the punch thrust forward.
+            // Vanilla display translation in the item's final hand orientation.
             var dVec = new Vector3(dTrans.x, dTrans.y, dTrans.z);
             Vector3 pos = grip + Vector3.Transform(dVec, Matrix4x4.CreateFromQuaternion(q));
             float worldSize = (sprite ? 2f : 0.3f) * scale;
             pos += Vector3.Transform(new Vector3(0.5f, 0.5f, 0.5f) * worldSize,
                 Matrix4x4.CreateFromQuaternion(q));
-            // Punch thrust (forward + slight up), applied raw in camera space.
-            pos += new Vector3(0f, punchY, punchZ);
             // F8 nudge stays raw in screen space, on top of everything.
             pos += new Vector3(_heldOffsetX, _heldOffsetY, _heldOffsetZ);
 
