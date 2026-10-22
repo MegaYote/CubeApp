@@ -89,13 +89,17 @@ namespace Cubuild.Renderer
             int id = hotbar[sel];
             if (id <= 0) return;
 
+            bool blockDisplay = ItemRegistry.IsBlockItem(id);
             var tile = ItemRegistry.GetTile(id, out bool fromItems);
+            // A block may define only per-face tiles and omit a shared inventory tile. Use its
+            // top face as the validity/placeholder tile; cube faces below select their own.
+            if (tile.Width <= 0 && blockDisplay)
+                tile = BlockRegistry.FaceTexture(id, new Point3D(0, 1, 0));
             if (tile.Width <= 0 || tile.Height <= 0) return;
 
             // A stack can be a block item even when its model is rendered as a flat sprite
             // (cross plants/torches). Pick its display transform from the stack's identity,
             // not from which GPU mesh happens to draw it.
-            bool blockDisplay = ItemRegistry.IsBlockItem(id);
 
             // Genuine items (and blocks that ship their own items.png art) are flat sprites;
             // cross-quad blocks (saplings, torches) are sprites too - a cube would look wrong.
@@ -156,40 +160,68 @@ namespace Cubuild.Renderer
             // F8 nudge stays raw in screen space, on top of everything.
             pos += new Vector3(_heldOffsetX, _heldOffsetY, _heldOffsetZ);
 
-            int f = 0;
-            _heldInstanceScratch[f++] = pos.X;
-            _heldInstanceScratch[f++] = pos.Y;
-            _heldInstanceScratch[f++] = pos.Z;
-            _heldInstanceScratch[f++] = tile.X / atlasW;
-            _heldInstanceScratch[f++] = tile.Y / atlasH;
-            _heldInstanceScratch[f++] = tile.Width / atlasW;
-            _heldInstanceScratch[f++] = tile.Height / atlasH;
-            _heldInstanceScratch[f++] = q.X;
-            _heldInstanceScratch[f++] = q.Y;
-            _heldInstanceScratch[f++] = q.Z;
-            _heldInstanceScratch[f++] = q.W;
-            _heldInstanceScratch[f++] = scale;
-            // Flat items are extruded into a thin slab (1 sprite pixel by default) so they
-            // read as physical objects instead of decals.
-            _heldInstanceScratch[f++] = sprite ? _heldThickness : 0f;
-            // The GPU fetches instance N at N * stride, so every slice of the stack needs its
-            // own copy of the data - they are all the same item, just at a different depth.
-            for (int sl = 1; sl < HeldSlices; sl++)
-                Array.Copy(_heldInstanceScratch, 0, _heldInstanceScratch, 13 * sl, 13);
-            _gd.UpdateBuffer(_heldInstanceBuffer, 0, _heldInstanceScratch);
-
             cl.SetPipeline(pipeline);
             cl.SetGraphicsResourceSet(0, _handProjSet);
             cl.SetGraphicsResourceSet(1, textureSet);
             cl.SetVertexBuffer(0, sprite ? _heldCardVertexBuffer : _itemDropVertexBuffer);
-            cl.SetVertexBuffer(1, _heldInstanceBuffer, 0);
             cl.SetIndexBuffer(sprite ? _heldCardIndexBuffer : _itemDropIndexBuffer, IndexFormat.UInt16);
-            // A flat item is a STACK of its own sprite through the slab's depth: the copies
-            // are spread by perspective, so the art's silhouette sweeps backward and the item
-            // grows a body instead of reading as a decal. The front slice is drawn last and
-            // wins (depth is off), so the item always shows its crisp sprite.
-            cl.DrawIndexed(sprite ? 6u : (uint)FallingCubeIndices,
-                sprite ? (uint)HeldSlices : 1u, 0, 0, 0);
+
+            // The cube pipeline has one tile rect per instance. Draw its six quads separately
+            // so top/bottom/side overrides from blocks.json are respected, just as they are in
+            // the world mesher (for example, logs use end-grain on top and bark on the sides).
+            // Sprites and single-texture blocks keep the single batched path.
+            bool perFaceBlockTiles = !sprite && blockDisplay;
+            int faceDraws = perFaceBlockTiles ? 6 : 1;
+            for (int face = 0; face < faceDraws; face++)
+            {
+                var drawTile = perFaceBlockTiles
+                    ? BlockRegistry.FaceTexture(id, FallingFaceNormals[face])
+                    : tile;
+                int dataBase = perFaceBlockTiles ? face * 13 : 0;
+                int f = dataBase;
+                _heldInstanceScratch[f++] = pos.X;
+                _heldInstanceScratch[f++] = pos.Y;
+                _heldInstanceScratch[f++] = pos.Z;
+                _heldInstanceScratch[f++] = drawTile.X / atlasW;
+                _heldInstanceScratch[f++] = drawTile.Y / atlasH;
+                _heldInstanceScratch[f++] = drawTile.Width / atlasW;
+                _heldInstanceScratch[f++] = drawTile.Height / atlasH;
+                _heldInstanceScratch[f++] = q.X;
+                _heldInstanceScratch[f++] = q.Y;
+                _heldInstanceScratch[f++] = q.Z;
+                _heldInstanceScratch[f++] = q.W;
+                _heldInstanceScratch[f++] = scale;
+                // Flat items are extruded into a thin slab (1 sprite pixel by default) so they
+                // read as physical objects instead of decals.
+                _heldInstanceScratch[f++] = sprite ? _heldThickness : 0f;
+                // Each sprite slice needs the same instance data at its own stride.
+                if (sprite)
+                {
+                    for (int sl = 1; sl < HeldSlices; sl++)
+                        Array.Copy(_heldInstanceScratch, 0, _heldInstanceScratch, 13 * sl, 13);
+                }
+            }
+
+            // Upload once before recording the draws; updating the same instance memory between
+            // recorded draws can make every face observe only the last tile rect.
+            _gd.UpdateBuffer(_heldInstanceBuffer, 0, _heldInstanceScratch);
+
+            for (int face = 0; face < faceDraws; face++)
+            {
+                if (perFaceBlockTiles)
+                {
+                    cl.SetVertexBuffer(1, _heldInstanceBuffer, (uint)(face * 13 * sizeof(float)));
+                    cl.DrawIndexed(6, 1, (uint)(face * 6), 0, 0);
+                }
+                else
+                {
+                    cl.SetVertexBuffer(1, _heldInstanceBuffer, 0);
+                    // A flat item is a STACK of its own sprite through the slab's depth; the
+                    // front slice is drawn last and wins with depth testing disabled.
+                    cl.DrawIndexed(sprite ? 6u : (uint)FallingCubeIndices,
+                        sprite ? (uint)HeldSlices : 1u, 0, 0, 0);
+                }
+            }
         }
     }
 }
