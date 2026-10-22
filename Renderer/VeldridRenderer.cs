@@ -297,9 +297,9 @@ namespace Cubuild.Renderer
 
         // ---- Tunable hand viewmodel params (adjust in-game via the F3 Hand Editor) ----
         private float _handScale = 1.052f;     // arm scale
-        private float _handSx = 0.854f;        // shoulder anchor X (right)
+        private float _handSx = 0.5f;        // shoulder anchor X (right) - closer to MC's 0.56
         private float _handSy = -1.023f;       // shoulder anchor Y (down)
-        private float _handSz = -0.623f;       // shoulder anchor Z (forward)
+        private float _handSz = -0.3f;       // shoulder anchor Z (forward) - closer to MC
         private float _handBasePitch = -0.678f; // idle arm pitch
         private float _handBaseYaw = 0.010f;   // idle arm yaw (toward center)
 
