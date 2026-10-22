@@ -92,6 +92,11 @@ namespace Cubuild.Renderer
             var tile = ItemRegistry.GetTile(id, out bool fromItems);
             if (tile.Width <= 0 || tile.Height <= 0) return;
 
+            // A stack can be a block item even when its model is rendered as a flat sprite
+            // (cross plants/torches). Pick its display transform from the stack's identity,
+            // not from which GPU mesh happens to draw it.
+            bool blockDisplay = ItemRegistry.IsBlockItem(id);
+
             // Genuine items (and blocks that ship their own items.png art) are flat sprites;
             // cross-quad blocks (saplings, torches) are sprites too - a cube would look wrong.
             bool itemsAtlas = fromItems;
@@ -108,20 +113,14 @@ namespace Cubuild.Renderer
             float atlasW = Math.Max(1f, itemsAtlas ? _itemsAtlasPixelsW : _atlasWidth);
             float atlasH = Math.Max(1f, itemsAtlas ? _itemsAtlasPixelsH : _atlasHeight);
 
-            // ---- Per-item MC display transform (items.json) --------------------------
-            // "heldRotation"/"heldTranslation"/"heldScale" carry the exact numbers
-            // Minecraft's item models ship for display.firstperson_righthand:
-            // rotation (0,-90,25), translation (1.13/16, 3.2/16, 1.13/16), scale 0.68.
-            // Plain blocks use the vanilla block display: rotation (0,45,0), no translation
-            // (the center offset below places the cube where the vanilla corner-anchored
-            // one sits).
-            var dRot = ItemRegistry.HeldRotationOf(id);        // degrees (x=pitch, y=yaw, z=roll)
-            var dTrans = ItemRegistry.HeldTranslationOf(id);   // world units
-            float dScale = ItemRegistry.HeldScaleOf(id);       // multiplier (1 = none)
-            if (!sprite && dRot == (0, 0, 0))
-            {
-                dRot = (0f, 45f, 0f); // vanilla held-block yaw, flat otherwise
-            }
+            // Vanilla has different first-person displays for block models and item models.
+            // Don't let the shared items.json item display accidentally tip/translate a block.
+            // Blocks: yaw 45 degrees, zero display translation, 0.4-block model size.
+            // Items: their firstperson_righthand transform from items.json (usually
+            // rotation 0,-90,25; translation 1.13,3.2,1.13 / 16; scale 0.68).
+            var dRot = blockDisplay ? (x: 0f, y: 45f, z: 0f) : ItemRegistry.HeldRotationOf(id);
+            var dTrans = blockDisplay ? (x: 0f, y: 0f, z: 0f) : ItemRegistry.HeldTranslationOf(id);
+            float dScale = blockDisplay ? 1f : ItemRegistry.HeldScaleOf(id);
 
             // Display rotation, degrees -> radians (CreateFromYawPitchRoll wants yaw,pitch,roll).
             Quaternion qDisplay = Quaternion.Identity;
@@ -139,15 +138,21 @@ namespace Cubuild.Renderer
             q = Quaternion.Multiply(
                 Quaternion.CreateFromYawPitchRoll(_heldYaw, _heldPitch, _heldRoll), q);
 
-            float scale = (sprite ? _heldItemScale : _heldBlockScale) * dScale;
+            // The cube mesh is 0.3 units wide and uses heldBlockScale=1.3334 for vanilla's
+            // 0.4-block display. A sprite quad spans +/-1, so a block rendered as a cross-card
+            // uses half of that same 0.4 width; true items keep vanilla's 0.68 width.
+            float scale = blockDisplay
+                ? (sprite ? 0.15f : 1f) * _heldBlockScale
+                : _heldItemScale * dScale;
 
             // ---- Position ----------------------------------------------------------------
-            // Vanilla display translation in the item's final hand orientation.
+            // Both GPU meshes are already CENTERED on their local origin (the cube vertex
+            // shader subtracts 0.15; the sprite quad spans -1..1). Therefore the fist is their
+            // center anchor: add only the display translation. Adding a second half-extents
+            // offset here moved the object out of the grip and made it look perched above the
+            // hand rather than held by it.
             var dVec = new Vector3(dTrans.x, dTrans.y, dTrans.z);
             Vector3 pos = grip + Vector3.Transform(dVec, Matrix4x4.CreateFromQuaternion(q));
-            float worldSize = (sprite ? 2f : 0.3f) * scale;
-            pos += Vector3.Transform(new Vector3(0.5f, 0.5f, 0.5f) * worldSize,
-                Matrix4x4.CreateFromQuaternion(q));
             // F8 nudge stays raw in screen space, on top of everything.
             pos += new Vector3(_heldOffsetX, _heldOffsetY, _heldOffsetZ);
 

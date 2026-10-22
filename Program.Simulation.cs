@@ -262,6 +262,10 @@ _wasCreativeBreakHeld = breakHeldNow;
         {
             if (World == null) return false;
             if (!World.TryBreakBlockAt(x, y, z, out int removedBlockId, chop)) return false;
+            // Creative removes the block in one instant, so MiningProgress never drives the
+            // renderer's continuous mining swing. Survival also gets a short finishing swing
+            // after the block disappears, rather than snapping back to idle on that frame.
+            _handSwingTimer = HandSwingDuration;
             gpuRenderer?.SpawnBlockBreakParticles(x, y, z, removedBlockId, 12);
             needsMeshUpdate = true;
 
@@ -402,7 +406,10 @@ _wasCreativeBreakHeld = breakHeldNow;
             if (World.TryPlaceSelectedBlock(World.LocalPlayer, World.PlayerPosition, World.GetCameraForward()))
             {
                 needsMeshUpdate = true;
-                _handPokeTimer = 0.3f; // first-person hand does a quick jab
+                // A successful place is the same deliberate punch as a successful break.
+                // Use the shared one-shot swing so creative and survival place identically.
+                _handPokeTimer = 0f;
+                _handSwingTimer = HandSwingDuration;
             }
         }
 
