@@ -139,10 +139,11 @@ namespace Cubuild.Renderer
                     // most of its arm is off-screen; ours is not. Blend the rotation out
                     // Rotate the whole arm rigidly around the fist (vanilla style). Per-vertex
                     // blending sheared the arm faces (looked like stretching). Rigid rotation
-                    // Pivot near the shoulder (1/4 from shoulder toward fist) so the shoulder
-                    // stays planted and the fist punches forward. The arm stays solid (no
-                    // per-vertex blending/stretching).
-                    v = pivot + Vector3.Transform(v - pivot, qFist);
+                    // Don't rotate the arm mesh at all - keep it in idle pose. Only the item
+                    // rotates (full -80 chop around the fist). This matches MC where the arm
+                    // is mostly off-screen and only the item is visible chopping. The shoulder
+                    // stays planted, no stretching, no sweep.
+                    // (v already has the idle pose + bob, no rotation applied)
                     verts[i] = v.X;
                     verts[i + 1] = v.Y;
                     verts[i + 2] = v.Z;
@@ -195,10 +196,9 @@ namespace Cubuild.Renderer
                 cl.DrawIndexed((uint)_handIndices.Length, 1, 0, 0, 0);
             }
 
-            // The held item / block rides in the fist: track where the fist ends up
-            // after the pivot rotation so the item stays glued to it.
-            Vector3 fistAfter = pivot + Vector3.Transform(grip - pivot, qFist);
-            DrawHeldItem(cl, fistAfter, qFist);
+            // The held item / block rides in the fist: the fist stays in its idle position
+            // (arm doesn't rotate), and only the item rotates (full -80 chop around the fist).
+            DrawHeldItem(cl, grip, qFist);
         }
 
         private void DrawCrosshair(CommandList cl)
