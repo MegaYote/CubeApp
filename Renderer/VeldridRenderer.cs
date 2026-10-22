@@ -292,7 +292,7 @@ namespace Cubuild.Renderer
         private float _handWalkAmount;
         private float _handPunchTime;
         private float _lastHandTime;
-        private float _prevHandSwing;
+        private int _lastHandSwingSerial;
         private readonly System.Diagnostics.Stopwatch _handClock = System.Diagnostics.Stopwatch.StartNew();
 
         // ---- Tunable hand viewmodel params (adjust in-game via the F3 Hand Editor) ----

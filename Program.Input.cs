@@ -184,7 +184,7 @@ namespace Cubuild
                 // before the mob attack so the click breaks the link rather than damaging a cart.
                 if (World.Entities.TryBreakLink(World.PlayerPosition, World.GetCameraForward(), out _))
                 {
-                    _handSwingTimer = HandSwingDuration;
+                    TriggerHandSwing();
                 }
                 else if (!World.TryMeleeAttackEntity(World.PlayerPosition, World.GetCameraForward()))
                 {
@@ -195,13 +195,13 @@ namespace Cubuild
                     var airPunch = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
                     if (!airPunch.HasValue)
                     {
-                        _handSwingTimer = HandSwingDuration;
+                        TriggerHandSwing();
                     }
                 }
                 else
                 {
                     // A mob was hit: play the same one-shot swing (MC swings on every attack).
-                    _handSwingTimer = HandSwingDuration;
+                    TriggerHandSwing();
                 }
             }
             if (screen == GameScreen.Playing && mouseLook && World != null && _ignoreInteractFrames == 0 && frameInput.PlaceBlockPressed)
@@ -226,14 +226,14 @@ namespace Cubuild
                 }
                 else if (TryToggleDoorUnderCrosshair())
                 {
-                    _handSwingTimer = HandSwingDuration;
+                    TriggerHandSwing();
                     _handPokeTimer = 0.3f;
                 }
                 // Linkage: while holding the coupler, right-click carts to couple them into a train.
                 // Checked before the cart/boat branch so it never just seats the player instead.
                 else if (World.TryLinkCarts(World.PlayerPosition, World.GetCameraForward()))
                 {
-                    _handSwingTimer = HandSwingDuration;
+                    TriggerHandSwing();
                     _handPokeTimer = 0.3f;
                 }
                 // Boats: right-click water to launch one, right-click a boat to board it, and
@@ -246,7 +246,7 @@ namespace Cubuild
                       || World.TryPlaceLocomotive(World.PlayerPosition, World.GetCameraForward())
                       || World.TryLaunchBoat(World.PlayerPosition, World.GetCameraForward()))
                 {
-                    _handSwingTimer = HandSwingDuration;
+                    TriggerHandSwing();
                 }
                 else
                 {

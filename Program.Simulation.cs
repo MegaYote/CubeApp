@@ -265,7 +265,7 @@ _wasCreativeBreakHeld = breakHeldNow;
             // Creative removes the block in one instant, so MiningProgress never drives the
             // renderer's continuous mining swing. Survival also gets a short finishing swing
             // after the block disappears, rather than snapping back to idle on that frame.
-            _handSwingTimer = HandSwingDuration;
+            TriggerHandSwing();
             gpuRenderer?.SpawnBlockBreakParticles(x, y, z, removedBlockId, 12);
             needsMeshUpdate = true;
 
@@ -409,7 +409,7 @@ _wasCreativeBreakHeld = breakHeldNow;
                 // A successful place is the same deliberate punch as a successful break.
                 // Use the shared one-shot swing so creative and survival place identically.
                 _handPokeTimer = 0f;
-                _handSwingTimer = HandSwingDuration;
+                TriggerHandSwing();
             }
         }
 

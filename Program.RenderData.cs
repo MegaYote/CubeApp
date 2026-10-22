@@ -175,6 +175,7 @@ namespace Cubuild
                 MiningBlockNormal = miningBlockNormal,
                 HandPoke = _handPokeTimer,
                 HandSwing = _handSwingTimer,
+                HandSwingSerial = _handSwingSerial,
                 SaveToast = _saveToastTimer,
                 GenWarning = _genWarningTimer,
                 WorldGenSaved = World.WorldGenVersion,

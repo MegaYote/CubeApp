@@ -155,6 +155,8 @@ namespace Cubuild.Renderer
         /// <summary>Remaining seconds of the first-person hand's one-shot punch/swing animation
         /// (set by Program when the player attacks a mob or punches the air).</summary>
         public float HandSwing;
+        /// <summary>Increments for every new punch so a fresh click can restart an active swing.</summary>
+        public int HandSwingSerial;
 
         /// <summary>Remaining seconds of the "World saved" toast (set when a save completes,
         /// manual or autosave). 0 = not showing.</summary>
@@ -225,6 +227,9 @@ namespace Cubuild.Renderer
             NetStatus = string.Empty,
             MultiplayerError = string.Empty,
             MiningProgress = 0f,
+            HandPoke = 0f,
+            HandSwing = 0f,
+            HandSwingSerial = 0,
             MiningBlockPos = Vector3.Zero,
             MiningBlockId = 0,
             MiningBlockNormal = new Point3D(0, 0, 0),

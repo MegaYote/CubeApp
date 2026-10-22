@@ -119,9 +119,17 @@ namespace Cubuild
         // to attack). Plays a single swing like Minecraft; mining a block uses MiningProgress
         // to drive the continuous punch instead.
         private float _handSwingTimer;
+        private int _handSwingSerial;
         // Matches the mining punch cycle (0.45s: 0.35 punch-out + 0.10 hold) so an air punch
         // plays exactly one full punch identical to a block-breaking swing.
         private const float HandSwingDuration = 0.45f;
+
+        /// <summary>Starts/restarts the one-shot hand punch, even if a previous one is active.</summary>
+        private void TriggerHandSwing()
+        {
+            _handSwingTimer = HandSwingDuration;
+            unchecked { _handSwingSerial++; }
+        }
         // Camera ray direction captured once when mining starts (the line from the camera THROUGH
         // the mined block to the block behind it). The shrink cube slides along this direction so
         // it clamps toward the block behind the crosshair, not the hit face's normal.
