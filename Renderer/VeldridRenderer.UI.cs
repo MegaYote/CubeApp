@@ -1042,8 +1042,8 @@ namespace Cubuild.Renderer
             }
             else if (m.Screen == GameScreen.CreateWorld)
             {
-                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 150f, size.Y / 2f - 170f), ImGuiCond.Always);
-                ImGui.SetNextWindowSize(new Vector2(300, 340), ImGuiCond.Always);
+                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 150f, size.Y / 2f - 135f), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(300, 270), ImGuiCond.Always);
                 ImGui.Begin("##createworld", windowFlags);
                 ImGui.Text("Create World");
                 ImGui.Spacing();
@@ -1069,23 +1069,6 @@ namespace Cubuild.Renderer
                     m.SelectedMode = GameMode.Survival;
                 }
                 ImGui.Spacing();
-                // Classic vs Complex is a SURVIVAL concept only - both are full crafting/
-                // progression packs, and in Creative you just get everything anyway, so the
-                // choice would be meaningless there. Shown only while Survival is selected.
-                if (m.SelectedMode == GameMode.Survival)
-                {
-                    ImGui.Text("Survival pack");
-                    if (ImGui.RadioButton("Classic", m.IsMinecraftMode))
-                    {
-                        m.IsMinecraftMode = true;
-                    }
-                    ImGui.SameLine();
-                    if (ImGui.RadioButton("Complex", !m.IsMinecraftMode))
-                    {
-                        m.IsMinecraftMode = false;
-                    }
-                    ImGui.Spacing();
-                }
                 if (ImGui.Button("Create World", new Vector2(220, 34)))
                 {
                     m.CreateWorldClicked = true;

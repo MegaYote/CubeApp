@@ -36,12 +36,6 @@ namespace Cubuild
         public string SeedInput = "";
         /// <summary>The mode chosen on the Create World screen (Creative by default).</summary>
         public GameMode SelectedMode = GameMode.Creative;
-        /// <summary>
-    /// Survival pack choice on the Create World screen: true = Classic (Minecraft-faithful
-    /// blocks/items/recipes), false = Complex (the default pack). Only offered while Survival
-    /// is selected, since both packs are full survival progressions.
-    /// </summary>
-        public bool IsMinecraftMode;
 
         public bool CreateWorldClicked;
         public bool ResumeClicked;
