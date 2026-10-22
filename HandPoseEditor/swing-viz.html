@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Hand Swing Visualization</title>
+<style>
+body { margin:0; background:#1a1a2e; color:#eee; font-family:monospace; overflow:hidden; }
+#info { position:absolute; top:10px; left:10px; background:rgba(0,0,0,0.8); padding:12px; border-radius:8px; font-size:13px; max-width:420px; border:1px solid #444; z-index:10; }
+#info h3 { margin:0 0 8px; color:#7af; }
+#info .legend { margin:3px 0; }
+#info .legend span { display:inline-block; width:16px; height:16px; margin-right:8px; vertical-align:middle; border-radius:3px; }
+#stats { margin-top:8px; color:#ff9; font-size:12px; }
+#slider { position:absolute; bottom:20px; left:50%; transform:translateX(-50%); width:70%; text-align:center; z-index:10; }
+#slider input { width:100%; }
+#controls { position:absolute; top:10px; right:10px; background:rgba(0,0,0,0.8); padding:12px; border-radius:8px; border:1px solid #444; z-index:10; }
+#controls button { margin:2px; padding:6px 14px; background:#333; color:#eee; border:1px solid #555; border-radius:4px; cursor:pointer; }
+#controls button:hover { background:#555; }
+#controls label { display:block; margin:4px 0; }
+canvas { display:block; }
+#err { position:absolute; bottom:60px; left:10px; color:#f44; font-size:12px; max-width:700px; z-index:10; background:rgba(0,0,0,0.8); padding:8px; }
+</style>
+</head>
+<body>
+<div id="info">
+  <h3>Hand Swing Pivot Visualization</h3>
+  <div class="legend"><span style="background:#e74c3c"></span>Fist end (full rotation)</div>
+  <div class="legend"><span style="background:#f39c12"></span>Forearm (blended rotation)</div>
+  <div class="legend"><span style="background:#2ecc71"></span>Shoulder end (stays planted)</div>
+  <div class="legend"><span style="background:#3498db"></span>Held item (full rotation, glued to fist)</div>
+  <div class="legend"><span style="background:rgba(136,136,136,0.5)"></span>Ghost = idle pose (no swing)</div>
+  <div id="stats">swing s=0.00 | chop=0.00 | fist drift X=0.00 Z=0.00</div>
+</div>
+<div id="controls">
+  <button onclick="playing=!playing">Play/Pause</button>
+  <button onclick="s=0; playing=true;">Restart</button>
+  <label><input type="checkbox" id="showGhost" checked> Ghost</label>
+  <label><input type="checkbox" id="showItem" checked> Item</label>
+</div>
+<div id="slider">
+  <input type="range" min="0" max="1" step="0.001" value="0" id="sl">
+</div>
+<div id="err"></div>
+<canvas id="c"></canvas>
+<script>
+try {
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+const MESH = { xMin:-0.0625, xMax:0.1875, yMin:-0.625, yMax:0.125, zMin:-0.125, zMax:0.125 };
+const SX=0.854, SY=-1.023, SZ=-0.623;
+const BASE_PITCH=-0.678, BASE_YAW=0.01;
+const HAND_SCALE=1.052;
+const SCALE = 100;
+const ARM_RANGE = MESH.yMax - MESH.yMin;
+
+let s=0, playing=true;
+
+function idleTransform(px, py, pz) {
+  let x = px*HAND_SCALE, y = py*HAND_SCALE, z = pz*HAND_SCALE;
+  let xf=-x, yf=-y, zf=z;
+  let cp=Math.cos(BASE_PITCH), sp=Math.sin(BASE_PITCH);
+  let cy=Math.cos(BASE_YAW), syw=Math.sin(BASE_YAW);
+  let y1 = yf*cp - zf*sp;
+  let z1 = yf*sp + zf*cp;
+  let x2 = xf*cy + z1*syw;
+  let z2 = -xf*syw + z1*cy;
+  return {x: x2+SX, y: y1+SY, z: z2+SZ};
+}
+
+function computeGrip() {
+  let sumX=0, sumY=0, sumZ=0, count=0;
+  for(let x of [MESH.xMin, MESH.xMax]) for(let z of [MESH.zMin, MESH.zMax]) {
+    let v = idleTransform(x, MESH.yMin, z);
+    sumX+=v.x; sumY+=v.y; sumZ+=v.z; count++;
+  }
+  return {x:sumX/count, y:sumY/count, z:sumZ/count};
+}
+const gripIdle = computeGrip();
+
+function computeSwing(sVal) {
+  let f4 = Math.sin(sVal*sVal*Math.PI);
+  let f5 = Math.sin(Math.sqrt(Math.max(sVal,0))*Math.PI);
+  let bobX = -0.4*f5;
+  let bobY = 0.2*Math.sin(Math.sqrt(Math.max(sVal,0))*Math.PI*2);
+  let bobZ = -0.2*Math.sin(Math.max(sVal,0)*Math.PI);
+  let D2R = Math.PI/180;
+  let yaw1 = (45 - f4*20)*D2R;
+  let roll = -20*f5*D2R;
+  let pitch = -80*f5*D2R;
+  let yaw2 = -45*D2R;
+  return {f4, f5, bobX, bobY, bobZ, yaw1, roll, pitch, yaw2};
+}
+
+function rotY(p, a){ let c=Math.cos(a),s=Math.sin(a); return {x:p.x*c+p.z*s, y:p.y, z:-p.x*s+p.z*c}; }
+function rotZ(p, a){ let c=Math.cos(a),s=Math.sin(a); return {x:p.x*c-p.y*s, y:p.x*s+p.y*c, z:p.z}; }
+function rotX(p, a){ let c=Math.cos(a),s=Math.sin(a); return {x:p.x, y:p.y*c-p.z*s, z:p.y*s+p.z*c}; }
+
+// Project: use a simple side view (X-Y plane, Z as depth)
+const CX = () => canvas.width*0.5;
+const CY = () => canvas.height*0.6;
+function project(p) {
+  // Side view: X right, Y up, Z ignored (depth)
+  return { x: CX() + (p.x-0.5)*SCALE*1.5, y: CY() - p.y*SCALE };
+}
+
+function drawArm(sVal, isGhost) {
+  let sw = isGhost ? 0 : sVal;
+  let info = computeSwing(sw);
+  let bob = isGhost ? {x:0,y:0,z:0} : {x:info.bobX, y:info.bobY, z:info.bobZ};
+  let grip = isGhost ? {x:gripIdle.x, y:gripIdle.y, z:gripIdle.z}
+                    : {x:gripIdle.x+bob.x, y:gripIdle.y+bob.y, z:gripIdle.z+bob.z};
+
+  let slices = 20;
+  for(let si=0; si<slices; si++) {
+    let t0 = si/slices, t1 = (si+1)/slices;
+    let yLocal0 = MESH.yMin + t0*ARM_RANGE;
+    let yLocal1 = MESH.yMin + t1*ARM_RANGE;
+    let yMid = (yLocal0+yLocal1)/2;
+
+    let armT = (MESH.yMax - yMid)/ARM_RANGE;
+    let bend = Math.max(0, Math.min(1, (armT-0.3)/0.7));
+    bend = bend*bend*(3-2*bend);
+
+    let cx = (MESH.xMin+MESH.xMax)/2;
+    let cz = (MESH.zMin+MESH.zMax)/2;
+    let v0 = idleTransform(cx, yLocal0, cz);
+    let v1 = idleTransform(cx, yLocal1, cz);
+    if(!isGhost){ v0.x+=bob.x; v0.y+=bob.y; v0.z+=bob.z; v1.x+=bob.x; v1.y+=bob.y; v1.z+=bob.z; }
+
+    if(!isGhost && bend > 1e-4) {
+      let y1r=info.yaw1*bend, rollr=info.roll*bend, pitchr=info.pitch*bend, yaw2r=info.yaw2*bend;
+      for(let vi of [v0, v1]) {
+        let rel = {x:vi.x-grip.x, y:vi.y-grip.y, z:vi.z-grip.z};
+        rel = rotY(rel, y1r); rel = rotZ(rel, rollr); rel = rotX(rel, pitchr); rel = rotY(rel, yaw2r);
+        vi.x = grip.x+rel.x; vi.y = grip.y+rel.y; vi.z = grip.z+rel.z;
+      }
+    }
+
+    let r,g,b;
+    if(isGhost) { r=136; g=136; b=136; }
+    else if(bend > 0.5) { let f=(bend-0.5)*2; r=231; g=Math.round(80*(1-f)); b=0; }
+    else { let f=bend*2; r=Math.round(231*f); g=Math.round(120+80*f); b=0; }
+
+    let p0 = project(v0), p1 = project(v1);
+    ctx.strokeStyle = `rgba(${r},${g},${b},${isGhost?0.3:0.95})`;
+    ctx.lineWidth = isGhost ? 4 : 10;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(p0.x, p0.y);
+    ctx.lineTo(p1.x, p1.y);
+    ctx.stroke();
+  }
+
+  // Fist marker
+  let fp = project(grip);
+  if(!isGhost) {
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(fp.x, fp.y, 6, 0, Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // label
+    ctx.fillStyle = '#fff';
+    ctx.font = '11px monospace';
+    ctx.fillText('FIST (pivot)', fp.x+10, fp.y-10);
+  }
+
+  // Held item
+  if(document.getElementById('showItem').checked && !isGhost) {
+    let dVec = {x:0.070625, y:0.2, z:0.070625};
+    let rel = {x:dVec.x, y:dVec.y, z:dVec.z};
+    rel = rotY(rel, info.yaw1); rel = rotZ(rel, info.roll); rel = rotX(rel, info.pitch); rel = rotY(rel, info.yaw2);
+    let itemPos = {x:grip.x+rel.x, y:grip.y+rel.y, z:grip.z+rel.z};
+    let co = {x:0.5*0.68, y:0.5*0.68, z:0.5*0.68};
+    let crel = {x:co.x, y:co.y, z:co.z};
+    crel = rotY(crel, info.yaw1); crel = rotZ(crel, info.roll); crel = rotX(crel, info.pitch); crel = rotY(crel, info.yaw2);
+    itemPos.x += crel.x; itemPos.y += crel.y; itemPos.z += crel.z;
+    let ip = project(itemPos);
+    ctx.save();
+    ctx.translate(ip.x, ip.y);
+    ctx.rotate(info.pitch + info.yaw1 + info.yaw2);
+    ctx.fillStyle = 'rgba(52,152,219,0.5)';
+    ctx.strokeStyle = '#3498db';
+    ctx.lineWidth = 2;
+    ctx.fillRect(-22, -22, 44, 44);
+    ctx.strokeRect(-22, -22, 44, 44);
+    ctx.restore();
+    ctx.fillStyle = '#3498db';
+    ctx.font = '11px monospace';
+    ctx.fillText('ITEM', ip.x+28, ip.y-28);
+  }
+}
+
+function draw() {
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Grid
+  ctx.strokeStyle = '#2a2a4e';
+  ctx.lineWidth = 1;
+  for(let i=-6; i<=6; i++) {
+    let p1 = project({x:i*0.3, y:-2, z:0}), p2 = project({x:i*0.3, y:2, z:0});
+    ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke();
+    let q1 = project({x:-3, y:i*0.3, z:0}), q2 = project({x:3, y:i*0.3, z:0});
+    ctx.beginPath(); ctx.moveTo(q1.x,q1.y); ctx.lineTo(q2.x,q2.y); ctx.stroke();
+  }
+
+  if(document.getElementById('showGhost').checked) drawArm(0, true);
+  drawArm(s, false);
+
+  // Axis labels
+  ctx.fillStyle = '#666';
+  ctx.font = '12px monospace';
+  ctx.fillText('X (right) ->', canvas.width-100, canvas.height-15);
+  ctx.save();
+  ctx.translate(15, canvas.height/2);
+  ctx.rotate(-Math.PI/2);
+  ctx.fillText('Y (up) ->', 0, 0);
+  ctx.restore();
+
+  // Draw shoulder marker
+  let sp = project({x:SX, y:SY, z:SZ});
+  ctx.fillStyle = '#2ecc71';
+  ctx.beginPath();
+  ctx.arc(sp.x, sp.y, 5, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = '#2ecc71';
+  ctx.font = '11px monospace';
+  ctx.fillText('SHOULDER (planted)', sp.x+8, sp.y-8);
+}
+
+const sl = document.getElementById('sl');
+sl.addEventListener('input', () => { s = parseFloat(sl.value); playing=false; });
+
+function animate() {
+  requestAnimationFrame(animate);
+  if(playing) {
+    s += 0.003;
+    if(s > 1) s = 0;
+    sl.value = s;
+  }
+  let info = computeSwing(s);
+  document.getElementById('stats').textContent =
+    `swing s=${s.toFixed(2)} | chop=${info.f5.toFixed(2)} | fist drift X=${info.bobX.toFixed(2)} Z=${info.bobZ.toFixed(2)}`;
+  draw();
+}
+animate();
+
+window.addEventListener('resize', () => {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+});
+} catch(e) {
+  document.getElementById('err').textContent = 'JS ERROR: ' + e.message + ' (line ' + (e.lineNumber||'?') + ')';
+}
+</script>
+</body>
+</html>

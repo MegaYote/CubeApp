@@ -720,18 +720,6 @@ void main() {
         private static void TransformHandMesh(Vector3 grip, Quaternion qFist, Vector3 bob)
         {
             if (_handMesh.Length == 0 || _handVertexBuffer == null) return;
-            // Arm blend bounds (fist = low-Y end, far/shoulder end = high-Y end), then the
-            // same blended chop as the game: fist full vanilla rotation, far end planted,
-            // forearm bends between so the shoulder never sweeps into view.
-            float armMaxY = _handMesh[1];
-            float armMinY = armMaxY;
-            for (int i = 1; i < _handMesh.Length; i += 8)
-            {
-                if (_handMesh[i] < armMinY) armMinY = _handMesh[i];
-                if (_handMesh[i] > armMaxY) armMaxY = _handMesh[i];
-            }
-            float armRange = MathF.Max(1e-4f, armMaxY - armMinY);
-
             var verts = new float[_handMesh.Length];
             float cp = MathF.Cos(_handBasePitch), sp = MathF.Sin(_handBasePitch);
             float cy = MathF.Cos(_handBaseYaw), syy = MathF.Sin(_handBaseYaw);
@@ -744,11 +732,8 @@ void main() {
                 float y1 = yf * cp - zf * sp, z1 = yf * sp + zf * cp;
                 float x2 = xf * cy + z1 * syy, z2 = -xf * syy + z1 * cy;
                 var v = new Vector3(x2 + _handSx + bob.X, y1 + _handSy + bob.Y, z2 + _handSz + bob.Z);
-                float armT = Math.Clamp((armMaxY - _handMesh[i + 1]) / armRange, 0f, 1f);
-                float bend = Math.Clamp((armT - 0.3f) / 0.7f, 0f, 1f);
-                bend = bend * bend * (3f - 2f * bend);
-                Quaternion qSeg = bend >= 0.999f ? qFist : Quaternion.Slerp(Quaternion.Identity, qFist, bend);
-                v = grip + Vector3.Transform(v - grip, qSeg);
+                // Rigid rotation around the fist (no blend - keeps the arm solid)
+                v = grip + Vector3.Transform(v - grip, qFist);
                 verts[i] = v.X; verts[i + 1] = v.Y; verts[i + 2] = v.Z;
                 for (int k = 3; k < 8; k++) verts[i + k] = _handMesh[i + k];
             }
