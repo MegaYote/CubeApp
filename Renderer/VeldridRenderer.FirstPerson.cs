@@ -109,6 +109,9 @@ namespace Cubuild.Renderer
             Vector3 grip = ArmToCamera(_gripX, _gripY, _gripZ, handScale,
                 cp, sp, cy, syy, cr, sr,
                 sx + handSway, sy + handBob, sz);
+            // Pivot near the shoulder so it stays planted and the fist punches.
+            Vector3 shoulder = new Vector3(sx + handSway, sy + handBob, sz);
+            Vector3 pivot = shoulder + (grip - shoulder) * 0.25f;
 
             float[] verts = new float[_handMesh.Length];
             {
@@ -136,9 +139,10 @@ namespace Cubuild.Renderer
                     // most of its arm is off-screen; ours is not. Blend the rotation out
                     // Rotate the whole arm rigidly around the fist (vanilla style). Per-vertex
                     // blending sheared the arm faces (looked like stretching). Rigid rotation
-                    // keeps the arm as a solid box. The shoulder may sweep into view since our
-                    // arm is more visible than MC's, but the arm stays solid.
-                    v = grip + Vector3.Transform(v - grip, qFist);
+                    // Pivot near the shoulder (1/4 from shoulder toward fist) so the shoulder
+                    // stays planted and the fist punches forward. The arm stays solid (no
+                    // per-vertex blending/stretching).
+                    v = pivot + Vector3.Transform(v - pivot, qFist);
                     verts[i] = v.X;
                     verts[i + 1] = v.Y;
                     verts[i + 2] = v.Z;
@@ -191,10 +195,10 @@ namespace Cubuild.Renderer
                 cl.DrawIndexed((uint)_handIndices.Length, 1, 0, 0, 0);
             }
 
-            // The held item / block rides in the fist: it's positioned at the SAME grip point
-            // (already drift- and bob-aware) and inherits the attack rotation there - the
-            // whole mining chop is one rigid arm+object swing, like vanilla.
-            DrawHeldItem(cl, grip, qFist);
+            // The held item / block rides in the fist: track where the fist ends up
+            // after the pivot rotation so the item stays glued to it.
+            Vector3 fistAfter = pivot + Vector3.Transform(grip - pivot, qFist);
+            DrawHeldItem(cl, fistAfter, qFist);
         }
 
         private void DrawCrosshair(CommandList cl)
