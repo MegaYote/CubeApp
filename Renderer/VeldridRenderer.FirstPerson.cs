@@ -110,6 +110,17 @@ namespace Cubuild.Renderer
                 cp, sp, cy, syy, cr, sr,
                 sx + handSway, sy + handBob, sz);
 
+            // Arm blend bounds: the fist is the mesh's low-Y end (where the grip point lives);
+            // the high-Y end is where the arm leaves toward the (off-screen) shoulder.
+            float armMaxY = _handMesh.Length > 0 ? _handMesh[1] : 0f;
+            float armMinY = armMaxY;
+            for (int i = 1; i < _handMesh.Length; i += 9)
+            {
+                if (_handMesh[i] < armMinY) armMinY = _handMesh[i];
+                if (_handMesh[i] > armMaxY) armMaxY = _handMesh[i];
+            }
+            float armRange = Math.Max(1e-4f, armMaxY - armMinY);
+
             float[] verts = new float[_handMesh.Length];
             {
                 for (int i = 0; i < _handMesh.Length; i += 9)
@@ -129,10 +140,19 @@ namespace Cubuild.Renderer
                     float x3 = x2 * cr - y1 * sr;
                     float y3 = x2 * sr + y1 * cr;
                     // Swing bob first: the whole assembly (arm, fist, item) drifts together.
-                    // Then the chop rotates everything around the fist - qFist is identity at
-                    // rest, so idle frames pass straight through.
                     var v = new Vector3(x3 + sx + handSway + bobX, y3 + sy + handBob + bobY, z2 + sz + bobZ);
-                    v = grip + Vector3.Transform(v - grip, qFist);
+                    // The chop pivots at the fist - but rotating the arm RIGIDLY around it
+                    // sweeps the far (shoulder) end in a wide arc, so the shoulder thrusts
+                    // itself outward instead of the fist. Vanilla gets away with it because
+                    // most of its arm is off-screen; ours is not. Blend the rotation out
+                    // along the arm instead: the fist takes the full vanilla transform, the
+                    // far end keeps its idle spot, and the forearm bends in between - the
+                    // arm stays pinned at the screen edge while the fist does the chopping.
+                    float armT = Math.Clamp((armMaxY - _handMesh[i + 1]) / armRange, 0f, 1f);
+                    float bend = Math.Clamp((armT - 0.3f) / 0.7f, 0f, 1f);
+                    bend = bend * bend * (3f - 2f * bend);
+                    Quaternion qSeg = bend >= 0.999f ? qFist : Quaternion.Slerp(Quaternion.Identity, qFist, bend);
+                    v = grip + Vector3.Transform(v - grip, qSeg);
                     verts[i] = v.X;
                     verts[i + 1] = v.Y;
                     verts[i + 2] = v.Z;
