@@ -42,5 +42,14 @@ namespace Cubuild
         public int Weight { get; set; } = 0;
         /// <summary>Swatch colour for the E-menu/debug, ImGui packed U32.</summary>
         public uint MapColor { get; set; }
+
+        /// <summary>
+        /// Optional MC-style first-person righthand display transform. When set, this is
+        /// applied on top of the global held-item tunables. Rotation is in degrees (x=pitch,
+        /// y=yaw, z=roll), translation is in world units, scale is a uniform multiplier.
+        /// </summary>
+        public (float x, float y, float z)? HeldRotation { get; set; }
+        public (float x, float y, float z)? HeldTranslation { get; set; }
+        public float? HeldScale { get; set; }
     }
 }

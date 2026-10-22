@@ -30,6 +30,18 @@ namespace Cubuild
         private static TextureRect[] _itemTiles = Array.Empty<TextureRect>();
         private static string[] _placedBlock = Array.Empty<string>();
         private static uint[] _mapColor = Array.Empty<uint>();
+
+        // MC-style first-person righthand display transform (per item).
+        private static float[] _heldRotX = Array.Empty<float>();
+        private static float[] _heldRotY = Array.Empty<float>();
+        private static float[] _heldRotZ = Array.Empty<float>();
+        private static bool[] _heldHasRot = Array.Empty<bool>();
+        private static float[] _heldTransX = Array.Empty<float>();
+        private static float[] _heldTransY = Array.Empty<float>();
+        private static float[] _heldTransZ = Array.Empty<float>();
+        private static bool[] _heldHasTrans = Array.Empty<bool>();
+        private static float[] _heldScale = Array.Empty<float>();
+        private static bool[] _heldHasScale = Array.Empty<bool>();
         private static bool _loaded;
         public static bool IsMinecraftMode { get; private set; }
 
@@ -59,6 +71,13 @@ namespace Cubuild
             public int FoodValue { get; set; }
             public int Weight { get; set; } = 0; // carry weight of one piece, in weight units
             public string? MapColor { get; set; }
+            // MC-style display transform for the first-person hand (optional).
+            // Rotation: "x,y,z" in degrees (yaw/pitch/roll around the grip).
+            // Translation: "x,y,z" offset from the grip in world units.
+            // Scale: uniform scale multiplier (default 1).
+            public string? HeldRotation { get; set; }
+            public string? HeldTranslation { get; set; }
+            public float HeldScale { get; set; } = 1f;
         }
 
         /// <summary>Seeds every registered block as an item, then appends genuine items from
@@ -144,6 +163,33 @@ namespace Cubuild
                             existing.MapColor = ParseMapColor(dto.MapColor ?? "#7F7F7F");
                             // 0 means "not specified", so the block's own weight survives.
                             existing.Weight = dto.Weight > 0 ? dto.Weight : existing.Weight;
+                            // MC-style display transform (optional, applies to block redefs too).
+                            if (!string.IsNullOrWhiteSpace(dto.HeldRotation))
+                            {
+                                var parts = dto.HeldRotation.Split(',');
+                                if (parts.Length == 3 &&
+                                    float.TryParse(parts[0], out float rx) &&
+                                    float.TryParse(parts[1], out float ry) &&
+                                    float.TryParse(parts[2], out float rz))
+                                {
+                                    existing.HeldRotation = (rx, ry, rz);
+                                }
+                            }
+                            if (!string.IsNullOrWhiteSpace(dto.HeldTranslation))
+                            {
+                                var parts = dto.HeldTranslation.Split(',');
+                                if (parts.Length == 3 &&
+                                    float.TryParse(parts[0], out float tx) &&
+                                    float.TryParse(parts[1], out float ty) &&
+                                    float.TryParse(parts[2], out float tz))
+                                {
+                                    existing.HeldTranslation = (tx, ty, tz);
+                                }
+                            }
+                            if (dto.HeldScale > 0)
+                            {
+                                existing.HeldScale = dto.HeldScale;
+                            }
                             // PlacedBlock intentionally stays the block's own id: redefining the
                             // item does not change what it places. UNLESS the entry explicitly
                             // declares "placedBlock": "" - that clears placement so crafting-only
@@ -174,6 +220,33 @@ namespace Cubuild
                             MapColor = ParseMapColor(dto.MapColor ?? "#7F7F7F"),
                             Weight = Math.Max(0, dto.Weight),
                         };
+                        // MC-style display transform for first-person hand (optional).
+                        if (!string.IsNullOrWhiteSpace(dto.HeldRotation))
+                        {
+                            var parts = dto.HeldRotation.Split(',');
+                            if (parts.Length == 3 &&
+                                float.TryParse(parts[0], out float rx) &&
+                                float.TryParse(parts[1], out float ry) &&
+                                float.TryParse(parts[2], out float rz))
+                            {
+                                item.HeldRotation = (rx, ry, rz);
+                            }
+                        }
+                        if (!string.IsNullOrWhiteSpace(dto.HeldTranslation))
+                        {
+                            var parts = dto.HeldTranslation.Split(',');
+                            if (parts.Length == 3 &&
+                                float.TryParse(parts[0], out float tx) &&
+                                float.TryParse(parts[1], out float ty) &&
+                                float.TryParse(parts[2], out float tz))
+                            {
+                                item.HeldTranslation = (tx, ty, tz);
+                            }
+                        }
+                        if (dto.HeldScale > 0)
+                        {
+                            item.HeldScale = dto.HeldScale;
+                        }
                         if (item.Category != "block" && dto.ItemTile == null)
                             throw new InvalidDataException($"Item \"{dto.Id}\" has no itemTile (items.png atlas tile).");
                         _items.Add(item);
@@ -205,6 +278,18 @@ namespace Cubuild
             _itemTiles = new TextureRect[n];
             _placedBlock = new string[n];
             _mapColor = new uint[n];
+            // ---- Held-item display transform arrays (MC-style) ------------------------
+            var heldRotX = new float[n];
+            var heldRotY = new float[n];
+            var heldRotZ = new float[n];
+            var heldHasRot = new bool[n];
+            var heldTransX = new float[n];
+            var heldTransY = new float[n];
+            var heldTransZ = new float[n];
+            var heldHasTrans = new bool[n];
+            var heldScale = new float[n];
+            var heldHasScale = new bool[n];
+
             for (int i = 0; i < n; i++)
             {
                 var it = _items[i];
@@ -232,7 +317,31 @@ namespace Cubuild
                     _fromItemsAtlas[i] = false;
                     _itemTiles[i] = BlockRegistry.GetById(i).AllTexture ?? default;
                 }
+
+                // MC-style display transform for first-person righthand.
+                if (it.HeldRotation.HasValue)
+                {
+                    var r = it.HeldRotation.Value;
+                    heldRotX[i] = r.x; heldRotY[i] = r.y; heldRotZ[i] = r.z;
+                    heldHasRot[i] = true;
+                }
+                if (it.HeldTranslation.HasValue)
+                {
+                    var t = it.HeldTranslation.Value;
+                    heldTransX[i] = t.x; heldTransY[i] = t.y; heldTransZ[i] = t.z;
+                    heldHasTrans[i] = true;
+                }
+                if (it.HeldScale.HasValue && it.HeldScale.Value > 0)
+                {
+                    heldScale[i] = it.HeldScale.Value;
+                    heldHasScale[i] = true;
+                }
             }
+
+            // Store as static fields for fast lookup (these are new, so add them to the class)
+            _heldRotX = heldRotX; _heldRotY = heldRotY; _heldRotZ = heldRotZ; _heldHasRot = heldHasRot;
+            _heldTransX = heldTransX; _heldTransY = heldTransY; _heldTransZ = heldTransZ; _heldHasTrans = heldHasTrans;
+            _heldScale = heldScale; _heldHasScale = heldHasScale;
             _loaded = true;
             LoadGeneration++;
         }
@@ -287,6 +396,16 @@ namespace Cubuild
         public static int StackSizeOf(int itemId) => itemId >= 0 && itemId < _items.Count ? _stackSize[itemId] : 64;
         public static bool IsInInventory(int itemId) => itemId >= 0 && itemId < _items.Count && _inInventory[itemId];
         public static uint MapColorOf(int itemId) => itemId >= 0 && itemId < _items.Count ? _mapColor[itemId] : 0;
+
+        /// <summary>MC-style first-person righthand display rotation in degrees (x=pitch, y=yaw, z=roll).</summary>
+        public static (float x, float y, float z) HeldRotationOf(int itemId)
+            => (itemId >= 0 && itemId < _items.Count && _heldHasRot[itemId]) ? (_heldRotX[itemId], _heldRotY[itemId], _heldRotZ[itemId]) : (0, 0, 0);
+        /// <summary>MC-style first-person righthand display translation in world units.</summary>
+        public static (float x, float y, float z) HeldTranslationOf(int itemId)
+            => (itemId >= 0 && itemId < _items.Count && _heldHasTrans[itemId]) ? (_heldTransX[itemId], _heldTransY[itemId], _heldTransZ[itemId]) : (0, 0, 0);
+        /// <summary>MC-style first-person righthand display scale multiplier.</summary>
+        public static float HeldScaleOf(int itemId)
+            => (itemId >= 0 && itemId < _items.Count && _heldHasScale[itemId]) ? _heldScale[itemId] : 1f;
 
         // ---- Parsers -------------------------------------------------------------
 

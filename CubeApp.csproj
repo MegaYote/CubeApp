@@ -18,6 +18,12 @@
     <CopyOutputDirectoryItemsToPublishDirectoryStyle>PreserveNewest</CopyOutputDirectoryItemsToPublishDirectoryStyle>
   </PropertyGroup>
   <ItemGroup>
+    <!-- The HandPoseEditor is a sibling tool project: keep its sources (and its obj/bin
+         build droppings) out of THIS project's default **\*.cs glob, or the game build
+         compiles the editor and trips over duplicate generated AssemblyInfo attributes. -->
+    <Compile Remove="HandPoseEditor\**" />
+    <Content Remove="HandPoseEditor\**" />
+    <None Remove="HandPoseEditor\**" />
     <!-- Bake the texture atlas into the assembly so no loose files need to ship. -->
     <EmbeddedResource Include="Assets\Textures\terrain.png" />
     <!-- Items atlas (flint drop icon, etc). -->

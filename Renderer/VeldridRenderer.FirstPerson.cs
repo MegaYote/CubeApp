@@ -70,15 +70,31 @@ namespace Cubuild.Renderer
             }
             s = Math.Min(1f, s + pokeS);
 
-            // The punch: the fist STRETCHES FORWARD (deep toward the block) and rises toward the
-            // crosshair, with a moderate forward pitch on the arm. Then it swings back to rest.
-            float env = (float)Math.Sin(Math.Sqrt(Math.Max(s, 0f)) * Math.PI);
-            float pitch = basePitch + idle - env * 0.6f;
-            float yaw = baseYaw + env * 0.3f;
-            float roll = env * 0.2f;
-            float tx = -env * 0.08f;  // sweep toward screen center
-            float ty = env * 0.12f + (float)Math.Sin(Math.Sqrt(Math.Max(s, 0f)) * Math.PI * 2.0) * 0.06f;
-            float tz = -env * 0.25f;  // the big forward stretch
+            // ---- The chop: Minecraft's exact first-person swing --------------------------
+            // Vanilla never re-poses the arm for a swing. The whole arm+item assembly first
+            // drifts with the swing bob, then rotates TOGETHER around the FIST by the attack
+            // transform: pitch dips 80° deep, yaw flicks 20° off its 45° base, roll sweeps
+            // 20°. The item is glued to the fist, so it inherits all of it (DrawHeldItem
+            // takes the same rotation) and arm + object chop as one rigid piece.
+            const float D2R = (float)(Math.PI / 180.0);
+            float f4 = (float)Math.Sin(s * s * Math.PI);                      // quick yaw flick
+            float f5 = (float)Math.Sin((float)Math.Sqrt(Math.Max(s, 0f)) * Math.PI); // chop envelope
+            float bobX = -0.4f * f5;
+            float bobY = 0.2f * (float)Math.Sin((float)Math.Sqrt(Math.Max(s, 0f)) * Math.PI * 2f);
+            float bobZ = -0.2f * (float)Math.Sin(Math.Max(s, 0f) * Math.PI);
+            // Attack chain in vanilla's mulPose order: yaw1 -> roll -> pitch -> yaw2 (right
+            // hand). Quaternion.Multiply(A, B) here rotates by B first, so the innermost yaw1
+            // is multiplied in last and the wrap-up yaw2 goes on outermost.
+            Quaternion qFist = Quaternion.CreateFromYawPitchRoll((45f - f4 * 20f) * D2R, 0f, 0f);
+            qFist = Quaternion.Multiply(Quaternion.CreateFromYawPitchRoll(0f, 0f, -20f * f5 * D2R), qFist);
+            qFist = Quaternion.Multiply(Quaternion.CreateFromYawPitchRoll(0f, -80f * f5 * D2R, 0f), qFist);
+            qFist = Quaternion.Multiply(Quaternion.CreateFromYawPitchRoll(-45f * D2R, 0f, 0f), qFist);
+
+            // The pose is purely the IDLE pose now: the swing doesn't re-angle the shoulder -
+            // the vanilla chop lives entirely in the fist rotation + bob above.
+            float pitch = basePitch + idle;
+            float yaw = baseYaw;
+            float roll = 0f;
 
             float cp = (float)Math.Cos(pitch), sp = (float)Math.Sin(pitch);
             float cy = (float)Math.Cos(yaw), syy = (float)Math.Sin(yaw);
@@ -86,12 +102,20 @@ namespace Cubuild.Renderer
 
             // The arm is the first-person model. The selected hotbar stack (block or item) is
             // drawn on top of it, in the fist - see DrawHeldItem.
+            // The held item AND the swing's pivot both hang on the fist: derive the grip point
+            // (the arm mesh's far end through the idle pose) first, so the verts can rotate
+            // around it exactly like vanilla rotates around its hand anchor.
+            ComputeGripPoint();
+            Vector3 grip = ArmToCamera(_gripX, _gripY, _gripZ, handScale,
+                cp, sp, cy, syy, cr, sr,
+                sx + handSway, sy + handBob, sz);
+
             float[] verts = new float[_handMesh.Length];
             {
                 for (int i = 0; i < _handMesh.Length; i += 9)
                 {
                     // Flip the arm so it points UP from the shoulder, then rotate pitch -> yaw -> roll
-                    // around the shoulder (origin) for the chop, then place + sweep toward the block.
+                    // around the shoulder for the idle pose, then place it.
                     float x = _handMesh[i] * handScale;
                     float y = _handMesh[i + 1] * handScale;
                     float z = _handMesh[i + 2] * handScale;
@@ -104,9 +128,14 @@ namespace Cubuild.Renderer
                     float z2 = -xf * syy + z1 * cy;
                     float x3 = x2 * cr - y1 * sr;
                     float y3 = x2 * sr + y1 * cr;
-                    verts[i] = x3 + sx + tx + handSway;
-                    verts[i + 1] = y3 + sy + ty + handBob;
-                    verts[i + 2] = z2 + sz + tz;
+                    // Swing bob first: the whole assembly (arm, fist, item) drifts together.
+                    // Then the chop rotates everything around the fist - qFist is identity at
+                    // rest, so idle frames pass straight through.
+                    var v = new Vector3(x3 + sx + handSway + bobX, y3 + sy + handBob + bobY, z2 + sz + bobZ);
+                    v = grip + Vector3.Transform(v - grip, qFist);
+                    verts[i] = v.X;
+                    verts[i + 1] = v.Y;
+                    verts[i + 2] = v.Z;
                     verts[i + 3] = _handMesh[i + 3];
                     verts[i + 4] = _handMesh[i + 4];
                     verts[i + 5] = _handMesh[i + 5];
@@ -156,14 +185,10 @@ namespace Cubuild.Renderer
                 cl.DrawIndexed((uint)_handIndices.Length, 1, 0, 0, 0);
             }
 
-            // The held item / block rides in the fist: the grip point comes from the arm mesh
-            // itself and goes through the SAME pose transform, so it follows the arm exactly -
-            // idle sway, walk bob and the mining chop included.
-            ComputeGripPoint();
-            Vector3 grip = ArmToCamera(_gripX, _gripY, _gripZ, handScale,
-                cp, sp, cy, syy, cr, sr,
-                sx + tx + handSway, sy + ty + handBob, sz + tz);
-            DrawHeldItem(cl, grip, env);
+            // The held item / block rides in the fist: it's positioned at the SAME grip point
+            // (already drift- and bob-aware) and inherits the attack rotation there - the
+            // whole mining chop is one rigid arm+object swing, like vanilla.
+            DrawHeldItem(cl, grip, qFist);
         }
 
         private void DrawCrosshair(CommandList cl)

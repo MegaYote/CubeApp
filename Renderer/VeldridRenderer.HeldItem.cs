@@ -77,10 +77,11 @@ namespace Cubuild.Renderer
 
         /// <summary>
         /// Draws the selected hotbar stack in the fist. <paramref name="grip"/> is the fist in
-        /// camera space; <paramref name="swing"/> is the punch envelope (0..1) so the item kicks
-        /// along with the mining chop.
+        /// camera space (already carrying the swing bob); <paramref name="qFist"/> is the
+        /// vanilla attack rotation around that fist. The item is glued to the hand and
+        /// inherits the whole chop from it - nothing kicks independently.
         /// </summary>
-        private void DrawHeldItem(CommandList cl, Vector3 grip, float swing)
+        private void DrawHeldItem(CommandList cl, Vector3 grip, Quaternion qFist)
         {
             var hotbar = _hud.Hotbar;
             if (hotbar == null || hotbar.Count == 0) return;
@@ -102,23 +103,57 @@ namespace Cubuild.Renderer
             if (textureSet == null) return;
             var pipeline = sprite ? _heldItemPipeline : _heldBlockPipeline;
             if (pipeline == null || _heldInstanceBuffer == null) return;
-            if (sprite && (_heldPrismVertexBuffer == null || _heldPrismIndexBuffer == null)) return;
+            if (sprite && (_heldCardVertexBuffer == null || _heldCardIndexBuffer == null)) return;
             if (!sprite && (_itemDropVertexBuffer == null || _itemDropIndexBuffer == null)) return;
 
             float atlasW = Math.Max(1f, itemsAtlas ? _itemsAtlasPixelsW : _atlasWidth);
             float atlasH = Math.Max(1f, itemsAtlas ? _itemsAtlasPixelsH : _atlasHeight);
 
-            // Sit in the fist, nudged by the tunable offset.
-            Vector3 pos = grip + new Vector3(_heldOffsetX, _heldOffsetY, _heldOffsetZ);
+            // ---- Per-item MC display transform (items.json) --------------------------
+            // "heldRotation"/"heldTranslation"/"heldScale" carry the exact numbers
+            // Minecraft's item models ship for display.firstperson_righthand:
+            // rotation (0,-90,25), translation (1.13/16, 3.2/16, 1.13/16), scale 0.68.
+            // Plain blocks use the vanilla block display: rotation (0,45,0), no translation
+            // (the center offset below places the cube where the vanilla corner-anchored
+            // one sits).
+            var dRot = ItemRegistry.HeldRotationOf(id);        // degrees (x=pitch, y=yaw, z=roll)
+            var dTrans = ItemRegistry.HeldTranslationOf(id);   // world units
+            float dScale = ItemRegistry.HeldScaleOf(id);       // multiplier (1 = none)
+            if (!sprite && dRot == (0, 0, 0))
+            {
+                dRot = (0f, 45f, 0f); // vanilla held-block yaw, flat otherwise
+            }
 
-            // Yaw/pitch/roll make the item read as a 3D object; the swing kicks it around a bit
-            // so it swings with the arm instead of sitting rigid.
-            float yaw = _heldYaw + swing * 1.1f;
-            float pitch = _heldPitch + swing * 0.6f;
-            float roll = _heldRoll - swing * 0.35f;
-            var q = Quaternion.CreateFromYawPitchRoll(yaw, pitch, roll);
+            // Display rotation, degrees -> radians (CreateFromYawPitchRoll wants yaw,pitch,roll).
+            Quaternion qDisplay = Quaternion.Identity;
+            if (dRot != (0, 0, 0))
+            {
+                const float Deg2Rad = MathF.PI / 180f;
+                qDisplay = Quaternion.CreateFromYawPitchRoll(
+                    dRot.y * Deg2Rad, dRot.x * Deg2Rad, dRot.z * Deg2Rad);
+            }
 
-            float scale = sprite ? _heldItemScale : _heldBlockScale;
+            // Total rotation in vanilla order: the swing's attack rotation wraps the item's
+            // own display rotation; the F8 yaw/pitch/roll nudge rides outermost.
+            Quaternion q = Quaternion.Multiply(qFist, qDisplay);
+            q = Quaternion.Multiply(
+                Quaternion.CreateFromYawPitchRoll(_heldYaw, _heldPitch, _heldRoll), q);
+
+            float scale = (sprite ? _heldItemScale : _heldBlockScale) * dScale;
+
+            // ---- Position ----------------------------------------------------------------
+            // Vanilla anchors the item by its local ORIGIN CORNER: it translates the attack-
+            // rotated frame by the display translation, then grows the sprite (or cube) from
+            // there. Our meshes are CENTERED, so we draw them at the vanilla object's CENTER:
+            // corner position + half extents carried by the same final rotation. That lands
+            // the geometry in the exact vanilla spot no matter what size it's drawn at.
+            var dVec = new Vector3(dTrans.x, dTrans.y, dTrans.z);
+            Vector3 pos = grip + Vector3.Transform(dVec, Matrix4x4.CreateFromQuaternion(qFist));
+            float worldSize = (sprite ? 2f : 0.3f) * scale; // drawn size in world units
+            pos += Vector3.Transform(new Vector3(0.5f, 0.5f, 0.5f) * worldSize,
+                Matrix4x4.CreateFromQuaternion(q));
+            // F8 nudge stays raw in screen space, on top of everything.
+            pos += new Vector3(_heldOffsetX, _heldOffsetY, _heldOffsetZ);
 
             int f = 0;
             _heldInstanceScratch[f++] = pos.X;
@@ -136,15 +171,24 @@ namespace Cubuild.Renderer
             // Flat items are extruded into a thin slab (1 sprite pixel by default) so they
             // read as physical objects instead of decals.
             _heldInstanceScratch[f++] = sprite ? _heldThickness : 0f;
+            // The GPU fetches instance N at N * stride, so every slice of the stack needs its
+            // own copy of the data - they are all the same item, just at a different depth.
+            for (int s = 1; s < HeldSlices; s++)
+                Array.Copy(_heldInstanceScratch, 0, _heldInstanceScratch, 13 * s, 13);
             _gd.UpdateBuffer(_heldInstanceBuffer, 0, _heldInstanceScratch);
 
             cl.SetPipeline(pipeline);
             cl.SetGraphicsResourceSet(0, _handProjSet);
             cl.SetGraphicsResourceSet(1, textureSet);
-            cl.SetVertexBuffer(0, sprite ? _heldPrismVertexBuffer : _itemDropVertexBuffer);
+            cl.SetVertexBuffer(0, sprite ? _heldCardVertexBuffer : _itemDropVertexBuffer);
             cl.SetVertexBuffer(1, _heldInstanceBuffer, 0);
-            cl.SetIndexBuffer(sprite ? _heldPrismIndexBuffer : _itemDropIndexBuffer, IndexFormat.UInt16);
-            cl.DrawIndexed(sprite ? 36u : (uint)FallingCubeIndices, 1, 0, 0, 0);
+            cl.SetIndexBuffer(sprite ? _heldCardIndexBuffer : _itemDropIndexBuffer, IndexFormat.UInt16);
+            // A flat item is a STACK of its own sprite through the slab's depth: the copies
+            // are spread by perspective, so the art's silhouette sweeps backward and the item
+            // grows a body instead of reading as a decal. The front slice is drawn last and
+            // wins (depth is off), so the item always shows its crisp sprite.
+            cl.DrawIndexed(sprite ? 6u : (uint)FallingCubeIndices,
+                sprite ? (uint)HeldSlices : 1u, 0, 0, 0);
         }
     }
 }

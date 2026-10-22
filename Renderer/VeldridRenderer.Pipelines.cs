@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using ImGuiNET;
@@ -1154,11 +1154,19 @@ void main() {
 
             // ---- Held item / block in the fist (camera space, depth OFF) ----------------
             // The selected hotbar stack is drawn in the hand: a textured CUBE for plain blocks
-            // and a flat CARD for genuine items. Both share one instance layout -
-            // iPos(3) + iTileRect(4) + iRot(4) + iScale(1) - and the camera-space projection
-            // (set 0 = the hand's), so they can never be clipped by terrain or fogged.
+            // and a SLAB for genuine items. Both share one instance layout -
+            // iPos(3) + iTileRect(4) + iRot(4) + iScale(1) + iThickness(1) - and the camera-space
+            // projection (set 0 = the hand's), so they can never be clipped by terrain or fogged.
             // The cube pass reuses the item-drop cube mesh (0.3 units, per-face shading, 0..1
-            // local UVs); the card pass reuses the flat unit quad the ground sprites use.
+            // local UVs); the slab pass stacks the item's own sprite through the depth.
+            //
+            // Why a sprite STACK and not an extruded box: item art is a CUT-OUT - the border of
+            // its tile is transparent - so a box's rim faces would sample nothing, get thrown
+            // away by the alpha test and the item would still read as a flat decal. Stacking
+            // copies of the sprite from the back of the slab to the front sweeps the art's own
+            // SILHOUETTE backward: the sliver that peeks out between two copies is the art's
+            // edge pixels, so the body follows the shape of the item and looks solid.
+            // Perspective spreads the copies apart, and that is what turns the stack into a slab.
             string heldBlockVsCode = @"#version 450
 layout(location=0) in vec3 aCorner;
 layout(location=1) in vec2 aLocalUV;
@@ -1170,6 +1178,7 @@ layout(location=6) in float iScale;
 layout(location=0) out vec2 vLocalUV;
 layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
+layout(location=3) out float vSlice;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() {
     // The cube mesh spans 0..0.3 - center it on the origin, then apply the held size.
@@ -1181,6 +1190,7 @@ void main() {
     vLocalUV = aLocalUV;
     vTileRect = iTileRect;
     vColor = aShade;
+    vSlice = 1.0;
     gl_Position = projView * vec4(pos, 1.0);
 }";
             string heldCardVsCode = @"#version 450
@@ -1195,35 +1205,45 @@ layout(location=7) in float iThickness;
 layout(location=0) out vec2 vLocalUV;
 layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
+layout(location=3) out float vSlice;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() {
-    // The held flat item is a PRISM: the sprite quad extruded to a thin slab, so the item
-    // has real edges instead of reading as a decal. iThickness scales the slab depth only
-    // (0 = a perfectly flat card, 1 = one sprite pixel, like Minecraft's extruded items).
+    // One slice of the slab. The instance index walks the stack from the BACK of the slab
+    // (0) to the FRONT (the last one) - and the front slice is drawn last, so with depth
+    // testing off it is the one that survives: the item always shows its crisp sprite.
+    // iThickness is the slab depth in sprite pixels (1 = one pixel of a 16px sprite); the
+    // copies are spread by perspective, so the silhouette sweeps back into a solid body.
+    // The stack runs along the item's local -Z: after the hand's tilt that axis points back
+    // INTO the screen, so the last slice ends up nearest the camera (and biggest).
+    float t = float(gl_InstanceIndex) / SLICES_LAST;
     vec3 local = aCorner * iScale;
-    local.z *= iThickness;
+    local.z = (1.0 - t * 2.0) * (iThickness * 0.0625) * iScale;
     vec3 qv = iRot.xyz;
-    vec3 t = 2.0 * cross(qv, local);
-    vec3 rotated = local + iRot.w * t + cross(qv, t);
+    vec3 tq = 2.0 * cross(qv, local);
+    vec3 rotated = local + iRot.w * tq + cross(qv, tq);
     vec3 pos = rotated + iPos;
     vLocalUV = aLocalUV;
     vTileRect = iTileRect;
     vColor = aShade;
+    vSlice = t;
     gl_Position = projView * vec4(pos, 1.0);
-}";
+}".Replace("SLICES_LAST", (HeldSlices - 1).ToString());
             // One unfogged cutout fragment shader for both passes: item art is transparent
             // around the shape, block tiles are opaque (the discard never fires for them).
+            // vSlice darkens the copies of the stack toward the back, so the sliver of edge
+            // pixels that peeks out reads as the shaded side of a solid body.
             string heldFsCode = @"#version 450
 layout(location=0) in vec2 vLocalUV;
 layout(location=1) in vec4 vTileRect;
 layout(location=2) in vec4 vColor;
+layout(location=3) in float vSlice;
 layout(set=1, binding=0) uniform sampler2D uTex;
 layout(location=0) out vec4 outColor;
 void main() {
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
     vec4 tex = texture(uTex, atlasUV);
     if (tex.a < 0.5) discard;
-    outColor = tex * vColor;
+    outColor = tex * vColor * mix(0.45, 1.0, vSlice);
 }";
             var heldBlockVsSpirv = SpirvCompilation.CompileGlslToSpirv(heldBlockVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
             var heldCardVsSpirv = SpirvCompilation.CompileGlslToSpirv(heldCardVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
@@ -1268,75 +1288,34 @@ void main() {
                 ShaderSet = new ShaderSetDescription(new[] { heldVertexLayout, heldInstanceLayout }, new[] { heldCardShaders[0], heldCardShaders[1] }),
                 Outputs = _sc.Framebuffer.OutputDescription
             });
-            _heldInstanceBuffer = factory.CreateBuffer(new BufferDescription(13 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            // Room for one instance per slice: the GPU fetches instance N at N * stride, so
+            // the buffer has to hold a full copy of the data for every slice of the stack.
+            _heldInstanceBuffer = factory.CreateBuffer(new BufferDescription(
+                (uint)(13 * sizeof(float) * HeldSlices), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
 
-            // ---- Held item prism (a flat item given real thickness) --------------------
-            // A flat sprite in the hand reads like a decal. Minecraft extrudes flat items
-            // into a 1/16-block slab: the front and back show the whole sprite and the four
-            // rim faces show the sprite's OWN edge pixels, so the item looks physical.
-            // Local space: x/y span -1..1 (the shader scales it), z spans +/-1/32 so the
-            // slab is exactly 1/16 of the card's width = one sprite pixel.
+            // ---- Held item card (the flat item's sprite, stacked into a slab) -----------
+            // The max UV edge is pulled just inside 1.0 so the atlas shader's fract() cannot
+            // wrap it onto the tile's first column.
             {
-                const float h = 1f / 32f;   // half the slab depth (1 sprite pixel of 16)
-                const float uvMax = 0.999f; // keep the max edge off fract()'s wrap point
-                var pv = new float[24 * (3 + 2 + 4)];
+                const float uvMax = 0.999f;
+                var cv = new float[4 * (3 + 2 + 4)];
                 int p = 0;
-                void P(float x, float y, float z, float u, float v, float shade)
+                void P(float x, float y, float u, float v)
                 {
-                    pv[p++] = x; pv[p++] = y; pv[p++] = z;
-                    pv[p++] = u; pv[p++] = v;
-                    pv[p++] = shade; pv[p++] = shade; pv[p++] = shade; pv[p++] = 1f;
+                    cv[p++] = x; cv[p++] = y; cv[p++] = 0f;
+                    cv[p++] = u; cv[p++] = v;
+                    cv[p++] = 1f; cv[p++] = 1f; cv[p++] = 1f; cv[p++] = 1f;
                 }
-                // 0: front (+z) - the sprite, upright
-                P(-1f, -1f, h, 0f, uvMax, 1.00f);
-                P(1f, -1f, h, uvMax, uvMax, 1.00f);
-                P(1f, 1f, h, uvMax, 0f, 1.00f);
-                P(-1f, 1f, h, 0f, 0f, 1.00f);
-                // 1: back (-z) - the same sprite seen from behind
-                P(-1f, -1f, -h, 0f, uvMax, 0.85f);
-                P(1f, -1f, -h, uvMax, uvMax, 0.85f);
-                P(1f, 1f, -h, uvMax, 0f, 0.85f);
-                P(-1f, 1f, -h, 0f, 0f, 0.85f);
-                // 2: left rim - the sprite's left column
-                P(-1f, -1f, -h, 0f, uvMax, 0.80f);
-                P(-1f, -1f, h, 0f, uvMax, 0.80f);
-                P(-1f, 1f, h, 0f, 0f, 0.80f);
-                P(-1f, 1f, -h, 0f, 0f, 0.80f);
-                // 3: right rim - the sprite's right column
-                P(1f, -1f, -h, uvMax, uvMax, 0.90f);
-                P(1f, -1f, h, uvMax, uvMax, 0.90f);
-                P(1f, 1f, h, uvMax, 0f, 0.90f);
-                P(1f, 1f, -h, uvMax, 0f, 0.90f);
-                // 4: top rim - the sprite's top row
-                P(-1f, 1f, h, 0f, 0f, 0.95f);
-                P(1f, 1f, h, uvMax, 0f, 0.95f);
-                P(1f, 1f, -h, uvMax, 0f, 0.95f);
-                P(-1f, 1f, -h, 0f, 0f, 0.95f);
-                // 5: bottom rim - the sprite's bottom row
-                P(-1f, -1f, -h, 0f, uvMax, 0.70f);
-                P(1f, -1f, -h, uvMax, uvMax, 0.70f);
-                P(1f, -1f, h, uvMax, uvMax, 0.70f);
-                P(-1f, -1f, h, 0f, uvMax, 0.70f);
+                P(-1f, -1f, 0f, uvMax);
+                P(1f, -1f, uvMax, uvMax);
+                P(1f, 1f, uvMax, 0f);
+                P(-1f, 1f, 0f, 0f);
 
-                var pi = new ushort[36];
-                int q = 0;
-                void Quad(int face)
-                {
-                    int b = face * 4;
-                    pi[q++] = (ushort)(b + 0); pi[q++] = (ushort)(b + 1); pi[q++] = (ushort)(b + 2);
-                    pi[q++] = (ushort)(b + 0); pi[q++] = (ushort)(b + 2); pi[q++] = (ushort)(b + 3);
-                }
-                // Back first, then the rims, then the front LAST: the held pass runs with
-                // depth testing off, so the front face has to be the one that survives the
-                // overlap with the back face - the item always shows its sprite.
-                Quad(1);
-                Quad(2); Quad(3); Quad(4); Quad(5);
-                Quad(0);
-
-                _heldPrismVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)pv.Length * sizeof(float), BufferUsage.VertexBuffer));
-                _gd.UpdateBuffer(_heldPrismVertexBuffer, 0, pv);
-                _heldPrismIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)pi.Length * sizeof(ushort), BufferUsage.IndexBuffer));
-                _gd.UpdateBuffer(_heldPrismIndexBuffer, 0, pi);
+                var ci = new ushort[] { 0, 1, 2, 0, 2, 3 };
+                _heldCardVertexBuffer = factory.CreateBuffer(new BufferDescription((uint)cv.Length * sizeof(float), BufferUsage.VertexBuffer));
+                _gd.UpdateBuffer(_heldCardVertexBuffer, 0, cv);
+                _heldCardIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)ci.Length * sizeof(ushort), BufferUsage.IndexBuffer));
+                _gd.UpdateBuffer(_heldCardIndexBuffer, 0, ci);
             }
 
 

@@ -310,23 +310,33 @@ namespace Cubuild.Renderer
         // terrain. The grip point is derived from the arm mesh itself (the far end of the arm
         // cube), so the item stays in the fist no matter how the arm pose is tuned.
         private Pipeline? _heldBlockPipeline;      // camera-space cube (a held block)
-        private Pipeline? _heldItemPipeline;       // camera-space prism (a held flat item)
+        private Pipeline? _heldItemPipeline;       // camera-space slab (a held flat item)
         private DeviceBuffer? _heldInstanceBuffer; // pos3 + tileRect4 + rot4 + scale1 + thick1 = 13 floats
-        private DeviceBuffer? _heldPrismVertexBuffer;  // the flat item, extruded to a thin slab
-        private DeviceBuffer? _heldPrismIndexBuffer;
-        private readonly float[] _heldInstanceScratch = new float[13];
+        private DeviceBuffer? _heldCardVertexBuffer;  // the flat item sprite, drawn as a stack
+        private DeviceBuffer? _heldCardIndexBuffer;
+        private readonly float[] _heldInstanceScratch = new float[13 * HeldSlices];
         private float _gripX, _gripY, _gripZ;      // fist position in arm-local space
         private bool _gripComputed;
 
         // ---- Tunable held-item params (F8 Hand Editor) -------------------------------
-        private float _heldOffsetX = -0.05f;   // shift the item toward the screen center
-        private float _heldOffsetY = 0.04f;    // nudge up out of the fist
-        private float _heldOffsetZ = -0.10f;   // push forward (toward the block being mined)
-        private float _heldBlockScale = 1.45f; // held block cube size (1 = the 0.3 drop cube)
-        private float _heldItemScale = 0.30f;  // held flat item half-size in camera units
-        private float _heldThickness = 1.0f;   // flat item slab thickness, in sprite pixels (1 = MC-like)
-        private float _heldYaw = 0.55f;        // turn the item so it reads as a 3D object
-        private float _heldPitch = 0.42f;      // tip the top toward the camera
+        // Defaults = Minecraft's first-person values, verbatim:
+        //   block  : display.firstperson_righthand rotation (0,45,0), scale 0.40
+        //   item   : rotation (0,-90,25), translation (1.13/16, 3.2/16, 1.13/16), scale 0.68
+        // The F8 sliders remain as USER nudges on top of this baseline (all zero at rest).
+        private float _heldOffsetX = 0f;       // screen-space nudge (F8)
+        private float _heldOffsetY = 0f;
+        private float _heldOffsetZ = 0f;
+        private float _heldBlockScale = 1.3334f; // held cube (0.3 mesh) drawn 0.40 wide - vanilla
+        private float _heldItemScale = 0.34f;    // held sprite: quad spans +/-1, so 0.34 = 0.68 wide
+        private float _heldThickness = 1.0f;     // flat item slab depth: 1 sprite pixel = vanilla
+        /// <summary>
+        /// How many copies of the item sprite are stacked through the slab's depth.
+        /// The stack is what gives a flat item a body: each copy is the art's own
+        /// silhouette, so the sliver that peeks out between two copies is the art's edge.
+        /// </summary>
+        private const int HeldSlices = 8;
+        private float _heldYaw = 0f;           // F8 nudge: the vanilla display transforms
+        private float _heldPitch = 0f;         // already carry the held angle
         private float _heldRoll = 0f;
         private uint _playerIndexCapacity;
         private IReadOnlyList<Cubuild.DuckInstance> _playerInstances = Array.Empty<Cubuild.DuckInstance>();

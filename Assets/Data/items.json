@@ -1,137 +1,683 @@
 {
-  // ============================================================================
-  // items.json â€” genuine items (tools, food, gemstones...).
-  //
-  // Every BLOCK is automatically also an item (same id, terrain atlas icon,
-  // places itself, 64 stack). This file only needs entries for things that are
-  // NOT blocks. Items share one numeric id space with blocks: block items use
-  // 0..(block count-1), genuine items are appended after.
-  //
-  // FIELDS (all optional except "id" and "itemTile"):
-  //   id            unique lowercase id
-  //   displayName   name shown in menus (defaults to id)
-  //   category      "tool" | "food" | "misc" | "gemstone" (groups the E menu)
-  //   itemTile      "col,row" tile from items.png (REQUIRED for new items)
-  //   stackSize     max per stack (64 typical; tools = 1)
-  //   placedBlock   block id this item places when used (default: none)
-  //   toolType      "pickaxe" | "axe" | "shovel" â€” mines matching blocks faster
-  //   toolLevel     harvest tier (wood/flint/gold 1; stone/copper/quartz 2; iron/bluestone 3; diamond 4)
-  //   miningSpeed   multiplier applied to blocks whose toolType matches this tool
-  //   durability    uses before the tool breaks (tools only)
-  //   foodValue     hunger restored when eaten (food only)
-  //   weight        carry weight of ONE piece, in weight units (0 = weightless). Every 8
-  //                 units in the inventory add one encumbrance level: 1 = slightly slower,
-  //                 2 = half speed, 3 = quarter speed + doubled fall damage + no swimming.
-  //   mapColor      "#RRGGBB" menu/swatch color
-  //
-  // REDEFINING A BLOCK ITEM: an entry whose "id" matches a BLOCK id overrides
-  // that block's item (icon/name/category) in place â€” it keeps its numeric id
-  // and still places the block. Example: "sap" below swaps the sap block's
-  // terrain icon for a dedicated items.png tile. The "itemTile" field is
-  // REQUIRED for block redefinitions too.
-  // ============================================================================
-
   "items": [
-    { "id": "flint",            "displayName": "Flint",            "category": "gemstone", "itemTile": "11,2", "stackSize": 64, "mapColor": "#6E6E6E" },
-    { "id": "stick",            "displayName": "Stick",            "category": "misc",     "itemTile": "0,0",  "stackSize": 64, "mapColor": "#8A5A2B" },
-    { "id": "flint_hatchet",    "displayName": "Flint Hatchet",   "category": "tool",     "itemTile": "1,0",  "stackSize": 1,  "toolType": "axe",     "toolLevel": 1, "miningSpeed": 3.0, "durability": 60, "mapColor": "#8A8A8A" },
-    { "id": "flint_pickaxe",    "displayName": "Flint Pick",   "category": "tool",     "itemTile": "2,0",  "stackSize": 1,  "toolType": "pickaxe",  "toolLevel": 1, "miningSpeed": 3.0, "durability": 60, "mapColor": "#8A8A8A" },
-    { "id": "flint_shovel",     "displayName": "Flint Shovel",     "category": "tool",     "itemTile": "3,0",  "stackSize": 1,  "toolType": "shovel",   "toolLevel": 1, "miningSpeed": 3.0, "durability": 60, "mapColor": "#8A8A8A" },
-
-    // ---- wood tier (toolLevel 1) ----
-    { "id": "wood_pickaxe",  "displayName": "Wood Pickaxe",  "category": "tool", "itemTile": "1,5", "stackSize": 1, "toolType": "pickaxe", "toolLevel": 1, "miningSpeed": 2.0, "durability": 60, "mapColor": "#8A5A2B" },
-    { "id": "wood_axe",      "displayName": "Wood Axe",      "category": "tool", "itemTile": "0,5", "stackSize": 1, "toolType": "axe",     "toolLevel": 1, "miningSpeed": 2.0, "durability": 60, "mapColor": "#8A5A2B" },
-    { "id": "wood_shovel",   "displayName": "Wood Shovel",   "category": "tool", "itemTile": "2,5", "stackSize": 1, "toolType": "shovel",  "toolLevel": 1, "miningSpeed": 2.0, "durability": 60, "mapColor": "#8A5A2B" },
-
-    // ---- stone tier (toolLevel 2) ----
-    { "id": "stone_pickaxe", "displayName": "Stone Pickaxe", "category": "tool", "itemTile": "1,6", "stackSize": 1, "toolType": "pickaxe", "toolLevel": 2, "miningSpeed": 4.0, "durability": 130, "mapColor": "#8A8A8A" },
-    { "id": "stone_axe",     "displayName": "Stone Axe",     "category": "tool", "itemTile": "0,6", "stackSize": 1, "toolType": "axe",     "toolLevel": 2, "miningSpeed": 4.0, "durability": 130, "mapColor": "#8A8A8A" },
-    { "id": "stone_shovel",  "displayName": "Stone Shovel",  "category": "tool", "itemTile": "2,6", "stackSize": 1, "toolType": "shovel",  "toolLevel": 2, "miningSpeed": 4.0, "durability": 130, "mapColor": "#8A8A8A" },
-
-    // ---- iron tier (toolLevel 3) ----
-    { "id": "iron_pickaxe",  "displayName": "Iron Pickaxe",  "category": "tool", "itemTile": "1,7", "stackSize": 1, "toolType": "pickaxe", "toolLevel": 3, "miningSpeed": 6.0, "durability": 250, "mapColor": "#C9C9C9" },
-    { "id": "iron_axe",      "displayName": "Iron Axe",      "category": "tool", "itemTile": "0,7", "stackSize": 1, "toolType": "axe",     "toolLevel": 3, "miningSpeed": 6.0, "durability": 250, "mapColor": "#C9C9C9" },
-    { "id": "iron_shovel",   "displayName": "Iron Shovel",   "category": "tool", "itemTile": "2,7", "stackSize": 1, "toolType": "shovel",  "toolLevel": 3, "miningSpeed": 6.0, "durability": 250, "mapColor": "#C9C9C9" },
-
-    // ---- diamond tier (toolLevel 4) ----
-    { "id": "diamond_pickaxe","displayName": "Diamond Pickaxe","category": "tool", "itemTile": "1,8", "stackSize": 1, "toolType": "pickaxe", "toolLevel": 4, "miningSpeed": 8.0, "durability": 1560, "mapColor": "#4AE8E0" },
-    { "id": "diamond_axe",   "displayName": "Diamond Axe",   "category": "tool", "itemTile": "0,8", "stackSize": 1, "toolType": "axe",     "toolLevel": 4, "miningSpeed": 8.0, "durability": 1560, "mapColor": "#4AE8E0" },
-    { "id": "diamond_shovel","displayName": "Diamond Shovel","category": "tool", "itemTile": "2,8", "stackSize": 1, "toolType": "shovel",  "toolLevel": 4, "miningSpeed": 8.0, "durability": 1560, "mapColor": "#4AE8E0" },
-    { "id": "flint_spear",      "displayName": "Flint Spear",      "category": "tool",     "itemTile": "4,0",  "stackSize": 1,  "durability": 80, "mapColor": "#8A8A8A" },
-    { "id": "persimmon",        "displayName": "Persimmon",        "category": "food",     "itemTile": "0,2",  "stackSize": 64, "foodValue": 4, "mapColor": "#D2691E" },
-
-    // empty bucket â€” tile 1,2 on items.png; fill mechanics later
-    { "id": "bucket",           "displayName": "Bucket",           "category": "tool",     "itemTile": "1,2",  "stackSize": 1,  "mapColor": "#7A7A7A" },
-    { "id": "water_bucket",   "displayName": "Water Bucket",   "category": "tool",     "itemTile": "3,2",  "stackSize": 1,  "mapColor": "#3A6FD8" },
-
-    { "id": "wood_sealant_bucket", "displayName": "Wood Sealant Bucket", "category": "tool",     "itemTile": "2,2",  "stackSize": 1,  "durability": 8, "mapColor": "#4A3728" },
-
-    // "sap" is a BLOCK (see blocks.json); this entry only gives its dropped
-    // item a dedicated icon from items.png. placedBlock "" clears the block's
-    // placement: sap blocks are only obtainable by crafting (later) - for now the
-    // dropped/held item is just an ingredient that can't be placed.
-    { "id": "sap",              "displayName": "Sap",              "category": "misc",     "itemTile": "10,2", "stackSize": 64, "placedBlock": "", "mapColor": "#442200" },
-
-    // ----- fuel & materials (items.png row 2, cols 12-15) ------------------------------
-    // Minecart: right-click a rail to set it down, right-click the cart to board it.
-    { "id": "cart", "displayName": "Minecart", "category": "tool", "itemTile": "1,3", "stackSize": 1, "mapColor": "#8A5A2B" },
-    { "id": "quartz_shard",     "displayName": "Quartz Shard",     "category": "gemstone", "itemTile": "12,2", "stackSize": 64, "mapColor": "#F1EBE2" },
-    { "id": "charcoal",         "displayName": "Charcoal",         "category": "misc",     "itemTile": "13,2", "stackSize": 64, "mapColor": "#2B2B2B" },
-    { "id": "charcoal_fragment","displayName": "Charcoal Fragment","category": "misc",     "itemTile": "14,2", "stackSize": 64, "mapColor": "#3A3A3A" },
-    { "id": "coal",             "displayName": "Coal",             "category": "misc",     "itemTile": "15,2", "stackSize": 64, "mapColor": "#1C1C1C" },
-
-    // ----- vehicles --------------------------------------------------------------------
-    // Added at the END on purpose: genuine items take their numeric id from their position in
-    // this list, so inserting one above would renumber every item after it and corrupt the
-    // hotbar/inventory of any saved world that already holds those items.
-    // Boat: right-click water to set one afloat, right-click the boat to board it. Like the
-    // minecart it is a placed entity, and its menu icon is the real boat model, not this tile.
-    { "id": "boat", "displayName": "Boat", "category": "tool", "itemTile": "1,4", "stackSize": 1, "mapColor": "#96602F" },
-
-    // Ore cart: like the minecart, right-click a rail to set it down - but it has no seat, so
-    // you can never ride or drive it. Walk into it to shove it along the track. Its menu icon is
-    // the real model (see EntityIconItems), so the tile below is only a fallback.
-    { "id": "orecart", "displayName": "Ore Cart", "category": "tool", "itemTile": "1,3", "stackSize": 1, "mapColor": "#5A4030" },
-
-    // Linkage: a coupling part. Appended at the END on purpose (see the vehicles note above) so
-    // its numeric id stays stable and no saved inventory shifts. Not placeable and not a tool -
-    // just an ingredient for now. Tile 0,3 on items.png.
-    { "id": "linkage", "displayName": "Linkage", "category": "misc", "itemTile": "0,3", "stackSize": 64, "mapColor": "#8A8A8A" },
-
-    // Locomotive: a train engine. Appended at the END for the same reason as the linkage above.
-    // Right-click a rail to set it down. It has no seat - couple a minecart to it with a linkage,
-    // board the CART, and the throttle drives the locomotive, which hauls the whole train. Much
-    // faster than a minecart and strong enough to pull a train up a grade. Its menu icon is the
-    // real model (see EntityIconItems), so the tile below is only a fallback.
-    { "id": "locomotive", "displayName": "Locomotive", "category": "tool", "itemTile": "1,3", "stackSize": 1, "mapColor": "#3A3A3A" },
-
-    // Additional material tiers are appended so existing genuine-item numeric ids stay stable.
-    { "id": "copper_pickaxe", "displayName": "Copper Pickaxe", "category": "tool", "itemTile": "1,9", "stackSize": 1, "toolType": "pickaxe", "toolLevel": 2, "miningSpeed": 5.0, "durability": 180, "mapColor": "#D98250" },
-    { "id": "copper_axe", "displayName": "Copper Axe", "category": "tool", "itemTile": "0,9", "stackSize": 1, "toolType": "axe", "toolLevel": 2, "miningSpeed": 5.0, "durability": 180, "mapColor": "#D98250" },
-    { "id": "copper_shovel", "displayName": "Copper Shovel", "category": "tool", "itemTile": "2,9", "stackSize": 1, "toolType": "shovel", "toolLevel": 2, "miningSpeed": 5.0, "durability": 180, "mapColor": "#D98250" },
-    { "id": "gold_pickaxe", "displayName": "Gold Pickaxe", "category": "tool", "itemTile": "1,10", "stackSize": 1, "toolType": "pickaxe", "toolLevel": 1, "miningSpeed": 12.0, "durability": 32, "mapColor": "#F4D03F" },
-    { "id": "gold_axe", "displayName": "Gold Axe", "category": "tool", "itemTile": "0,10", "stackSize": 1, "toolType": "axe", "toolLevel": 1, "miningSpeed": 12.0, "durability": 32, "mapColor": "#F4D03F" },
-    { "id": "gold_shovel", "displayName": "Gold Shovel", "category": "tool", "itemTile": "2,10", "stackSize": 1, "toolType": "shovel", "toolLevel": 1, "miningSpeed": 12.0, "durability": 32, "mapColor": "#F4D03F" },
-    { "id": "quartz_pickaxe", "displayName": "Quartz Pickaxe", "category": "tool", "itemTile": "1,11", "stackSize": 1, "toolType": "pickaxe", "toolLevel": 2, "miningSpeed": 5.5, "durability": 180, "mapColor": "#F1EBE2" },
-    { "id": "quartz_axe", "displayName": "Quartz Axe", "category": "tool", "itemTile": "0,11", "stackSize": 1, "toolType": "axe", "toolLevel": 2, "miningSpeed": 5.5, "durability": 180, "mapColor": "#F1EBE2" },
-    { "id": "quartz_shovel", "displayName": "Quartz Shovel", "category": "tool", "itemTile": "2,11", "stackSize": 1, "toolType": "shovel", "toolLevel": 2, "miningSpeed": 5.5, "durability": 180, "mapColor": "#F1EBE2" },
-    { "id": "bluestone", "displayName": "Bluestone", "category": "gemstone", "itemTile": "3,12", "stackSize": 64, "mapColor": "#4169E1" },
-    { "id": "bluestone_pickaxe", "displayName": "Bluestone Pickaxe", "category": "tool", "itemTile": "1,12", "stackSize": 1, "toolType": "pickaxe", "toolLevel": 3, "miningSpeed": 7.0, "durability": 400, "mapColor": "#4169E1" },
-    { "id": "bluestone_axe", "displayName": "Bluestone Axe", "category": "tool", "itemTile": "0,12", "stackSize": 1, "toolType": "axe", "toolLevel": 3, "miningSpeed": 7.0, "durability": 400, "mapColor": "#4169E1" },
-    { "id": "bluestone_shovel", "displayName": "Bluestone Shovel", "category": "tool", "itemTile": "2,12", "stackSize": 1, "toolType": "shovel", "toolLevel": 3, "miningSpeed": 7.0, "durability": 400, "mapColor": "#4169E1" },
-
-    // ---- raw ore chunks (the six new tiles on row 3 of items.png) ----
-    // These are the drops of the matching ore BLOCK when it is mined with a pickaxe
-    // (see "dropItem" on coalore/ironore/goldore/diamondore/copperore/bluestoneore).
-    // They are genuine items, not placeable blocks - "placedBlock" is intentionally
-    // empty, so they can never be set back down in the world.
-    // Appended at the END on purpose: numeric ids are positional, so inserting these
-    // earlier would renumber every later item and corrupt saved hotbars/inventories.
-    { "id": "raw_coal",      "displayName": "Raw Coal",      "category": "misc",     "itemTile": "4,3", "stackSize": 64, "weight": 1, "mapColor": "#1E1E1E" },
-    { "id": "raw_iron",      "displayName": "Raw Iron",      "category": "misc",     "itemTile": "5,3", "stackSize": 64, "weight": 1, "mapColor": "#564934" },
-    { "id": "raw_gold",      "displayName": "Raw Gold",      "category": "misc",     "itemTile": "6,3", "stackSize": 64, "weight": 1, "mapColor": "#5C5628" },
-    { "id": "raw_diamond",   "displayName": "Raw Diamond",   "category": "gemstone", "itemTile": "7,3", "stackSize": 64, "weight": 1, "mapColor": "#505F5C" },
-    { "id": "raw_copper",    "displayName": "Raw Copper",    "category": "misc",     "itemTile": "8,3", "stackSize": 64, "weight": 1, "mapColor": "#4F3C29" },
-    { "id": "raw_bluestone", "displayName": "Raw Bluestone", "category": "gemstone", "itemTile": "9,3", "stackSize": 64, "weight": 1, "mapColor": "#2E2E48" }
+    {
+      "id": "flint",
+      "displayName": "Flint",
+      "category": "gemstone",
+      "itemTile": "11,2",
+      "stackSize": 64,
+      "mapColor": "#6E6E6E",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "stick",
+      "displayName": "Stick",
+      "category": "misc",
+      "itemTile": "0,0",
+      "stackSize": 64,
+      "mapColor": "#8A5A2B",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "flint_hatchet",
+      "displayName": "Flint Hatchet",
+      "category": "tool",
+      "itemTile": "1,0",
+      "stackSize": 1,
+      "toolType": "axe",
+      "toolLevel": 1,
+      "miningSpeed": 3.0,
+      "durability": 60,
+      "mapColor": "#8A8A8A",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "flint_pickaxe",
+      "displayName": "Flint Pick",
+      "category": "tool",
+      "itemTile": "2,0",
+      "stackSize": 1,
+      "toolType": "pickaxe",
+      "toolLevel": 1,
+      "miningSpeed": 3.0,
+      "durability": 60,
+      "mapColor": "#8A8A8A",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "flint_shovel",
+      "displayName": "Flint Shovel",
+      "category": "tool",
+      "itemTile": "3,0",
+      "stackSize": 1,
+      "toolType": "shovel",
+      "toolLevel": 1,
+      "miningSpeed": 3.0,
+      "durability": 60,
+      "mapColor": "#8A8A8A",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "wood_pickaxe",
+      "displayName": "Wood Pickaxe",
+      "category": "tool",
+      "itemTile": "1,5",
+      "stackSize": 1,
+      "toolType": "pickaxe",
+      "toolLevel": 1,
+      "miningSpeed": 2.0,
+      "durability": 60,
+      "mapColor": "#8A5A2B",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "wood_axe",
+      "displayName": "Wood Axe",
+      "category": "tool",
+      "itemTile": "0,5",
+      "stackSize": 1,
+      "toolType": "axe",
+      "toolLevel": 1,
+      "miningSpeed": 2.0,
+      "durability": 60,
+      "mapColor": "#8A5A2B",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "wood_shovel",
+      "displayName": "Wood Shovel",
+      "category": "tool",
+      "itemTile": "2,5",
+      "stackSize": 1,
+      "toolType": "shovel",
+      "toolLevel": 1,
+      "miningSpeed": 2.0,
+      "durability": 60,
+      "mapColor": "#8A5A2B",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "stone_pickaxe",
+      "displayName": "Stone Pickaxe",
+      "category": "tool",
+      "itemTile": "1,6",
+      "stackSize": 1,
+      "toolType": "pickaxe",
+      "toolLevel": 2,
+      "miningSpeed": 4.0,
+      "durability": 130,
+      "mapColor": "#8A8A8A",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "stone_axe",
+      "displayName": "Stone Axe",
+      "category": "tool",
+      "itemTile": "0,6",
+      "stackSize": 1,
+      "toolType": "axe",
+      "toolLevel": 2,
+      "miningSpeed": 4.0,
+      "durability": 130,
+      "mapColor": "#8A8A8A",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "stone_shovel",
+      "displayName": "Stone Shovel",
+      "category": "tool",
+      "itemTile": "2,6",
+      "stackSize": 1,
+      "toolType": "shovel",
+      "toolLevel": 2,
+      "miningSpeed": 4.0,
+      "durability": 130,
+      "mapColor": "#8A8A8A",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "iron_pickaxe",
+      "displayName": "Iron Pickaxe",
+      "category": "tool",
+      "itemTile": "1,7",
+      "stackSize": 1,
+      "toolType": "pickaxe",
+      "toolLevel": 3,
+      "miningSpeed": 6.0,
+      "durability": 250,
+      "mapColor": "#C9C9C9",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "iron_axe",
+      "displayName": "Iron Axe",
+      "category": "tool",
+      "itemTile": "0,7",
+      "stackSize": 1,
+      "toolType": "axe",
+      "toolLevel": 3,
+      "miningSpeed": 6.0,
+      "durability": 250,
+      "mapColor": "#C9C9C9",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "iron_shovel",
+      "displayName": "Iron Shovel",
+      "category": "tool",
+      "itemTile": "2,7",
+      "stackSize": 1,
+      "toolType": "shovel",
+      "toolLevel": 3,
+      "miningSpeed": 6.0,
+      "durability": 250,
+      "mapColor": "#C9C9C9",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "diamond_pickaxe",
+      "displayName": "Diamond Pickaxe",
+      "category": "tool",
+      "itemTile": "1,8",
+      "stackSize": 1,
+      "toolType": "pickaxe",
+      "toolLevel": 4,
+      "miningSpeed": 8.0,
+      "durability": 1560,
+      "mapColor": "#4AE8E0",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "diamond_axe",
+      "displayName": "Diamond Axe",
+      "category": "tool",
+      "itemTile": "0,8",
+      "stackSize": 1,
+      "toolType": "axe",
+      "toolLevel": 4,
+      "miningSpeed": 8.0,
+      "durability": 1560,
+      "mapColor": "#4AE8E0",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "diamond_shovel",
+      "displayName": "Diamond Shovel",
+      "category": "tool",
+      "itemTile": "2,8",
+      "stackSize": 1,
+      "toolType": "shovel",
+      "toolLevel": 4,
+      "miningSpeed": 8.0,
+      "durability": 1560,
+      "mapColor": "#4AE8E0",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "flint_spear",
+      "displayName": "Flint Spear",
+      "category": "tool",
+      "itemTile": "4,0",
+      "stackSize": 1,
+      "durability": 80,
+      "mapColor": "#8A8A8A",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "persimmon",
+      "displayName": "Persimmon",
+      "category": "food",
+      "itemTile": "0,2",
+      "stackSize": 64,
+      "foodValue": 4,
+      "mapColor": "#D2691E",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "bucket",
+      "displayName": "Bucket",
+      "category": "tool",
+      "itemTile": "1,2",
+      "stackSize": 1,
+      "mapColor": "#7A7A7A",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "water_bucket",
+      "displayName": "Water Bucket",
+      "category": "tool",
+      "itemTile": "3,2",
+      "stackSize": 1,
+      "mapColor": "#3A6FD8",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "wood_sealant_bucket",
+      "displayName": "Wood Sealant Bucket",
+      "category": "tool",
+      "itemTile": "2,2",
+      "stackSize": 1,
+      "durability": 8,
+      "mapColor": "#4A3728",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "sap",
+      "displayName": "Sap",
+      "category": "misc",
+      "itemTile": "10,2",
+      "stackSize": 64,
+      "placedBlock": "",
+      "mapColor": "#442200",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "cart",
+      "displayName": "Minecart",
+      "category": "tool",
+      "itemTile": "1,3",
+      "stackSize": 1,
+      "mapColor": "#8A5A2B",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "quartz_shard",
+      "displayName": "Quartz Shard",
+      "category": "gemstone",
+      "itemTile": "12,2",
+      "stackSize": 64,
+      "mapColor": "#F1EBE2",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "charcoal",
+      "displayName": "Charcoal",
+      "category": "misc",
+      "itemTile": "13,2",
+      "stackSize": 64,
+      "mapColor": "#2B2B2B",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "charcoal_fragment",
+      "displayName": "Charcoal Fragment",
+      "category": "misc",
+      "itemTile": "14,2",
+      "stackSize": 64,
+      "mapColor": "#3A3A3A",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "coal",
+      "displayName": "Coal",
+      "category": "misc",
+      "itemTile": "15,2",
+      "stackSize": 64,
+      "mapColor": "#1C1C1C",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "boat",
+      "displayName": "Boat",
+      "category": "tool",
+      "itemTile": "1,4",
+      "stackSize": 1,
+      "mapColor": "#96602F",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "orecart",
+      "displayName": "Ore Cart",
+      "category": "tool",
+      "itemTile": "1,3",
+      "stackSize": 1,
+      "mapColor": "#5A4030",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "linkage",
+      "displayName": "Linkage",
+      "category": "misc",
+      "itemTile": "0,3",
+      "stackSize": 64,
+      "mapColor": "#8A8A8A",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "locomotive",
+      "displayName": "Locomotive",
+      "category": "tool",
+      "itemTile": "1,3",
+      "stackSize": 1,
+      "mapColor": "#3A3A3A",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "copper_pickaxe",
+      "displayName": "Copper Pickaxe",
+      "category": "tool",
+      "itemTile": "1,9",
+      "stackSize": 1,
+      "toolType": "pickaxe",
+      "toolLevel": 2,
+      "miningSpeed": 5.0,
+      "durability": 180,
+      "mapColor": "#D98250",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "copper_axe",
+      "displayName": "Copper Axe",
+      "category": "tool",
+      "itemTile": "0,9",
+      "stackSize": 1,
+      "toolType": "axe",
+      "toolLevel": 2,
+      "miningSpeed": 5.0,
+      "durability": 180,
+      "mapColor": "#D98250",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "copper_shovel",
+      "displayName": "Copper Shovel",
+      "category": "tool",
+      "itemTile": "2,9",
+      "stackSize": 1,
+      "toolType": "shovel",
+      "toolLevel": 2,
+      "miningSpeed": 5.0,
+      "durability": 180,
+      "mapColor": "#D98250",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "gold_pickaxe",
+      "displayName": "Gold Pickaxe",
+      "category": "tool",
+      "itemTile": "1,10",
+      "stackSize": 1,
+      "toolType": "pickaxe",
+      "toolLevel": 1,
+      "miningSpeed": 12.0,
+      "durability": 32,
+      "mapColor": "#F4D03F",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "gold_axe",
+      "displayName": "Gold Axe",
+      "category": "tool",
+      "itemTile": "0,10",
+      "stackSize": 1,
+      "toolType": "axe",
+      "toolLevel": 1,
+      "miningSpeed": 12.0,
+      "durability": 32,
+      "mapColor": "#F4D03F",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "gold_shovel",
+      "displayName": "Gold Shovel",
+      "category": "tool",
+      "itemTile": "2,10",
+      "stackSize": 1,
+      "toolType": "shovel",
+      "toolLevel": 1,
+      "miningSpeed": 12.0,
+      "durability": 32,
+      "mapColor": "#F4D03F",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "quartz_pickaxe",
+      "displayName": "Quartz Pickaxe",
+      "category": "tool",
+      "itemTile": "1,11",
+      "stackSize": 1,
+      "toolType": "pickaxe",
+      "toolLevel": 2,
+      "miningSpeed": 5.5,
+      "durability": 180,
+      "mapColor": "#F1EBE2",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "quartz_axe",
+      "displayName": "Quartz Axe",
+      "category": "tool",
+      "itemTile": "0,11",
+      "stackSize": 1,
+      "toolType": "axe",
+      "toolLevel": 2,
+      "miningSpeed": 5.5,
+      "durability": 180,
+      "mapColor": "#F1EBE2",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "quartz_shovel",
+      "displayName": "Quartz Shovel",
+      "category": "tool",
+      "itemTile": "2,11",
+      "stackSize": 1,
+      "toolType": "shovel",
+      "toolLevel": 2,
+      "miningSpeed": 5.5,
+      "durability": 180,
+      "mapColor": "#F1EBE2",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "bluestone",
+      "displayName": "Bluestone",
+      "category": "gemstone",
+      "itemTile": "3,12",
+      "stackSize": 64,
+      "mapColor": "#4169E1",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "bluestone_pickaxe",
+      "displayName": "Bluestone Pickaxe",
+      "category": "tool",
+      "itemTile": "1,12",
+      "stackSize": 1,
+      "toolType": "pickaxe",
+      "toolLevel": 3,
+      "miningSpeed": 7.0,
+      "durability": 400,
+      "mapColor": "#4169E1",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "bluestone_axe",
+      "displayName": "Bluestone Axe",
+      "category": "tool",
+      "itemTile": "0,12",
+      "stackSize": 1,
+      "toolType": "axe",
+      "toolLevel": 3,
+      "miningSpeed": 7.0,
+      "durability": 400,
+      "mapColor": "#4169E1",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "bluestone_shovel",
+      "displayName": "Bluestone Shovel",
+      "category": "tool",
+      "itemTile": "2,12",
+      "stackSize": 1,
+      "toolType": "shovel",
+      "toolLevel": 3,
+      "miningSpeed": 7.0,
+      "durability": 400,
+      "mapColor": "#4169E1",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "raw_coal",
+      "displayName": "Raw Coal",
+      "category": "misc",
+      "itemTile": "4,3",
+      "stackSize": 64,
+      "weight": 1,
+      "mapColor": "#1E1E1E",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "raw_iron",
+      "displayName": "Raw Iron",
+      "category": "misc",
+      "itemTile": "5,3",
+      "stackSize": 64,
+      "weight": 1,
+      "mapColor": "#564934",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "raw_gold",
+      "displayName": "Raw Gold",
+      "category": "misc",
+      "itemTile": "6,3",
+      "stackSize": 64,
+      "weight": 1,
+      "mapColor": "#5C5628",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "raw_diamond",
+      "displayName": "Raw Diamond",
+      "category": "gemstone",
+      "itemTile": "7,3",
+      "stackSize": 64,
+      "weight": 1,
+      "mapColor": "#505F5C",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "raw_copper",
+      "displayName": "Raw Copper",
+      "category": "misc",
+      "itemTile": "8,3",
+      "stackSize": 64,
+      "weight": 1,
+      "mapColor": "#4F3C29",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    },
+    {
+      "id": "raw_bluestone",
+      "displayName": "Raw Bluestone",
+      "category": "gemstone",
+      "itemTile": "9,3",
+      "stackSize": 64,
+      "weight": 1,
+      "mapColor": "#2E2E48",
+      "heldRotation": "0,-90,25",
+      "heldTranslation": "0.070625,0.2,0.070625",
+      "heldScale": 1.0
+    }
   ]
 }
