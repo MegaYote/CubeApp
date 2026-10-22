@@ -64,6 +64,9 @@ namespace Cubuild
                     Name = World.Name,
                     Seed = World.Seed,
                     GenVersion = World.WorldGenVersion,
+                    // Survival/creative MUST be saved: without it every world reopens in
+                    // creative (the default of the save record) and the survival run is lost.
+                    Mode = (int)World.Mode,
                     IsMinecraftMode = World.IsMinecraftMode,
                     PlayerX = World.PlayerPosition.X,
                     PlayerY = World.PlayerPosition.Y,
@@ -72,6 +75,10 @@ namespace Cubuild
                     Pitch = World.PlayerPitch,
                     SelectedSlot = World.SelectedSlot,
                     Hotbar = (int[])World.Hotbar.Clone(),
+                    // The stack sizes MUST be saved too: without them every hotbar slot
+                    // reloads with an item id but a count of 0, which silently deletes
+                    // everything the player is carrying (the bag slots below keep theirs).
+                    HotbarCounts = (int[])World.HotbarCounts.Clone(),
                     PlayerHealth = World.LocalPlayer.Health,
                     WorldTime = World.WorldTime,
                     Bag = new InventorySlot[40],
