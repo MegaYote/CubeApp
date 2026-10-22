@@ -115,6 +115,20 @@
     { "id": "bluestone", "displayName": "Bluestone", "category": "gemstone", "itemTile": "3,12", "stackSize": 64, "mapColor": "#4169E1" },
     { "id": "bluestone_pickaxe", "displayName": "Bluestone Pickaxe", "category": "tool", "itemTile": "1,12", "stackSize": 1, "toolType": "pickaxe", "toolLevel": 3, "miningSpeed": 7.0, "durability": 400, "mapColor": "#4169E1" },
     { "id": "bluestone_axe", "displayName": "Bluestone Axe", "category": "tool", "itemTile": "0,12", "stackSize": 1, "toolType": "axe", "toolLevel": 3, "miningSpeed": 7.0, "durability": 400, "mapColor": "#4169E1" },
-    { "id": "bluestone_shovel", "displayName": "Bluestone Shovel", "category": "tool", "itemTile": "2,12", "stackSize": 1, "toolType": "shovel", "toolLevel": 3, "miningSpeed": 7.0, "durability": 400, "mapColor": "#4169E1" }
+    { "id": "bluestone_shovel", "displayName": "Bluestone Shovel", "category": "tool", "itemTile": "2,12", "stackSize": 1, "toolType": "shovel", "toolLevel": 3, "miningSpeed": 7.0, "durability": 400, "mapColor": "#4169E1" },
+
+    // ---- raw ore chunks (the six new tiles on row 3 of items.png) ----
+    // These are the drops of the matching ore BLOCK when it is mined with a pickaxe
+    // (see "dropItem" on coalore/ironore/goldore/diamondore/copperore/bluestoneore).
+    // They are genuine items, not placeable blocks - "placedBlock" is intentionally
+    // empty, so they can never be set back down in the world.
+    // Appended at the END on purpose: numeric ids are positional, so inserting these
+    // earlier would renumber every later item and corrupt saved hotbars/inventories.
+    { "id": "raw_coal",      "displayName": "Raw Coal",      "category": "misc",     "itemTile": "4,3", "stackSize": 64, "mapColor": "#1E1E1E" },
+    { "id": "raw_iron",      "displayName": "Raw Iron",      "category": "misc",     "itemTile": "5,3", "stackSize": 64, "mapColor": "#564934" },
+    { "id": "raw_gold",      "displayName": "Raw Gold",      "category": "misc",     "itemTile": "6,3", "stackSize": 64, "mapColor": "#5C5628" },
+    { "id": "raw_diamond",   "displayName": "Raw Diamond",   "category": "gemstone", "itemTile": "7,3", "stackSize": 64, "mapColor": "#505F5C" },
+    { "id": "raw_copper",    "displayName": "Raw Copper",    "category": "misc",     "itemTile": "8,3", "stackSize": 64, "mapColor": "#4F3C29" },
+    { "id": "raw_bluestone", "displayName": "Raw Bluestone", "category": "gemstone", "itemTile": "9,3", "stackSize": 64, "mapColor": "#2E2E48" }
   ]
 }

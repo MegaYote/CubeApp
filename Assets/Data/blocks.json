@@ -381,7 +381,8 @@
       "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true,
-      "harvestLevel": 1
+      "harvestLevel": 1,
+      "dropItem": "raw_coal"
     },
     {
       "id": "ironore",
@@ -393,7 +394,8 @@
       "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true,
-      "harvestLevel": 2
+      "harvestLevel": 2,
+      "dropItem": "raw_iron"
     },
     {
       "id": "goldore",
@@ -405,7 +407,8 @@
       "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true,
-      "harvestLevel": 3
+      "harvestLevel": 3,
+      "dropItem": "raw_gold"
     },
     {
       "id": "diamondore",
@@ -417,7 +420,8 @@
       "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true,
-      "harvestLevel": 3
+      "harvestLevel": 3,
+      "dropItem": "raw_diamond"
     },
     {
       "id": "bluestoneore",
@@ -429,7 +433,8 @@
       "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true,
-      "harvestLevel": 3
+      "harvestLevel": 3,
+      "dropItem": "raw_bluestone"
     },
     {
       "id": "copperore",
@@ -441,7 +446,8 @@
       "hardness": 3.0,
       "toolType": "pickaxe",
       "toolRequired": true,
-      "harvestLevel": 2
+      "harvestLevel": 2,
+      "dropItem": "raw_copper"
     },
     {
       "id": "iron",

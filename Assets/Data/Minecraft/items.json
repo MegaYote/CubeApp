@@ -104,6 +104,16 @@
 
     // Locomotive: appended to preserve all existing item IDs. Its creative palette icon
     // resolves to the locomotive model; this tile is only a fallback.
-    { "id": "locomotive", "displayName": "Locomotive", "category": "tool", "itemTile": "1,3", "stackSize": 1, "mapColor": "#3A3A3A" }
+    { "id": "locomotive", "displayName": "Locomotive", "category": "tool", "itemTile": "1,3", "stackSize": 1, "mapColor": "#3A3A3A" },
+
+    // Raw ore chunks (the six new tiles on row 3 of items.png). Appended at the END so
+    // every existing numeric item id stays stable. They are the pickaxe drops of the
+    // matching ore blocks (see "dropItem" in blocks.json) and are not placeable.
+    { "id": "raw_coal",      "displayName": "Raw Coal",      "category": "misc",     "itemTile": "4,3", "stackSize": 64, "mapColor": "#1E1E1E" },
+    { "id": "raw_iron",      "displayName": "Raw Iron",      "category": "misc",     "itemTile": "5,3", "stackSize": 64, "mapColor": "#564934" },
+    { "id": "raw_gold",      "displayName": "Raw Gold",      "category": "misc",     "itemTile": "6,3", "stackSize": 64, "mapColor": "#5C5628" },
+    { "id": "raw_diamond",   "displayName": "Raw Diamond",   "category": "gemstone", "itemTile": "7,3", "stackSize": 64, "mapColor": "#505F5C" },
+    { "id": "raw_copper",    "displayName": "Raw Copper",    "category": "misc",     "itemTile": "8,3", "stackSize": 64, "mapColor": "#4F3C29" },
+    { "id": "raw_bluestone", "displayName": "Raw Bluestone", "category": "gemstone", "itemTile": "9,3", "stackSize": 64, "mapColor": "#2E2E48" }
   ]
 }
