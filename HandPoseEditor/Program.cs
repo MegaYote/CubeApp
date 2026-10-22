@@ -58,7 +58,7 @@ namespace HandPoseEditor
         private static float _handScale = 1.0f;
         private static float _handSx = 0.5f;
         private static float _handSy = -0.75f;
-        private static float _handSz = -0.3f;
+        private static float _handSz = -0.6f;
         private static float _handBasePitch = -0.5f;
         private static float _handBaseYaw = 0.0f;
 
