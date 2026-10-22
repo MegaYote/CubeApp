@@ -9,6 +9,41 @@ namespace Cubuild.Renderer
 {
     public sealed partial class VeldridRenderer : IRenderer, IDisposable
     {
+        /// <summary>
+        /// Builds the same per-face UV basis used by the world chunk mesher. The old cube
+        /// vertex order assigned one generic 0..1 quad to all six faces, which mirrored some
+        /// sides and flipped top/bottom texture orientation compared with placed blocks.
+        /// </summary>
+        private static float[] WorldAlignedCubeFaceUvs(float[] vertices, Point3D normal, float uvMax)
+        {
+            var uvs = new float[8];
+            if (!TryGetCubuildFaceAxes(normal, out var uAxis, out var vAxis))
+                return new float[] { 0f, 0f, uvMax, 0f, uvMax, uvMax, 0f, uvMax };
+
+            double minU = double.PositiveInfinity, maxU = double.NegativeInfinity;
+            double minV = double.PositiveInfinity, maxV = double.NegativeInfinity;
+            for (int c = 0; c < 4; c++)
+            {
+                double x = vertices[c * 3], y = vertices[c * 3 + 1], z = vertices[c * 3 + 2];
+                double u = x * uAxis.X + y * uAxis.Y + z * uAxis.Z;
+                double v = x * vAxis.X + y * vAxis.Y + z * vAxis.Z;
+                minU = Math.Min(minU, u); maxU = Math.Max(maxU, u);
+                minV = Math.Min(minV, v); maxV = Math.Max(maxV, v);
+            }
+
+            double spanU = Math.Max(1e-9, maxU - minU);
+            double spanV = Math.Max(1e-9, maxV - minV);
+            for (int c = 0; c < 4; c++)
+            {
+                double x = vertices[c * 3], y = vertices[c * 3 + 1], z = vertices[c * 3 + 2];
+                double u = (x * uAxis.X + y * uAxis.Y + z * uAxis.Z - minU) / spanU;
+                double v = (x * vAxis.X + y * vAxis.Y + z * vAxis.Z - minV) / spanV;
+                uvs[c * 2] = (float)Math.Clamp(u, 0.0, uvMax);
+                uvs[c * 2 + 1] = (float)Math.Clamp(v, 0.0, uvMax);
+            }
+            return uvs;
+        }
+
         private void CreatePipeline()
         {
             var factory = _gd.ResourceFactory;
@@ -583,13 +618,14 @@ void main() {
                     (verts[3], verts[4], verts[5], verts[9], verts[10], verts[11]) =
                         (verts[9], verts[10], verts[11], verts[3], verts[4], verts[5]);
                 }
+                float[] faceUvs = WorldAlignedCubeFaceUvs(verts, n, uvMax);
                 for (int c = 0; c < 4; c++)
                 {
                     cubeVerts[cv++] = verts[c * 3 + 0];
                     cubeVerts[cv++] = verts[c * 3 + 1];
                     cubeVerts[cv++] = verts[c * 3 + 2];
-                    cubeVerts[cv++] = (c == 1 || c == 2) ? uvMax : 0f;
-                    cubeVerts[cv++] = (c == 2 || c == 3) ? uvMax : 0f;
+                    cubeVerts[cv++] = faceUvs[c * 2 + 0];
+                    cubeVerts[cv++] = faceUvs[c * 2 + 1];
                     cubeVerts[cv++] = shade; cubeVerts[cv++] = shade; cubeVerts[cv++] = shade; cubeVerts[cv++] = 1f;
                 }
             }
@@ -634,13 +670,14 @@ void main() {
                         (verts[3], verts[4], verts[5], verts[9], verts[10], verts[11]) =
                             (verts[9], verts[10], verts[11], verts[3], verts[4], verts[5]);
                     }
+                    float[] faceUvs = WorldAlignedCubeFaceUvs(verts, n, uvMax);
                     for (int c = 0; c < 4; c++)
                     {
                         smallVerts[sv++] = verts[c * 3 + 0] * ItemDropScale;
                         smallVerts[sv++] = verts[c * 3 + 1] * ItemDropScale;
                         smallVerts[sv++] = verts[c * 3 + 2] * ItemDropScale;
-                        smallVerts[sv++] = (c == 1 || c == 2) ? uvMax : 0f;
-                        smallVerts[sv++] = (c == 2 || c == 3) ? uvMax : 0f;
+                        smallVerts[sv++] = faceUvs[c * 2 + 0];
+                        smallVerts[sv++] = faceUvs[c * 2 + 1];
                         smallVerts[sv++] = shade; smallVerts[sv++] = shade; smallVerts[sv++] = shade; smallVerts[sv++] = 1f;
                     }
                 }
