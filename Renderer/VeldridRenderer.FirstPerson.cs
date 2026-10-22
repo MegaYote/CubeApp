@@ -198,7 +198,9 @@ namespace Cubuild.Renderer
 
             // The held item / block rides in the fist: the fist stays in its idle position
             // (arm doesn't rotate), and only the item rotates (full -80 chop around the fist).
-            DrawHeldItem(cl, grip, qFist);
+            // The held item / block rides in the fist: the fist stays in idle pose,
+            // and the item does a forward PUNCH (thrust), not a rotation.
+            DrawHeldItem(cl, grip, s);
         }
 
         private void DrawCrosshair(CommandList cl)

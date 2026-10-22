@@ -77,11 +77,10 @@ namespace Cubuild.Renderer
 
         /// <summary>
         /// Draws the selected hotbar stack in the fist. <paramref name="grip"/> is the fist in
-        /// camera space (already carrying the swing bob); <paramref name="qFist"/> is the
-        /// vanilla attack rotation around that fist. The item is glued to the hand and
-        /// inherits the whole chop from it - nothing kicks independently.
+        /// camera space (idle pose); <paramref name="s"/> is the swing progress (0..1).
+        /// The item does a forward PUNCH (thrust toward the block), not a rotation/swipe.
         /// </summary>
-        private void DrawHeldItem(CommandList cl, Vector3 grip, Quaternion qFist)
+        private void DrawHeldItem(CommandList cl, Vector3 grip, float s)
         {
             var hotbar = _hud.Hotbar;
             if (hotbar == null || hotbar.Count == 0) return;
@@ -133,25 +132,33 @@ namespace Cubuild.Renderer
                     dRot.y * Deg2Rad, dRot.x * Deg2Rad, dRot.z * Deg2Rad);
             }
 
-            // Total rotation in vanilla order: the swing's attack rotation wraps the item's
-            // own display rotation; the F8 yaw/pitch/roll nudge rides outermost.
-            Quaternion q = Quaternion.Multiply(qFist, qDisplay);
+            // ---- Punch: forward thrust (not a rotation/swipe) ------------------------
+            // A punch is a forward jab: the item thrusts toward the block and pulls back.
+            // The vanilla swing envelope (sin(sqrt(s)*pi)) gives a smooth out-and-back.
+            float f5 = (float)Math.Sin(Math.Sqrt(Math.Max(s, 0f)) * Math.PI);
+            float punchZ = -0.4f * f5;   // forward (negative Z) thrust at peak
+            float punchY = 0.05f * f5;   // slight upward lift
+            // Small downward tilt so it reads as a punch, not just a slide.
+            float tilt = -0.25f * f5;    // radians, ~-14 degrees at peak
+
+            // Total rotation: display transform (vanilla item tilt) + small punch tilt + F8 nudge.
+            // NO -80 chop rotation - that's what made it look like a swipe.
+            Quaternion q = Quaternion.Multiply(qDisplay, Quaternion.Identity);
+            q = Quaternion.Multiply(Quaternion.CreateFromYawPitchRoll(0f, tilt, 0f), q);
             q = Quaternion.Multiply(
                 Quaternion.CreateFromYawPitchRoll(_heldYaw, _heldPitch, _heldRoll), q);
 
             float scale = (sprite ? _heldItemScale : _heldBlockScale) * dScale;
 
             // ---- Position ----------------------------------------------------------------
-            // Vanilla anchors the item by its local ORIGIN CORNER: it translates the attack-
-            // rotated frame by the display translation, then grows the sprite (or cube) from
-            // there. Our meshes are CENTERED, so we draw them at the vanilla object's CENTER:
-            // corner position + half extents carried by the same final rotation. That lands
-            // the geometry in the exact vanilla spot no matter what size it's drawn at.
+            // Vanilla display translation, plus the punch thrust forward.
             var dVec = new Vector3(dTrans.x, dTrans.y, dTrans.z);
-            Vector3 pos = grip + Vector3.Transform(dVec, Matrix4x4.CreateFromQuaternion(qFist));
-            float worldSize = (sprite ? 2f : 0.3f) * scale; // drawn size in world units
+            Vector3 pos = grip + Vector3.Transform(dVec, Matrix4x4.CreateFromQuaternion(q));
+            float worldSize = (sprite ? 2f : 0.3f) * scale;
             pos += Vector3.Transform(new Vector3(0.5f, 0.5f, 0.5f) * worldSize,
                 Matrix4x4.CreateFromQuaternion(q));
+            // Punch thrust (forward + slight up), applied raw in camera space.
+            pos += new Vector3(0f, punchY, punchZ);
             // F8 nudge stays raw in screen space, on top of everything.
             pos += new Vector3(_heldOffsetX, _heldOffsetY, _heldOffsetZ);
 
@@ -173,8 +180,8 @@ namespace Cubuild.Renderer
             _heldInstanceScratch[f++] = sprite ? _heldThickness : 0f;
             // The GPU fetches instance N at N * stride, so every slice of the stack needs its
             // own copy of the data - they are all the same item, just at a different depth.
-            for (int s = 1; s < HeldSlices; s++)
-                Array.Copy(_heldInstanceScratch, 0, _heldInstanceScratch, 13 * s, 13);
+            for (int sl = 1; sl < HeldSlices; sl++)
+                Array.Copy(_heldInstanceScratch, 0, _heldInstanceScratch, 13 * sl, 13);
             _gd.UpdateBuffer(_heldInstanceBuffer, 0, _heldInstanceScratch);
 
             cl.SetPipeline(pipeline);
