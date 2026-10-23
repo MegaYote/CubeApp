@@ -2011,8 +2011,6 @@ void main() {
 
             _cloudParamsLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
                 new ResourceLayoutElementDescription("CloudParams", ResourceKind.UniformBuffer, ShaderStages.Fragment)));
-            _cloudParamsBuffer = factory.CreateBuffer(new BufferDescription(32, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
-            _cloudParamsSet = factory.CreateResourceSet(new ResourceSetDescription(_cloudParamsLayout, _cloudParamsBuffer));
 
             _cloudPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
             {
@@ -2038,16 +2036,21 @@ void main() {
                 Outputs = _sc.Framebuffer.OutputDescription
             });
 
-            _cloudInstanceCapacity = 256;
-            _cloudInstanceScratch = new float[_cloudInstanceCapacity * 2];
-            _cloudInstanceBuffer = factory.CreateBuffer(new BufferDescription(
-                (uint)(_cloudInstanceScratch.Length * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            foreach (var layer in _cloudLayers)
+            {
+                layer.ParamsBuffer = factory.CreateBuffer(new BufferDescription(32, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+                layer.ParamsSet = factory.CreateResourceSet(new ResourceSetDescription(_cloudParamsLayout, layer.ParamsBuffer));
+                layer.InstanceScratch = new float[layer.InstanceCapacity * 2];
+                layer.InstanceBuffer = factory.CreateBuffer(new BufferDescription(
+                    (uint)(layer.InstanceScratch.Length * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            }
             RebuildCloudGeometry(_cloudSeed);
         }
 
-        // Generate the same deterministic hard-thresholded 32x32 coarse field formerly used to
-        // stamp the cloud alpha texture. Each occupied cell becomes an 8x8 world-unit puff cell.
-        private static bool[] GenerateCloudOccupancy(int seed)
+        // Generate a deterministic, hard-thresholded 32x32 coarse field for one layer. Different
+        // seeds and thresholds keep the layers visually independent while retaining the sparse,
+        // softly clustered puffs of the original field.
+        private static bool[] GenerateCloudOccupancy(int seed, float coverageThreshold)
         {
             const int coarse = CloudCoarseSize;
             var rng = new Random(seed);
@@ -2084,28 +2087,33 @@ void main() {
             }
 
             var occupancy = new bool[coarse * coarse];
-            const float cloudCoverageThreshold = 0.56f;
             for (int y = 0; y < coarse; y++)
             {
                 for (int x = 0; x < coarse; x++)
                 {
                     float v = Math.Clamp(noise[y * coarse + x] / totalAmp, 0f, 1f);
-                    occupancy[y * coarse + x] = v > cloudCoverageThreshold;
+                    occupancy[y * coarse + x] = v > coverageThreshold;
                 }
             }
             return occupancy;
         }
 
-        // Build a closed, shaded prism mesh from the coarse occupancy. Neighboring side faces
-        // are omitted where another puff reaches the same height; only exposed height steps are
-        // emitted. Neighbor lookup wraps so repeated tile boundaries join consistently.
+        // Build independent closed, shaded prisms for each altitude. Neighboring side faces are
+        // omitted where another puff reaches the same height; exposed height steps remain visible.
+        // Neighbor lookup wraps so repeated tile boundaries join consistently.
         private void RebuildCloudGeometry(int seed)
         {
-            var occupied = GenerateCloudOccupancy(seed);
+            foreach (var layer in _cloudLayers)
+                RebuildCloudLayerGeometry(layer, unchecked(seed ^ layer.SeedSalt));
+        }
+
+        private void RebuildCloudLayerGeometry(CloudLayer layer, int seed)
+        {
+            var occupied = GenerateCloudOccupancy(seed, layer.CoverageThreshold);
             var heights = new int[occupied.Length];
             var heightRng = new Random(unchecked(seed * 397 ^ 0x5F3759DF));
             for (int i = 0; i < occupied.Length; i++)
-                if (occupied[i]) heights[i] = 2 + heightRng.Next(4); // 2..5 world units
+                if (occupied[i]) heights[i] = layer.MinHeight + heightRng.Next(layer.MaxHeight - layer.MinHeight + 1);
 
             int HeightAt(int x, int z)
             {
@@ -2138,7 +2146,7 @@ void main() {
                 float x1 = x0 + CloudCellSize;
                 float z0 = z * CloudCellSize;
                 float z1 = z0 + CloudCellSize;
-                float bottom = CloudWorldY;
+                float bottom = layer.WorldY;
                 float top = bottom + height;
 
                 AddQuad(x0, top, z0, x0, top, z1, x1, top, z1, x1, top, z0, 1.00f);
@@ -2162,15 +2170,15 @@ void main() {
                         x1, top, z0, x1, bottom + north, z0, 0.84f);
             }
 
-            if (_cloudVertexBuffer != null) _gd.DisposeWhenIdle(_cloudVertexBuffer);
-            if (_cloudIndexBuffer != null) _gd.DisposeWhenIdle(_cloudIndexBuffer);
-            _cloudVertexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+            if (layer.VertexBuffer != null) _gd.DisposeWhenIdle(layer.VertexBuffer);
+            if (layer.IndexBuffer != null) _gd.DisposeWhenIdle(layer.IndexBuffer);
+            layer.VertexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
                 (uint)Math.Max(vertices.Count * sizeof(float), 16), BufferUsage.VertexBuffer));
-            _cloudIndexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+            layer.IndexBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
                 (uint)Math.Max(indices.Count * sizeof(ushort), sizeof(ushort)), BufferUsage.IndexBuffer));
-            if (vertices.Count > 0) _gd.UpdateBuffer(_cloudVertexBuffer, 0, vertices.ToArray());
-            if (indices.Count > 0) _gd.UpdateBuffer(_cloudIndexBuffer, 0, indices.ToArray());
-            _cloudIndexCount = indices.Count;
+            if (vertices.Count > 0) _gd.UpdateBuffer(layer.VertexBuffer, 0, vertices.ToArray());
+            if (indices.Count > 0) _gd.UpdateBuffer(layer.IndexBuffer, 0, indices.ToArray());
+            layer.IndexCount = indices.Count;
         }
 
         // Generates the green+water "earth seen from above" texture (noise blob walkers again):
@@ -2275,79 +2283,96 @@ void main() {
         // rebuilding the puff geometry each frame.
         private void DrawClouds(CommandList cl)
         {
-            if (_cloudPipeline == null || _cloudDepthPipeline == null || _cloudVertexBuffer == null || _cloudIndexBuffer == null
-                || _cloudInstanceBuffer == null || _cloudParamsBuffer == null || !_cameraPosition.HasValue
-                || _cloudIndexCount == 0) return;
+            if (_cloudPipeline == null || _cloudDepthPipeline == null || !_cameraPosition.HasValue) return;
 
             float extent = Math.Max(_farPlane, 768f);
             float camX = (float)_cameraPosition.Value.X;
             float camZ = (float)_cameraPosition.Value.Z;
 
             float now = (float)_cloudClock.Elapsed.TotalSeconds;
-            _cloudScrollU = (float)Math.IEEERemainder(_cloudScrollU + 0.002f * (now - _lastCloudTime), 1.0);
-            _cloudScrollV = (float)Math.IEEERemainder(_cloudScrollV + 0.0007f * (now - _lastCloudTime), 1.0);
+            float deltaTime = Math.Max(0f, now - _lastCloudTime);
             _lastCloudTime = now;
 
-            // The old texture scroll sampled at (world / tile + scroll), so the geometry moves
-            // in the opposite direction. A whole-tile wrap is visually seamless because the
-            // same seeded occupancy is repeated at every instance origin.
-            float driftX = -_cloudScrollU * CloudTileSize;
-            float driftZ = -_cloudScrollV * CloudTileSize;
             int tileRadius = (int)Math.Ceiling(extent / CloudTileSize) + 1;
             int side = tileRadius * 2 + 1;
             int instanceCount = side * side;
-            if (instanceCount > _cloudInstanceCapacity)
+
+            // Prepare every layer's unique dynamic data before recording draws. No instance or
+            // uniform buffer is rewritten between commands that reference it.
+            foreach (var layer in _cloudLayers)
             {
-                int newCapacity = 1;
-                while (newCapacity < instanceCount) newCapacity <<= 1;
-                _gd.DisposeWhenIdle(_cloudInstanceBuffer);
-                _cloudInstanceCapacity = newCapacity;
-                _cloudInstanceScratch = new float[newCapacity * 2];
-                _cloudInstanceBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
-                    (uint)(_cloudInstanceScratch.Length * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+                if (layer.IndexCount == 0 || layer.VertexBuffer == null || layer.IndexBuffer == null
+                    || layer.InstanceBuffer == null || layer.ParamsBuffer == null) continue;
+
+                layer.ScrollU = (float)Math.IEEERemainder(layer.ScrollU + layer.DriftUPerSecond * deltaTime, 1.0);
+                layer.ScrollV = (float)Math.IEEERemainder(layer.ScrollV + layer.DriftVPerSecond * deltaTime, 1.0);
+                // The field moves opposite the old texture-scroll direction. Whole-tile wrapping
+                // is seamless because every instance repeats this layer's own seeded occupancy.
+                float driftX = -layer.ScrollU * CloudTileSize;
+                float driftZ = -layer.ScrollV * CloudTileSize;
+
+                if (instanceCount > layer.InstanceCapacity)
+                {
+                    int newCapacity = 1;
+                    while (newCapacity < instanceCount) newCapacity <<= 1;
+                    _gd.DisposeWhenIdle(layer.InstanceBuffer);
+                    layer.InstanceCapacity = newCapacity;
+                    layer.InstanceScratch = new float[newCapacity * 2];
+                    layer.InstanceBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                        (uint)(layer.InstanceScratch.Length * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+                }
+
+                float centerTileX = (float)Math.Floor((camX - driftX) / CloudTileSize);
+                float centerTileZ = (float)Math.Floor((camZ - driftZ) / CloudTileSize);
+                int instance = 0;
+                for (int z = -tileRadius; z <= tileRadius; z++)
+                for (int x = -tileRadius; x <= tileRadius; x++)
+                {
+                    layer.InstanceScratch[instance * 2] = (centerTileX + x) * CloudTileSize + driftX;
+                    layer.InstanceScratch[instance * 2 + 1] = (centerTileZ + z) * CloudTileSize + driftZ;
+                    instance++;
+                }
+                _gd.UpdateBuffer(layer.InstanceBuffer, 0, layer.InstanceScratch);
+
+                layer.Params[0] = camX;
+                layer.Params[1] = camZ;
+                layer.Params[2] = layer.Opacity * Math.Max(_nightSkyDim, 0.02f);
+                layer.Params[3] = extent;
+                layer.Params[4] = CloudFadeWidth;
+                layer.Params[5] = CloudTileSize;
+                layer.Params[6] = 0f;
+                layer.Params[7] = 0f;
+                _gd.UpdateBuffer(layer.ParamsBuffer, 0, layer.Params);
             }
 
-            float centerTileX = (float)Math.Floor((camX - driftX) / CloudTileSize);
-            float centerTileZ = (float)Math.Floor((camZ - driftZ) / CloudTileSize);
-            int instance = 0;
-            for (int z = -tileRadius; z <= tileRadius; z++)
-            for (int x = -tileRadius; x <= tileRadius; x++)
-            {
-                _cloudInstanceScratch[instance * 2] = (centerTileX + x) * CloudTileSize + driftX;
-                _cloudInstanceScratch[instance * 2 + 1] = (centerTileZ + z) * CloudTileSize + driftZ;
-                instance++;
-            }
-            _gd.UpdateBuffer(_cloudInstanceBuffer, 0, _cloudInstanceScratch);
-
-            _cloudParams[0] = camX;
-            _cloudParams[1] = camZ;
-            _cloudParams[2] = 0.65f * Math.Max(_nightSkyDim, 0.02f); // translucent, dims at night
-            _cloudParams[3] = extent;
-            _cloudParams[4] = CloudFadeWidth;
-            _cloudParams[5] = CloudTileSize;
-            _cloudParams[6] = 0f;
-            _cloudParams[7] = 0f;
-            _gd.UpdateBuffer(_cloudParamsBuffer, 0, _cloudParams);
-
-            // Resolve the nearest visible voxel surface first. Without this pass, depth writes
-            // from whichever translucent face happened to submit first could reveal a back face
-            // through the puff and make adjacent clouds look incorrectly sorted.
+            // One shared prepass across all cloud layers resolves the nearest cloud surface
+            // against terrain before any translucent cloud color is submitted. This prevents
+            // layer order and the back faces of closed puff meshes from creating sort artifacts.
             cl.SetPipeline(_cloudDepthPipeline);
             cl.SetGraphicsResourceSet(0, _projViewSet);
-            if (_cloudParamsSet != null) cl.SetGraphicsResourceSet(1, _cloudParamsSet);
-            cl.SetVertexBuffer(0, _cloudVertexBuffer);
-            cl.SetVertexBuffer(1, _cloudInstanceBuffer);
-            cl.SetIndexBuffer(_cloudIndexBuffer, IndexFormat.UInt16);
-            cl.DrawIndexed((uint)_cloudIndexCount, (uint)instanceCount, 0, 0, 0);
+            foreach (var layer in _cloudLayers)
+            {
+                if (layer.IndexCount == 0 || layer.VertexBuffer == null || layer.IndexBuffer == null
+                    || layer.InstanceBuffer == null || layer.ParamsSet == null) continue;
+                cl.SetGraphicsResourceSet(1, layer.ParamsSet);
+                cl.SetVertexBuffer(0, layer.VertexBuffer);
+                cl.SetVertexBuffer(1, layer.InstanceBuffer);
+                cl.SetIndexBuffer(layer.IndexBuffer, IndexFormat.UInt16);
+                cl.DrawIndexed((uint)layer.IndexCount, (uint)instanceCount, 0, 0, 0);
+            }
 
             cl.SetPipeline(_cloudPipeline);
-            // Same projection and depth as the world: terrain and the nearer cloud puff win.
             cl.SetGraphicsResourceSet(0, _projViewSet);
-            if (_cloudParamsSet != null) cl.SetGraphicsResourceSet(1, _cloudParamsSet);
-            cl.SetVertexBuffer(0, _cloudVertexBuffer);
-            cl.SetVertexBuffer(1, _cloudInstanceBuffer);
-            cl.SetIndexBuffer(_cloudIndexBuffer, IndexFormat.UInt16);
-            cl.DrawIndexed((uint)_cloudIndexCount, (uint)instanceCount, 0, 0, 0);
+            foreach (var layer in _cloudLayers)
+            {
+                if (layer.IndexCount == 0 || layer.VertexBuffer == null || layer.IndexBuffer == null
+                    || layer.InstanceBuffer == null || layer.ParamsSet == null) continue;
+                cl.SetGraphicsResourceSet(1, layer.ParamsSet);
+                cl.SetVertexBuffer(0, layer.VertexBuffer);
+                cl.SetVertexBuffer(1, layer.InstanceBuffer);
+                cl.SetIndexBuffer(layer.IndexBuffer, IndexFormat.UInt16);
+                cl.DrawIndexed((uint)layer.IndexCount, (uint)instanceCount, 0, 0, 0);
+            }
         }
 
         // Pixel-art colour-INVERTING crosshair. The blend is SUBTRACT: out = src - dst = white -

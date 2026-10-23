@@ -189,31 +189,61 @@ namespace Cubuild.Renderer
         private float _cloudFarPlane = 2100f;
         private int _cloudSeed = 12345;
 
-        // ---- Clouds (seeded voxel-puff field) --------------------------------------------
-        // One static 3D mesh is built from a repeated 32x32 occupancy tile. Per-frame instance
-        // offsets keep enough copies around the camera while allowing the cloud field to drift.
-        // The outer radius fades softly; depth test remains enabled and depth writes disabled so
-        // clouds blend over terrain from above and are occluded by it from below.
+        // ---- Clouds (seeded voxel-puff fields) -------------------------------------------
+        // Each altitude has an independent, repeated 32x32 occupancy tile and its own dynamic
+        // instance/uniform buffers. That lets all depth draws be recorded before any color draws
+        // without changing GPU data referenced by earlier commands.
         private Pipeline? _cloudPipeline;
         private Pipeline? _cloudDepthPipeline;
-        private DeviceBuffer? _cloudVertexBuffer;
-        private DeviceBuffer? _cloudIndexBuffer;
-        private DeviceBuffer? _cloudInstanceBuffer;
-        private int _cloudInstanceCapacity;
-        private int _cloudIndexCount;
-        private DeviceBuffer? _cloudParamsBuffer;
-        private ResourceSet? _cloudParamsSet;
         private ResourceLayout? _cloudParamsLayout;
-        private const float CloudWorldY = 128f;       // cloud base altitude
+        private sealed class CloudLayer
+        {
+            public readonly float WorldY;
+            public readonly float CoverageThreshold;
+            public readonly int MinHeight;
+            public readonly int MaxHeight;
+            public readonly float Opacity;
+            public readonly float DriftUPerSecond;
+            public readonly float DriftVPerSecond;
+            public readonly int SeedSalt;
+            public DeviceBuffer? VertexBuffer;
+            public DeviceBuffer? IndexBuffer;
+            public DeviceBuffer? InstanceBuffer;
+            public DeviceBuffer? ParamsBuffer;
+            public ResourceSet? ParamsSet;
+            public int InstanceCapacity;
+            public int IndexCount;
+            public float ScrollU;
+            public float ScrollV;
+            public float[] InstanceScratch = new float[512];
+            public readonly float[] Params = new float[8];
+
+            public CloudLayer(float worldY, float coverageThreshold, int minHeight, int maxHeight,
+                float opacity, float driftUPerSecond, float driftVPerSecond, int seedSalt)
+            {
+                WorldY = worldY;
+                CoverageThreshold = coverageThreshold;
+                MinHeight = minHeight;
+                MaxHeight = maxHeight;
+                Opacity = opacity;
+                DriftUPerSecond = driftUPerSecond;
+                DriftVPerSecond = driftVPerSecond;
+                SeedSalt = seedSalt;
+                InstanceCapacity = 256;
+            }
+        }
+
+        private readonly CloudLayer[] _cloudLayers =
+        {
+            new CloudLayer(128f, 0.56f, 2, 5, 0.65f,  0.0020f,  0.0007f, 0x13579),
+            new CloudLayer(168f, 0.61f, 1, 3, 0.48f, -0.0013f,  0.0011f, 0x2468B),
+            new CloudLayer(208f, 0.68f, 1, 2, 0.34f,  0.0006f, -0.0018f, 0x5A17D),
+        };
         private const int CloudCoarseSize = 32;
         private const float CloudCellSize = 8f;       // world units per coarse occupancy cell
         private const float CloudTileSize = CloudCoarseSize * CloudCellSize;
         private const float CloudFadeWidth = 300f;    // outer-radius fade so the horizon line is soft
-        private float _cloudScrollU;
-        private float _cloudScrollV;
         private float _lastCloudTime;
-        private readonly float[] _cloudParams = new float[8];
-        private float[] _cloudInstanceScratch = new float[512];
         private readonly System.Diagnostics.Stopwatch _cloudClock = System.Diagnostics.Stopwatch.StartNew();
 
         // ---- Crosshair (pixel-art, colour-INVERTING) --------------------------------------
@@ -989,12 +1019,15 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             _galaxyIndexBuffer?.Dispose();
             _cloudPipeline?.Dispose();
             _cloudDepthPipeline?.Dispose();
-            _cloudVertexBuffer?.Dispose();
-            _cloudIndexBuffer?.Dispose();
-            _cloudInstanceBuffer?.Dispose();
-            _cloudParamsSet?.Dispose();
+            foreach (var cloudLayer in _cloudLayers)
+            {
+                cloudLayer.ParamsSet?.Dispose();
+                cloudLayer.VertexBuffer?.Dispose();
+                cloudLayer.IndexBuffer?.Dispose();
+                cloudLayer.InstanceBuffer?.Dispose();
+                cloudLayer.ParamsBuffer?.Dispose();
+            }
             _cloudParamsLayout?.Dispose();
-            _cloudParamsBuffer?.Dispose();
             _cloudMatrixBuffer?.Dispose();
             _cloudMatrixSet?.Dispose();
             _worldPlanePipeline?.Dispose();
