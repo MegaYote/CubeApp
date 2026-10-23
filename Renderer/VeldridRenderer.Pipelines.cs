@@ -113,15 +113,50 @@ layout(set=2, binding=0) uniform FogParams {
     vec2 lightParams; // sky-light scale, fullbright override
     vec4 cameraPos;  // xyz + pad
     vec4 hiddenCell; // xyz = mining cell (floor), w = 1 when a block is being hidden
+    vec4 cloudShadowSun;       // xyz = sun direction, w = max attenuation
+    vec4 cloudShadowScrollU;   // per-layer U scroll
+    vec4 cloudShadowScrollV;   // per-layer V scroll
+    vec4 cloudShadowAltitudes; // per-layer representative cloud altitude
+    uvec4 cloudShadowRows[24];
 };
 layout(location=0) out vec4 outColor;
 float lightBrightness(uint level) {
     float t = float(level) / 15.0;
     return t * t * t * 0.55 + t * 0.45;
 }
+float cloudMaskAt(ivec2 cell, int layer) {
+    int x = (cell.x % 32 + 32) % 32;
+    int z = (cell.y % 32 + 32) % 32;
+    int row = layer * 32 + z;
+    uint rowBits = cloudShadowRows[row / 4][row % 4];
+    return float((rowBits >> uint(x)) & 1u);
+}
+float cloudMaskSample(vec2 uv, int layer) {
+    vec2 coord = fract(uv) * 32.0 - 0.5;
+    ivec2 base = ivec2(floor(coord));
+    vec2 weight = fract(coord);
+    float top = mix(cloudMaskAt(base, layer), cloudMaskAt(base + ivec2(1, 0), layer), weight.x);
+    float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
+    return mix(top, bottom, weight.y);
+}
+float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
+    float verticalDistance = altitude - worldPos.y;
+    if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
+    float sunElevation = max(cloudShadowSun.y, 0.18);
+    vec2 projected = worldPos.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
+    vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
+    return cloudMaskSample(uv, layer);
+}
+float cloudShadowCoverage(vec3 worldPos) {
+    float r = cloudLayerCoverage(worldPos, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
+    float g = cloudLayerCoverage(worldPos, 1, cloudShadowScrollU.y, cloudShadowScrollV.y, cloudShadowAltitudes.y);
+    float b = cloudLayerCoverage(worldPos, 2, cloudShadowScrollU.z, cloudShadowScrollV.z, cloudShadowAltitudes.z);
+    return 1.0 - (1.0 - r) * (1.0 - g) * (1.0 - b);
+}
 float worldLight() {
     if (lightParams.y > 0.5) return 1.0;
-    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x;
+    float shadow = cloudShadowSun.w * cloudShadowCoverage(vWorldPos);
+    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x * (1.0 - shadow);
     float block = lightBrightness((vLightPacked >> 4) & 0xFu);
     return max(sky, block);
 }
@@ -181,10 +216,11 @@ void main() {
                 new ResourceLayoutElementDescription("uAtlas", ResourceKind.TextureReadOnly, ShaderStages.Fragment),
                 new ResourceLayoutElementDescription("uAtlasSampler", ResourceKind.Sampler, ShaderStages.Fragment)));
 
-            // Distance fog uniform block (set 2), shared by all world pipelines.
+            // Distance fog and the packed cloud-shadow mask share set 2 across world pipelines.
             _fogLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
                 new ResourceLayoutElementDescription("FogParams", ResourceKind.UniformBuffer, ShaderStages.Fragment)));
-            _fogBuffer = factory.CreateBuffer(new BufferDescription(64, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _fogBuffer = factory.CreateBuffer(new BufferDescription(
+                (uint)(_fogParams.Length * sizeof(float)), BufferUsage.UniformBuffer | BufferUsage.Dynamic));
             _fogSet = factory.CreateResourceSet(new ResourceSetDescription(_fogLayout, _fogBuffer));
 
             var pipelineDesc = new GraphicsPipelineDescription()
@@ -221,15 +257,50 @@ layout(set=2, binding=0) uniform FogParams {
     vec2 lightParams;
     vec4 cameraPos;
     vec4 hiddenCell;
+    vec4 cloudShadowSun;
+    vec4 cloudShadowScrollU;
+    vec4 cloudShadowScrollV;
+    vec4 cloudShadowAltitudes;
+    uvec4 cloudShadowRows[24];
 };
 layout(location=0) out vec4 outColor;
 float lightBrightness(uint level) {
     float t = float(level) / 15.0;
     return t * t * t * 0.55 + t * 0.45;
 }
+float cloudMaskAt(ivec2 cell, int layer) {
+    int x = (cell.x % 32 + 32) % 32;
+    int z = (cell.y % 32 + 32) % 32;
+    int row = layer * 32 + z;
+    uint rowBits = cloudShadowRows[row / 4][row % 4];
+    return float((rowBits >> uint(x)) & 1u);
+}
+float cloudMaskSample(vec2 uv, int layer) {
+    vec2 coord = fract(uv) * 32.0 - 0.5;
+    ivec2 base = ivec2(floor(coord));
+    vec2 weight = fract(coord);
+    float top = mix(cloudMaskAt(base, layer), cloudMaskAt(base + ivec2(1, 0), layer), weight.x);
+    float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
+    return mix(top, bottom, weight.y);
+}
+float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
+    float verticalDistance = altitude - worldPos.y;
+    if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
+    float sunElevation = max(cloudShadowSun.y, 0.18);
+    vec2 projected = worldPos.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
+    vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
+    return cloudMaskSample(uv, layer);
+}
+float cloudShadowCoverage(vec3 worldPos) {
+    float r = cloudLayerCoverage(worldPos, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
+    float g = cloudLayerCoverage(worldPos, 1, cloudShadowScrollU.y, cloudShadowScrollV.y, cloudShadowAltitudes.y);
+    float b = cloudLayerCoverage(worldPos, 2, cloudShadowScrollU.z, cloudShadowScrollV.z, cloudShadowAltitudes.z);
+    return 1.0 - (1.0 - r) * (1.0 - g) * (1.0 - b);
+}
 float worldLight() {
     if (lightParams.y > 0.5) return 1.0;
-    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x;
+    float shadow = cloudShadowSun.w * cloudShadowCoverage(vWorldPos);
+    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x * (1.0 - shadow);
     float block = lightBrightness((vLightPacked >> 4) & 0xFu);
     return max(sky, block);
 }
@@ -306,15 +377,50 @@ layout(set=2, binding=0) uniform FogParams {
     vec2 lightParams;
     vec4 cameraPos;
     vec4 hiddenCell;
+    vec4 cloudShadowSun;
+    vec4 cloudShadowScrollU;
+    vec4 cloudShadowScrollV;
+    vec4 cloudShadowAltitudes;
+    uvec4 cloudShadowRows[24];
 };
 layout(location=0) out vec4 outColor;
 float lightBrightness(uint level) {
     float t = float(level) / 15.0;
     return t * t * t * 0.55 + t * 0.45;
 }
+float cloudMaskAt(ivec2 cell, int layer) {
+    int x = (cell.x % 32 + 32) % 32;
+    int z = (cell.y % 32 + 32) % 32;
+    int row = layer * 32 + z;
+    uint rowBits = cloudShadowRows[row / 4][row % 4];
+    return float((rowBits >> uint(x)) & 1u);
+}
+float cloudMaskSample(vec2 uv, int layer) {
+    vec2 coord = fract(uv) * 32.0 - 0.5;
+    ivec2 base = ivec2(floor(coord));
+    vec2 weight = fract(coord);
+    float top = mix(cloudMaskAt(base, layer), cloudMaskAt(base + ivec2(1, 0), layer), weight.x);
+    float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
+    return mix(top, bottom, weight.y);
+}
+float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
+    float verticalDistance = altitude - worldPos.y;
+    if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
+    float sunElevation = max(cloudShadowSun.y, 0.18);
+    vec2 projected = worldPos.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
+    vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
+    return cloudMaskSample(uv, layer);
+}
+float cloudShadowCoverage(vec3 worldPos) {
+    float r = cloudLayerCoverage(worldPos, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
+    float g = cloudLayerCoverage(worldPos, 1, cloudShadowScrollU.y, cloudShadowScrollV.y, cloudShadowAltitudes.y);
+    float b = cloudLayerCoverage(worldPos, 2, cloudShadowScrollU.z, cloudShadowScrollV.z, cloudShadowAltitudes.z);
+    return 1.0 - (1.0 - r) * (1.0 - g) * (1.0 - b);
+}
 float worldLight() {
     if (lightParams.y > 0.5) return 1.0;
-    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x;
+    float shadow = cloudShadowSun.w * cloudShadowCoverage(vWorldPos);
+    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x * (1.0 - shadow);
     float block = lightBrightness((vLightPacked >> 4) & 0xFu);
     return max(sky, block);
 }
@@ -1504,15 +1610,50 @@ layout(set=2, binding=0) uniform FogParams {
     vec2 lightParams;
     vec4 cameraPos;
     vec4 hiddenCell;
+    vec4 cloudShadowSun;
+    vec4 cloudShadowScrollU;
+    vec4 cloudShadowScrollV;
+    vec4 cloudShadowAltitudes;
+    uvec4 cloudShadowRows[24];
 };
 layout(location=0) out vec4 outColor;
 float lightBrightness(uint level) {
     float t = float(level) / 15.0;
     return t * t * t * 0.55 + t * 0.45;
 }
+float cloudMaskAt(ivec2 cell, int layer) {
+    int x = (cell.x % 32 + 32) % 32;
+    int z = (cell.y % 32 + 32) % 32;
+    int row = layer * 32 + z;
+    uint rowBits = cloudShadowRows[row / 4][row % 4];
+    return float((rowBits >> uint(x)) & 1u);
+}
+float cloudMaskSample(vec2 uv, int layer) {
+    vec2 coord = fract(uv) * 32.0 - 0.5;
+    ivec2 base = ivec2(floor(coord));
+    vec2 weight = fract(coord);
+    float top = mix(cloudMaskAt(base, layer), cloudMaskAt(base + ivec2(1, 0), layer), weight.x);
+    float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
+    return mix(top, bottom, weight.y);
+}
+float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
+    float verticalDistance = altitude - worldPos.y;
+    if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
+    float sunElevation = max(cloudShadowSun.y, 0.18);
+    vec2 projected = worldPos.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
+    vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
+    return cloudMaskSample(uv, layer);
+}
+float cloudShadowCoverage(vec3 worldPos) {
+    float r = cloudLayerCoverage(worldPos, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
+    float g = cloudLayerCoverage(worldPos, 1, cloudShadowScrollU.y, cloudShadowScrollV.y, cloudShadowAltitudes.y);
+    float b = cloudLayerCoverage(worldPos, 2, cloudShadowScrollU.z, cloudShadowScrollV.z, cloudShadowAltitudes.z);
+    return 1.0 - (1.0 - r) * (1.0 - g) * (1.0 - b);
+}
 float worldLight() {
     if (lightParams.y > 0.5) return 1.0;
-    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x;
+    float shadow = cloudShadowSun.w * cloudShadowCoverage(vWorldPos);
+    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x * (1.0 - shadow);
     float block = lightBrightness((vLightPacked >> 4) & 0xFu);
     return max(sky, block);
 }
@@ -2105,11 +2246,13 @@ void main() {
         {
             foreach (var layer in _cloudLayers)
                 RebuildCloudLayerGeometry(layer, unchecked(seed ^ layer.SeedSalt));
+            UploadCloudShadowMask();
         }
 
         private void RebuildCloudLayerGeometry(CloudLayer layer, int seed)
         {
             var occupied = GenerateCloudOccupancy(seed, layer.CoverageThreshold);
+            layer.Occupancy = occupied;
             var heights = new int[occupied.Length];
             var heightRng = new Random(unchecked(seed * 397 ^ 0x5F3759DF));
             for (int i = 0; i < occupied.Length; i++)
@@ -2179,6 +2322,30 @@ void main() {
             if (vertices.Count > 0) _gd.UpdateBuffer(layer.VertexBuffer, 0, vertices.ToArray());
             if (indices.Count > 0) _gd.UpdateBuffer(layer.IndexBuffer, 0, indices.ToArray());
             layer.IndexCount = indices.Count;
+        }
+
+        private void UploadCloudShadowMask()
+        {
+            Array.Clear(_fogParams, FogParamsValueCount, _fogParams.Length - FogParamsValueCount);
+            int layerCount = Math.Min(_cloudLayers.Length, CloudShadowLayerCount);
+            for (int layerIndex = 0; layerIndex < layerCount; layerIndex++)
+            {
+                bool[] occupancy = _cloudLayers[layerIndex].Occupancy;
+                for (int z = 0; z < CloudCoarseSize; z++)
+                {
+                    // One uint holds this row's 32 binary occupancy cells.
+                    uint rowBits = 0;
+                    for (int x = 0; x < CloudCoarseSize; x++)
+                    {
+                        int cell = z * CloudCoarseSize + x;
+                        if (cell < occupancy.Length && occupancy[cell]) rowBits |= 1u << x;
+                    }
+
+                    int packedRow = layerIndex * CloudCoarseSize + z;
+                    int packedFloat = FogParamsValueCount + packedRow;
+                    _fogParams[packedFloat] = BitConverter.Int32BitsToSingle(unchecked((int)rowBits));
+                }
+            }
         }
 
         // Generates the green+water "earth seen from above" texture (noise blob walkers again):
@@ -2281,6 +2448,19 @@ void main() {
         // Draw repeated static mesh tiles around the camera. Tile origins scroll continuously
         // with the cloud drift; fragment-space radial fade keeps the horizon soft without
         // rebuilding the puff geometry each frame.
+        private void UpdateCloudScroll()
+        {
+            float now = (float)_cloudClock.Elapsed.TotalSeconds;
+            float deltaTime = Math.Max(0f, now - _lastCloudTime);
+            _lastCloudTime = now;
+
+            foreach (var layer in _cloudLayers)
+            {
+                layer.ScrollU = (float)Math.IEEERemainder(layer.ScrollU + layer.DriftUPerSecond * deltaTime, 1.0);
+                layer.ScrollV = (float)Math.IEEERemainder(layer.ScrollV + layer.DriftVPerSecond * deltaTime, 1.0);
+            }
+        }
+
         private void DrawClouds(CommandList cl)
         {
             if (_cloudPipeline == null || _cloudDepthPipeline == null || !_cameraPosition.HasValue) return;
@@ -2288,10 +2468,6 @@ void main() {
             float extent = Math.Max(_farPlane, 768f);
             float camX = (float)_cameraPosition.Value.X;
             float camZ = (float)_cameraPosition.Value.Z;
-
-            float now = (float)_cloudClock.Elapsed.TotalSeconds;
-            float deltaTime = Math.Max(0f, now - _lastCloudTime);
-            _lastCloudTime = now;
 
             int tileRadius = (int)Math.Ceiling(extent / CloudTileSize) + 1;
             int side = tileRadius * 2 + 1;
@@ -2304,8 +2480,6 @@ void main() {
                 if (layer.IndexCount == 0 || layer.VertexBuffer == null || layer.IndexBuffer == null
                     || layer.InstanceBuffer == null || layer.ParamsBuffer == null) continue;
 
-                layer.ScrollU = (float)Math.IEEERemainder(layer.ScrollU + layer.DriftUPerSecond * deltaTime, 1.0);
-                layer.ScrollV = (float)Math.IEEERemainder(layer.ScrollV + layer.DriftVPerSecond * deltaTime, 1.0);
                 // The field moves opposite the old texture-scroll direction. Whole-tile wrapping
                 // is seamless because every instance repeats this layer's own seeded occupancy.
                 float driftX = -layer.ScrollU * CloudTileSize;

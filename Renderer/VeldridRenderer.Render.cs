@@ -468,6 +468,9 @@ namespace Cubuild.Renderer
             if (particleDt > 0.1f) particleDt = 0.1f;
             if (_particleCount > 0) UpdateParticles(particleDt);
 
+            // Keep cloud geometry and its projected occupancy masks on one scroll state for this
+            // frame. Advance first so the world/fog uniforms and the later cloud draw agree.
+            UpdateCloudScroll();
             UpdateFog();
 
             DrawSky(cl);

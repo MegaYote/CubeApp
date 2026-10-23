@@ -42,7 +42,12 @@ namespace Cubuild.Renderer
         private DeviceBuffer _fogBuffer;
         private ResourceLayout _fogLayout;
         private ResourceSet _fogSet;
-        private readonly float[] _fogParams = new float[16];
+        // FogParams carries the per-frame shadow controls and 3x32 packed cloud-shadow rows.
+        private const int FogParamsValueCount = 32;
+        private const int CloudShadowLayerCount = 3;
+        private const int CloudShadowRowCount = CloudCoarseSize * CloudShadowLayerCount;
+        private const int CloudShadowPackedVectorCount = (CloudShadowRowCount + 3) / 4;
+        private readonly float[] _fogParams = new float[FogParamsValueCount + CloudShadowPackedVectorCount * 4];
         // Day/night: computed from HudState.WorldTime each frame. _nightDim scales world light,
         // _nightSkyDim scales the fog color toward night dark.
         private float _nightDim = 1f;
@@ -189,6 +194,11 @@ namespace Cubuild.Renderer
         private float _cloudFarPlane = 2100f;
         private int _cloudSeed = 12345;
 
+        // Reversible rendering experiment: set false to retain the packed mask but disable
+        // all cloud-shadow attenuation. This never changes terrain geometry or cloud rendering.
+        private const bool ExperimentalCloudShadowsEnabled = true;
+        private const float ExperimentalCloudShadowMaxStrength = 0.24f;
+
         // ---- Clouds (seeded voxel-puff fields) -------------------------------------------
         // Each altitude has an independent, repeated 32x32 occupancy tile and its own dynamic
         // instance/uniform buffers. That lets all depth draws be recorded before any color draws
@@ -215,6 +225,7 @@ namespace Cubuild.Renderer
             public int IndexCount;
             public float ScrollU;
             public float ScrollV;
+            public bool[] Occupancy = Array.Empty<bool>();
             public float[] InstanceScratch = new float[512];
             public readonly float[] Params = new float[8];
 

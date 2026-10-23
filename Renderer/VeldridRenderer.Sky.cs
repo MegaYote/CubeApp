@@ -31,8 +31,7 @@ namespace Cubuild.Renderer
             _fogParams[3] = 1f;
             _fogParams[4] = fogStart;
             _fogParams[5] = fogEnd;
-            // std140 padding after fogRange: use the two floats at indices 6-7 for the
-            // continuous skylight scale and Fullbright override, without growing the 64-byte UBO.
+            // FogParams indices 6-7 hold the continuous skylight scale and Fullbright override.
             _fogParams[6] = _nightDim;
             _fogParams[7] = ChunkLighting.Fullbright ? 1f : 0f;
             if (_cameraPosition.HasValue)
@@ -57,6 +56,30 @@ namespace Cubuild.Renderer
             else
             {
                 _fogParams[15] = 0f;
+            }
+
+            // Experimental projected cloud shadows use the exact per-layer scroll values that
+            // DrawClouds uses for its instanced tile origins. The celestial quad follows this same
+            // X-axis orbit: at high sun, shadows are short; at low/night sun, the effect fades out.
+            float sunAngle = ComputeNightCelestialAngle() * MathF.PI * 2f;
+            float sunY = MathF.Cos(sunAngle);
+            float sunZ = MathF.Sin(sunAngle);
+            float elevationT = Math.Clamp((sunY - 0.18f) / (0.55f - 0.18f), 0f, 1f);
+            float elevationFade = elevationT * elevationT * (3f - 2f * elevationT);
+            float shadowStrength = ExperimentalCloudShadowsEnabled
+                ? ExperimentalCloudShadowMaxStrength * elevationFade * _nightSkyDim
+                : 0f;
+            _fogParams[16] = 0f;          // sun direction X
+            _fogParams[17] = sunY;        // sun direction Y
+            _fogParams[18] = sunZ;        // sun direction Z
+            _fogParams[19] = shadowStrength;
+            for (int i = 0; i < _cloudLayers.Length; i++)
+            {
+                var layer = _cloudLayers[i];
+                _fogParams[20 + i] = layer.ScrollU;
+                _fogParams[24 + i] = layer.ScrollV;
+                // Sample around the cloud volume's representative mid-height.
+                _fogParams[28 + i] = layer.WorldY + (layer.MinHeight + layer.MaxHeight) * 0.5f;
             }
             _gd.UpdateBuffer(_fogBuffer, 0, _fogParams);
 
