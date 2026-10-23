@@ -132,18 +132,17 @@ float cloudMaskAt(ivec2 cell, int layer) {
     return float((rowBits >> uint(x)) & 1u);
 }
 float cloudMaskSample(vec2 uv, int layer) {
-    vec2 coord = fract(uv) * 32.0 - 0.5;
-    ivec2 base = ivec2(floor(coord));
-    vec2 weight = fract(coord);
-    float top = mix(cloudMaskAt(base, layer), cloudMaskAt(base + ivec2(1, 0), layer), weight.x);
-    float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
-    return mix(top, bottom, weight.y);
+    ivec2 cell = ivec2(floor(fract(uv) * 32.0));
+    return cloudMaskAt(cell, layer);
 }
 float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
-    float verticalDistance = altitude - worldPos.y;
+    // Snap the receiver to its block center so shadow changes happen on block boundaries,
+    // matching the game's voxel skylight rather than smoothly sliding across a face.
+    vec3 blockCenter = floor(worldPos) + vec3(0.5);
+    float verticalDistance = altitude - blockCenter.y;
     if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
     float sunElevation = max(cloudShadowSun.y, 0.18);
-    vec2 projected = worldPos.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
+    vec2 projected = blockCenter.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
     return cloudMaskSample(uv, layer);
 }
@@ -276,18 +275,15 @@ float cloudMaskAt(ivec2 cell, int layer) {
     return float((rowBits >> uint(x)) & 1u);
 }
 float cloudMaskSample(vec2 uv, int layer) {
-    vec2 coord = fract(uv) * 32.0 - 0.5;
-    ivec2 base = ivec2(floor(coord));
-    vec2 weight = fract(coord);
-    float top = mix(cloudMaskAt(base, layer), cloudMaskAt(base + ivec2(1, 0), layer), weight.x);
-    float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
-    return mix(top, bottom, weight.y);
+    ivec2 cell = ivec2(floor(fract(uv) * 32.0));
+    return cloudMaskAt(cell, layer);
 }
 float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
-    float verticalDistance = altitude - worldPos.y;
+    vec3 blockCenter = floor(worldPos) + vec3(0.5);
+    float verticalDistance = altitude - blockCenter.y;
     if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
     float sunElevation = max(cloudShadowSun.y, 0.18);
-    vec2 projected = worldPos.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
+    vec2 projected = blockCenter.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
     return cloudMaskSample(uv, layer);
 }
@@ -396,18 +392,15 @@ float cloudMaskAt(ivec2 cell, int layer) {
     return float((rowBits >> uint(x)) & 1u);
 }
 float cloudMaskSample(vec2 uv, int layer) {
-    vec2 coord = fract(uv) * 32.0 - 0.5;
-    ivec2 base = ivec2(floor(coord));
-    vec2 weight = fract(coord);
-    float top = mix(cloudMaskAt(base, layer), cloudMaskAt(base + ivec2(1, 0), layer), weight.x);
-    float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
-    return mix(top, bottom, weight.y);
+    ivec2 cell = ivec2(floor(fract(uv) * 32.0));
+    return cloudMaskAt(cell, layer);
 }
 float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
-    float verticalDistance = altitude - worldPos.y;
+    vec3 blockCenter = floor(worldPos) + vec3(0.5);
+    float verticalDistance = altitude - blockCenter.y;
     if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
     float sunElevation = max(cloudShadowSun.y, 0.18);
-    vec2 projected = worldPos.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
+    vec2 projected = blockCenter.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
     return cloudMaskSample(uv, layer);
 }
@@ -1629,18 +1622,15 @@ float cloudMaskAt(ivec2 cell, int layer) {
     return float((rowBits >> uint(x)) & 1u);
 }
 float cloudMaskSample(vec2 uv, int layer) {
-    vec2 coord = fract(uv) * 32.0 - 0.5;
-    ivec2 base = ivec2(floor(coord));
-    vec2 weight = fract(coord);
-    float top = mix(cloudMaskAt(base, layer), cloudMaskAt(base + ivec2(1, 0), layer), weight.x);
-    float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
-    return mix(top, bottom, weight.y);
+    ivec2 cell = ivec2(floor(fract(uv) * 32.0));
+    return cloudMaskAt(cell, layer);
 }
 float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
-    float verticalDistance = altitude - worldPos.y;
+    vec3 blockCenter = floor(worldPos) + vec3(0.5);
+    float verticalDistance = altitude - blockCenter.y;
     if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
     float sunElevation = max(cloudShadowSun.y, 0.18);
-    vec2 projected = worldPos.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
+    vec2 projected = blockCenter.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
     return cloudMaskSample(uv, layer);
 }
