@@ -1770,12 +1770,9 @@ namespace Cubuild.Renderer
                 DrawOreCartWindow(displaySize);
             }
 
-            // E-menu inventory: a grid of every block. Clicking one queues it to Program, which
-            // drops it into the selected hotbar slot and closes the menu.
-            // Survival inventory always includes the personal 2x2 crafting grid. Minecraft/Classic
-            // worlds used to get this UI, while regular Survival incorrectly fell through to the
-            // Creative block palette and had no crafting grid at all.
-            if (_hud.Mode == GameMode.Survival && _hud.InventoryOpen)
+            // Legacy Survival keeps its inventory 2x2. Frontier Survival requires a physical
+            // rough workbench for that grid, so E stays a bag/inventory screen there.
+            if (_hud.Mode == GameMode.Survival && _hud.InventoryOpen && !_hud.FrontierProgression)
             {
                 DrawCraftingWindow(displaySize);
             }

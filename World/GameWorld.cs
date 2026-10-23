@@ -27,7 +27,7 @@ namespace Cubuild
         /// stamp their own version (WorldSave.GenVersion); worlds stamped with an older version
         /// warn on load instead of silently mutating when generation changes.
         /// </summary>
-        public const int GenerationVersion = 25;
+        public const int GenerationVersion = 26;
         public int Seed { get; private set; }
         public string Name { get; private set; } = "World 1";
         /// <summary>The generation version this world was originally created with (from its save
@@ -96,7 +96,16 @@ namespace Cubuild
         /// <summary>Minecraft faithful fork flag (persisted in save).</summary>
         public bool IsMinecraftMode { get; set; }
         /// <summary>New station-tiered Classic Survival progression; false preserves legacy recipes.</summary>
-        public bool FrontierProgression { get; set; }
+        private bool _frontierProgression;
+        public bool FrontierProgression
+        {
+            get => _frontierProgression;
+            set
+            {
+                _frontierProgression = value;
+                if (ChunkProvider != null) ChunkProvider.CopperOres.Enabled = value;
+            }
+        }
 
         // ---- survival inventory (slot-based, ported from Cubuild C++) ----
         public const int MaxStackSize = 64;

@@ -158,6 +158,7 @@ namespace Cubuild
       SmeltProgress = World.SmeltProgress, SmeltBurnProgress = World.SmeltBurnProgress,
       SmeltOutputPreview = World.SmeltRecipeForInput?.OutputItemId ?? 0,
                 IsMinecraftMode = World.IsMinecraftMode,
+                FrontierProgression = World.FrontierProgression,
                 SaplingGrowthText = saplingText,
                 PlayerHealth = World.LocalPlayer.Health,
                 WeightLevel = World.CarryWeightLevel,

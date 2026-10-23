@@ -99,8 +99,10 @@ namespace Cubuild.Renderer
     public int CraftingTableId;
         /// <summary>Live crafting result for the current grid (null = no recipe).</summary>
         public (int ItemId, int Count)? CraftingResult;
-        /// <summary>True for a Classic (Minecraft-faithful) world - E then shows workbench crafting.</summary>
+        /// <summary>True for a world using the Classic Minecraft-faithful data pack.</summary>
         public bool IsMinecraftMode;
+        /// <summary>New world progression where crafting is available only at physical workbenches.</summary>
+        public bool FrontierProgression;
         /// <summary>Debug text for the sapling being looked at (F3), or empty.</summary>
         public string SaplingGrowthText;
 
@@ -220,6 +222,7 @@ namespace Cubuild.Renderer
     CraftingGridSize = 2,
             CraftingResult = null,
             IsMinecraftMode = false,
+            FrontierProgression = false,
             SaplingGrowthText = string.Empty,
             PlayerHealth = 20,
             WeightLevel = 0,

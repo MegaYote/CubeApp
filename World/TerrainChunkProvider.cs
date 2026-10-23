@@ -58,6 +58,9 @@ namespace Cubuild.World
         /// (decomposed biomass), rare deep pockets anywhere.</summary>
         public CoalOreGenerator CoalOres { get; private set; }
 
+        /// <summary>Small shallow copper veins, enabled only for Frontier Survival worlds.</summary>
+        public CopperOreGenerator CopperOres { get; private set; }
+
         /// <summary>Occasional underground gravel pockets (see GravelSplotchGenerator): sparse
         /// buried splotches in the stone, a nice find while digging - never everywhere.</summary>
         public GravelSplotchGenerator GravelSplotches { get; private set; }
@@ -141,6 +144,7 @@ namespace Cubuild.World
             QuartzVeins = new QuartzVeinGenerator(seed);
             Serpentines = new SerpentineGenerator(seed);
             CoalOres = new CoalOreGenerator(seed);
+            CopperOres = new CopperOreGenerator(seed);
             GravelSplotches = new GravelSplotchGenerator(seed);
             Pyramids = new PyramidGenerator(seed);
             RegularPyramids = new RegularPyramidGenerator(seed);
@@ -625,6 +629,11 @@ namespace Cubuild.World
                 // ---- the Great Pyramid (runs LAST so its volume is pure solid brick) ----
                 Pyramids.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
             }
+
+            // Frontier Survival copper is progression-critical, so generate it in every biome
+            // style (including faithful Alpha columns) while leaving legacy/Complex worlds
+            // unchanged unless their owning world explicitly enables the generator.
+            CopperOres.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
 
             // Decoration is deliberately last: mushrooms need the final tree canopy and plants
             // must not be overwritten by later terrain/features. Its RNG is separate from all
