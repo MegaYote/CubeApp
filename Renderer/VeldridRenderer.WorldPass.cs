@@ -293,9 +293,11 @@ namespace Cubuild.Renderer
                 uint tileH = (uint)Math.Clamp(Math.Max(1, tr.Height), 0, 255);
                 uint pack2 = (tileX << 24) | (tileY << 16) | (tileW << 8) | tileH;
                 uint shadeByte = (uint)Math.Clamp((int)Math.Round(faceShade[face] * 255f), 0, 255);
+                uint cloudFaceDirection = EncodeCloudShadowFaceDirection(faceNormals[face]);
                 uint pack3 = shadeByte | (255u << 8)
                     | ((uint)(_miningSkyLightLevel & 0xF) << 19)
-                    | ((uint)(_miningBlockLightLevel & 0xF) << 23); // opaque + separate light channels
+                    | ((uint)(_miningBlockLightLevel & 0xF) << 23)
+                    | (cloudFaceDirection << 27); // opaque + lights + exposed-face direction
 
                 var src = faces[face];
                 // UVs from the SAME axis projection the world mesher uses (TryGetCubuildFaceAxes
@@ -378,9 +380,11 @@ namespace Cubuild.Renderer
                     uint tileH = (uint)Math.Clamp(Math.Max(1, tr.Height), 0, 255);
                     uint pack2 = (tileX << 24) | (tileY << 16) | (tileW << 8) | tileH;
                     uint shadeByte = (uint)Math.Clamp((int)Math.Round(neighbors[i].brightness * 255f), 0, 255);
+                    uint cloudFaceDirection = EncodeCloudShadowFaceDirection(faceNormals[nFace]);
                     uint pack3 = shadeByte | (255u << 8)
                         | ((uint)(_miningSkyLightLevel & 0xF) << 19)
-                        | ((uint)(_miningBlockLightLevel & 0xF) << 23); // opaque + separate light channels
+                        | ((uint)(_miningBlockLightLevel & 0xF) << 23)
+                        | (cloudFaceDirection << 27); // opaque + lights + exposed-face direction
 
                     var src = faces[nFace];
                     // Same axis-projection UV baking as the cube + world mesher: the wall is the

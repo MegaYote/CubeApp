@@ -53,7 +53,7 @@ namespace Cubuild.Renderer
             //   aPack1     : du/dv as 8.8 fixed point (uint16 each)
             //   aPack2     : tile rect as 4x uint8 ATLAS TEXELS (x,y,w,h)
             //   aPack3     : directionalShade(8) | alphaByte(8) | alphaMode(2) | hillsTint(1)
-            //                | skyLight(4) | blockLight(4) | pad(5)
+            //                | skyLight(4) | blockLight(4) | faceDirection(3) | pad(2)
             //                alphaMode 0 = real alpha (opaque/water), 1 = glass frame (-100
             //                sentinel), 2 = translucent glass tint (-200 sentinel).
             // Atlas size is baked in (atlas loads before CreatePipeline) so the texel decode is exact.
@@ -70,6 +70,7 @@ layout(location=2) out vec4 vColor;
 layout(location=3) out vec3 vWorldPos;
 layout(location=4) flat out uint vBiomeHillsGreenTint;
 layout(location=5) flat out uint vLightPacked;
+layout(location=6) flat out uint vFaceDirection;
 layout(set=0, binding=0) uniform ProjectionView {{ mat4 projView; }};
 const float ATLAS_INV_X = 1.0 / {atlasW.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
 const float ATLAS_INV_Y = 1.0 / {atlasH.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
@@ -93,6 +94,7 @@ void main() {{
     uint skyLight = (aPack3 >> 19) & 0xFu;
     uint blockLight = (aPack3 >> 23) & 0xFu;
     vLightPacked = skyLight | (blockLight << 4);
+    vFaceDirection = (aPack3 >> 27) & 0x7u;
     float alpha = mode == 0u ? float(alphaByte) / 255.0 : (mode == 1u ? -100.0 : -200.0);
     vColor = vec4(shade, shade, shade, alpha);
     vWorldPos = aPosition;
@@ -106,6 +108,7 @@ layout(location=2) in vec4 vColor;
 layout(location=3) in vec3 vWorldPos;
 layout(location=4) flat in uint vBiomeHillsGreenTint;
 layout(location=5) flat in uint vLightPacked;
+layout(location=6) flat in uint vFaceDirection;
 layout(set=1, binding=0) uniform sampler2D uAtlas;
 layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;   // rgb + pad
@@ -120,8 +123,8 @@ layout(set=2, binding=0) uniform FogParams {
     uvec4 cloudShadowRows[24];
 };
 layout(location=0) out vec4 outColor;
-float lightBrightness(uint level) {
-    float t = float(level) / 15.0;
+float lightBrightness(float level) {
+    float t = clamp(level / 15.0, 0.0, 1.0);
     return t * t * t * 0.55 + t * 0.45;
 }
 float cloudMaskAt(ivec2 cell, int layer) {
@@ -141,10 +144,20 @@ float cloudMaskSample(vec2 uv, int layer) {
     float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
     return mix(top, bottom, weight.y);
 }
-float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
-    // Snap the receiver to its block center so shadow changes happen on block boundaries,
-    // matching the game's voxel skylight rather than smoothly sliding across a face.
-    vec3 blockCenter = floor(worldPos) + vec3(0.5);
+vec3 cloudBlockCenter(vec3 worldPos, uint faceDirection) {
+    // Mesh vertices lie on block boundaries. Move half a cell outward along the face normal
+    // before flooring, matching the exposed neighbor cell from which the mesher samples light.
+    vec3 faceNormal = vec3(0.0);
+    if (faceDirection == 1u) faceNormal.x = 1.0;
+    else if (faceDirection == 2u) faceNormal.x = -1.0;
+    else if (faceDirection == 3u) faceNormal.y = 1.0;
+    else if (faceDirection == 4u) faceNormal.y = -1.0;
+    else if (faceDirection == 5u) faceNormal.z = 1.0;
+    else if (faceDirection == 6u) faceNormal.z = -1.0;
+    return floor(worldPos + faceNormal * 0.5) + vec3(0.5);
+}
+float cloudLayerCoverage(vec3 worldPos, uint faceDirection, int layer, float scrollU, float scrollV, float altitude) {
+    vec3 blockCenter = cloudBlockCenter(worldPos, faceDirection);
     float verticalDistance = altitude - blockCenter.y;
     if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
     float sunElevation = max(cloudShadowSun.y, 0.18);
@@ -152,19 +165,18 @@ float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV,
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
     return cloudMaskSample(uv, layer);
 }
-float cloudShadowCoverage(vec3 worldPos) {
-    float r = cloudLayerCoverage(worldPos, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
-    float g = cloudLayerCoverage(worldPos, 1, cloudShadowScrollU.y, cloudShadowScrollV.y, cloudShadowAltitudes.y);
-    float b = cloudLayerCoverage(worldPos, 2, cloudShadowScrollU.z, cloudShadowScrollV.z, cloudShadowAltitudes.z);
+float cloudShadowCoverage(vec3 worldPos, uint faceDirection) {
+    float r = cloudLayerCoverage(worldPos, faceDirection, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
+    float g = cloudLayerCoverage(worldPos, faceDirection, 1, cloudShadowScrollU.y, cloudShadowScrollV.y, cloudShadowAltitudes.y);
+    float b = cloudLayerCoverage(worldPos, faceDirection, 2, cloudShadowScrollU.z, cloudShadowScrollV.z, cloudShadowAltitudes.z);
     return 1.0 - (1.0 - r) * (1.0 - g) * (1.0 - b);
 }
 float worldLight() {
     if (lightParams.y > 0.5) return 1.0;
-    uint skyLevel = vLightPacked & 0xFu;
-    uint shadowLevels = uint(clamp(floor(cloudShadowSun.w * cloudShadowCoverage(vWorldPos) * 15.0 + 0.5), 0.0, 15.0));
-    uint shadowedSkyLevel = skyLevel > shadowLevels ? skyLevel - shadowLevels : 0u;
+    float skyLevel = float(vLightPacked & 0xFu);
+    float shadowedSkyLevel = max(0.0, skyLevel - cloudShadowSun.w * cloudShadowCoverage(vWorldPos, vFaceDirection) * 15.0);
     float sky = lightBrightness(shadowedSkyLevel) * lightParams.x;
-    float block = lightBrightness((vLightPacked >> 4) & 0xFu);
+    float block = lightBrightness(float((vLightPacked >> 4) & 0xFu));
     return max(sky, block);
 }
 void main() {
@@ -257,6 +269,7 @@ layout(location=2) in vec4 vColor;
 layout(location=3) in vec3 vWorldPos;
 layout(location=4) flat in uint vBiomeHillsGreenTint;
 layout(location=5) flat in uint vLightPacked;
+layout(location=6) flat in uint vFaceDirection;
 layout(set=1, binding=0) uniform sampler2D uAtlas;
 layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;
@@ -271,8 +284,8 @@ layout(set=2, binding=0) uniform FogParams {
     uvec4 cloudShadowRows[24];
 };
 layout(location=0) out vec4 outColor;
-float lightBrightness(uint level) {
-    float t = float(level) / 15.0;
+float lightBrightness(float level) {
+    float t = clamp(level / 15.0, 0.0, 1.0);
     return t * t * t * 0.55 + t * 0.45;
 }
 float cloudMaskAt(ivec2 cell, int layer) {
@@ -290,8 +303,18 @@ float cloudMaskSample(vec2 uv, int layer) {
     float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
     return mix(top, bottom, weight.y);
 }
-float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
-    vec3 blockCenter = floor(worldPos) + vec3(0.5);
+vec3 cloudBlockCenter(vec3 worldPos, uint faceDirection) {
+    vec3 faceNormal = vec3(0.0);
+    if (faceDirection == 1u) faceNormal.x = 1.0;
+    else if (faceDirection == 2u) faceNormal.x = -1.0;
+    else if (faceDirection == 3u) faceNormal.y = 1.0;
+    else if (faceDirection == 4u) faceNormal.y = -1.0;
+    else if (faceDirection == 5u) faceNormal.z = 1.0;
+    else if (faceDirection == 6u) faceNormal.z = -1.0;
+    return floor(worldPos + faceNormal * 0.5) + vec3(0.5);
+}
+float cloudLayerCoverage(vec3 worldPos, uint faceDirection, int layer, float scrollU, float scrollV, float altitude) {
+    vec3 blockCenter = cloudBlockCenter(worldPos, faceDirection);
     float verticalDistance = altitude - blockCenter.y;
     if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
     float sunElevation = max(cloudShadowSun.y, 0.18);
@@ -299,19 +322,18 @@ float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV,
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
     return cloudMaskSample(uv, layer);
 }
-float cloudShadowCoverage(vec3 worldPos) {
-    float r = cloudLayerCoverage(worldPos, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
-    float g = cloudLayerCoverage(worldPos, 1, cloudShadowScrollU.y, cloudShadowScrollV.y, cloudShadowAltitudes.y);
-    float b = cloudLayerCoverage(worldPos, 2, cloudShadowScrollU.z, cloudShadowScrollV.z, cloudShadowAltitudes.z);
+float cloudShadowCoverage(vec3 worldPos, uint faceDirection) {
+    float r = cloudLayerCoverage(worldPos, faceDirection, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
+    float g = cloudLayerCoverage(worldPos, faceDirection, 1, cloudShadowScrollU.y, cloudShadowScrollV.y, cloudShadowAltitudes.y);
+    float b = cloudLayerCoverage(worldPos, faceDirection, 2, cloudShadowScrollU.z, cloudShadowScrollV.z, cloudShadowAltitudes.z);
     return 1.0 - (1.0 - r) * (1.0 - g) * (1.0 - b);
 }
 float worldLight() {
     if (lightParams.y > 0.5) return 1.0;
-    uint skyLevel = vLightPacked & 0xFu;
-    uint shadowLevels = uint(clamp(floor(cloudShadowSun.w * cloudShadowCoverage(vWorldPos) * 15.0 + 0.5), 0.0, 15.0));
-    uint shadowedSkyLevel = skyLevel > shadowLevels ? skyLevel - shadowLevels : 0u;
+    float skyLevel = float(vLightPacked & 0xFu);
+    float shadowedSkyLevel = max(0.0, skyLevel - cloudShadowSun.w * cloudShadowCoverage(vWorldPos, vFaceDirection) * 15.0);
     float sky = lightBrightness(shadowedSkyLevel) * lightParams.x;
-    float block = lightBrightness((vLightPacked >> 4) & 0xFu);
+    float block = lightBrightness(float((vLightPacked >> 4) & 0xFu));
     return max(sky, block);
 }
 void main() {
@@ -380,6 +402,7 @@ layout(location=1) in vec4 vTileRect;
 layout(location=2) in vec4 vColor;
 layout(location=3) in vec3 vWorldPos;
 layout(location=5) flat in uint vLightPacked;
+layout(location=6) flat in uint vFaceDirection;
 layout(set=1, binding=0) uniform sampler2D uAtlas;
 layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;
@@ -394,8 +417,8 @@ layout(set=2, binding=0) uniform FogParams {
     uvec4 cloudShadowRows[24];
 };
 layout(location=0) out vec4 outColor;
-float lightBrightness(uint level) {
-    float t = float(level) / 15.0;
+float lightBrightness(float level) {
+    float t = clamp(level / 15.0, 0.0, 1.0);
     return t * t * t * 0.55 + t * 0.45;
 }
 float cloudMaskAt(ivec2 cell, int layer) {
@@ -413,8 +436,18 @@ float cloudMaskSample(vec2 uv, int layer) {
     float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
     return mix(top, bottom, weight.y);
 }
-float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
-    vec3 blockCenter = floor(worldPos) + vec3(0.5);
+vec3 cloudBlockCenter(vec3 worldPos, uint faceDirection) {
+    vec3 faceNormal = vec3(0.0);
+    if (faceDirection == 1u) faceNormal.x = 1.0;
+    else if (faceDirection == 2u) faceNormal.x = -1.0;
+    else if (faceDirection == 3u) faceNormal.y = 1.0;
+    else if (faceDirection == 4u) faceNormal.y = -1.0;
+    else if (faceDirection == 5u) faceNormal.z = 1.0;
+    else if (faceDirection == 6u) faceNormal.z = -1.0;
+    return floor(worldPos + faceNormal * 0.5) + vec3(0.5);
+}
+float cloudLayerCoverage(vec3 worldPos, uint faceDirection, int layer, float scrollU, float scrollV, float altitude) {
+    vec3 blockCenter = cloudBlockCenter(worldPos, faceDirection);
     float verticalDistance = altitude - blockCenter.y;
     if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
     float sunElevation = max(cloudShadowSun.y, 0.18);
@@ -422,19 +455,18 @@ float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV,
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
     return cloudMaskSample(uv, layer);
 }
-float cloudShadowCoverage(vec3 worldPos) {
-    float r = cloudLayerCoverage(worldPos, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
-    float g = cloudLayerCoverage(worldPos, 1, cloudShadowScrollU.y, cloudShadowScrollV.y, cloudShadowAltitudes.y);
-    float b = cloudLayerCoverage(worldPos, 2, cloudShadowScrollU.z, cloudShadowScrollV.z, cloudShadowAltitudes.z);
+float cloudShadowCoverage(vec3 worldPos, uint faceDirection) {
+    float r = cloudLayerCoverage(worldPos, faceDirection, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
+    float g = cloudLayerCoverage(worldPos, faceDirection, 1, cloudShadowScrollU.y, cloudShadowScrollV.y, cloudShadowAltitudes.y);
+    float b = cloudLayerCoverage(worldPos, faceDirection, 2, cloudShadowScrollU.z, cloudShadowScrollV.z, cloudShadowAltitudes.z);
     return 1.0 - (1.0 - r) * (1.0 - g) * (1.0 - b);
 }
 float worldLight() {
     if (lightParams.y > 0.5) return 1.0;
-    uint skyLevel = vLightPacked & 0xFu;
-    uint shadowLevels = uint(clamp(floor(cloudShadowSun.w * cloudShadowCoverage(vWorldPos) * 15.0 + 0.5), 0.0, 15.0));
-    uint shadowedSkyLevel = skyLevel > shadowLevels ? skyLevel - shadowLevels : 0u;
+    float skyLevel = float(vLightPacked & 0xFu);
+    float shadowedSkyLevel = max(0.0, skyLevel - cloudShadowSun.w * cloudShadowCoverage(vWorldPos, vFaceDirection) * 15.0);
     float sky = lightBrightness(shadowedSkyLevel) * lightParams.x;
-    float block = lightBrightness((vLightPacked >> 4) & 0xFu);
+    float block = lightBrightness(float((vLightPacked >> 4) & 0xFu));
     return max(sky, block);
 }
 void main() {
@@ -1582,6 +1614,7 @@ layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
 layout(location=3) out vec3 vWorldPos;
 layout(location=5) flat out uint vLightPacked;
+layout(location=6) flat out uint vFaceDirection;
 layout(set=0, binding=0) uniform ProjectionView {{ mat4 projView; }};
 const float ATLAS_INV_X = 1.0 / {shrinkAtlasW.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
 const float ATLAS_INV_Y = 1.0 / {shrinkAtlasH.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
@@ -1601,6 +1634,7 @@ void main() {{
     uint skyLight = (aPack3 >> 19) & 0xFu;
     uint blockLight = (aPack3 >> 23) & 0xFu;
     vLightPacked = skyLight | (blockLight << 4);
+    vFaceDirection = (aPack3 >> 27) & 0x7u;
     vColor = vec4(shade, shade, shade, alpha);
     vWorldPos = aPosition;
     vec4 clip = projView * vec4(aPosition, 1.0);
@@ -1616,6 +1650,7 @@ layout(location=1) in vec4 vTileRect;
 layout(location=2) in vec4 vColor;
 layout(location=3) in vec3 vWorldPos;
 layout(location=5) flat in uint vLightPacked;
+layout(location=6) flat in uint vFaceDirection;
 layout(set=1, binding=0) uniform sampler2D uAtlas;
 layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;
@@ -1630,8 +1665,8 @@ layout(set=2, binding=0) uniform FogParams {
     uvec4 cloudShadowRows[24];
 };
 layout(location=0) out vec4 outColor;
-float lightBrightness(uint level) {
-    float t = float(level) / 15.0;
+float lightBrightness(float level) {
+    float t = clamp(level / 15.0, 0.0, 1.0);
     return t * t * t * 0.55 + t * 0.45;
 }
 float cloudMaskAt(ivec2 cell, int layer) {
@@ -1649,8 +1684,18 @@ float cloudMaskSample(vec2 uv, int layer) {
     float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
     return mix(top, bottom, weight.y);
 }
-float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
-    vec3 blockCenter = floor(worldPos) + vec3(0.5);
+vec3 cloudBlockCenter(vec3 worldPos, uint faceDirection) {
+    vec3 faceNormal = vec3(0.0);
+    if (faceDirection == 1u) faceNormal.x = 1.0;
+    else if (faceDirection == 2u) faceNormal.x = -1.0;
+    else if (faceDirection == 3u) faceNormal.y = 1.0;
+    else if (faceDirection == 4u) faceNormal.y = -1.0;
+    else if (faceDirection == 5u) faceNormal.z = 1.0;
+    else if (faceDirection == 6u) faceNormal.z = -1.0;
+    return floor(worldPos + faceNormal * 0.5) + vec3(0.5);
+}
+float cloudLayerCoverage(vec3 worldPos, uint faceDirection, int layer, float scrollU, float scrollV, float altitude) {
+    vec3 blockCenter = cloudBlockCenter(worldPos, faceDirection);
     float verticalDistance = altitude - blockCenter.y;
     if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
     float sunElevation = max(cloudShadowSun.y, 0.18);
@@ -1658,19 +1703,18 @@ float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV,
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
     return cloudMaskSample(uv, layer);
 }
-float cloudShadowCoverage(vec3 worldPos) {
-    float r = cloudLayerCoverage(worldPos, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
-    float g = cloudLayerCoverage(worldPos, 1, cloudShadowScrollU.y, cloudShadowScrollV.y, cloudShadowAltitudes.y);
-    float b = cloudLayerCoverage(worldPos, 2, cloudShadowScrollU.z, cloudShadowScrollV.z, cloudShadowAltitudes.z);
+float cloudShadowCoverage(vec3 worldPos, uint faceDirection) {
+    float r = cloudLayerCoverage(worldPos, faceDirection, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
+    float g = cloudLayerCoverage(worldPos, faceDirection, 1, cloudShadowScrollU.y, cloudShadowScrollV.y, cloudShadowAltitudes.y);
+    float b = cloudLayerCoverage(worldPos, faceDirection, 2, cloudShadowScrollU.z, cloudShadowScrollV.z, cloudShadowAltitudes.z);
     return 1.0 - (1.0 - r) * (1.0 - g) * (1.0 - b);
 }
 float worldLight() {
     if (lightParams.y > 0.5) return 1.0;
-    uint skyLevel = vLightPacked & 0xFu;
-    uint shadowLevels = uint(clamp(floor(cloudShadowSun.w * cloudShadowCoverage(vWorldPos) * 15.0 + 0.5), 0.0, 15.0));
-    uint shadowedSkyLevel = skyLevel > shadowLevels ? skyLevel - shadowLevels : 0u;
+    float skyLevel = float(vLightPacked & 0xFu);
+    float shadowedSkyLevel = max(0.0, skyLevel - cloudShadowSun.w * cloudShadowCoverage(vWorldPos, vFaceDirection) * 15.0);
     float sky = lightBrightness(shadowedSkyLevel) * lightParams.x;
-    float block = lightBrightness((vLightPacked >> 4) & 0xFu);
+    float block = lightBrightness(float((vLightPacked >> 4) & 0xFu));
     return max(sky, block);
 }
 void main() {

@@ -197,8 +197,8 @@ namespace Cubuild.Renderer
         // Reversible rendering experiment: set false to retain the packed mask but disable
         // all cloud-shadow attenuation. This never changes terrain geometry or cloud rendering.
         private const bool ExperimentalCloudShadowsEnabled = true;
-        // At most two of the renderer's 15 sky-light steps are removed, so daylight still
-        // passes through the clouds instead of turning their shadows into near-night patches.
+        // Cap cloud darkening below two of the renderer's 15 sky-light steps, while preserving
+        // fractional levels in the shader for visible block-by-block shadow gradients.
         private const float ExperimentalCloudShadowMaxStrength = 0.12f;
 
         // ---- Clouds (seeded voxel-puff fields) -------------------------------------------
@@ -248,9 +248,9 @@ namespace Cubuild.Renderer
 
         private readonly CloudLayer[] _cloudLayers =
         {
-            new CloudLayer(128f, 0.56f, 2, 5, 0.54f,  0.0020f,  0.0007f, 0x13579),
-            new CloudLayer(168f, 0.61f, 1, 3, 0.39f, -0.0013f,  0.0011f, 0x2468B),
-            new CloudLayer(208f, 0.68f, 1, 2, 0.27f,  0.0006f, -0.0018f, 0x5A17D),
+            new CloudLayer(128f, 0.62f, 2, 5, 0.54f,  0.0020f,  0.0007f, 0x13579),
+            new CloudLayer(168f, 0.68f, 1, 3, 0.39f, -0.0013f,  0.0011f, 0x2468B),
+            new CloudLayer(208f, 0.73f, 1, 2, 0.27f,  0.0006f, -0.0018f, 0x5A17D),
         };
         private const int CloudCoarseSize = 32;
         private const float CloudCellSize = 8f;       // world units per coarse occupancy cell
@@ -1189,6 +1189,20 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 lodVertices, lodIndices));
         }
 
+        // Encodes an axis-aligned face normal into pack3's three cloud-shadow direction bits.
+        // 0 is reserved for non-axis faces, which keep the legacy continuous-position fallback.
+        private static uint EncodeCloudShadowFaceDirection(Point3D normal)
+        {
+            const double epsilon = 1e-5;
+            if (Math.Abs(Math.Abs(normal.X) - 1.0) < epsilon && Math.Abs(normal.Y) < epsilon && Math.Abs(normal.Z) < epsilon)
+                return normal.X > 0 ? 1u : 2u; // +X, -X
+            if (Math.Abs(Math.Abs(normal.Y) - 1.0) < epsilon && Math.Abs(normal.X) < epsilon && Math.Abs(normal.Z) < epsilon)
+                return normal.Y > 0 ? 3u : 4u; // +Y, -Y
+            if (Math.Abs(Math.Abs(normal.Z) - 1.0) < epsilon && Math.Abs(normal.X) < epsilon && Math.Abs(normal.Y) < epsilon)
+                return normal.Z > 0 ? 5u : 6u; // +Z, -Z
+            return 0u;
+        }
+
         // Builds the packed 24-byte-per-vertex chunk mesh (Float3 pos + 3x UInt1 packs) from greedy
         // faces. Per-face alpha routes each face to one of four buffer pairs:
         //   alpha >= 1   -> opaque (culled, depth-writing)
@@ -1325,8 +1339,10 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 uint tileY = (uint)Math.Clamp(f.SrcRect.Y, 0, 255);
                 uint pack2 = (tileX << 24) | (tileY << 16) | ((uint)Math.Clamp(tileW, 0, 255) << 8) | (uint)Math.Clamp(tileH, 0, 255);
                 uint biomeHillsGreenTintBit = f.BiomeHillsGreenTint ? (1u << 18) : 0u;
+                uint cloudFaceDirection = EncodeCloudShadowFaceDirection(f.Normal);
                 uint pack3 = shadeByte | (alphaByte << 8) | (alphaMode << 16) | biomeHillsGreenTintBit
-                    | ((uint)(f.SkyLight & 0xF) << 19) | ((uint)(f.BlockLight & 0xF) << 23);
+                    | ((uint)(f.SkyLight & 0xF) << 19) | ((uint)(f.BlockLight & 0xF) << 23)
+                    | (cloudFaceDirection << 27);
 
                 // Face-edge basis for the non-axis (fluid slope) UV fallback.
                 var v0p = vertsSpan[0];
