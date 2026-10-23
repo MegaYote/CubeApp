@@ -195,6 +195,7 @@ namespace Cubuild.Renderer
         // The outer radius fades softly; depth test remains enabled and depth writes disabled so
         // clouds blend over terrain from above and are occluded by it from below.
         private Pipeline? _cloudPipeline;
+        private Pipeline? _cloudDepthPipeline;
         private DeviceBuffer? _cloudVertexBuffer;
         private DeviceBuffer? _cloudIndexBuffer;
         private DeviceBuffer? _cloudInstanceBuffer;
@@ -987,6 +988,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             _galaxyVertexBuffer?.Dispose();
             _galaxyIndexBuffer?.Dispose();
             _cloudPipeline?.Dispose();
+            _cloudDepthPipeline?.Dispose();
             _cloudVertexBuffer?.Dispose();
             _cloudIndexBuffer?.Dispose();
             _cloudInstanceBuffer?.Dispose();

@@ -1975,11 +1975,32 @@ void main() {
     outColor = vec4(vec3(vShade), a);
 }";
 
+            // First draw only the nearest visible cloud surfaces into depth. The following
+            // translucent pass then shades just those surfaces, avoiding back/inner-face
+            // overdraw and the order-dependent checker pattern of a transparent closed mesh.
+            string depthFsCode = @"#version 450
+layout(location=0) in vec3 vWorldPosition;
+layout(set=1, binding=0) uniform CloudParams {
+    vec4 centerOpacityExtent;
+    vec4 fadeParams;
+};
+layout(location=0) out vec4 outColor;
+void main() {
+    float distanceFromCenter = length(vWorldPosition.xz - centerOpacityExtent.xy);
+    float fade = clamp(1.0 - (distanceFromCenter - (centerOpacityExtent.w - fadeParams.x)) / fadeParams.x, 0.0, 1.0);
+    if (centerOpacityExtent.z * fade < 0.01) discard;
+    outColor = vec4(0.0);
+}";
+
             var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
             var fsSpirv = SpirvCompilation.CompileGlslToSpirv(fsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
             var shaders = factory.CreateFromSpirv(
                 new ShaderDescription(ShaderStages.Vertex, vsSpirv.SpirvBytes, "main"),
                 new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main"));
+            var depthFsSpirv = SpirvCompilation.CompileGlslToSpirv(depthFsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var depthShaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, vsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, depthFsSpirv.SpirvBytes, "main"));
 
             var vertexLayout = new VertexLayoutDescription(
                 new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
@@ -1996,13 +2017,24 @@ void main() {
             _cloudPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
             {
                 BlendState = BlendStateDescription.SingleAlphaBlend,
-                // Depth TEST on, WRITE off: terrain hides puffs when closer to the camera, and
-                // puffs blend over farther terrain when viewed from above.
+                // Depth was already resolved by the cloud depth prepass.
                 DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
-                RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
                 ResourceLayouts = new[] { _projViewLayout, _cloudParamsLayout },
                 ShaderSet = new ShaderSetDescription(new[] { vertexLayout, instanceLayout }, new[] { shaders[0], shaders[1] }),
+                Outputs = _sc.Framebuffer.OutputDescription
+            });
+            _cloudDepthPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription()
+            {
+                // Alpha-zero output with alpha blending leaves the color target unchanged while
+                // writing the closest visible cloud surface to depth.
+                BlendState = BlendStateDescription.SingleAlphaBlend,
+                DepthStencilState = new DepthStencilStateDescription(true, true, ComparisonKind.LessEqual),
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _cloudParamsLayout },
+                ShaderSet = new ShaderSetDescription(new[] { vertexLayout, instanceLayout }, new[] { depthShaders[0], depthShaders[1] }),
                 Outputs = _sc.Framebuffer.OutputDescription
             });
 
@@ -2114,20 +2146,20 @@ void main() {
 
                 int east = HeightAt(x + 1, z);
                 if (east < height)
-                    AddQuad(x1, bottom + east, z0, x1, bottom + east, z1,
-                        x1, top, z1, x1, top, z0, 0.78f);
+                    AddQuad(x1, bottom + east, z0, x1, top, z0,
+                        x1, top, z1, x1, bottom + east, z1, 0.78f);
                 int west = HeightAt(x - 1, z);
                 if (west < height)
-                    AddQuad(x0, bottom + west, z1, x0, bottom + west, z0,
-                        x0, top, z0, x0, top, z1, 0.78f);
+                    AddQuad(x0, bottom + west, z1, x0, top, z1,
+                        x0, top, z0, x0, bottom + west, z0, 0.78f);
                 int south = HeightAt(x, z + 1);
                 if (south < height)
-                    AddQuad(x1, bottom + south, z1, x0, bottom + south, z1,
-                        x0, top, z1, x1, top, z1, 0.84f);
+                    AddQuad(x1, bottom + south, z1, x1, top, z1,
+                        x0, top, z1, x0, bottom + south, z1, 0.84f);
                 int north = HeightAt(x, z - 1);
                 if (north < height)
-                    AddQuad(x0, bottom + north, z0, x1, bottom + north, z0,
-                        x1, top, z0, x0, top, z0, 0.84f);
+                    AddQuad(x0, bottom + north, z0, x0, top, z0,
+                        x1, top, z0, x1, bottom + north, z0, 0.84f);
             }
 
             if (_cloudVertexBuffer != null) _gd.DisposeWhenIdle(_cloudVertexBuffer);
@@ -2243,7 +2275,7 @@ void main() {
         // rebuilding the puff geometry each frame.
         private void DrawClouds(CommandList cl)
         {
-            if (_cloudPipeline == null || _cloudVertexBuffer == null || _cloudIndexBuffer == null
+            if (_cloudPipeline == null || _cloudDepthPipeline == null || _cloudVertexBuffer == null || _cloudIndexBuffer == null
                 || _cloudInstanceBuffer == null || _cloudParamsBuffer == null || !_cameraPosition.HasValue
                 || _cloudIndexCount == 0) return;
 
@@ -2297,8 +2329,19 @@ void main() {
             _cloudParams[7] = 0f;
             _gd.UpdateBuffer(_cloudParamsBuffer, 0, _cloudParams);
 
+            // Resolve the nearest visible voxel surface first. Without this pass, depth writes
+            // from whichever translucent face happened to submit first could reveal a back face
+            // through the puff and make adjacent clouds look incorrectly sorted.
+            cl.SetPipeline(_cloudDepthPipeline);
+            cl.SetGraphicsResourceSet(0, _projViewSet);
+            if (_cloudParamsSet != null) cl.SetGraphicsResourceSet(1, _cloudParamsSet);
+            cl.SetVertexBuffer(0, _cloudVertexBuffer);
+            cl.SetVertexBuffer(1, _cloudInstanceBuffer);
+            cl.SetIndexBuffer(_cloudIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed((uint)_cloudIndexCount, (uint)instanceCount, 0, 0, 0);
+
             cl.SetPipeline(_cloudPipeline);
-            // Same projection as the world, so terrain depth correctly occludes the puffs.
+            // Same projection and depth as the world: terrain and the nearer cloud puff win.
             cl.SetGraphicsResourceSet(0, _projViewSet);
             if (_cloudParamsSet != null) cl.SetGraphicsResourceSet(1, _cloudParamsSet);
             cl.SetVertexBuffer(0, _cloudVertexBuffer);
