@@ -218,8 +218,14 @@ namespace Cubuild
             }
             if (screen == GameScreen.Playing && mouseLook && World != null && _ignoreInteractFrames == 0 && frameInput.PlaceBlockPressed)
             {
+                // In Frontier Survival, tapping flint on a log carves the first rough bench
+                // immediately. It is a deliberate use action, not a multi-second held mine.
+                if (TryCarveRoughWorkbench())
+                {
+                    _flintWorkbenchTapConsumed = true;
+                }
                 // Ore carts are containers, not mountable carts or placeable blocks.
-                if (World.TryPickOreCart(World.PlayerPosition, World.GetCameraForward(), out var oreCart)
+                else if (World.TryPickOreCart(World.PlayerPosition, World.GetCameraForward(), out var oreCart)
                     && oreCart != null)
                 {
                     _openOreCart = oreCart;
@@ -277,6 +283,19 @@ namespace Cubuild
                     PlaceSelectedBlock();
                 }
             }
+        }
+
+        private bool TryCarveRoughWorkbench()
+        {
+            if (World == null || !World.FrontierProgression || World.IsCreative
+                || World.SelectedBlock != ItemRegistry.GetId("flint")) return false;
+            var pick = World.TryPickBlock(World.PlayerPosition, World.GetCameraForward());
+            if (!pick.HasValue) return false;
+            var target = pick.Value.Remove;
+            if (!World.Chunks.TryGetLoadedBlock(target.x, target.y, target.z, out int blockId)
+                || blockId != BlockRegistry.GetId("log")) return false;
+
+            return DeleteBlockAt(target.x, target.y, target.z, GameWorld.WoodChopKind.Flint);
         }
 
         /// <summary>

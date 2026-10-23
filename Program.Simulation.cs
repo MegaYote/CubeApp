@@ -69,6 +69,7 @@ namespace Cubuild
         private void UpdateMining(TickInputState tickInput, float deltaSeconds)
         {
             if (World == null) return;
+            if (!tickInput.PlaceHeld) _flintWorkbenchTapConsumed = false;
 
 // Right-click CHOP modes (survival only): the hatchet strips logs/planks,
         // flint converts a log into a workbench, pickaxe converts stone to cobblestone.
@@ -78,7 +79,7 @@ namespace Cubuild
         bool flintHeld = World.SelectedBlock == _flintItemId;
         bool pickaxeHeld = string.Equals(selectedToolType, "pickaxe", StringComparison.OrdinalIgnoreCase);
         var chopKind = GameWorld.WoodChopKind.None;
-        if (!World.IsCreative && tickInput.PlaceHeld && !tickInput.BreakHeld)
+        if (!World.IsCreative && tickInput.PlaceHeld && !tickInput.BreakHeld && !_flintWorkbenchTapConsumed)
         {
             if (hatchetHeld) chopKind = GameWorld.WoodChopKind.Hatchet;
             else if (flintHeld) chopKind = GameWorld.WoodChopKind.Flint;

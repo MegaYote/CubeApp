@@ -76,6 +76,7 @@ namespace Cubuild
         private GameMode _pendingMode;
         private bool _pendingIsMinecraftMode;
         private bool _pendingFrontierProgression;
+        private bool _flintWorkbenchTapConsumed;
         private bool _loadingScreenShown;       // gate: first frame shows "Loading...", second does work
 
         private float lastFps;
