@@ -213,6 +213,11 @@ namespace Cubuild
                         while (gpuRenderer.TryTakeInventoryClick(out var click))
                         {
                             if (World == null) continue;
+                            if (click.Kind == 7)
+                            {
+                                _openOreCart?.CursorClickSlot(click.Target, click.Button == 1, World);
+                                continue;
+                            }
                             // Crafting grid/result clicks work in both modes (the survival
                             // cursor just never gets populated in creative, so no-op there).
                             if (click.Kind == 4 || click.Kind == 5)

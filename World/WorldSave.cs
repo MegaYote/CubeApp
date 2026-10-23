@@ -24,6 +24,8 @@ namespace Cubuild
         public bool Brute;
         /// <summary>Successful melee hits received by a vehicle before this save.</summary>
         public int VehicleMeleeHitCount;
+        /// <summary>v10: ore-cart-only cargo payload; other mob types leave this empty.</summary>
+        public InventorySlot[] CargoSlots = new InventorySlot[OreCartEntity.CargoSlotCount];
     }
 
     /// <summary>
@@ -33,7 +35,7 @@ namespace Cubuild
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 9;
+        public const int Version = 10;
 
         public string Name = "World 1";
         public int Seed;
@@ -128,6 +130,15 @@ namespace Cubuild
                     w.Write(m.Health);
                     w.Write(m.Brute);
                     w.Write(m.VehicleMeleeHitCount);
+                    if (m.Type == "orecart")
+                    {
+                        for (int i = 0; i < OreCartEntity.CargoSlotCount; i++)
+                        {
+                            var slot = i < m.CargoSlots.Length ? m.CargoSlots[i] : default;
+                            w.Write(slot.ItemId);
+                            w.Write(slot.Count);
+                        }
+                    }
                 }
             }
 
@@ -208,6 +219,18 @@ namespace Cubuild
                     };
                     if (version >= 4) m.Brute = reader.ReadBoolean();
                     if (version >= 8) m.VehicleMeleeHitCount = reader.ReadInt32();
+                    if (version >= 10 && m.Type == "orecart")
+                    {
+                        m.CargoSlots = new InventorySlot[OreCartEntity.CargoSlotCount];
+                        for (int slot = 0; slot < m.CargoSlots.Length; slot++)
+                        {
+                            m.CargoSlots[slot] = new InventorySlot
+                            {
+                                ItemId = reader.ReadInt32(),
+                                Count = reader.ReadInt32(),
+                            };
+                        }
+                    }
                     save.Mobs.Add(m);
                 }
                 return save;

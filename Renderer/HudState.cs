@@ -39,6 +39,10 @@ namespace Cubuild.Renderer
         public bool CraftingOpen;
         /// <summary>Kiln/furnace screen open (right-click a kiln or forge).</summary>
         public bool SmeltOpen;
+        /// <summary>Ore-cart cargo inventory is open.</summary>
+        public bool OreCartOpen;
+        /// <summary>Eight ore-cart cargo slots, valid while OreCartOpen.</summary>
+        public IReadOnlyList<InventorySlot> OreCartSlots;
         /// <summary>Kiln input stack (item waiting to smelt).</summary>
         public (int ItemId, int Count)? SmeltInput;
         /// <summary>Kiln fuel stack.</summary>
@@ -187,6 +191,7 @@ namespace Cubuild.Renderer
             ShowDebug = false,
             InventoryOpen = false,
             CraftingOpen = false,
+            OreCartOpen = false,
             BiomeMenuOpen = false,
             HandEditorOpen = false,
             FlyMode = false,
@@ -210,6 +215,7 @@ namespace Cubuild.Renderer
             BagSlots = Array.Empty<InventorySlot>(),
             HotbarCounts = Array.Empty<int>(),
             HeldStack = null,
+            OreCartSlots = System.Array.Empty<InventorySlot>(),
             CraftingSlots = Array.Empty<(int ItemId, int Count)>(),
     CraftingGridSize = 2,
             CraftingResult = null,

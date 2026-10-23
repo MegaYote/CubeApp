@@ -864,6 +864,13 @@ namespace Cubuild
             return best;
         }
 
+        /// <summary>Returns the nearest mob under the ray only when that mob is an ore cart.</summary>
+        public bool TryPickOreCart(Point3D origin, Point3D direction, out OreCartEntity? cart, out double hitDistance)
+        {
+            cart = TryPickMob(origin, direction, out hitDistance) as OreCartEntity;
+            return cart != null;
+        }
+
         /// <summary>
         /// Tests the ray against every living mob AABB and returns the nearest hit distance.
         /// Used by the block-pick ray so a mob's hitbox stops the ray: the player can never
@@ -976,6 +983,7 @@ namespace Cubuild
                 Type = type, X = mob.Position.X, Y = mob.Position.Y, Z = mob.Position.Z,
                 Yaw = mob.Yaw, Health = health, Brute = brute,
                 VehicleMeleeHitCount = mob is MobEntity me3 ? me3.VehicleMeleeHitCount : 0,
+                CargoSlots = mob is OreCartEntity oreCart ? oreCart.CopyCargoSlots() : Array.Empty<InventorySlot>(),
             };
         }
 
@@ -1114,6 +1122,7 @@ namespace Cubuild
                 // would fall through to the generic path and be rebuilt as an AI mob.
                 var cart = new OreCartEntity(pos, m.Yaw);
                 cart.RestoreState(pos, m.Yaw, m.Health, m.VehicleMeleeHitCount);
+                cart.RestoreCargo(m.CargoSlots);
                 _mobs.Add(cart);
             }
             else if (m.Type == "boat")

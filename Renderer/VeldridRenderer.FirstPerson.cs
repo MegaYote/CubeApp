@@ -14,7 +14,7 @@ namespace Cubuild.Renderer
             if (_handPipeline == null || _handVertexBuffer == null || _handMesh.Length == 0 || _playerTextureSet == null) return;
             var menu = _hud.Menu;
             bool playing = menu == null || menu.Screen == GameScreen.Playing;
-            if (!playing || !_firstPersonCamera || _hud.InventoryOpen || _hud.BiomeMenuOpen) return;
+            if (!playing || !_firstPersonCamera || _hud.InventoryOpen || _hud.OreCartOpen || _hud.BiomeMenuOpen) return;
 
             float handScale = _handScale;   // arm sized like MC's first-person arm
             float sx = _handSx;             // shoulder (camera space): lower, further right
@@ -207,7 +207,7 @@ namespace Cubuild.Renderer
             // after this pass anyway, but skip it entirely for cleanliness).
             var menu = _hud.Menu;
             bool playing = menu == null || menu.Screen == GameScreen.Playing;
-            if (!playing || _hud.InventoryOpen || _hud.BiomeMenuOpen) return;
+            if (!playing || _hud.InventoryOpen || _hud.OreCartOpen || _hud.BiomeMenuOpen) return;
 
             float w = _sc.Framebuffer.Width;
             float h = _sc.Framebuffer.Height;

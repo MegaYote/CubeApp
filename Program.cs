@@ -143,6 +143,8 @@ namespace Cubuild
         /// <summary>Workbench crafting menu open (right-click a workbench block while playing).</summary>
         private bool craftingOpen;
         private bool smeltOpen;
+        private bool oreCartOpen;
+        private OreCartEntity? _openOreCart;
         private bool handEditorOpen;
         private bool biomeMenuOpen;
 

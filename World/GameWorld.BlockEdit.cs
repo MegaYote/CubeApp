@@ -949,6 +949,10 @@ var place = pickResult.Value.Place;
 
         public PickBlockResult? TryPickBlock(Point3D origin, Point3D direction) => TryPickBlock(origin, direction, out _);
 
+        /// <summary>Block-only ray pick used for checking whether a block occludes a container entity.</summary>
+        public PickBlockResult? TryPickBlockIgnoringEntities(Point3D origin, Point3D direction, out double hitDistance)
+            => TryPickBlockInternal(origin, direction, out hitDistance, ignoreEntities: true);
+
         /// <summary>Attacks the nearest entity under the crosshair, respecting solid blocks. Vehicles
         /// break after one Creative hit or three Survival hits and drop their matching item only in
         /// Survival.</summary>
@@ -979,6 +983,9 @@ var place = pickResult.Value.Place;
         }
 
         public PickBlockResult? TryPickBlock(Point3D origin, Point3D direction, out double hitDistance)
+            => TryPickBlockInternal(origin, direction, out hitDistance, ignoreEntities: false);
+
+        private PickBlockResult? TryPickBlockInternal(Point3D origin, Point3D direction, out double hitDistance, bool ignoreEntities)
         {
             hitDistance = double.PositiveInfinity;
             direction = direction.Normalized();
@@ -998,7 +1005,8 @@ var place = pickResult.Value.Place;
             var maxDistance = BlockReach;
             // A living mob's hitbox consumes the ray: blocks behind it are unreachable, so
             // fighting a mob can never accidentally break the wall behind it.
-            bool mobInFront = Entities.TryRaycastMobs(origin, direction, maxDistance, out double mobDist);
+            double mobDist = double.PositiveInfinity;
+            bool mobInFront = !ignoreEntities && Entities.TryRaycastMobs(origin, direction, maxDistance, out mobDist);
             var distance = 0.0;
             for (int iteration = 0; iteration < 400 && distance <= maxDistance; iteration++)
             {

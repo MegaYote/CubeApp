@@ -22,7 +22,7 @@ namespace Cubuild
                 if (screen == GameScreen.Playing)
                 {
                     // ESC closes the E-menu / crafting menu / biome menu first; only then does it pause.
-                    if (inventoryOpen || craftingOpen || smeltOpen || biomeMenuOpen)
+                    if (inventoryOpen || craftingOpen || smeltOpen || oreCartOpen || biomeMenuOpen)
                     {
                         // Never leave a stack orphaned on the cursor: return it to the player
                         // (dropping any overflow) as the container shuts. The crafting
@@ -33,6 +33,8 @@ namespace Cubuild
                         inventoryOpen = false;
                         craftingOpen = false;
                         smeltOpen = false;
+                        oreCartOpen = false;
+                        _openOreCart = null;
                         biomeMenuOpen = false;
                         EnableMouseLook();
                     }
@@ -57,7 +59,7 @@ namespace Cubuild
             }
             // Clicking while a menu-style overlay is open must NOT re-capture the mouse - the
             // E-menu / crafting / biome menu are only closed by E/ESC now.
-            if (screen == GameScreen.Playing && !mouseLook && !handEditorOpen && !inventoryOpen && !craftingOpen && !smeltOpen && !biomeMenuOpen
+            if (screen == GameScreen.Playing && !mouseLook && !handEditorOpen && !inventoryOpen && !craftingOpen && !smeltOpen && !oreCartOpen && !biomeMenuOpen
                 && (frameInput.BreakBlockPressed || frameInput.PlaceBlockPressed))
             {
                 EnableMouseLook();
@@ -65,7 +67,7 @@ namespace Cubuild
             }
             if (frameInput.ToggleDebugPressed) showFps = !showFps;
             if (frameInput.ToggleFullscreenPressed) ToggleFullscreen();
-            if (frameInput.ToggleCreativePressed && World != null)
+            if (frameInput.ToggleCreativePressed && World != null && !oreCartOpen)
             {
                 World.Mode = World.Mode == GameMode.Creative ? GameMode.Survival : GameMode.Creative;
                 World.FlyMode = false; // creative no longer forces flight; use the fly toggle
@@ -74,8 +76,8 @@ namespace Cubuild
             if (screen == GameScreen.Playing && World != null)
             {
                 // Flight is a creative privilege.
-                if (frameInput.ToggleFlyPressed && World.IsCreative) World.FlyMode = !World.FlyMode;
-                if (frameInput.AdvanceTimePressed) World.AdvanceTime();
+                if (frameInput.ToggleFlyPressed && World.IsCreative && !oreCartOpen) World.FlyMode = !World.FlyMode;
+                if (frameInput.AdvanceTimePressed && !oreCartOpen) World.AdvanceTime();
                 if (frameInput.ToggleGpuCullPressed)
                 {
                     gpuRenderer?.ToggleGpuCulling();
@@ -96,33 +98,43 @@ namespace Cubuild
                 }
                 if (frameInput.ToggleInventoryPressed)
                 {
-                    inventoryOpen = !inventoryOpen;
-                    if (inventoryOpen)
+                    if (oreCartOpen)
                     {
-                        // Opening the E-menu also shuts the crafting menu - hand the cursor
-                        // stack back rather than stranding it, and drop back to 2x2.
-                        if (craftingOpen) { World?.ReturnHeldStackToInventory(); World?.RefundCraftingGrid(); }
-                        if (smeltOpen) { World?.ReturnHeldStackToInventory(); World?.CloseSmelter(); }
-                        smeltOpen = false;
-                        World?.SetCraftingSize(2);
-                        craftingOpen = false;
-                        DisableMouseLook();
+                        World.ReturnHeldStackToInventory();
+                        oreCartOpen = false;
+                        _openOreCart = null;
+                        EnableMouseLook();
                     }
                     else
                     {
-                        World?.ReturnHeldStackToInventory();
-                        EnableMouseLook();
+                        inventoryOpen = !inventoryOpen;
+                        if (inventoryOpen)
+                        {
+                            // Opening the E-menu also shuts the crafting menu - hand the cursor
+                            // stack back rather than stranding it, and drop back to 2x2.
+                            if (craftingOpen) { World?.ReturnHeldStackToInventory(); World?.RefundCraftingGrid(); }
+                            if (smeltOpen) { World?.ReturnHeldStackToInventory(); World?.CloseSmelter(); }
+                            smeltOpen = false;
+                            World?.SetCraftingSize(2);
+                            craftingOpen = false;
+                            DisableMouseLook();
+                        }
+                        else
+                        {
+                            World?.ReturnHeldStackToInventory();
+                            EnableMouseLook();
+                        }
                     }
                 }
                 // Teleport menu is a creative sandbox convenience.
-                if (frameInput.ToggleBiomeMenuPressed && World.IsCreative)
+                if (frameInput.ToggleBiomeMenuPressed && World.IsCreative && !oreCartOpen)
                 {
                     biomeMenuOpen = !biomeMenuOpen;
                     if (biomeMenuOpen) DisableMouseLook();
                     else EnableMouseLook();
                 }
                 // Hand Editor (F8): frees the mouse so sliders can be dragged without looking around.
-                if (frameInput.ToggleHandEditorPressed)
+                if (frameInput.ToggleHandEditorPressed && !oreCartOpen)
                 {
                     handEditorOpen = !handEditorOpen;
                     if (handEditorOpen) DisableMouseLook();
@@ -130,7 +142,7 @@ namespace Cubuild
                 }
             }
             if (frameInput.CycleRenderDistancePressed) CycleRenderDistance();
-            if (screen == GameScreen.Playing && World != null)
+            if (screen == GameScreen.Playing && World != null && !oreCartOpen)
             {
                 // Debug spawn + damage-test keys are creative-only toys.
                 if (frameInput.SpawnMobPressed && World.IsCreative) World.Entities.SpawnDuck(World.PlayerPosition, World.PlayerYaw);
@@ -146,13 +158,13 @@ namespace Cubuild
             // selection behind the panel.
             if (frameInput.SelectedSlot.HasValue && World != null
                 && screen == GameScreen.Playing && mouseLook
-                && !inventoryOpen && !craftingOpen && !smeltOpen && !biomeMenuOpen && !handEditorOpen)
+                && !inventoryOpen && !craftingOpen && !smeltOpen && !oreCartOpen && !biomeMenuOpen && !handEditorOpen)
             {
                 World.SetSelectedSlot(frameInput.SelectedSlot.Value);
             }
             // Q: throw one item - from the hovered inventory slot, else the cursor, else the
             // selected hotbar stack (MC survival behavior).
-            if (frameInput.DropItemPressed && World != null && screen == GameScreen.Playing)
+            if (frameInput.DropItemPressed && World != null && screen == GameScreen.Playing && !oreCartOpen)
             {
                 if (inventoryOpen)
                 {
@@ -171,7 +183,7 @@ namespace Cubuild
             // open the wheel goes to ImGui instead).
             if (frameInput.HotbarScroll != 0 && World != null
                 && screen == GameScreen.Playing && mouseLook
-                && !inventoryOpen && !craftingOpen && !smeltOpen && !biomeMenuOpen && !handEditorOpen)
+                && !inventoryOpen && !craftingOpen && !smeltOpen && !oreCartOpen && !biomeMenuOpen && !handEditorOpen)
             {
                 int slots = GameWorld.HotbarSlots;
                 int next = (World.SelectedSlot + frameInput.HotbarScroll) % slots;
@@ -206,17 +218,25 @@ namespace Cubuild
             }
             if (screen == GameScreen.Playing && mouseLook && World != null && _ignoreInteractFrames == 0 && frameInput.PlaceBlockPressed)
             {
-// Right-click on a workbench opens the crafting menu; on a door it swings the door;
-            // on a kiln/forge it opens the smelter; anywhere else places the selected block.
-            if (World.TryPickWorkbench(World.PlayerPosition, World.GetCameraForward(), out int workbenchId))
-    {
-        // In the frontier profile, the rough hand-made bench is still a 2x2 handcraft surface;
-        // only the sap-treated carpenter's bench opens the full 3x3 construction grid.
-        // Legacy and Complex worlds retain their existing any-bench-is-3x3 behavior.
-        int carpenterBenchId = BlockRegistry.GetId("carpenters_workbench");
-        int gridSize = World.FrontierProgression && workbenchId != carpenterBenchId ? 2 : 3;
-        World.SetCraftingSize(gridSize);
-        craftingOpen = true;
+                // Ore carts are containers, not mountable carts or placeable blocks.
+                if (World.TryPickOreCart(World.PlayerPosition, World.GetCameraForward(), out var oreCart)
+                    && oreCart != null)
+                {
+                    _openOreCart = oreCart;
+                    oreCartOpen = true;
+                    inventoryOpen = false;
+                    craftingOpen = false;
+                    smeltOpen = false;
+                    DisableMouseLook();
+                }
+                // Right-click on a workbench opens the crafting menu; on a door it swings the door;
+                // on a kiln/forge it opens the smelter; anywhere else places the selected block.
+                else if (World.TryPickWorkbench(World.PlayerPosition, World.GetCameraForward(), out int workbenchId))
+                {
+                    int carpenterBenchId = BlockRegistry.GetId("carpenters_workbench");
+                    int gridSize = World.FrontierProgression && workbenchId != carpenterBenchId ? 2 : 3;
+                    World.SetCraftingSize(gridSize);
+                    craftingOpen = true;
                     inventoryOpen = false;
                     DisableMouseLook();
                 }

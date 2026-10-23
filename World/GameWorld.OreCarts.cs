@@ -13,6 +13,18 @@ namespace Cubuild
 
         public bool HoldingOreCart => OreCartItemId > 0 && SelectedBlock == OreCartItemId;
 
+        /// <summary>Finds the ore cart under the crosshair, unless a solid block is in front of it.</summary>
+        public bool TryPickOreCart(Point3D origin, Point3D direction, out OreCartEntity? cart)
+        {
+            cart = null;
+            if (!Entities.TryPickOreCart(origin, direction, out var target, out double cartDistance) || target == null)
+                return false;
+            var block = TryPickBlockIgnoringEntities(origin, direction, out double blockDistance);
+            if (block.HasValue && blockDistance <= cartDistance) return false;
+            cart = target;
+            return true;
+        }
+
         /// <summary>
         /// Right-click while holding an ore cart sets it down on the rail under the crosshair
         /// (or on the block face you're pointing at, if it's a rail). Returns true when the

@@ -824,6 +824,83 @@ namespace Cubuild.Renderer
             }
         }
 
+        // Compact ore-cart cargo panel above the standard player inventory. Cargo clicks use
+        // kind 7 and share the normal cursor stack, matching the other container interactions.
+        private void DrawOreCartWindow(Vector2 displaySize)
+        {
+            const float uiScale = 3f;
+            const float invW = 190f * uiScale;
+            const float cargoH = 158f;
+            float winW = invW;
+            float winH = cargoH + 24f + 111f * uiScale + 24f;
+            float winX = (displaySize.X - winW) * 0.5f;
+            float winY = Math.Max(24f, (displaySize.Y - winH) * 0.5f);
+
+            uint dimCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.10f, 0.10f, 0.10f, 0.68f));
+            ImGui.GetForegroundDrawList().AddRectFilled(Vector2.Zero, displaySize, dimCol);
+            ImGui.SetNextWindowPos(new Vector2(winX, winY), ImGuiCond.Always);
+            ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
+            var flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove
+                | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoBackground;
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+            ImGui.Begin("##orecartcargo", flags);
+            var contentScreen = ImGui.GetCursorScreenPos();
+            var fg = ImGui.GetForegroundDrawList();
+            uint textCol = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 1f));
+            uint mutedCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.83f, 0.86f, 0.88f, 1f));
+            uint panelCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.16f, 0.18f, 0.20f, 0.98f));
+            uint cellCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.08f, 0.09f, 0.10f, 1f));
+            uint edgeCol = ImGui.ColorConvertFloat4ToU32(new Vector4(0.55f, 0.60f, 0.64f, 1f));
+
+            var panelMin = contentScreen;
+            var panelMax = panelMin + new Vector2(winW, cargoH);
+            fg.AddRectFilled(panelMin, panelMax, panelCol, 5f);
+            fg.AddText(panelMin + new Vector2(12f, 8f), textCol, "Ore Cart Cargo");
+            fg.AddText(panelMin + new Vector2(12f, 30f), mutedCol,
+                "Left: take / place    Right: half / place 1    E / Esc: close");
+            fg.AddText(panelMin + new Vector2(12f, 52f), mutedCol, "Heavy ore and materials only");
+
+            const float slotPx = 42f;
+            const float pitch = 51f;
+            float slotsX = (winW - pitch * 4f) * 0.5f;
+            const float slotsY = 63f;
+            for (int i = 0; i < OreCartEntity.CargoSlotCount; i++)
+            {
+                int row = i / 4, col = i % 4;
+                var pos = new Vector2(slotsX + col * pitch, slotsY + row * pitch);
+                var screenMin = contentScreen + pos;
+                var screenMax = screenMin + new Vector2(slotPx, slotPx);
+                fg.AddRectFilled(screenMin, screenMax, cellCol);
+                fg.AddRect(screenMin, screenMax, edgeCol, 0f, 0, 2f);
+                var contents = _hud.OreCartSlots != null && i < _hud.OreCartSlots.Count
+                    ? _hud.OreCartSlots[i] : default;
+                ImGui.SetCursorPos(pos);
+                DrawCraftingCellAt($"ocargo{i}", contents.ItemId, contents.Count, screenMin, screenMax,
+                    7, i, 4f, 34f, fg, textCol);
+            }
+
+            DrawInventoryStripBelow(new Vector2(0f, cargoH + 24f), uiScale, contentScreen, fg, textCol);
+            ImGui.End();
+            ImGui.PopStyleVar();
+
+            if (_hud.HeldStack.HasValue)
+            {
+                int itemId = _hud.HeldStack.Value.ItemId;
+                var uv = IconUv(itemId, out IntPtr texture);
+                if (texture != IntPtr.Zero)
+                {
+                    var mouse = ImGui.GetMousePos();
+                    const float half = 24f;
+                    var drawList = ImGui.GetForegroundDrawList();
+                    drawList.AddImage(texture, mouse + new Vector2(-half, -half), mouse + new Vector2(half, half),
+                        new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W));
+                    int count = _hud.HeldStack.Value.Count;
+                    if (count > 1)
+                        drawList.AddText(mouse + new Vector2(half - 16f, half - 17f), textCol, count.ToString());
+                }
+            }
+        }
+
         // One inventory slot in the crafting menu's lower section: a painted cell background
         // (dark fill + light border, like Minecraft) on the Foreground list, then the shared
         // E-menu cell logic on top for clicks/hover/icon/count (kind 0 = bag, 1 = hotbar).
@@ -1685,6 +1762,12 @@ namespace Cubuild.Renderer
                         uv0,
                         uv1);
                 }
+            }
+
+            // Ore-cart cargo container.
+            if (_hud.OreCartOpen)
+            {
+                DrawOreCartWindow(displaySize);
             }
 
             // E-menu inventory: a grid of every block. Clicking one queues it to Program, which

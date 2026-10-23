@@ -135,7 +135,9 @@ namespace Cubuild
 
             return new HudState
             {
-                ShowDebug = showFps, InventoryOpen = inventoryOpen, CraftingOpen = craftingOpen, SmeltOpen = smeltOpen, BiomeMenuOpen = biomeMenuOpen, HandEditorOpen = handEditorOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
+                ShowDebug = showFps, InventoryOpen = inventoryOpen, CraftingOpen = craftingOpen, SmeltOpen = smeltOpen, OreCartOpen = oreCartOpen,
+                OreCartSlots = _openOreCart?.CargoSlots ?? Array.Empty<InventorySlot>(),
+                BiomeMenuOpen = biomeMenuOpen, HandEditorOpen = handEditorOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
                 MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                 EntityMs = World.LastEntityMs, EntityCount = World.Entities.MobCount,
                 FacingText = $"{GetCompassDirection(World.PlayerYaw)} ({GameWorld.NormalizeYaw(World.PlayerYaw):0.0} deg)",
