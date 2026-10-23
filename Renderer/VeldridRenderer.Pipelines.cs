@@ -2150,24 +2150,24 @@ void main() {
                 float top = bottom + height;
 
                 AddQuad(x0, top, z0, x0, top, z1, x1, top, z1, x1, top, z0, 1.00f);
-                AddQuad(x0, bottom, z1, x0, bottom, z0, x1, bottom, z0, x1, bottom, z1, 0.58f);
+                AddQuad(x0, bottom, z1, x0, bottom, z0, x1, bottom, z0, x1, bottom, z1, 0.82f);
 
                 int east = HeightAt(x + 1, z);
                 if (east < height)
                     AddQuad(x1, bottom + east, z0, x1, top, z0,
-                        x1, top, z1, x1, bottom + east, z1, 0.78f);
+                        x1, top, z1, x1, bottom + east, z1, 0.88f);
                 int west = HeightAt(x - 1, z);
                 if (west < height)
                     AddQuad(x0, bottom + west, z1, x0, top, z1,
-                        x0, top, z0, x0, bottom + west, z0, 0.78f);
+                        x0, top, z0, x0, bottom + west, z0, 0.88f);
                 int south = HeightAt(x, z + 1);
                 if (south < height)
                     AddQuad(x1, bottom + south, z1, x1, top, z1,
-                        x0, top, z1, x0, bottom + south, z1, 0.84f);
+                        x0, top, z1, x0, bottom + south, z1, 0.90f);
                 int north = HeightAt(x, z - 1);
                 if (north < height)
                     AddQuad(x0, bottom + north, z0, x0, top, z0,
-                        x1, top, z0, x1, bottom + north, z0, 0.84f);
+                        x1, top, z0, x1, bottom + north, z0, 0.90f);
             }
 
             if (layer.VertexBuffer != null) _gd.DisposeWhenIdle(layer.VertexBuffer);

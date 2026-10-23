@@ -235,9 +235,9 @@ namespace Cubuild.Renderer
 
         private readonly CloudLayer[] _cloudLayers =
         {
-            new CloudLayer(128f, 0.56f, 2, 5, 0.65f,  0.0020f,  0.0007f, 0x13579),
-            new CloudLayer(168f, 0.61f, 1, 3, 0.48f, -0.0013f,  0.0011f, 0x2468B),
-            new CloudLayer(208f, 0.68f, 1, 2, 0.34f,  0.0006f, -0.0018f, 0x5A17D),
+            new CloudLayer(128f, 0.56f, 2, 5, 0.54f,  0.0020f,  0.0007f, 0x13579),
+            new CloudLayer(168f, 0.61f, 1, 3, 0.39f, -0.0013f,  0.0011f, 0x2468B),
+            new CloudLayer(208f, 0.68f, 1, 2, 0.27f,  0.0006f, -0.0018f, 0x5A17D),
         };
         private const int CloudCoarseSize = 32;
         private const float CloudCellSize = 8f;       // world units per coarse occupancy cell
