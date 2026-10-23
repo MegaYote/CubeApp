@@ -19,8 +19,8 @@
     { "input": ["flint", "sap", "stick", ""], "output": "flint_shovel", "count": 1, "station": "hand" },
 
     // ---- Carpenter: stations, construction, transport and tools (3x3) ----
-    // Eight cobblestone makes the first kiln.
-    { "input": ["cobblestone", "cobblestone", "cobblestone", "cobblestone", "", "cobblestone", "cobblestone", "cobblestone", "cobblestone"], "output": "kiln", "count": 1, "station": "carpenter" },
+    // Four red clay + four cobblestone make the first kiln; fired bricks are made inside it.
+    { "input": ["redclay", "cobblestone", "redclay", "cobblestone", "", "cobblestone", "redclay", "cobblestone", "redclay"], "output": "kiln", "count": 1, "station": "carpenter" },
     // A brick-and-stone forge, built after firing bricks in the kiln.
     { "input": ["bricks", "cobblestone", "bricks", "cobblestone", "log", "cobblestone", "bricks", "cobblestone", "bricks"], "output": "forge", "count": 1, "station": "carpenter" },
 
