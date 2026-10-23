@@ -2090,12 +2090,13 @@ void main() {
             }
 
             var rgba = new byte[size * size * 4];
+            const float cloudCoverageThreshold = 0.56f;
             for (int y = 0; y < coarse; y++)
             {
                 for (int x = 0; x < coarse; x++)
                 {
                     float v = Math.Clamp(noise[y * coarse + x] / totalAmp, 0f, 1f);
-                    byte a = v > 0.52f ? (byte)255 : (byte)0; // HARD threshold: solid or empty
+                    byte a = v > cloudCoverageThreshold ? (byte)255 : (byte)0; // Hard-edged but a little more open sky
                     int bx = x * scale;
                     int by = y * scale;
                     for (int oy = 0; oy < scale; oy++)
