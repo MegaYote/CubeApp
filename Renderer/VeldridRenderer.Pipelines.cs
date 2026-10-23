@@ -132,8 +132,14 @@ float cloudMaskAt(ivec2 cell, int layer) {
     return float((rowBits >> uint(x)) & 1u);
 }
 float cloudMaskSample(vec2 uv, int layer) {
-    ivec2 cell = ivec2(floor(fract(uv) * 32.0));
-    return cloudMaskAt(cell, layer);
+    // Interpolate cloud occupancy, but the caller evaluates it at the block center so the
+    // resulting light level only changes in whole-block steps.
+    vec2 coord = fract(uv) * 32.0 - 0.5;
+    ivec2 base = ivec2(floor(coord));
+    vec2 weight = fract(coord);
+    float top = mix(cloudMaskAt(base, layer), cloudMaskAt(base + ivec2(1, 0), layer), weight.x);
+    float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
+    return mix(top, bottom, weight.y);
 }
 float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
     // Snap the receiver to its block center so shadow changes happen on block boundaries,
@@ -154,8 +160,10 @@ float cloudShadowCoverage(vec3 worldPos) {
 }
 float worldLight() {
     if (lightParams.y > 0.5) return 1.0;
-    float shadow = cloudShadowSun.w * cloudShadowCoverage(vWorldPos);
-    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x * (1.0 - shadow);
+    uint skyLevel = vLightPacked & 0xFu;
+    uint shadowLevels = uint(clamp(floor(cloudShadowSun.w * cloudShadowCoverage(vWorldPos) * 15.0 + 0.5), 0.0, 15.0));
+    uint shadowedSkyLevel = skyLevel > shadowLevels ? skyLevel - shadowLevels : 0u;
+    float sky = lightBrightness(shadowedSkyLevel) * lightParams.x;
     float block = lightBrightness((vLightPacked >> 4) & 0xFu);
     return max(sky, block);
 }
@@ -275,8 +283,12 @@ float cloudMaskAt(ivec2 cell, int layer) {
     return float((rowBits >> uint(x)) & 1u);
 }
 float cloudMaskSample(vec2 uv, int layer) {
-    ivec2 cell = ivec2(floor(fract(uv) * 32.0));
-    return cloudMaskAt(cell, layer);
+    vec2 coord = fract(uv) * 32.0 - 0.5;
+    ivec2 base = ivec2(floor(coord));
+    vec2 weight = fract(coord);
+    float top = mix(cloudMaskAt(base, layer), cloudMaskAt(base + ivec2(1, 0), layer), weight.x);
+    float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
+    return mix(top, bottom, weight.y);
 }
 float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
     vec3 blockCenter = floor(worldPos) + vec3(0.5);
@@ -295,8 +307,10 @@ float cloudShadowCoverage(vec3 worldPos) {
 }
 float worldLight() {
     if (lightParams.y > 0.5) return 1.0;
-    float shadow = cloudShadowSun.w * cloudShadowCoverage(vWorldPos);
-    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x * (1.0 - shadow);
+    uint skyLevel = vLightPacked & 0xFu;
+    uint shadowLevels = uint(clamp(floor(cloudShadowSun.w * cloudShadowCoverage(vWorldPos) * 15.0 + 0.5), 0.0, 15.0));
+    uint shadowedSkyLevel = skyLevel > shadowLevels ? skyLevel - shadowLevels : 0u;
+    float sky = lightBrightness(shadowedSkyLevel) * lightParams.x;
     float block = lightBrightness((vLightPacked >> 4) & 0xFu);
     return max(sky, block);
 }
@@ -392,8 +406,12 @@ float cloudMaskAt(ivec2 cell, int layer) {
     return float((rowBits >> uint(x)) & 1u);
 }
 float cloudMaskSample(vec2 uv, int layer) {
-    ivec2 cell = ivec2(floor(fract(uv) * 32.0));
-    return cloudMaskAt(cell, layer);
+    vec2 coord = fract(uv) * 32.0 - 0.5;
+    ivec2 base = ivec2(floor(coord));
+    vec2 weight = fract(coord);
+    float top = mix(cloudMaskAt(base, layer), cloudMaskAt(base + ivec2(1, 0), layer), weight.x);
+    float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
+    return mix(top, bottom, weight.y);
 }
 float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
     vec3 blockCenter = floor(worldPos) + vec3(0.5);
@@ -412,8 +430,10 @@ float cloudShadowCoverage(vec3 worldPos) {
 }
 float worldLight() {
     if (lightParams.y > 0.5) return 1.0;
-    float shadow = cloudShadowSun.w * cloudShadowCoverage(vWorldPos);
-    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x * (1.0 - shadow);
+    uint skyLevel = vLightPacked & 0xFu;
+    uint shadowLevels = uint(clamp(floor(cloudShadowSun.w * cloudShadowCoverage(vWorldPos) * 15.0 + 0.5), 0.0, 15.0));
+    uint shadowedSkyLevel = skyLevel > shadowLevels ? skyLevel - shadowLevels : 0u;
+    float sky = lightBrightness(shadowedSkyLevel) * lightParams.x;
     float block = lightBrightness((vLightPacked >> 4) & 0xFu);
     return max(sky, block);
 }
@@ -1622,8 +1642,12 @@ float cloudMaskAt(ivec2 cell, int layer) {
     return float((rowBits >> uint(x)) & 1u);
 }
 float cloudMaskSample(vec2 uv, int layer) {
-    ivec2 cell = ivec2(floor(fract(uv) * 32.0));
-    return cloudMaskAt(cell, layer);
+    vec2 coord = fract(uv) * 32.0 - 0.5;
+    ivec2 base = ivec2(floor(coord));
+    vec2 weight = fract(coord);
+    float top = mix(cloudMaskAt(base, layer), cloudMaskAt(base + ivec2(1, 0), layer), weight.x);
+    float bottom = mix(cloudMaskAt(base + ivec2(0, 1), layer), cloudMaskAt(base + ivec2(1, 1), layer), weight.x);
+    return mix(top, bottom, weight.y);
 }
 float cloudLayerCoverage(vec3 worldPos, int layer, float scrollU, float scrollV, float altitude) {
     vec3 blockCenter = floor(worldPos) + vec3(0.5);
@@ -1642,8 +1666,10 @@ float cloudShadowCoverage(vec3 worldPos) {
 }
 float worldLight() {
     if (lightParams.y > 0.5) return 1.0;
-    float shadow = cloudShadowSun.w * cloudShadowCoverage(vWorldPos);
-    float sky = lightBrightness(vLightPacked & 0xFu) * lightParams.x * (1.0 - shadow);
+    uint skyLevel = vLightPacked & 0xFu;
+    uint shadowLevels = uint(clamp(floor(cloudShadowSun.w * cloudShadowCoverage(vWorldPos) * 15.0 + 0.5), 0.0, 15.0));
+    uint shadowedSkyLevel = skyLevel > shadowLevels ? skyLevel - shadowLevels : 0u;
+    float sky = lightBrightness(shadowedSkyLevel) * lightParams.x;
     float block = lightBrightness((vLightPacked >> 4) & 0xFu);
     return max(sky, block);
 }
