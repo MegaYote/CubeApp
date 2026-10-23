@@ -104,9 +104,7 @@ namespace Cubuild
                 }
                 else
                 {
-                    // New worlds always use the default (Complex) data pack. Legacy saves that
-                    // were created with the Classic pack still load with their own pack.
-                    StartNewWorld(_pendingSeed, _pendingName, _pendingMode);
+                    StartNewWorld(_pendingSeed, _pendingName, _pendingMode, _pendingIsMinecraftMode);
                 }
                 _pendingName = "";
                 _pendingWorldSave = null;
@@ -332,6 +330,7 @@ namespace Cubuild
                 _pendingSeed = ParseSeed(menu.SeedInput);
                 _pendingName = menu.WorldName;
                 _pendingMode = menu.SelectedMode;
+                _pendingIsMinecraftMode = _pendingMode == GameMode.Survival && menu.SelectedIsMinecraftMode;
                 _pendingWorldFromSave = false;
                 screen = GameScreen.Loading;
                 menu.Screen = GameScreen.Loading;

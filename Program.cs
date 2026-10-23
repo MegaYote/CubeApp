@@ -74,6 +74,7 @@ namespace Cubuild
         private int _pendingSeed;
         private string _pendingName = "";
         private GameMode _pendingMode;
+        private bool _pendingIsMinecraftMode;
         private bool _loadingScreenShown;       // gate: first frame shows "Loading...", second does work
 
         private float lastFps;

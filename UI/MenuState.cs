@@ -36,6 +36,8 @@ namespace Cubuild
         public string SeedInput = "";
         /// <summary>The mode chosen on the Create World screen (Creative by default).</summary>
         public GameMode SelectedMode = GameMode.Creative;
+        /// <summary>Survival data pack: true = Minecraft-faithful Classic, false = Complex.</summary>
+        public bool SelectedIsMinecraftMode = true;
 
         public bool CreateWorldClicked;
         public bool ResumeClicked;
