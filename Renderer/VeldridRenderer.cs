@@ -182,35 +182,37 @@ namespace Cubuild.Renderer
 
         // ---- Wide far plane for the "world from above" plane: a dedicated projection with far =
         // 3x the world far plane, so the fake earth stretches much further than terrain without
-        // affecting depth precision of the world. (Clouds were removed; this matrix remains for
-        // the world-plane backdrop.)
+        // affecting depth precision of the world. This matrix is used by the world-plane
+        // backdrop; voxel clouds use the normal world projection for terrain occlusion.
         private DeviceBuffer? _cloudMatrixBuffer;
         private ResourceSet? _cloudMatrixSet;
         private float _cloudFarPlane = 2100f;
         private int _cloudSeed = 12345;
 
-        // ---- Clouds (flat MC-style deck) ------------------------------------------------
-        // A single flat translucent plane at a fixed world height that follows the camera in
-        // X/Z, textured with an ORIGINAL procedurally generated puff pattern (fractal value
-        // noise - no external assets). Tiled UVs from world position keep the puffs anchored as
-        // you walk; the deck's outer edge fades to zero so the horizon cut is soft. Drawn after
-        // the world with depth test on / write off, using the SAME projection as terrain, so it
-        // blends over the land from above and is hidden behind hills from below.
+        // ---- Clouds (seeded voxel-puff field) --------------------------------------------
+        // One static 3D mesh is built from a repeated 32x32 occupancy tile. Per-frame instance
+        // offsets keep enough copies around the camera while allowing the cloud field to drift.
+        // The outer radius fades softly; depth test remains enabled and depth writes disabled so
+        // clouds blend over terrain from above and are occluded by it from below.
         private Pipeline? _cloudPipeline;
         private DeviceBuffer? _cloudVertexBuffer;
         private DeviceBuffer? _cloudIndexBuffer;
+        private DeviceBuffer? _cloudInstanceBuffer;
+        private int _cloudInstanceCapacity;
+        private int _cloudIndexCount;
         private DeviceBuffer? _cloudParamsBuffer;
         private ResourceSet? _cloudParamsSet;
         private ResourceLayout? _cloudParamsLayout;
-        private Texture? _cloudTexture;
-        private TextureView? _cloudTextureView;
-        private const float CloudWorldY = 128f;       // cloud deck altitude
-        private const float CloudTileSize = 256f;     // blocks per 256px texture tile (1px ~ 1 block)
-        private const float CloudFadeWidth = 300f;    // outer-edge fade so the horizon line is soft
+        private const float CloudWorldY = 128f;       // cloud base altitude
+        private const int CloudCoarseSize = 32;
+        private const float CloudCellSize = 8f;       // world units per coarse occupancy cell
+        private const float CloudTileSize = CloudCoarseSize * CloudCellSize;
+        private const float CloudFadeWidth = 300f;    // outer-radius fade so the horizon line is soft
         private float _cloudScrollU;
         private float _cloudScrollV;
         private float _lastCloudTime;
-        private readonly float[] _cloudParams = new float[4];
+        private readonly float[] _cloudParams = new float[8];
+        private float[] _cloudInstanceScratch = new float[512];
         private readonly System.Diagnostics.Stopwatch _cloudClock = System.Diagnostics.Stopwatch.StartNew();
 
         // ---- Crosshair (pixel-art, colour-INVERTING) --------------------------------------
@@ -987,11 +989,10 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             _cloudPipeline?.Dispose();
             _cloudVertexBuffer?.Dispose();
             _cloudIndexBuffer?.Dispose();
+            _cloudInstanceBuffer?.Dispose();
             _cloudParamsSet?.Dispose();
             _cloudParamsLayout?.Dispose();
             _cloudParamsBuffer?.Dispose();
-            _cloudTextureView?.Dispose();
-            _cloudTexture?.Dispose();
             _cloudMatrixBuffer?.Dispose();
             _cloudMatrixSet?.Dispose();
             _worldPlanePipeline?.Dispose();
@@ -1528,8 +1529,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 _gd.UpdateBuffer(_skyMatrixBuffer, 0, ref skyViewProj);
             if (_cloudMatrixBuffer != null)
             {
-                // Same view, WIDER far plane (3x) so clouds / world-from-above stretch much
-                // further than terrain. Near plane raised slightly to keep depth precision sane.
+                // Same view, WIDER far plane (3x) so the world-from-above backdrop stretches
+                // much further than terrain. Near plane raised slightly to keep depth precision sane.
                 var wideProj = Matrix4x4.CreatePerspectiveFieldOfView((float)(Math.PI / 2.0), (float)_sc.Framebuffer.Width / _sc.Framebuffer.Height, 1.0f, _cloudFarPlane);
                 var wideVP = Matrix4x4.Multiply(view, wideProj);
                 _gd.UpdateBuffer(_cloudMatrixBuffer, 0, ref wideVP);
@@ -1661,10 +1662,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         public void SetWorldSeed(int seed)
         {
             _cloudSeed = seed;
-            if (_cloudTexture != null)
-            {
-                _gd.UpdateTexture(_cloudTexture, GenerateCloudTexture(seed), 0, 0, 0, 256, 256, 1, 0, 0);
-            }
+            if (_cloudPipeline != null) RebuildCloudGeometry(seed);
             _galaxySeed = int.MinValue; // force galaxies to rebuild from the new seed
         }
 
