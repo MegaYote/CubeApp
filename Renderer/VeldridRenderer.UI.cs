@@ -1689,8 +1689,10 @@ namespace Cubuild.Renderer
 
             // E-menu inventory: a grid of every block. Clicking one queues it to Program, which
             // drops it into the selected hotbar slot and closes the menu.
-            // In Classic mode, E shows the workbench crafting UI directly (so you can craft without a block).
-            if (_hud.IsMinecraftMode && _hud.Mode == GameMode.Survival && _hud.InventoryOpen)
+            // Survival inventory always includes the personal 2x2 crafting grid. Minecraft/Classic
+            // worlds used to get this UI, while regular Survival incorrectly fell through to the
+            // Creative block palette and had no crafting grid at all.
+            if (_hud.Mode == GameMode.Survival && _hud.InventoryOpen)
             {
                 DrawCraftingWindow(displaySize);
             }
