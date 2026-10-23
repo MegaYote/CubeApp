@@ -28,6 +28,15 @@ namespace Cubuild
         public InventorySlot[] CargoSlots = new InventorySlot[OreCartEntity.CargoSlotCount];
     }
 
+    /// <summary>World-time burnout schedule for one sap torch (v11).</summary>
+    public sealed class SavedSapTorchTimer
+    {
+        public int X, Y, Z;
+        public long GraceEndTick;
+        /// <summary>Zero until the grace period elapses and the randomized lifetime is chosen.</summary>
+        public long BurnAtTick;
+    }
+
     /// <summary>
     /// One world save: header (name/seed), player state, the modified chunks (block + meta
     /// bytes), and mob state. Serialized to a Deflate-compressed .cubuild file.
@@ -35,7 +44,9 @@ namespace Cubuild
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 10;
+        public const int Version = 11;
+        /// <summary>Binary version read from disk; new/in-memory saves use the current version.</summary>
+        public int FileVersion = Version;
 
         public string Name = "World 1";
         public int Seed;
@@ -71,6 +82,7 @@ namespace Cubuild
         public long WorldTime;
         public List<SavedChunk> Chunks = new();
         public List<SavedMob> Mobs = new();
+        public List<SavedSapTorchTimer> SapTorchTimers = new();
 
         public void Save(string path)
         {
@@ -140,6 +152,17 @@ namespace Cubuild
                         }
                     }
                 }
+
+                // v11: absolute world-time schedule for each placed sap torch.
+                w.Write(SapTorchTimers.Count);
+                foreach (var timer in SapTorchTimers)
+                {
+                    w.Write(timer.X);
+                    w.Write(timer.Y);
+                    w.Write(timer.Z);
+                    w.Write(timer.GraceEndTick);
+                    w.Write(timer.BurnAtTick);
+                }
             }
 
             using var file = File.Create(path);
@@ -160,6 +183,7 @@ namespace Cubuild
                 if (version > Version) return null;
 
                 var save = new WorldSave();
+                save.FileVersion = version;
                 save.Name = reader.ReadString();
                 save.Seed = reader.ReadInt32();
                 if (version >= 3) save.Mode = reader.ReadInt32();
@@ -232,6 +256,21 @@ namespace Cubuild
                         }
                     }
                     save.Mobs.Add(m);
+                }
+                if (version >= 11)
+                {
+                    int timerCount = reader.ReadInt32();
+                    for (int i = 0; i < timerCount; i++)
+                    {
+                        save.SapTorchTimers.Add(new SavedSapTorchTimer
+                        {
+                            X = reader.ReadInt32(),
+                            Y = reader.ReadInt32(),
+                            Z = reader.ReadInt32(),
+                            GraceEndTick = reader.ReadInt64(),
+                            BurnAtTick = reader.ReadInt64(),
+                        });
+                    }
                 }
                 return save;
             }

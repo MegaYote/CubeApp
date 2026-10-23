@@ -82,6 +82,7 @@ namespace Cubuild
                     HotbarCounts = (int[])World.HotbarCounts.Clone(),
                     PlayerHealth = World.LocalPlayer.Health,
                     WorldTime = World.WorldTime,
+                    SapTorchTimers = World.CaptureSapTorchBurnTimers(),
                     Bag = new InventorySlot[40],
                 };
                 for (int i = 0; i < 40 && i < World.BagSlots.Count; i++)
@@ -197,6 +198,10 @@ namespace Cubuild
                 ? (save.HeldItemId, save.HeldCount) : null;
             World.LocalPlayer.Health = Math.Clamp(save.PlayerHealth, 0, 10);
             World.SetWorldTime(save.WorldTime);
+            if (save.FileVersion >= 11)
+                World.RestoreSapTorchBurnTimers(save.SapTorchTimers);
+            else
+                World.InitializeSapTorchBurnTimersForLoadedTorches();
             World.Entities.LoadMobs(save.Mobs);
             needsMeshUpdate = true;
         }

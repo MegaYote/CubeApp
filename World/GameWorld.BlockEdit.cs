@@ -41,6 +41,7 @@ namespace Cubuild
             removedBlockId = 0;
             if (!Chunks.TryGetLoadedBlock(x, y, z, out removedBlockId)) return false;
             if (!Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId)) return false;
+            OnSapTorchBlockChanged(x, y, z, BlockRegistry.AirId, removedBlockId);
 
             // A door is two cells, so breaking either half must remove both - otherwise you'd
             // leave a floating top half. The partner is cleared without dropping anything; the
@@ -50,6 +51,7 @@ namespace Cubuild
             {
                 doorPartnerY = BlockRegistry.IsDoorTop(removedBlockId) ? y - 1 : y + 1;
                 Chunks.TrySetBlock(x, doorPartnerY, z, BlockRegistry.AirId);
+                OnSapTorchBlockChanged(x, doorPartnerY, z, BlockRegistry.AirId);
                 BlockTicks?.OnBlockChanged(x, doorPartnerY, z);
                 BlockEdited?.Invoke(x, doorPartnerY, z, 0, 0);
                 Mesher.RequestImmediateRemesh(new ChunkCoordinates(
@@ -580,7 +582,7 @@ var place = pickResult.Value.Place;
             {
                 // Check if we're right-clicking a burnt torch (target block, not placement position)
                 var hit = pickResult.Value.Remove;
-                if (Chunks.TryGetLoadedBlock(hit.x, hit.y, hit.z, out var targetId) && targetId == _idBurntTorch)
+                if (Chunks.TryGetLoadedBlockAndMeta(hit.x, hit.y, hit.z, out var targetId, out byte burntMeta) && targetId == _idBurntTorch)
                 {
                     if (!IsCreative)
                     {
@@ -588,16 +590,17 @@ var place = pickResult.Value.Place;
                         TryConsumeFromInventory(sapItemId, 1);
                     }
                     // Replace burnt torch with fresh sap torch at the SAME position
-                    if (!Chunks.TrySetBlock(hit.x, hit.y, hit.z, sapTorchBlockId, 0)) return false;
+                    if (!Chunks.TrySetBlock(hit.x, hit.y, hit.z, sapTorchBlockId, burntMeta)) return false;
+                    OnSapTorchBlockChanged(hit.x, hit.y, hit.z, sapTorchBlockId, _idBurntTorch);
                     BlockTicks?.OnBlockChanged(hit.x, hit.y, hit.z);
                     Mesher.RequestImmediateRemesh(new ChunkCoordinates(ChunkManager.LayerForWorldY(hit.y), WorldToChunkCoord(hit.x), WorldToChunkCoord(hit.z)));
-                    BlockEdited?.Invoke(hit.x, hit.y, hit.z, sapTorchBlockId, 0);
-                    ScheduleBurntTorchConversion(hit.x, hit.y, hit.z, 10.0f); // 10 seconds for testing
+                    BlockEdited?.Invoke(hit.x, hit.y, hit.z, sapTorchBlockId, burntMeta);
                     return true;
                 }
             }
 
             if (!Chunks.TrySetBlock(place.x, place.y, place.z, blockToPlace, meta)) return false;
+            OnSapTorchBlockChanged(place.x, place.y, place.z, blockToPlace);
             if (!IsCreative) TryConsumeFromInventory(spendId, 1);
             BlockTicks?.OnBlockChanged(place.x, place.y, place.z);
             int placeLayer = ChunkManager.LayerForWorldY(place.y);
@@ -610,11 +613,6 @@ var place = pickResult.Value.Place;
             // Laying a block can give a rail above it its support back (and laying a rail feeds a
             // new track into the sag solve). Laying track over a gap is how you build a bridge.
             MarkRailSagAround(place.x, place.y, place.z);
-            // Schedule burn for sap torches
-            if (blockToPlace == _idSapTorch)
-            {
-                ScheduleSapTorchBurn(place.x, place.y, place.z);
-            }
             return true;
         }
 
@@ -637,15 +635,12 @@ var place = pickResult.Value.Place;
             // its neighbours just as much as placing one does.
             Chunks.TryGetLoadedBlock(x, y, z, out int oldId);
             if (!Chunks.TrySetBlockLoadedOnly(x, y, z, blockId, meta)) return false;
+            OnSapTorchBlockChanged(x, y, z, blockId, oldId);
             BlockTicks?.OnBlockChanged(x, y, z);
             int ebLayer = ChunkManager.LayerForWorldY(y);
             var editedChunk = new ChunkCoordinates(ebLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
             Mesher.RequestImmediateRemesh(editedChunk);
             BlockEdited?.Invoke(x, y, z, blockId, meta);
-            if (blockId == _idSapTorch)
-            {
-                ScheduleSapTorchBurn(x, y, z);
-            }
             if (blockId == BlockRegistry.AirId)
             {
                 BreakUnsupportedCross(x, y + 1, z);
@@ -710,6 +705,7 @@ var place = pickResult.Value.Place;
                 return;
             // No support — break this cross block (no drops, like flowers/saplings in Minecraft).
             Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId);
+            OnSapTorchBlockChanged(x, y, z, BlockRegistry.AirId, id);
             BlockTicks?.OnBlockChanged(x, y, z);
             int ucLayer = ChunkManager.LayerForWorldY(y);
             Mesher.RequestImmediateRemesh(new ChunkCoordinates(ucLayer, WorldToChunkCoord(x), WorldToChunkCoord(z)));
@@ -737,6 +733,7 @@ var place = pickResult.Value.Place;
             if (id != _idTorch && id != _idSapTorch && id != _idBurntTorch) return;
             if (meta != expectedMeta) return;
             Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId);
+            OnSapTorchBlockChanged(x, y, z, BlockRegistry.AirId, id);
             BlockTicks?.OnBlockChanged(x, y, z);
             int layer = ChunkManager.LayerForWorldY(y);
             Mesher.RequestImmediateRemesh(new ChunkCoordinates(layer, WorldToChunkCoord(x), WorldToChunkCoord(z)));
@@ -749,6 +746,7 @@ var place = pickResult.Value.Place;
             if (id != _idSapTorch && id != _idBurntTorch) return;
             if (meta != 5) return; // only ceiling torches (meta 5)
             Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId);
+            OnSapTorchBlockChanged(x, y, z, BlockRegistry.AirId, id);
             BlockTicks?.OnBlockChanged(x, y, z);
             int layer = ChunkManager.LayerForWorldY(y);
             Mesher.RequestImmediateRemesh(new ChunkCoordinates(layer, WorldToChunkCoord(x), WorldToChunkCoord(z)));
@@ -1104,33 +1102,6 @@ var place = pickResult.Value.Place;
                 }
             }
             return null;
-        }
-
-        private void ScheduleBurntTorchConversion(int x, int y, int z, float delaySeconds)
-        {
-            var pos = (x, y, z);
-            Task.Delay(TimeSpan.FromSeconds(delaySeconds)).ContinueWith(_ =>
-            {
-                if (Chunks.TryGetLoadedBlockAndMeta(x, y, z, out int id, out byte meta))
-                {
-                    if (id == _idSapTorch)
-                    {
-                        Chunks.TrySetBlock(x, y, z, _idBurntTorch);
-                        BlockTicks?.OnBlockChanged(x, y, z);
-                        Mesher.RequestImmediateRemesh(new ChunkCoordinates(ChunkManager.LayerForWorldY(y), WorldToChunkCoord(x), WorldToChunkCoord(z)));
-                        BlockEdited?.Invoke(x, y, z, _idBurntTorch, 0);
-                    }
-                }
-            });
-        }
-
-        /// <summary>
-        /// Called when a sap torch is placed (via placement or relighting). Schedules it to burn out after 10 seconds (testing).
-        /// </summary>
-        private void ScheduleSapTorchBurn(int x, int y, int z)
-        {
-            // 10 seconds for testing, will be longer in production
-            ScheduleBurntTorchConversion(x, y, z, 10.0f);
         }
 
         // ------------------------------------------------------------------

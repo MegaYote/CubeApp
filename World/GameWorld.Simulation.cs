@@ -196,6 +196,7 @@ namespace Cubuild
             long advance = (long)_worldTimeAccumulator;
             WorldTime += advance;
             _worldTimeAccumulator -= advance;
+            StepSapTorchBurnTimers();
             StepRegen(deltaSeconds);
             if (LocalPlayer.HurtTimer > 0f)
                 LocalPlayer.HurtTimer = Math.Max(0f, LocalPlayer.HurtTimer - deltaSeconds);
