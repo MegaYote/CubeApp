@@ -12,6 +12,8 @@ namespace Cubuild
         /// <summary>Seconds of burn to produce one item.</summary>
         public float Time { get; internal set; } = 10f;
         public string OutputName { get; internal set; } = "";
+        /// <summary>Required processing station; empty means the legacy unrestricted recipe.</summary>
+        public string Station { get; internal set; } = "";
     }
 
     /// <summary>
@@ -27,6 +29,7 @@ namespace Cubuild
             public string Input { get; set; } = "";
             public string Output { get; set; } = "";
             public float Time { get; set; } = 10f;
+            public string Station { get; set; } = "";
         }
 
         private static readonly Dictionary<int, SmeltRecipe> _recipes = new();
@@ -54,6 +57,7 @@ namespace Cubuild
                         OutputItemId = outItem.NumericId,
                         Time = dto.Time <= 0 ? 10f : dto.Time,
                         OutputName = dto.Output,
+                        Station = dto.Station?.Trim() ?? "",
                     };
                 }
             }
@@ -75,8 +79,13 @@ namespace Cubuild
         }
 
         /// <summary>The recipe for an input item, or null when it doesn't smelt.</summary>
-        public static SmeltRecipe? Find(int itemId)
-            => itemId > 0 && _recipes.TryGetValue(itemId, out var r) ? r : null;
+        public static SmeltRecipe? Find(int itemId, string station = "")
+        {
+            if (itemId <= 0 || !_recipes.TryGetValue(itemId, out var recipe)) return null;
+            return string.IsNullOrEmpty(recipe.Station)
+                || string.Equals(recipe.Station, station, StringComparison.OrdinalIgnoreCase)
+                ? recipe : null;
+        }
 
         /// <summary>Burn seconds one unit of this item provides. 0 means it isn't fuel.</summary>
         public static float FuelSeconds(int itemId)

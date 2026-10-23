@@ -15,9 +15,10 @@ namespace Cubuild
 {
     public sealed partial class Program : IDisposable
     {
-        private void StartNewWorld(int seed, string name, GameMode mode = GameMode.Creative, bool isMinecraftMode = false)
+        private void StartNewWorld(int seed, string name, GameMode mode = GameMode.Creative,
+            bool isMinecraftMode = false, bool frontierProgression = false)
         {
-            EnsureRegistries(isMinecraftMode);
+            EnsureRegistries(isMinecraftMode, frontierProgression);
             if (World != null)
             {
                 // Unsubscribe before disposing so a late chunk from the dying world can't
@@ -30,6 +31,7 @@ namespace Cubuild
             World = new GameWorld(seed, name, () => gpuRenderer, ChunkRenderRadius, Math.Max(1, Environment.ProcessorCount - 2));
             World.Mode = mode;
             World.IsMinecraftMode = isMinecraftMode;
+            World.FrontierProgression = isMinecraftMode && frontierProgression;
             // Both modes start with an empty hotbar; creative starts grounded unless fly is toggled.
             World.FlyMode = false;
             for (int i = 0; i < GameWorld.HotbarSlots; i++) World.Hotbar[i] = BlockRegistry.AirId;
@@ -104,7 +106,8 @@ namespace Cubuild
                 }
                 else
                 {
-                    StartNewWorld(_pendingSeed, _pendingName, _pendingMode, _pendingIsMinecraftMode);
+                    StartNewWorld(_pendingSeed, _pendingName, _pendingMode,
+                        _pendingIsMinecraftMode, _pendingFrontierProgression);
                 }
                 _pendingName = "";
                 _pendingWorldSave = null;
@@ -333,6 +336,7 @@ namespace Cubuild
                 // With the pack picker removed, Survival is always Minecraft/Classic while
                 // Creative keeps the default Complex pack.
                 _pendingIsMinecraftMode = _pendingMode == GameMode.Survival;
+                _pendingFrontierProgression = _pendingMode == GameMode.Survival && _pendingIsMinecraftMode;
                 _pendingWorldFromSave = false;
                 screen = GameScreen.Loading;
                 menu.Screen = GameScreen.Loading;

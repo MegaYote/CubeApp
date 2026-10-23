@@ -19,6 +19,8 @@ namespace Cubuild
         public int OutputItemId { get; internal set; }
         public int OutputCount { get; internal set; } = 1;
         public string OutputName { get; internal set; } = "";
+        /// <summary>Required crafting station (empty means legacy/unrestricted).</summary>
+        public string Station { get; internal set; } = "";
     }
 
     /// <summary>
@@ -34,6 +36,7 @@ namespace Cubuild
         public static bool Loaded { get; private set; }
         public static IReadOnlyList<CraftingRecipe> All => _recipes;
         public static bool IsMinecraftMode { get; private set; }
+        public static bool IsFrontierProgression { get; private set; }
 
         private sealed class RecipesFile
         {
@@ -47,21 +50,26 @@ namespace Cubuild
             public List<string?> Input { get; set; } = new();
             public string Output { get; set; } = "";
             public int Count { get; set; } = 1;
+            public string Station { get; set; } = "";
         }
 
         /// <summary>Must run AFTER BlockRegistry and ItemRegistry (ids resolve through both).</summary>
-        public static void LoadDefault() => LoadFromFolder("Assets/Data");
+        public static void LoadDefault() => LoadFromFolder("Assets/Data", false);
 
-        public static void LoadFromFolder(string folder)
+        public static void LoadFromFolder(string folder, bool frontierProgression = false)
         {
             bool wantsMinecraft = folder.IndexOf("Minecraft", StringComparison.OrdinalIgnoreCase) >= 0;
-            byte[]? bytes = LoadResourceBytes(folder, "recipes.json");
+            // Old Classic worlds stay on the exact recipe table they were created with. New
+            // Survival worlds use the station-gated frontier recipe set.
+            string recipeFile = wantsMinecraft && !frontierProgression ? "recipes_legacy.json" : "recipes.json";
+            byte[]? bytes = LoadResourceBytes(folder, recipeFile);
             bool foundMinecraft = bytes != null && wantsMinecraft;
             if (bytes == null && wantsMinecraft)
                 bytes = LoadResourceBytes("Assets/Data", "recipes.json");
             if (bytes == null) throw new FileNotFoundException("recipes.json not found as an embedded resource or loose file.");
             LoadFromJson(System.Text.Encoding.UTF8.GetString(bytes));
             IsMinecraftMode = foundMinecraft;
+            IsFrontierProgression = foundMinecraft && frontierProgression;
         }
 
         public static void LoadFromJson(string json)
@@ -86,7 +94,13 @@ namespace Cubuild
                     throw new InvalidDataException($"Recipe output \"{dto.Output}\" is not a known item/block id.");
                 if (dto.Count < 1) dto.Count = 1;
 
-                var r = new CraftingRecipe { OutputItemId = outItem.NumericId, OutputCount = dto.Count, OutputName = dto.Output };
+                var r = new CraftingRecipe
+                {
+                    OutputItemId = outItem.NumericId,
+                    OutputCount = dto.Count,
+                    OutputName = dto.Output,
+                    Station = dto.Station?.Trim() ?? "",
+                };
                 // 9 inputs -> a 3x3 recipe; anything shorter stays 2x2.
                 r.Size = dto.Input.Count > 4 ? 3 : 2;
                 for (int i = 0; i < 9; i++) r.Input[i] = "";
@@ -118,6 +132,9 @@ namespace Cubuild
         /// - six planks in a 2x3 column is a door, not two planks stacked into sticks.
         /// </summary>
         public static bool TryMatch(ReadOnlySpan<string> grid, int gridSize, out CraftingRecipe match)
+            => TryMatch(grid, gridSize, "", out match);
+
+        public static bool TryMatch(ReadOnlySpan<string> grid, int gridSize, string station, out CraftingRecipe match)
         {
             match = null!;
             if (grid.Length < 9 || gridSize < 1 || gridSize > 3) return false;
@@ -139,6 +156,8 @@ namespace Cubuild
             foreach (var r in _recipes)
             {
                 if (r.Size > gridSize) continue;           // 3x3 recipes need a table
+                if (!string.IsNullOrEmpty(r.Station)
+                    && !string.Equals(r.Station, station, StringComparison.OrdinalIgnoreCase)) continue;
 
                 // Normalize the pattern to its own bounding box.
                 int pminX = 3, pminY = 3, pmaxX = -1, pmaxY = -1;

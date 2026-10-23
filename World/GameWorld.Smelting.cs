@@ -27,6 +27,9 @@ namespace Cubuild
 
         /// <summary>True while a kiln screen is open.</summary>
         public bool SmeltOpen { get; private set; }
+        /// <summary>The specific kiln/forge station currently in use.</summary>
+        public int SmeltStationBlockId { get; private set; }
+        private string SmeltStationName => SmeltStationBlockId == _idForge ? "forge" : "kiln";
 
         /// <summary>Stack waiting to be smelted (consumed from the top, one at a time).</summary>
         public (int ItemId, int Count)? SmeltInput { get; private set; }
@@ -58,10 +61,11 @@ namespace Cubuild
                 : 0f;
 
         /// <summary>What the current input would produce, or null when it can't smelt.</summary>
-        public SmeltRecipe? SmeltRecipeForInput => SmeltInput is { } i ? SmeltRegistry.Find(i.ItemId) : null;
+        public SmeltRecipe? SmeltRecipeForInput => SmeltInput is { } i ? SmeltRegistry.Find(i.ItemId, SmeltStationName) : null;
 
-        public void OpenSmelter()
+        public void OpenSmelter(int stationBlockId = 0)
         {
+            SmeltStationBlockId = stationBlockId == _idForge ? _idForge : _idKiln;
             SmeltOpen = true;
         }
 
@@ -75,6 +79,7 @@ namespace Cubuild
             SmeltActiveFuelId = 0;
             SmeltBurnTime = 0f;
             SmeltProgress = 0f;
+            SmeltStationBlockId = 0;
             SmeltOpen = false;
         }
 
@@ -98,7 +103,7 @@ namespace Cubuild
                 if (held.HasValue)
                 {
                     // Fuel only accepts fuel; the input only accepts something smeltable.
-                    if (isInput ? SmeltRegistry.Find(held.Value.ItemId) == null : !SmeltRegistry.IsFuel(held.Value.ItemId))
+                    if (isInput ? SmeltRegistry.Find(held.Value.ItemId, SmeltStationName) == null : !SmeltRegistry.IsFuel(held.Value.ItemId))
                         return;
                     int heldId = held.Value.ItemId, heldCount = held.Value.Count;
                     if (current is { } c && c.ItemId == heldId)
@@ -131,7 +136,7 @@ namespace Cubuild
             {
                 if (held.HasValue)
                 {
-                    if (isInput ? SmeltRegistry.Find(held.Value.ItemId) == null : !SmeltRegistry.IsFuel(held.Value.ItemId))
+                    if (isInput ? SmeltRegistry.Find(held.Value.ItemId, SmeltStationName) == null : !SmeltRegistry.IsFuel(held.Value.ItemId))
                         return;
                     int heldId = held.Value.ItemId;
                     if (current is not { } c || c.ItemId == 0)

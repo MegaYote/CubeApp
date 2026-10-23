@@ -33,7 +33,7 @@ namespace Cubuild
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 8;
+        public const int Version = 9;
 
         public string Name = "World 1";
         public int Seed;
@@ -50,6 +50,8 @@ namespace Cubuild
         /// <summary>Classic pack fork: when true, load Minecraft-faithful blocks/items/recipes
     /// (shown as "Classic" in the menu); false is the default "Complex" pack.</summary>
         public bool IsMinecraftMode;
+        /// <summary>v9: use the station-tiered Classic Survival recipe progression.</summary>
+        public bool FrontierProgression;
         public double PlayerX, PlayerY, PlayerZ;
         public float Yaw, Pitch;
         public int SelectedSlot;
@@ -101,6 +103,7 @@ namespace Cubuild
                 w.Write(HeldCount);
                 w.Write(GenVersion);
                 w.Write(IsMinecraftMode);
+                w.Write(FrontierProgression);
 
                 w.Write(Chunks.Count);
                 foreach (var c in Chunks)
@@ -175,6 +178,7 @@ namespace Cubuild
                 }
                 if (version >= 6) save.GenVersion = reader.ReadInt32();
                 if (version >= 7) save.IsMinecraftMode = reader.ReadBoolean();
+                if (version >= 9) save.FrontierProgression = reader.ReadBoolean();
 
                 int chunkCount = reader.ReadInt32();
                 for (int i = 0; i < chunkCount; i++)

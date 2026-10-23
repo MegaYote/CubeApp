@@ -75,6 +75,7 @@ namespace Cubuild
         private string _pendingName = "";
         private GameMode _pendingMode;
         private bool _pendingIsMinecraftMode;
+        private bool _pendingFrontierProgression;
         private bool _loadingScreenShown;       // gate: first frame shows "Loading...", second does work
 
         private float lastFps;
@@ -172,23 +173,26 @@ namespace Cubuild
             Sound.RegisterAllEmbedded();
         }
 
-        private static void EnsureRegistries(bool isMinecraftMode)
+        private static void EnsureRegistries(bool isMinecraftMode, bool frontierProgression = false)
         {
             string folder = isMinecraftMode ? "Assets/Data/Minecraft" : "Assets/Data";
+            bool useFrontierProgression = isMinecraftMode && frontierProgression;
             if (BlockRegistry.IsMinecraftMode != isMinecraftMode || !BlockRegistry.Loaded)
             {
                 BlockRegistry.LoadFromFolder(folder);
                 ItemRegistry.LoadFromFolder(folder);
-                RecipeRegistry.LoadFromFolder(folder);
+                RecipeRegistry.LoadFromFolder(folder, useFrontierProgression);
             }
             else if (ItemRegistry.IsMinecraftMode != isMinecraftMode || !ItemRegistry.Loaded)
             {
                 ItemRegistry.LoadFromFolder(folder);
-                RecipeRegistry.LoadFromFolder(folder);
+                RecipeRegistry.LoadFromFolder(folder, useFrontierProgression);
             }
-            else if (RecipeRegistry.IsMinecraftMode != isMinecraftMode || !RecipeRegistry.Loaded)
+            else if (RecipeRegistry.IsMinecraftMode != isMinecraftMode
+                || RecipeRegistry.IsFrontierProgression != useFrontierProgression
+                || !RecipeRegistry.Loaded)
             {
-                RecipeRegistry.LoadFromFolder(folder);
+                RecipeRegistry.LoadFromFolder(folder, useFrontierProgression);
             }
         }
 

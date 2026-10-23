@@ -224,7 +224,10 @@ namespace Cubuild
             {
                 ids[i] = CraftingGrid[i].ItemId > 0 ? ItemRegistry.GetName(CraftingGrid[i].ItemId) : "";
             }
-            if (RecipeRegistry.TryMatch(ids, CraftingSize, out var recipe))
+            string station = CraftingSize < 3
+                ? "hand"
+                : CraftingTableId == _idMasonsWorkbench ? "masonry" : "carpenter";
+            if (RecipeRegistry.TryMatch(ids, CraftingSize, station, out var recipe))
             {
                 CraftingResult = (recipe.OutputItemId, recipe.OutputCount);
             }

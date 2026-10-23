@@ -23,7 +23,8 @@ namespace Cubuild
             }
             StopNetworking();
             bool useClassicSurvival = menu.SelectedMode == GameMode.Survival;
-            StartNewWorld(ParseSeed(menu.SeedInput), menu.WorldName + " (host)", menu.SelectedMode, useClassicSurvival);
+            StartNewWorld(ParseSeed(menu.SeedInput), menu.WorldName + " (host)", menu.SelectedMode,
+                useClassicSurvival, useClassicSurvival);
             _netHost = new Net.NetHost(World, port);
             _netHost.Log += msg => System.Console.WriteLine($"[NET] {msg}");
             _netHost.SetLocalPlayerState(World.LocalPlayer);

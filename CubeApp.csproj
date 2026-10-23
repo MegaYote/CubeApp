@@ -44,6 +44,7 @@
     <EmbeddedResource Include="Assets\Data\Minecraft\blocks.json" />
     <EmbeddedResource Include="Assets\Data\Minecraft\items.json" />
     <EmbeddedResource Include="Assets\Data\Minecraft\recipes.json" />
+    <EmbeddedResource Include="Assets\Data\Minecraft\recipes_legacy.json" />
     <!-- Data-driven mob spawn rules (categories, weights, biome/light gates). -->
     <EmbeddedResource Include="Assets\Data\spawns.json" />
     <!-- Workbench crafting menu background (user's UI design). -->

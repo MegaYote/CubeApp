@@ -208,17 +208,21 @@ namespace Cubuild
             {
 // Right-click on a workbench opens the crafting menu; on a door it swings the door;
             // on a kiln/forge it opens the smelter; anywhere else places the selected block.
-            if (World.TryPickWorkbench(World.PlayerPosition, World.GetCameraForward(), out _))
+            if (World.TryPickWorkbench(World.PlayerPosition, World.GetCameraForward(), out int workbenchId))
     {
-        // A table opens the full 3x3 box, like Minecraft's crafting screen.
-        World.SetCraftingSize(3);
+        // In the frontier profile, the rough hand-made bench is still a 2x2 handcraft surface;
+        // only the sap-treated carpenter's bench opens the full 3x3 construction grid.
+        // Legacy and Complex worlds retain their existing any-bench-is-3x3 behavior.
+        int carpenterBenchId = BlockRegistry.GetId("carpenters_workbench");
+        int gridSize = World.FrontierProgression && workbenchId != carpenterBenchId ? 2 : 3;
+        World.SetCraftingSize(gridSize);
         craftingOpen = true;
                     inventoryOpen = false;
                     DisableMouseLook();
                 }
-                else if (World.TryPickSmelter(World.PlayerPosition, World.GetCameraForward(), out _))
+                else if (World.TryPickSmelter(World.PlayerPosition, World.GetCameraForward(), out int smelterId))
                 {
-                    World.OpenSmelter();
+                    World.OpenSmelter(smelterId);
                     smeltOpen = true;
                     inventoryOpen = false;
                     craftingOpen = false;

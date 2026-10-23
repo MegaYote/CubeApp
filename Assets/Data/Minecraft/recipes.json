@@ -1,134 +1,85 @@
 {
-  // ============================================================================
-  // recipes.json — MINECRAFT MODE
-  //
-  // Crafting recipes. A recipe is 2x2 when it lists 4 (or fewer) inputs, and 3x3 when it
-  // lists 9. The 3x3 ones need a crafting table; the 2x2 ones work anywhere, including the
-  // pack. Matching is Minecraft-shaped: the pattern may sit at any offset that fits and
-  // may be rotated or mirrored, so you don't have to line it up perfectly.
-  //   "." in the comments below is an empty cell.
-  //
-  // The "smelting" array at the bottom drives the kiln (right-click a kiln or forge).
-  // Fuel burn times are built in (coal/charcoal/planks/log/sapling/stick).
-  // ============================================================================
-
+  // Classic Survival frontier progression.
+  // Station contract: "hand" is the 2x2 inventory grid; "carpenter" is the 3x3 carpenter's workbench.
+  // All crafting and smelting entries name their station explicitly for RecipeRegistry gating.
   "recipes": [
-    // ---- basics (2x2 - craftable in the pack) -------------------------------
-    // log -> 4 planks
-    { "input": ["log", "", "", ""], "output": "planks", "count": 4 },
-    // 2 planks stacked -> 4 sticks
-    { "input": ["planks", "", "planks", ""], "output": "stick", "count": 4 },
+    // ---- Hand: primitive tools and simple wood processing (2x2) ----
+    { "input": ["log", "", "", ""], "output": "planks", "count": 4, "station": "hand" },
+    { "input": ["planks", "", "planks", ""], "output": "stick", "count": 4, "station": "hand" },
+    { "input": ["treated_planks", "treated_planks", "treated_planks", "treated_planks"], "output": "carpenters_workbench", "count": 1, "station": "hand" },
 
-    // ---- the crafting table (3x3, but the 2x2 shape fits a 2x2 grid) -------
-    // 4 planks in a square -> workbench
-    { "input": ["planks", "planks", "planks", "planks"], "output": "workbench", "count": 1 },
+    // Sealant enables the existing planks -> treated_planks world interaction.
+    { "input": ["planks", "planks", "sap", "sap"], "output": "bucket", "count": 1, "station": "hand" },
+    { "input": ["sap", "water_bucket", "", ""], "output": "wood_sealant_bucket", "count": 1, "station": "hand" },
 
-    // ---- flint tools (3x3, Minecraft's exact tool shapes) ----------------
-    // Pickaxe: 3 flint over 2 sticks down the middle
-    { "input": ["flint", "flint", "flint", "", "stick", "", "", "stick", ""], "output": "flint_pickaxe", "count": 1 },
-    // Axe: 2 flint + a stick on the left, then a stick below
-    { "input": ["flint", "flint", "", "flint", "stick", "", "", "stick", ""], "output": "flint_hatchet", "count": 1 },
-    // Shovel: 1 flint over 2 sticks
-    { "input": ["", "flint", "", "", "stick", "", "", "stick", ""], "output": "flint_shovel", "count": 1 },
-    // Spear (this pack's sword stand-in): 2 flint over a stick
-    { "input": ["", "flint", "", "", "flint", "", "", "stick", ""], "output": "flint_spear", "count": 1 },
+    // Flint primitives; sap binds the tool heads in the recipes that need it.
+    { "input": ["flint", "stick", "", ""], "output": "flint_spear", "count": 1, "station": "hand" },
+    { "input": ["stick", "flint", "stick", "sap"], "output": "flint_hatchet", "count": 1, "station": "hand" },
+    { "input": ["flint", "flint", "stick", "sap"], "output": "flint_pickaxe", "count": 1, "station": "hand" },
+    { "input": ["flint", "sap", "stick", ""], "output": "flint_shovel", "count": 1, "station": "hand" },
 
-    // ---- wood tier ----
-    { "input": ["planks", "planks", "planks", "", "stick", "", "", "stick", ""], "output": "wood_pickaxe", "count": 1 },
-    { "input": ["planks", "planks", "", "planks", "stick", "", "", "stick", ""], "output": "wood_axe", "count": 1 },
-    { "input": ["", "planks", "", "", "stick", "", "", "stick", ""], "output": "wood_shovel", "count": 1 },
+    // ---- Carpenter: stations, construction, transport and tools (3x3) ----
+    // Eight cobblestone makes the first kiln.
+    { "input": ["cobblestone", "cobblestone", "cobblestone", "cobblestone", "", "cobblestone", "cobblestone", "cobblestone", "cobblestone"], "output": "kiln", "count": 1, "station": "carpenter" },
+    // A brick-and-stone forge, built after firing bricks in the kiln.
+    { "input": ["bricks", "cobblestone", "bricks", "cobblestone", "log", "cobblestone", "bricks", "cobblestone", "bricks"], "output": "forge", "count": 1, "station": "carpenter" },
 
-    // ---- stone tier ----
-    { "input": ["cobblestone", "cobblestone", "cobblestone", "", "stick", "", "", "stick", ""], "output": "stone_pickaxe", "count": 1 },
-    { "input": ["cobblestone", "cobblestone", "", "cobblestone", "stick", "", "", "stick", ""], "output": "stone_axe", "count": 1 },
-    { "input": ["", "cobblestone", "", "", "stick", "", "", "stick", ""], "output": "stone_shovel", "count": 1 },
+    // Construction recipes.
+    { "input": ["planks", "planks", "", "planks", "planks", "", "planks", "planks", ""], "output": "oak_door_bottom", "count": 3, "station": "carpenter" },
+    { "input": ["planks", "planks", "planks", "", "planks", "", "", "planks", ""], "output": "boat", "count": 1, "station": "carpenter" },
+    { "input": ["stone", "stone", "stone", "", "", "", "", "", ""], "output": "stone_slab", "count": 6, "station": "carpenter" },
+    { "input": ["cobblestone", "cobblestone", "cobblestone", "", "", "", "", "", ""], "output": "cobblestone_slab", "count": 6, "station": "carpenter" },
+    { "input": ["planks", "planks", "planks", "", "", "", "", "", ""], "output": "planks_slab", "count": 6, "station": "carpenter" },
+    { "input": ["sand", "sand", "sand", "", "", "", "", "", ""], "output": "sand_slab", "count": 6, "station": "carpenter" },
+    { "input": ["dirt", "dirt", "dirt", "", "", "", "", "", ""], "output": "dirt_slab", "count": 6, "station": "carpenter" },
+    { "input": ["bricks", "bricks", "bricks", "", "", "", "", "", ""], "output": "bricks_slab", "count": 6, "station": "carpenter" },
+    { "input": ["stone", "stone", "stone", "stone", "", "", "", "", ""], "output": "stone_stairs", "count": 4, "station": "carpenter" },
+    { "input": ["cobblestone", "cobblestone", "cobblestone", "cobblestone", "", "", "", "", ""], "output": "cobblestone_stairs", "count": 4, "station": "carpenter" },
+    { "input": ["planks", "planks", "planks", "planks", "", "", "", "", ""], "output": "planks_stairs", "count": 4, "station": "carpenter" },
+    { "input": ["sand", "sand", "sand", "sand", "", "", "", "", ""], "output": "sand_stairs", "count": 4, "station": "carpenter" },
+    { "input": ["dirt", "dirt", "dirt", "dirt", "", "", "", "", ""], "output": "dirt_stairs", "count": 4, "station": "carpenter" },
+    { "input": ["bricks", "bricks", "bricks", "bricks", "", "", "", "", ""], "output": "bricks_stairs", "count": 4, "station": "carpenter" },
 
-    // ---- iron tier ----
-    { "input": ["iron", "iron", "iron", "", "stick", "", "", "stick", ""], "output": "iron_pickaxe", "count": 1 },
-    { "input": ["iron", "iron", "", "iron", "stick", "", "", "stick", ""], "output": "iron_axe", "count": 1 },
-    { "input": ["", "iron", "", "", "stick", "", "", "stick", ""], "output": "iron_shovel", "count": 1 },
+    // Low-cost frontier transport: wood-based ore cart and rails.
+    { "input": ["planks", "", "planks", "planks", "", "planks", "", "stick", ""], "output": "orecart", "count": 1, "station": "carpenter" },
+    { "input": ["stick", "", "stick", "stick", "planks", "stick", "stick", "", "stick"], "output": "rail", "count": 16, "station": "carpenter" },
 
-    // ---- diamond tier ----
-    { "input": ["diamond", "diamond", "diamond", "", "stick", "", "", "stick", ""], "output": "diamond_pickaxe", "count": 1 },
-    { "input": ["diamond", "diamond", "", "diamond", "stick", "", "", "stick", ""], "output": "diamond_axe", "count": 1 },
-    { "input": ["", "diamond", "", "", "stick", "", "", "stick", ""], "output": "diamond_shovel", "count": 1 },
-
-    // ---- copper and quartz alternatives; gold is fast but remains wood-tier ----
-    { "input": ["copper", "copper", "copper", "", "stick", "", "", "stick", ""], "output": "copper_pickaxe", "count": 1 },
-    { "input": ["copper", "copper", "", "copper", "stick", "", "", "stick", ""], "output": "copper_axe", "count": 1 },
-    { "input": ["", "copper", "", "", "stick", "", "", "stick", ""], "output": "copper_shovel", "count": 1 },
-    { "input": ["gold", "gold", "gold", "", "stick", "", "", "stick", ""], "output": "gold_pickaxe", "count": 1 },
-    { "input": ["gold", "gold", "", "gold", "stick", "", "", "stick", ""], "output": "gold_axe", "count": 1 },
-    { "input": ["", "gold", "", "", "stick", "", "", "stick", ""], "output": "gold_shovel", "count": 1 },
-    { "input": ["quartz_shard", "quartz_shard", "quartz_shard", "", "stick", "", "", "stick", ""], "output": "quartz_pickaxe", "count": 1 },
-    { "input": ["quartz_shard", "quartz_shard", "", "quartz_shard", "stick", "", "", "stick", ""], "output": "quartz_axe", "count": 1 },
-    { "input": ["", "quartz_shard", "", "", "stick", "", "", "stick", ""], "output": "quartz_shovel", "count": 1 },
-    { "input": ["bluestone", "bluestone", "bluestone", "", "stick", "", "", "stick", ""], "output": "bluestone_pickaxe", "count": 1 },
-    { "input": ["bluestone", "bluestone", "", "bluestone", "stick", "", "", "stick", ""], "output": "bluestone_axe", "count": 1 },
-    { "input": ["", "bluestone", "", "", "stick", "", "", "stick", ""], "output": "bluestone_shovel", "count": 1 },
-
-    // ---- light (2x2) ------------------------------------------------------
-    // coal/charcoal over a stick -> 4 torches, like Minecraft
-    { "input": ["coal", "", "stick", ""], "output": "torch", "count": 4 },
-    { "input": ["charcoal", "", "stick", ""], "output": "torch", "count": 4 },
-    // sap makes the longer-burning variant (it never burns out on its own)
-    { "input": ["sap", "", "stick", ""], "output": "sap_torch", "count": 2 },
-
-    // ---- the kiln (3x3) - 8 cobblestone ring, Minecraft's furnace shape --
-    { "input": ["cobblestone", "cobblestone", "cobblestone", "cobblestone", "", "cobblestone", "cobblestone", "cobblestone", "cobblestone"], "output": "kiln", "count": 1 },
-
-    // ---- door (3x3) - 6 planks in a 2x3 column -> 3 doors ----------------
-    { "input": ["planks", "planks", "", "planks", "planks", "", "planks", "planks", ""], "output": "oak_door_bottom", "count": 3 },
-
-    // ---- boat (3x3) - 5 planks in a hull shape, Minecraft's boat recipe ----
-    // Three planks across the deck, then a plank down the keel. Rotation/mirroring means
-    // any facing of the hull works.
-    { "input": ["planks", "planks", "planks", "", "planks", "", "", "planks", ""], "output": "boat", "count": 1 },
-
-    // ---- slabs (3x3) - 3 in a row -> 6 slabs, Minecraft's ratio -----------
-    { "input": ["stone", "stone", "stone", "", "", "", "", "", ""], "output": "stone_slab", "count": 6 },
-    { "input": ["cobblestone", "cobblestone", "cobblestone", "", "", "", "", "", ""], "output": "cobblestone_slab", "count": 6 },
-    { "input": ["planks", "planks", "planks", "", "", "", "", "", ""], "output": "planks_slab", "count": 6 },
-    { "input": ["sand", "sand", "sand", "", "", "", "", "", ""], "output": "sand_slab", "count": 6 },
-    { "input": ["dirt", "dirt", "dirt", "", "", "", "", "", ""], "output": "dirt_slab", "count": 6 },
-    { "input": ["bricks", "bricks", "bricks", "", "", "", "", "", ""], "output": "bricks_slab", "count": 6 },
-
-    // ---- stairs (3x3) - 3 stacked + 1 alongside -> 4 stairs --------------
-    { "input": ["stone", "stone", "stone", "stone", "", "", "", "", ""], "output": "stone_stairs", "count": 4 },
-    { "input": ["cobblestone", "cobblestone", "cobblestone", "cobblestone", "", "", "", "", ""], "output": "cobblestone_stairs", "count": 4 },
-    { "input": ["planks", "planks", "planks", "planks", "", "", "", "", ""], "output": "planks_stairs", "count": 4 },
-    { "input": ["sand", "sand", "sand", "sand", "", "", "", "", ""], "output": "sand_stairs", "count": 4 },
-    { "input": ["dirt", "dirt", "dirt", "dirt", "", "", "", "", ""], "output": "dirt_stairs", "count": 4 },
-    { "input": ["bricks", "bricks", "bricks", "bricks", "", "", "", "", ""], "output": "bricks_stairs", "count": 4 },
-
-    // ---- clay / brick (2x2) ----------------------------------------------
-    { "input": ["redclay", "redclay", "redclay", "redclay"], "output": "bricks", "count": 1 },
-
-    // ---- a bucket (3x3) - Minecraft's iron-bucket shape, in planks -------
-    // (Iron needs the kiln, and iron ingots aren't craft material here, so this
-    //  stays the pack's own bucket recipe.)
-    { "input": ["planks", "", "planks", "planks", "planks", "planks", "", "planks", ""], "output": "bucket", "count": 1 },
-    { "input": ["sap", "", "water_bucket", ""], "output": "wood_sealant_bucket", "count": 1 }
+    // Copper tools and higher tiers remain carpenter-made and consume their existing material IDs.
+    { "input": ["copper", "copper", "copper", "", "stick", "", "", "stick", ""], "output": "copper_pickaxe", "count": 1, "station": "carpenter" },
+    { "input": ["copper", "copper", "", "copper", "stick", "", "", "stick", ""], "output": "copper_axe", "count": 1, "station": "carpenter" },
+    { "input": ["", "copper", "", "", "stick", "", "", "stick", ""], "output": "copper_shovel", "count": 1, "station": "carpenter" },
+    { "input": ["iron", "iron", "iron", "", "stick", "", "", "stick", ""], "output": "iron_pickaxe", "count": 1, "station": "carpenter" },
+    { "input": ["iron", "iron", "", "iron", "stick", "", "", "stick", ""], "output": "iron_axe", "count": 1, "station": "carpenter" },
+    { "input": ["", "iron", "", "", "stick", "", "", "stick", ""], "output": "iron_shovel", "count": 1, "station": "carpenter" },
+    { "input": ["gold", "gold", "gold", "", "stick", "", "", "stick", ""], "output": "gold_pickaxe", "count": 1, "station": "carpenter" },
+    { "input": ["gold", "gold", "", "gold", "stick", "", "", "stick", ""], "output": "gold_axe", "count": 1, "station": "carpenter" },
+    { "input": ["", "gold", "", "", "stick", "", "", "stick", ""], "output": "gold_shovel", "count": 1, "station": "carpenter" },
+    { "input": ["diamond", "diamond", "diamond", "", "stick", "", "", "stick", ""], "output": "diamond_pickaxe", "count": 1, "station": "carpenter" },
+    { "input": ["diamond", "diamond", "", "diamond", "stick", "", "", "stick", ""], "output": "diamond_axe", "count": 1, "station": "carpenter" },
+    { "input": ["", "diamond", "", "", "stick", "", "", "stick", ""], "output": "diamond_shovel", "count": 1, "station": "carpenter" },
+    { "input": ["quartz_shard", "quartz_shard", "quartz_shard", "", "stick", "", "", "stick", ""], "output": "quartz_pickaxe", "count": 1, "station": "carpenter" },
+    { "input": ["quartz_shard", "quartz_shard", "", "quartz_shard", "stick", "", "", "stick", ""], "output": "quartz_axe", "count": 1, "station": "carpenter" },
+    { "input": ["", "quartz_shard", "", "", "stick", "", "", "stick", ""], "output": "quartz_shovel", "count": 1, "station": "carpenter" },
+    { "input": ["bluestone", "bluestone", "bluestone", "", "stick", "", "", "stick", ""], "output": "bluestone_pickaxe", "count": 1, "station": "carpenter" },
+    { "input": ["bluestone", "bluestone", "", "bluestone", "stick", "", "", "stick", ""], "output": "bluestone_axe", "count": 1, "station": "carpenter" },
+    { "input": ["", "bluestone", "", "", "stick", "", "", "stick", ""], "output": "bluestone_shovel", "count": 1, "station": "carpenter" }
   ],
 
-  // ============================================================================
-  // KILN / FURNACE. input -> output, in seconds per item. This is the ore
-  // progression: mine the ore (pickaxe required), then smelt it into its ingot.
-  // ============================================================================
+  // Kiln handles clay, charcoal and ceramics; forge handles all mined ore refinement.
   "smelting": [
-    { "input": "coalore",     "output": "coal",            "time": 10 },
-    { "input": "ironore",     "output": "iron",            "time": 10 },
-    { "input": "goldore",     "output": "gold",            "time": 10 },
-    { "input": "diamondore",  "output": "diamond",         "time": 10 },
-    { "input": "copperore",   "output": "copper",          "time": 10 },
-    { "input": "bluestoneore", "output": "bluestone",      "time": 10 },
-    { "input": "cobblestone", "output": "stone",           "time": 10 },
-    { "input": "sand",        "output": "glass",           "time": 10 },
-    { "input": "log",         "output": "charcoal",        "time": 10 },
-    { "input": "stone",       "output": "smoothstone",     "time": 10 },
-    { "input": "redclay",     "output": "bricks",          "time": 10 },
-    { "input": "ceramic",     "output": "bricks",          "time": 10 },
-    { "input": "mossycobblestone", "output": "cobblestone", "time": 10 },
-    { "input": "sapling",     "output": "charcoal",        "time": 10 }
+    { "input": "raw_coal", "output": "coal", "time": 10, "station": "forge" },
+    { "input": "raw_iron", "output": "iron", "time": 10, "station": "forge" },
+    { "input": "raw_gold", "output": "gold", "time": 10, "station": "forge" },
+    { "input": "raw_diamond", "output": "diamond", "time": 10, "station": "forge" },
+    { "input": "raw_copper", "output": "copper", "time": 10, "station": "forge" },
+    { "input": "raw_bluestone", "output": "bluestone", "time": 10, "station": "forge" },
+    { "input": "redclay", "output": "bricks", "time": 10, "station": "kiln" },
+    { "input": "log", "output": "charcoal", "time": 10, "station": "kiln" },
+    { "input": "ceramic", "output": "bricks", "time": 10, "station": "kiln" },
+    { "input": "sand", "output": "glass", "time": 10, "station": "kiln" },
+    { "input": "cobblestone", "output": "stone", "time": 10, "station": "kiln" },
+    { "input": "stone", "output": "smoothstone", "time": 10, "station": "kiln" },
+    { "input": "mossycobblestone", "output": "cobblestone", "time": 10, "station": "kiln" },
+    { "input": "sapling", "output": "charcoal", "time": 10, "station": "kiln" }
   ]
 }

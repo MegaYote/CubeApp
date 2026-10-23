@@ -95,6 +95,8 @@ namespace Cubuild
         public bool IsCreative => Mode == GameMode.Creative;
         /// <summary>Minecraft faithful fork flag (persisted in save).</summary>
         public bool IsMinecraftMode { get; set; }
+        /// <summary>New station-tiered Classic Survival progression; false preserves legacy recipes.</summary>
+        public bool FrontierProgression { get; set; }
 
         // ---- survival inventory (slot-based, ported from Cubuild C++) ----
         public const int MaxStackSize = 64;
