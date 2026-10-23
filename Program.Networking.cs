@@ -22,7 +22,7 @@ namespace Cubuild
                 return;
             }
             StopNetworking();
-            bool useClassicSurvival = menu.SelectedMode == GameMode.Survival && menu.SelectedIsMinecraftMode;
+            bool useClassicSurvival = menu.SelectedMode == GameMode.Survival;
             StartNewWorld(ParseSeed(menu.SeedInput), menu.WorldName + " (host)", menu.SelectedMode, useClassicSurvival);
             _netHost = new Net.NetHost(World, port);
             _netHost.Log += msg => System.Console.WriteLine($"[NET] {msg}");

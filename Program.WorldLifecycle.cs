@@ -330,7 +330,9 @@ namespace Cubuild
                 _pendingSeed = ParseSeed(menu.SeedInput);
                 _pendingName = menu.WorldName;
                 _pendingMode = menu.SelectedMode;
-                _pendingIsMinecraftMode = _pendingMode == GameMode.Survival && menu.SelectedIsMinecraftMode;
+                // With the pack picker removed, Survival is always Minecraft/Classic while
+                // Creative keeps the default Complex pack.
+                _pendingIsMinecraftMode = _pendingMode == GameMode.Survival;
                 _pendingWorldFromSave = false;
                 screen = GameScreen.Loading;
                 menu.Screen = GameScreen.Loading;

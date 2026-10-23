@@ -1042,8 +1042,8 @@ namespace Cubuild.Renderer
             }
             else if (m.Screen == GameScreen.CreateWorld)
             {
-                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 150f, size.Y / 2f - 170f), ImGuiCond.Always);
-                ImGui.SetNextWindowSize(new Vector2(300, 340), ImGuiCond.Always);
+                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 150f, size.Y / 2f - 135f), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(300, 270), ImGuiCond.Always);
                 ImGui.Begin("##createworld", windowFlags);
                 ImGui.Text("Create World");
                 ImGui.Spacing();
@@ -1069,19 +1069,6 @@ namespace Cubuild.Renderer
                     m.SelectedMode = GameMode.Survival;
                 }
                 ImGui.Spacing();
-                // The Survival pack selector was removed when new worlds were hard-wired to
-                // Complex. Keep both submodes available, with Classic as the vanilla-like default.
-                if (m.SelectedMode == GameMode.Survival)
-                {
-                    ImGui.Text("Survival pack");
-                    if (ImGui.RadioButton("Classic", m.SelectedIsMinecraftMode))
-                        m.SelectedIsMinecraftMode = true;
-                    ImGui.SameLine();
-                    if (ImGui.RadioButton("Complex", !m.SelectedIsMinecraftMode))
-                        m.SelectedIsMinecraftMode = false;
-                    ImGui.TextWrapped("Classic uses Minecraft-style blocks and recipes; Complex uses the expanded Cubuild pack.");
-                    ImGui.Spacing();
-                }
                 if (ImGui.Button("Create World", new Vector2(220, 34)))
                 {
                     m.CreateWorldClicked = true;
