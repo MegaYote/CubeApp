@@ -197,7 +197,9 @@ namespace Cubuild.Renderer
         // Reversible rendering experiment: set false to retain the packed mask but disable
         // all cloud-shadow attenuation. This never changes terrain geometry or cloud rendering.
         private const bool ExperimentalCloudShadowsEnabled = true;
-        private const float ExperimentalCloudShadowMaxStrength = 0.24f;
+        // At most two of the renderer's 15 sky-light steps are removed, so daylight still
+        // passes through the clouds instead of turning their shadows into near-night patches.
+        private const float ExperimentalCloudShadowMaxStrength = 0.12f;
 
         // ---- Clouds (seeded voxel-puff fields) -------------------------------------------
         // Each altitude has an independent, repeated 32x32 occupancy tile and its own dynamic
