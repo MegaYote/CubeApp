@@ -36,7 +36,8 @@ namespace Cubuild.Renderer
         bool TryTakeInventoryClick(out (int Kind, int Target, int Button) click);
         int HoveredInventorySlot { get; }
         bool TryTakeBiomeSelection(out string biomeName);
-        void SpawnBlockBreakParticles(int worldX, int worldY, int worldZ, int blockId, int count);
+        void SpawnBlockBreakParticles(int worldX, int worldY, int worldZ, int blockId, int count,
+            int skyLightLevel = 0, int blockLightLevel = 0);
         void ResetWorld();
     }
 }

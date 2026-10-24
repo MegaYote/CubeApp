@@ -11,7 +11,8 @@ namespace Cubuild.Renderer
     {
         private void WriteChunkData(Cubuild.ChunkCoordinates coord, uint[] verts, ushort[] indices,
             uint[] cutoutVerts, ushort[] cutoutIndices, uint[] glassVerts, ushort[] glassIndices,
-            uint[] transVerts, ushort[] transIndices, uint[] surfaceLodVerts, ushort[] surfaceLodIndices)
+            uint[] transVerts, ushort[] transIndices, uint transNonTopIndexCount,
+            uint[] surfaceLodVerts, ushort[] surfaceLodIndices)
         {
             InvalidateSurfacePatchFor(coord);
 
@@ -91,7 +92,14 @@ namespace Cubuild.Renderer
                 _gd.UpdateBuffer(_megaVertexBuffer, tvbo, transVerts);
                 _gd.UpdateBuffer(_megaIndexBuffer, tibo, transIndices);
 
-                _transparentRanges[coord] = new ChunkRange { VbOffsetBytes = tvbo, VbBytes = tvbBytes, IbOffsetBytes = tibo, IndexCount = (uint)transIndices.Length };
+                _transparentRanges[coord] = new ChunkRange
+                {
+                    VbOffsetBytes = tvbo,
+                    VbBytes = tvbBytes,
+                    IbOffsetBytes = tibo,
+                    IndexCount = (uint)transIndices.Length,
+                    NonTopIndexCount = transNonTopIndexCount,
+                };
             }
             else
             {
@@ -444,7 +452,7 @@ namespace Cubuild.Renderer
             }
         }
 
-        // Runs the GPU-cull compute pass for one draw pass. All four passes share ONE cull-data
+        // Runs the GPU-cull compute pass for one draw pass. All draw passes share ONE cull-data
         // buffer, so each pass must re-upload ITS OWN data via the CommandList (recorded in-order
         // before its dispatch) - a GraphicsDevice-level upload executes immediately and would be
         // overwritten by the last pass, making every dispatch read the wrong AABBs.
@@ -456,6 +464,10 @@ namespace Cubuild.Renderer
             if (cullData.Length < commands.Count * 16) return;
             for (int i = 0; i < commands.Count; i++)
             {
+                // Heightmap occlusion is transient: restore the command's real instance count
+                // every frame before deciding whether it is hidden from this camera position.
+                // Otherwise an occluded chunk stays at zero in this cached array forever.
+                cullData[i * 16 + 9] = commands[i].Cmd.InstanceCount;
                 if (IsDrawEntryHeightmapOccluded(commands[i]))
                 {
                     cullData[i * 16 + 9] = 0; // InstanceCount = 0 -> skipped by the GPU draw
@@ -509,7 +521,7 @@ namespace Cubuild.Renderer
             cl.CopyBuffer(_cullArgsBuffer, 0, _indirectBuffer, 0, (uint)commands.Count * IndirectCommandStride);
         }
 
-        // Rebuilds all four pass lists from the range dictionaries. Called once per frame when a
+        // Rebuilds all chunk draw lists from the range dictionaries. Called once per frame when a
         // chunk was uploaded or unloaded (see WriteChunkData / FreeChunkRange), which replaced the
         // old per-chunk incremental sync - that scanned each pass list per pass, so its cost grew
         // with the render distance and caused 40-60ms stalls while flying at the 64-chunk preset.
@@ -520,7 +532,9 @@ namespace Cubuild.Renderer
             _opaqueCullData = Array.Empty<uint>();
             _cutoutCullData = Array.Empty<uint>();
             _glassCullData = Array.Empty<uint>();
-            _transparentCullData = Array.Empty<uint>();
+            _transparentNonTopCullData = Array.Empty<uint>();
+            _transparentTopCullData = Array.Empty<uint>();
+            for (int i = 0; i < _lastSortCount.Length; i++) _lastSortCount[i] = -1;
 
             var patchedChunks = new HashSet<Cubuild.ChunkCoordinates>();
             foreach (var kv in _surfacePatchRanges)
@@ -617,22 +631,45 @@ namespace Cubuild.Renderer
                 _glassIndirectScratch = new IndirectDrawIndexedArguments[Math.Max(256, _glassDrawCommands.Count * 2)];
             }
 
-            _transparentDrawCommands.Clear();
+            _transparentNonTopDrawCommands.Clear();
+            _transparentTopDrawCommands.Clear();
             foreach (var kv in _transparentRanges)
             {
                 var r = kv.Value;
-                _transparentDrawCommands.Add(new DrawEntry(kv.Key, new IndirectDrawIndexedArguments
+                uint nonTopIndexCount = Math.Min(r.NonTopIndexCount, r.IndexCount);
+                uint topIndexCount = r.IndexCount - nonTopIndexCount;
+                int vertexOffset = (int)(r.VbOffsetBytes / VertexStrideBytes);
+                uint firstIndex = r.IbOffsetBytes / 2;
+                if (nonTopIndexCount > 0)
                 {
-                    IndexCount = r.IndexCount,
-                    InstanceCount = 1,
-                    FirstIndex = r.IbOffsetBytes / 2,           // ushort index units
-                    VertexOffset = (int)(r.VbOffsetBytes / VertexStrideBytes),
-                    FirstInstance = 0,
-                }, 1));
+                    _transparentNonTopDrawCommands.Add(new DrawEntry(kv.Key, new IndirectDrawIndexedArguments
+                    {
+                        IndexCount = nonTopIndexCount,
+                        InstanceCount = 1,
+                        FirstIndex = firstIndex, // ushort index units
+                        VertexOffset = vertexOffset,
+                        FirstInstance = 0,
+                    }, 1));
+                }
+                if (topIndexCount > 0)
+                {
+                    _transparentTopDrawCommands.Add(new DrawEntry(kv.Key, new IndirectDrawIndexedArguments
+                    {
+                        IndexCount = topIndexCount,
+                        InstanceCount = 1,
+                        FirstIndex = firstIndex + nonTopIndexCount,
+                        VertexOffset = vertexOffset,
+                        FirstInstance = 0,
+                    }, 1));
+                }
             }
-            if (_transparentIndirectScratch.Length < _transparentDrawCommands.Count)
+            if (_transparentNonTopIndirectScratch.Length < _transparentNonTopDrawCommands.Count)
             {
-                _transparentIndirectScratch = new IndirectDrawIndexedArguments[Math.Max(256, _transparentDrawCommands.Count * 2)];
+                _transparentNonTopIndirectScratch = new IndirectDrawIndexedArguments[Math.Max(256, _transparentNonTopDrawCommands.Count * 2)];
+            }
+            if (_transparentTopIndirectScratch.Length < _transparentTopDrawCommands.Count)
+            {
+                _transparentTopIndirectScratch = new IndirectDrawIndexedArguments[Math.Max(256, _transparentTopDrawCommands.Count * 2)];
             }
         }
 

@@ -37,6 +37,7 @@ namespace Cubuild.Net
         public int ClientId { get; private set; } = -1;
         public int WorldSeed { get; private set; }
         public string WorldName { get; private set; } = "";
+        public bool IsCreativeWorld { get; private set; } = true;
         public float SpawnX, SpawnY, SpawnZ;
 
         // Latest snapshot (received on the network thread).
@@ -103,6 +104,7 @@ namespace Cubuild.Net
                 if (!wr.TryReadInt(out int myId)) { Disconnected?.Invoke("Bad welcome"); return; }
                 if (!wr.TryReadInt(out int seed)) { Disconnected?.Invoke("Bad welcome"); return; }
                 if (!wr.TryReadString(out string name)) { Disconnected?.Invoke("Bad welcome"); return; }
+                IsCreativeWorld = wr.ReadBool();
                 if (!wr.TryReadFloat(out float sx) || !wr.TryReadFloat(out float sy) || !wr.TryReadFloat(out float sz))
                 {
                     Disconnected?.Invoke("Bad welcome");

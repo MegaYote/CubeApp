@@ -163,7 +163,9 @@ float cloudLayerCoverage(vec3 worldPos, uint faceDirection, int layer, float scr
     float sunElevation = max(cloudShadowSun.y, 0.18);
     vec2 projected = blockCenter.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
-    return cloudMaskSample(uv, layer);
+    // Higher cloud decks cast progressively softer shadows: low 100%, mid 65%, high 35%.
+    float layerWeight = layer == 0 ? 1.0 : (layer == 1 ? 0.65 : 0.35);
+    return cloudMaskSample(uv, layer) * layerWeight;
 }
 float cloudShadowCoverage(vec3 worldPos, uint faceDirection) {
     float r = cloudLayerCoverage(worldPos, faceDirection, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
@@ -320,7 +322,8 @@ float cloudLayerCoverage(vec3 worldPos, uint faceDirection, int layer, float scr
     float sunElevation = max(cloudShadowSun.y, 0.18);
     vec2 projected = blockCenter.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
-    return cloudMaskSample(uv, layer);
+    float layerWeight = layer == 0 ? 1.0 : (layer == 1 ? 0.65 : 0.35);
+    return cloudMaskSample(uv, layer) * layerWeight;
 }
 float cloudShadowCoverage(vec3 worldPos, uint faceDirection) {
     float r = cloudLayerCoverage(worldPos, faceDirection, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
@@ -453,7 +456,8 @@ float cloudLayerCoverage(vec3 worldPos, uint faceDirection, int layer, float scr
     float sunElevation = max(cloudShadowSun.y, 0.18);
     vec2 projected = blockCenter.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
-    return cloudMaskSample(uv, layer);
+    float layerWeight = layer == 0 ? 1.0 : (layer == 1 ? 0.65 : 0.35);
+    return cloudMaskSample(uv, layer) * layerWeight;
 }
 float cloudShadowCoverage(vec3 worldPos, uint faceDirection) {
     float r = cloudLayerCoverage(worldPos, faceDirection, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
@@ -1196,7 +1200,8 @@ void main() {
             _opaqueCullData = Array.Empty<uint>();
             _cutoutCullData = Array.Empty<uint>();
             _glassCullData = Array.Empty<uint>();
-            _transparentCullData = Array.Empty<uint>();
+            _transparentNonTopCullData = Array.Empty<uint>();
+            _transparentTopCullData = Array.Empty<uint>();
         }
 
         // Settings-menu API: player picks Auto / CPU / GPU.
@@ -1701,7 +1706,8 @@ float cloudLayerCoverage(vec3 worldPos, uint faceDirection, int layer, float scr
     float sunElevation = max(cloudShadowSun.y, 0.18);
     vec2 projected = blockCenter.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
-    return cloudMaskSample(uv, layer);
+    float layerWeight = layer == 0 ? 1.0 : (layer == 1 ? 0.65 : 0.35);
+    return cloudMaskSample(uv, layer) * layerWeight;
 }
 float cloudShadowCoverage(vec3 worldPos, uint faceDirection) {
     float r = cloudLayerCoverage(worldPos, faceDirection, 0, cloudShadowScrollU.x, cloudShadowScrollV.x, cloudShadowAltitudes.x);
@@ -1870,7 +1876,7 @@ void main() {
 layout(location=0) in vec3 vRayDirection;
 layout(set=0, binding=0) uniform SkyFog {
     vec4 fogColor;     // horizon/fog color (matches world fog so terrain fades in seamlessly)
-    vec2 fogRange;     // start, end (unused - sky is not distance-fogged)
+    vec2 weatherFog;   // x = visual weather haze strength, y unused
     vec4 sunDirectionTwilight; // xyz = sun direction, w = golden-hour intensity
     vec4 skyTop;       // overhead sky color
     vec4 skyBottom;    // below-horizon color
@@ -1908,6 +1914,10 @@ void main() {
         + pow(sunAlignment, 32.0) * 0.42)
         * lowSunFade * twilight * belowHorizonFade;
     col = mix(col, vec3(1.0, 0.55, 0.25), clamp(halo, 0.0, 0.72));
+    // Full fog strength completely veils the sky and the localized sun glow. During the fade,
+    // the sky washes smoothly toward its horizon haze color.
+    float hazeAmount = clamp(weatherFog.x, 0.0, 1.0);
+    col = mix(col, fogColor.rgb, hazeAmount);
     outColor = vec4(col, 1.0);
 }";
 
@@ -1922,7 +1932,7 @@ void main() {
                 new VertexElementDescription("aColor", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
 
             // Dedicated sky uniform; preserve the existing 80-byte std140 layout:
-            // fogColor(16) + fogRange(8, padded to 16) + sunDirectionTwilight(16) +
+            // fogColor(16) + weatherFog(8, padded to 16) + sunDirectionTwilight(16) +
             // skyTop(16) + skyBottom(16).
             _skyFogLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
                 new ResourceLayoutElementDescription("SkyFog", ResourceKind.UniformBuffer, ShaderStages.Fragment)));
@@ -1961,18 +1971,21 @@ void main() {
         {
             var factory = _gd.ResourceFactory;
 
-            // Sun/moon: pos(3) + uv(2), texture from set 1, additive blend, depth off (drawn on sky).
+            // Sun/moon: pos(3) + uv(2) + opacity, texture from set 1, depth off (drawn on sky).
             string celestialVs = @"#version 450
 layout(location=0) in vec3 aPosition;
 layout(location=1) in vec2 aUV;
+layout(location=2) in float aOpacity;
 layout(location=0) out vec2 vUV;
+layout(location=1) out float vOpacity;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
-void main() { vUV = aUV; gl_Position = projView * vec4(aPosition, 1.0); }";
+void main() { vUV = aUV; vOpacity = aOpacity; gl_Position = projView * vec4(aPosition, 1.0); }";
             string celestialFs = @"#version 450
 layout(location=0) in vec2 vUV;
+layout(location=1) in float vOpacity;
 layout(set=1, binding=0) uniform sampler2D uTex;
 layout(location=0) out vec4 outColor;
-void main() { outColor = texture(uTex, vUV); }";
+void main() { vec4 tex = texture(uTex, vUV); outColor = vec4(tex.rgb, tex.a * vOpacity); }";
             var cvSpirv = SpirvCompilation.CompileGlslToSpirv(celestialVs, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
             var cfSpirv = SpirvCompilation.CompileGlslToSpirv(celestialFs, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
             var celestialShaders = factory.CreateFromSpirv(
@@ -1980,7 +1993,8 @@ void main() { outColor = texture(uTex, vUV); }";
                 new ShaderDescription(ShaderStages.Fragment, cfSpirv.SpirvBytes, "main"));
             var celestialLayout = new VertexLayoutDescription(
                 new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
-                new VertexElementDescription("aUV", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float2));
+                new VertexElementDescription("aUV", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float2),
+                new VertexElementDescription("aOpacity", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float1));
             _celestialTextureLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
                 new ResourceLayoutElementDescription("uTex", ResourceKind.TextureReadOnly, ShaderStages.Fragment),
                 new ResourceLayoutElementDescription("uTexSampler", ResourceKind.Sampler, ShaderStages.Fragment)));
@@ -1998,7 +2012,7 @@ void main() { outColor = texture(uTex, vUV); }";
             };
             _celestialPipeline = factory.CreateGraphicsPipeline(celestialPipelineDesc);
             _celestialVertexBuffer = factory.CreateBuffer(new BufferDescription(
-                8 * 5 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+                8 * 6 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
             _celestialIndexBuffer = factory.CreateBuffer(new BufferDescription(
                 12 * sizeof(ushort), BufferUsage.IndexBuffer));
             _gd.UpdateBuffer(_celestialIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7 });
@@ -2259,7 +2273,6 @@ void main() {
                 layer.InstanceBuffer = factory.CreateBuffer(new BufferDescription(
                     (uint)(layer.InstanceScratch.Length * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
             }
-            RebuildCloudGeometry(_cloudSeed);
         }
 
         // Generate a deterministic, hard-thresholded 32x32 coarse field for one layer. Different
@@ -2316,11 +2329,51 @@ void main() {
         // Build independent closed, shaded prisms for each altitude. Neighboring side faces are
         // omitted where another puff reaches the same height; exposed height steps remain visible.
         // Neighbor lookup wraps so repeated tile boundaries join consistently.
-        private void RebuildCloudGeometry(int seed)
+        private void RebuildCloudGeometry(int seed, CloudWeatherProfile profile)
         {
-            foreach (var layer in _cloudLayers)
+            var settings = CloudProfileSettings[(int)profile];
+            for (int i = 0; i < _cloudLayers.Length; i++)
+            {
+                var layer = _cloudLayers[i];
+                var layerSettings = settings[i];
+                layer.CoverageThreshold = layerSettings.CoverageThreshold;
+                layer.MinHeight = layerSettings.MinHeight;
+                layer.MaxHeight = layerSettings.MaxHeight;
+                layer.Opacity = layerSettings.Opacity;
                 RebuildCloudLayerGeometry(layer, unchecked(seed ^ layer.SeedSalt));
+            }
             UploadCloudShadowMask();
+        }
+
+        private void UpdateCloudWeatherProfile()
+        {
+            long dayIndex = GetMidnightAlignedWeatherDayIndex(_hud.WorldTime);
+            if (_cloudWeatherDayIndex == dayIndex) return;
+
+            int profileIndex = GetUniformCloudWeatherProfileIndex(_cloudSeed, dayIndex);
+            var profile = (CloudWeatherProfile)profileIndex;
+            int cloudWeatherSeed = unchecked(_cloudSeed ^ (int)0xC10D5EEDu);
+            int daySeed = unchecked(_cloudSeed ^ (int)HashFogDay(cloudWeatherSeed, dayIndex));
+            RebuildCloudGeometry(daySeed, profile);
+            _cloudWeatherProfile = profile;
+            _cloudWeatherDayIndex = dayIndex;
+        }
+
+        private static int GetUniformCloudWeatherProfileIndex(int worldSeed, long dayIndex)
+        {
+            // Rejection sampling avoids modulo bias while keeping the roll deterministic.
+            const uint acceptedRollCount = 4_294_967_292u; // largest multiple of six below 2^32
+            uint attempt = 0;
+            uint roll;
+            do
+            {
+                int rollSeed = unchecked((worldSeed ^ (int)0xC10D5EEDu) + (int)(attempt * 0x9E3779B9u));
+                roll = HashFogDay(rollSeed, dayIndex);
+                attempt++;
+            }
+            while (roll >= acceptedRollCount);
+
+            return (int)(roll % 6u);
         }
 
         private void RebuildCloudLayerGeometry(CloudLayer layer, int seed)
@@ -2524,6 +2577,8 @@ void main() {
         // rebuilding the puff geometry each frame.
         private void UpdateCloudScroll()
         {
+            UpdateCloudWeatherProfile();
+
             float now = (float)_cloudClock.Elapsed.TotalSeconds;
             float deltaTime = Math.Max(0f, now - _lastCloudTime);
             _lastCloudTime = now;
@@ -2584,7 +2639,9 @@ void main() {
 
                 layer.Params[0] = camX;
                 layer.Params[1] = camZ;
-                layer.Params[2] = layer.Opacity * Math.Max(_nightSkyDim, 0.02f);
+                // The shared opacity drives both the depth prepass cutoff and the color pass.
+                layer.Params[2] = layer.Opacity * Math.Max(_nightSkyDim, 0.02f)
+                    * (1f - _fogWeatherStrength);
                 layer.Params[3] = extent;
                 layer.Params[4] = CloudFadeWidth;
                 layer.Params[5] = CloudTileSize;

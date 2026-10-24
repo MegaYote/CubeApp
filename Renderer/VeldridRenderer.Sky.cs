@@ -13,14 +13,17 @@ namespace Cubuild.Renderer
         {
             ComputeNightFactors();
 
-            float fogEnd = _fogEnd;
+            float sunAngle = ComputeNightCelestialAngle() * MathF.PI * 2f;
+            float sunY = MathF.Cos(sunAngle);
+            float sunZ = MathF.Sin(sunAngle);
+            float fogEnd = GetFoggyMorningEnd();
+            // The chosen fog day starts its fade at the day-counter boundary. Sky, sun and cloud
+            // obscuration use the full fade amount for either preset; Short/Tiny changes only range.
+            _fogWeatherStrength = _fogDebugFoggy ? _fogDebugEffectBlend : 0f;
             // 25% of fogEnd: the fog start. Cave walls are within a few blocks, so
             // the fog factor there is ~0.96-1.0 (clear). Fog only ramps up toward the horizon.
             float fogStart = fogEnd * 0.25f;
 
-            float sunAngle = ComputeNightCelestialAngle() * MathF.PI * 2f;
-            float sunY = MathF.Cos(sunAngle);
-            float sunZ = MathF.Sin(sunAngle);
             // This gates a localized halo around the sun; it does not tint the rest of the sky.
             float twilightT = Math.Clamp((0.68f - MathF.Abs(sunY)) / 0.56f, 0f, 1f);
             float twilight = twilightT * twilightT * (3f - 2f * twilightT) * _nightSkyDim;
@@ -85,14 +88,14 @@ namespace Cubuild.Renderer
             }
             _gd.UpdateBuffer(_fogBuffer, 0, _fogParams);
 
-            // Sky fog uses the SAME range + color so the horizon blends with terrain. Keep the
-            // existing uniform packing: fogColor, fogRange, sunDirectionTwilight, skyTop, skyBottom.
+            // Carry weather haze strength in the existing (previously unused) SkyFog vec2 while
+            // retaining the same 80-byte uniform packing and all later field offsets.
             _skyFogParams[0] = fogR;
             _skyFogParams[1] = fogG;
             _skyFogParams[2] = fogB;
             _skyFogParams[3] = 1f;
-            _skyFogParams[4] = fogStart;
-            _skyFogParams[5] = fogEnd;
+            _skyFogParams[4] = _fogWeatherStrength;
+            _skyFogParams[5] = 0f;
             // Carry the world-space sun direction and twilight amount so the fragment shader can
             // place a local halo.
             _skyFogParams[8] = 0f;
@@ -109,6 +112,74 @@ namespace Cubuild.Renderer
             _skyFogParams[18] = fogB * 0.6f + 0.1f;
             _skyFogParams[19] = 1f;
             _gd.UpdateBuffer(_skyFogBuffer, 0, _skyFogParams);
+        }
+
+        // A seeded roll per fourth in-game day keeps weather stable across frames and saves.
+        // Weather changes the effective fragment fog range plus visual haze/opacity only; render
+        // distance, chunk streaming and sky projection continue using normal settings. One-based
+        // days make Day 4 the first eligible morning.
+        private float GetFoggyMorningEnd()
+        {
+            const long dayLengthTicks = 24000;
+            const long fogEveryDays = 4;
+            long worldTime = Math.Max(0L, _hud.WorldTime);
+            // Minecraft's sky cycle reaches midnight at tick 18000. Fog and clouds share this
+            // same midnight-aligned day index.
+            long fogDayIndex = GetMidnightAlignedWeatherDayIndex(worldTime);
+            _fogDebugScheduleDay = fogDayIndex + 1;
+            _fogDebugEligible = _fogDebugScheduleDay % fogEveryDays == 0;
+            _fogDebugFoggy = false;
+            _fogDebugTargetEnd = _fogEnd;
+            _fogDebugBlend = 0f;
+            _fogDebugEffectBlend = 0f;
+            _fogDebugEffectiveEnd = _fogEnd;
+            if (!_fogDebugEligible)
+                return _fogEnd;
+
+            uint roll = HashFogDay(_hud.WorldSeed, fogDayIndex);
+            if (roll % 5u != 0u)
+                return _fogEnd;
+            _fogDebugFoggy = true;
+
+            // The existing Short and Tiny presets are 4 and 2 chunks. This is a temporary fog
+            // distance only; the actual preset and loaded chunk radius are never changed.
+            float foggyEnd = ((roll >> 8) & 1u) == 0u ? 64f : 32f;
+            _fogDebugTargetEnd = foggyEnd;
+
+            // The fade counter starts at midnight and advances across the full 24000-tick cycle.
+            // A short tail fade returns to normal immediately before the next midnight.
+            long fogDayStart = fogDayIndex * dayLengthTicks - 6000;
+            long fogElapsedTicks = Math.Max(0L, worldTime - fogDayStart);
+            float fadeProgress = Math.Clamp(fogElapsedTicks / (float)dayLengthTicks, 0f, 1f);
+            _fogDebugBlend = fadeProgress;
+            const float fadeOutStartProgress = 0.95f;
+            float fadeOutT = Math.Clamp((fadeProgress - fadeOutStartProgress) / (1f - fadeOutStartProgress), 0f, 1f);
+            float fadeOut = 1f - fadeOutT * fadeOutT * (3f - 2f * fadeOutT);
+            float fadeIn = fadeProgress;
+            _fogDebugEffectBlend = fadeIn * fadeOut;
+            _fogDebugEffectiveEnd = _fogEnd + (foggyEnd - _fogEnd) * _fogDebugEffectBlend;
+            return _fogDebugEffectiveEnd;
+        }
+
+        private static uint HashFogDay(int worldSeed, long dayIndex)
+        {
+            unchecked
+            {
+                ulong value = (uint)worldSeed ^ (0x9E3779B97F4A7C15UL * ((ulong)dayIndex + 1UL));
+                value = (value ^ (value >> 30)) * 0xBF58476D1CE4E5B9UL;
+                value = (value ^ (value >> 27)) * 0x94D049BB133111EBUL;
+                value ^= value >> 31;
+                return (uint)(value ^ (value >> 32));
+            }
+        }
+
+        private static long GetMidnightAlignedWeatherDayIndex(long worldTime)
+        {
+            const long dayLengthTicks = 24000;
+            long nonnegativeTime = Math.Max(0L, worldTime);
+            long cycleIndex = nonnegativeTime / dayLengthTicks;
+            long timeOfDay = nonnegativeTime % dayLengthTicks;
+            return cycleIndex + (timeOfDay >= 18000 ? 1L : 0L);
         }
 
         // Day/night dimming. The world light multiplier follows the night-dim level (0..11, how
@@ -217,9 +288,10 @@ namespace Cubuild.Renderer
             // with the SAME offset-0 data was the bug: both draws used verts 0-3, so the moon
             // always rendered on top of the sun regardless of the y position given.
             var v = _celestialVertexScratch;
-            if (v.Length < 40) v = _celestialVertexScratch = new float[40];
-            WriteCelestialQuad(v, 0, cosA, sinA, 100f, 15f, 0f, 0f, 1f, 1f);   // sun
-            WriteCelestialQuad(v, 4, cosA, sinA, -100f, 10f, 1f, 0f, 0f, 1f);  // moon
+            if (v.Length < 48) v = _celestialVertexScratch = new float[48];
+            float celestialOpacity = 1f - _fogWeatherStrength;
+            WriteCelestialQuad(v, 0, cosA, sinA, 100f, 15f, 0f, 0f, 1f, 1f, celestialOpacity);   // sun
+            WriteCelestialQuad(v, 4, cosA, sinA, -100f, 10f, 1f, 0f, 0f, 1f, celestialOpacity);  // moon
             _gd.UpdateBuffer(_celestialVertexBuffer, 0, v);
 
             cl.SetPipeline(_celestialPipeline);
@@ -240,7 +312,7 @@ namespace Cubuild.Renderer
         // celestial arc so it orbits the sky as the angle changes. This matches how MC actually
         // draws them: a flat sprite always facing the player, riding the sun/moon path.
         private static void WriteCelestialQuad(float[] v, int index, float cosA, float sinA,
-            float centerY, float size, float u0, float v0, float u1, float v1)
+            float centerY, float size, float u0, float v0, float u1, float v1, float opacity)
         {
             // The sun/moon are FIXED horizontal XZ quads at
             // y=+100 (sun) / y=-100 (moon), and the celestial angle is a modelview rotation about
@@ -257,7 +329,7 @@ namespace Cubuild.Renderer
             };
             for (int c = 0; c < 4; c++)
             {
-                int o = (index + c) * 5;
+                int o = (index + c) * 6;
                 float x = corners[c].x;
                 float z = corners[c].z;
                 // Rotate (x, centerY, z) around X: x'=x, y'=y*cosA - z*sinA, z'=y*sinA + z*cosA
@@ -266,6 +338,7 @@ namespace Cubuild.Renderer
                 v[o + 2] = centerY * sinA + z * cosA;
                 v[o + 3] = (c == 0 || c == 3) ? u0 : u1;
                 v[o + 4] = (c == 0 || c == 1) ? v0 : v1;
+                v[o + 5] = opacity;
             }
         }
 

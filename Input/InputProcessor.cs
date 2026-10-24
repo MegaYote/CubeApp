@@ -19,7 +19,8 @@ namespace Cubuild
         public bool SpawnZombiePressed { get; }
         public bool DamageSelfPressed { get; }
         public bool ToggleThirdPersonPressed { get; }
-        public bool ToggleFlyPressed { get; }
+        public bool ToggleNoclipPressed { get; }
+        public bool ToggleCreativeFlightPressed { get; }
         public bool ToggleFullbrightPressed { get; }
         public bool AdvanceTimePressed { get; }
         public bool ToggleGpuCullPressed { get; }
@@ -44,7 +45,8 @@ namespace Cubuild
             bool spawnZombiePressed,
             bool damageSelfPressed,
             bool toggleThirdPersonPressed,
-            bool toggleFlyPressed,
+            bool toggleNoclipPressed,
+            bool toggleCreativeFlightPressed,
             bool toggleFullbrightPressed,
             bool advanceTimePressed,
             bool toggleGpuCullPressed,
@@ -68,7 +70,8 @@ namespace Cubuild
             SpawnZombiePressed = spawnZombiePressed;
             DamageSelfPressed = damageSelfPressed;
             ToggleThirdPersonPressed = toggleThirdPersonPressed;
-            ToggleFlyPressed = toggleFlyPressed;
+            ToggleNoclipPressed = toggleNoclipPressed;
+            ToggleCreativeFlightPressed = toggleCreativeFlightPressed;
             ToggleFullbrightPressed = toggleFullbrightPressed;
             AdvanceTimePressed = advanceTimePressed;
             ToggleGpuCullPressed = toggleGpuCullPressed;
@@ -93,6 +96,9 @@ namespace Cubuild
         public bool MoveDown { get; }
         public bool BreakHeld { get; }
         public bool PlaceHeld { get; }
+        public bool NoclipMode { get; }
+        public bool CreativeFlightMode { get; }
+        public bool MoveFast { get; }
         public Vector2 LookDelta { get; }
 
         public TickInputState(
@@ -105,7 +111,10 @@ namespace Cubuild
             bool moveDown,
             bool breakHeld,
             bool placeHeld,
-            Vector2 lookDelta)
+            Vector2 lookDelta,
+            bool noclipMode = false,
+            bool creativeFlightMode = false,
+            bool moveFast = false)
         {
             MoveForward = moveForward;
             MoveBackward = moveBackward;
@@ -116,8 +125,15 @@ namespace Cubuild
             MoveDown = moveDown;
             BreakHeld = breakHeld;
             PlaceHeld = placeHeld;
+            NoclipMode = noclipMode;
+            CreativeFlightMode = creativeFlightMode;
+            MoveFast = moveFast;
             LookDelta = lookDelta;
         }
+
+        public TickInputState WithFlightModes(bool noclipMode, bool creativeFlightMode) => new(
+            MoveForward, MoveBackward, MoveLeft, MoveRight, JumpPressed, MoveUp, MoveDown,
+            BreakHeld, PlaceHeld, LookDelta, noclipMode, creativeFlightMode && !noclipMode, MoveFast);
     }
 
     // Collects per-frame snapshots and exposes deterministic per-tick input for fixed-step simulation.
@@ -136,7 +152,10 @@ namespace Cubuild
         private const int SDL_SCANCODE_D = 7;
         private const int SDL_SCANCODE_SPACE = 44;
         private const int SDL_SCANCODE_LSHIFT = 225;
+        private const int SDL_SCANCODE_LCTRL = 224;
+        private const int SDL_SCANCODE_RCTRL = 228;
         private const int SDL_SCANCODE_SLASH = 56; // forward slash /
+        private const long SpaceDoubleTapWindowMs = 300;
 
         private bool moveForward;
         private bool moveBackward;
@@ -145,6 +164,7 @@ namespace Cubuild
         private bool jumpPressed;
         private bool moveUp;
         private bool moveDown;
+        private bool moveFast;
 
         private bool toggleMouseCapturePressed;
         private bool toggleDebugPressed;
@@ -158,7 +178,8 @@ namespace Cubuild
         private bool spawnZombiePressed;
         private bool damageSelfPressed;
         private bool toggleThirdPersonPressed;
-        private bool toggleFlyPressed;
+        private bool toggleNoclipPressed;
+        private bool toggleCreativeFlightPressed;
         private bool toggleFullbrightPressed;
         private bool advanceTimePressed;
         private bool toggleGpuCullPressed;
@@ -174,6 +195,8 @@ namespace Cubuild
         private Vector2 lookDeltaAccum;
         private Vector2 lastMousePosition;
         private bool hasLastMousePosition;
+        private bool spaceWasDown;
+        private long lastSpaceTapMs = -1;
 
         public void BeginFrame()
         {
@@ -189,7 +212,8 @@ namespace Cubuild
             spawnZombiePressed = false;
             damageSelfPressed = false;
             toggleThirdPersonPressed = false;
-            toggleFlyPressed = false;
+            toggleNoclipPressed = false;
+            toggleCreativeFlightPressed = false;
             toggleFullbrightPressed = false;
             toggleFullscreenPressed = false;
             toggleCreativePressed = false;
@@ -211,6 +235,7 @@ namespace Cubuild
             // key-repeat events for one key when another is pressed.  SDL_GetKeyboardState
             // reads the hardware state and always reflects reality.
             IntPtr keyStatePtr = SDL_GetKeyboardState(out int numkeys);
+            bool spaceDown;
             unsafe
             {
                 byte* keyState = (byte*)keyStatePtr;
@@ -219,12 +244,33 @@ namespace Cubuild
                 moveLeft = keyState[SDL_SCANCODE_A] != 0;
                 moveRight = keyState[SDL_SCANCODE_D] != 0;
                 moveUp = keyState[SDL_SCANCODE_SPACE] != 0;
+                spaceDown = moveUp;
                 moveDown = keyState[SDL_SCANCODE_LSHIFT] != 0;
+                moveFast = keyState[SDL_SCANCODE_LCTRL] != 0 || keyState[SDL_SCANCODE_RCTRL] != 0;
 
                 // jumpPressed is consumed each tick (one-shot).  Set it whenever Space is
                 // physically held so StepPlayer can trigger a jump each time the player lands.
                 jumpPressed = keyState[SDL_SCANCODE_SPACE] != 0;
             }
+
+            if (!mouseCaptured)
+            {
+                lastSpaceTapMs = -1;
+            }
+            else if (spaceDown && !spaceWasDown)
+            {
+                long nowMs = Environment.TickCount64;
+                if (lastSpaceTapMs >= 0 && nowMs - lastSpaceTapMs <= SpaceDoubleTapWindowMs)
+                {
+                    toggleCreativeFlightPressed = true;
+                    lastSpaceTapMs = -1;
+                }
+                else
+                {
+                    lastSpaceTapMs = nowMs;
+                }
+            }
+            spaceWasDown = spaceDown;
 
             // Process key events only for non-movement actions (toggles, one-shots).
             foreach (var keyEvent in snapshot.KeyEvents)
@@ -290,7 +336,7 @@ namespace Cubuild
                         toggleCreativePressed = true;
                         break;
                     case Key.F2:
-                        toggleFlyPressed = true;
+                        toggleNoclipPressed = true;
                         break;
                     case Key.Number1:
                         selectedSlot = 0;
@@ -415,7 +461,8 @@ namespace Cubuild
                 spawnZombiePressed,
                 damageSelfPressed,
                 toggleThirdPersonPressed,
-                toggleFlyPressed,
+                toggleNoclipPressed,
+                toggleCreativeFlightPressed,
                 toggleFullbrightPressed,
                 advanceTimePressed,
                 toggleGpuCullPressed,
@@ -439,7 +486,8 @@ namespace Cubuild
             spawnZombiePressed = false;
             damageSelfPressed = false;
             toggleThirdPersonPressed = false;
-            toggleFlyPressed = false;
+            toggleNoclipPressed = false;
+            toggleCreativeFlightPressed = false;
             toggleFullbrightPressed = false;
             advanceTimePressed = false;
             toggleGpuCullPressed = false;
@@ -460,7 +508,7 @@ namespace Cubuild
             return look;
         }
 
-        public TickInputState CaptureTickInput()
+        public TickInputState CaptureTickInput(bool noclipMode = false, bool creativeFlightMode = false)
         {
             var result = new TickInputState(
                 moveForward,
@@ -472,7 +520,10 @@ namespace Cubuild
                 moveDown,
                 breakHeld,
                 placeHeld,
-                Vector2.Zero);
+                Vector2.Zero,
+                noclipMode,
+                creativeFlightMode,
+                moveFast);
 
             jumpPressed = false;
 

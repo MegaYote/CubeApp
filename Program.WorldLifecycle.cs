@@ -32,12 +32,12 @@ namespace Cubuild
             World.Mode = mode;
             World.IsMinecraftMode = isMinecraftMode;
             World.FrontierProgression = isMinecraftMode && frontierProgression;
-            // Both modes start with an empty hotbar; creative starts grounded unless fly is toggled.
-            World.FlyMode = false;
+            // Both modes start with an empty hotbar; flight states never carry across worlds.
+            World.ResetFlightModes();
             for (int i = 0; i < GameWorld.HotbarSlots; i++) World.Hotbar[i] = BlockRegistry.AirId;
             World.SelectedBlock = BlockRegistry.AirId;
             World.SelectedSlot = 0;
-            // Both modes start grounded unless fly is toggled.
+            // Both modes start grounded unless a flight mode is toggled.
             World.ChunkGenerated += OnChunkGenerated;
             World.ChunkUnloaded += OnChunkUnloaded;
             if (gpuRenderer != null)

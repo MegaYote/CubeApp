@@ -389,7 +389,8 @@ namespace Cubuild.Renderer
             // Process priority uploads (player edits) first - no limit for instant feedback
             while (_pendingPriorityUploads.TryDequeue(out var pu))
             {
-                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices, pu.TransparentVertices, pu.TransparentIndices, pu.SurfaceLodVertices, pu.SurfaceLodIndices);
+                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices,
+                    pu.TransparentVertices, pu.TransparentIndices, pu.TransparentNonTopIndexCount, pu.SurfaceLodVertices, pu.SurfaceLodIndices);
             }
 
             // Stream pending chunk meshes: always take the guaranteed minimum, then keep going
@@ -400,7 +401,8 @@ namespace Cubuild.Renderer
             double ticksPerMs = System.Diagnostics.Stopwatch.Frequency / 1000.0;
             while (_pendingUploads.TryDequeue(out var pu))
             {
-                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices, pu.TransparentVertices, pu.TransparentIndices, pu.SurfaceLodVertices, pu.SurfaceLodIndices);
+                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices,
+                    pu.TransparentVertices, pu.TransparentIndices, pu.TransparentNonTopIndexCount, pu.SurfaceLodVertices, pu.SurfaceLodIndices);
                 uploadsThisFrame++;
                 if (uploadsThisFrame >= _maxUploadsPerFrame
                     && (System.Diagnostics.Stopwatch.GetTimestamp() - uploadStartTicks) / ticksPerMs >= UploadBudgetMs)
@@ -495,7 +497,8 @@ namespace Cubuild.Renderer
             // alpha-testing and depth-writing so nearer quads occlude farther ones; glass alpha-tests
             // without depth-writing, so its chunks are sorted back-to-front (far first) like
             // Cubuild/THREE does for transparent objects - otherwise a far chunk drawn after a near
-            // one would paint its frame on top. Water blends last, likewise sorted.
+            // one would paint its frame on top. Water blends last, with all non-top faces before
+            // the globally sorted surface-top ranges.
             if (_megaVertexBuffer != null && _megaIndexBuffer != null)
             {
                 DrawWorldPass(cl, _drawCommands, _indirectScratch, _pipeline, ref _opaqueCullData);
@@ -517,10 +520,17 @@ namespace Cubuild.Renderer
                 DrawDucks(cl);
                 DrawPlayers(cl);
                 DrawModelMobs(cl);
-                if (_transparentDrawCommands.Count > 0)
+                if (_transparentNonTopDrawCommands.Count > 0)
                 {
-                    SortPassBackToFront(SortPassWater, _transparentDrawCommands);
-                    DrawWorldPass(cl, _transparentDrawCommands, _transparentIndirectScratch, _transparentPipeline, ref _transparentCullData);
+                    SortPassBackToFront(SortPassWaterNonTop, _transparentNonTopDrawCommands);
+                    DrawWorldPass(cl, _transparentNonTopDrawCommands, _transparentNonTopIndirectScratch,
+                        _transparentPipeline, ref _transparentNonTopCullData);
+                }
+                if (_transparentTopDrawCommands.Count > 0)
+                {
+                    SortPassBackToFront(SortPassWaterTop, _transparentTopDrawCommands);
+                    DrawWorldPass(cl, _transparentTopDrawCommands, _transparentTopIndirectScratch,
+                        _transparentPipeline, ref _transparentTopCullData);
                 }
                 // Translucent tint (colored glass) draws AFTER water so its semi-transparent pixels
                 // paint over the water/terrain behind it without depth-blocking anything.

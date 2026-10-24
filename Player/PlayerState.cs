@@ -12,7 +12,28 @@ namespace Cubuild
         public float Pitch;
         public Point3D Velocity;
         public bool Grounded;
-        public bool FlyMode;
+        private bool _noclipMode;
+        private bool _creativeFlightMode;
+        /// <summary>F2 noclip: free movement that bypasses block collision.</summary>
+        public bool NoclipMode
+        {
+            get => _noclipMode;
+            set
+            {
+                _noclipMode = value;
+                if (value) _creativeFlightMode = false;
+            }
+        }
+        /// <summary>Creative flight with gravity disabled but normal block collision retained.</summary>
+        public bool CreativeFlightMode
+        {
+            get => _creativeFlightMode;
+            set
+            {
+                _creativeFlightMode = value;
+                if (value) _noclipMode = false;
+            }
+        }
         /// <summary>Third-person body facing (radians). Lags the look yaw so the head can swivel
         /// independently like a real person turning.</summary>
         public float BodyYaw;

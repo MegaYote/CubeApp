@@ -229,7 +229,7 @@ namespace Cubuild
                 float camYaw = LocalPlayer.Yaw * (float)Math.PI / 180f;
                 float bodyYaw = LocalPlayer.BodyYaw;
                 float delta = NormalizeRadians(camYaw - bodyYaw);
-                float turnRate = (LocalPlayer.WalkAmount > 0.05f || LocalPlayer.FlyMode) ? 9f : 3f;
+                float turnRate = (LocalPlayer.WalkAmount > 0.05f || LocalPlayer.NoclipMode || LocalPlayer.CreativeFlightMode) ? 9f : 3f;
                 float maxStep = turnRate * deltaSeconds;
                 LocalPlayer.BodyYaw = Math.Abs(delta) <= maxStep ? camYaw : bodyYaw + Math.Sign(delta) * maxStep;
             }

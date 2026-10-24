@@ -8,8 +8,8 @@ namespace Cubuild
     {
         public void AdvanceTime()
         {
-            // T advances exactly one eighth of the 24000-tick daylight cycle (three in-game hours).
-            WorldTime += 24000 / 8;
+            // T advances 1/64 of a 24000-tick daylight cycle (one eighth of the previous step).
+            WorldTime += 24000 / 64;
             _worldTimeAccumulator = 0.0;
         }
 
@@ -70,6 +70,8 @@ namespace Cubuild
             {
                 // Remote players use the same physics; their input is applied by the network
                 // layer via ApplyRemoteInput (latest received TickInputState).
+                s.NoclipMode = IsCreative && s.PendingInput.NoclipMode;
+                s.CreativeFlightMode = IsCreative && !s.NoclipMode && s.PendingInput.CreativeFlightMode;
                 StepPlayer(s, s.PendingInput, deltaSeconds);
             }
         }
@@ -89,35 +91,51 @@ namespace Cubuild
                 return;
             }
 
-            if (p.FlyMode)
+            if (!IsCreative)
+            {
+                p.NoclipMode = false;
+                p.CreativeFlightMode = false;
+            }
+
+            if (p.NoclipMode)
             {
                 // Forward/back are HORIZONTAL: flatten the camera vector onto the XZ plane, exactly
                 // as the walk path below does, so looking down while flying ahead still moves you
                 // AHEAD instead of diving with the pitch. Altitude comes only from Space/Ctrl
-                // (MoveUp/MoveDown), which is why straight-and-level flight is possible at all.
+                // (Space/Left Shift), which is why straight-and-level flight is possible at all.
                 // Left/right were already horizontal (yaw only), so they needed no change.
-                var flyForward = GetCameraForward(p);
-                var flyHorizontal = new Point3D(flyForward.X, 0, flyForward.Z).Normalized();
-                var flyRight = GetCameraRight(p.Yaw);
-                var flyDir = new Point3D(0, 0, 0);
-                if (tickInput.MoveForward) flyDir += flyHorizontal;
-                if (tickInput.MoveBackward) flyDir -= flyHorizontal;
-                if (tickInput.MoveLeft) flyDir += flyRight;
-                if (tickInput.MoveRight) flyDir -= flyRight;
-                if (tickInput.MoveUp) flyDir += new Point3D(0, 1, 0);
-                if (tickInput.MoveDown) flyDir += new Point3D(0, -1, 0);
-                if (flyDir.X != 0 || flyDir.Y != 0 || flyDir.Z != 0)
+                var noclipForward = GetCameraForward(p);
+                var noclipHorizontal = new Point3D(noclipForward.X, 0, noclipForward.Z).Normalized();
+                var noclipRight = GetCameraRight(p.Yaw);
+                var noclipDirection = new Point3D(0, 0, 0);
+                if (tickInput.MoveForward) noclipDirection += noclipHorizontal;
+                if (tickInput.MoveBackward) noclipDirection -= noclipHorizontal;
+                if (tickInput.MoveLeft) noclipDirection += noclipRight;
+                if (tickInput.MoveRight) noclipDirection -= noclipRight;
+                if (tickInput.MoveUp) noclipDirection += new Point3D(0, 1, 0);
+                if (tickInput.MoveDown) noclipDirection += new Point3D(0, -1, 0);
+                if (noclipDirection.X != 0 || noclipDirection.Y != 0 || noclipDirection.Z != 0)
                 {
-                    double len = Math.Sqrt(flyDir.X * flyDir.X + flyDir.Y * flyDir.Y + flyDir.Z * flyDir.Z);
-                    flyDir *= 1.0 / len;
+                    double len = Math.Sqrt(noclipDirection.X * noclipDirection.X + noclipDirection.Y * noclipDirection.Y + noclipDirection.Z * noclipDirection.Z);
+                    noclipDirection *= 1.0 / len;
                 }
-                p.Velocity = flyDir * FlySpeed;
+                double noclipSpeed = NoclipSpeed * (tickInput.MoveFast ? 1.5 : 1.0);
+                p.Velocity = new Point3D(
+                    noclipDirection.X * noclipSpeed,
+                    noclipDirection.Y * noclipSpeed * (noclipDirection.Y > 0 ? 1.2 : 1.0),
+                    noclipDirection.Z * noclipSpeed);
                 p.Position = new Point3D(
                     p.Position.X + p.Velocity.X * deltaSeconds,
                     p.Position.Y + p.Velocity.Y * deltaSeconds,
                     p.Position.Z + p.Velocity.Z * deltaSeconds);
                 p.Grounded = false;
                 p.WalkAmount = 0f;
+                return;
+            }
+
+            if (p.CreativeFlightMode)
+            {
+                StepCreativeFlight(p, tickInput, deltaSeconds);
                 return;
             }
 
@@ -233,6 +251,62 @@ namespace Cubuild
             double hSpeed = Math.Sqrt(p.Velocity.X * p.Velocity.X + p.Velocity.Z * p.Velocity.Z);
             p.WalkAmount = (float)Math.Min(1.0, hSpeed / WalkSpeed);
             p.WalkPhase += deltaSeconds * p.WalkAmount * 10f;
+        }
+
+        // Separate from F2 noclip: creative flight keeps the player's collision box active and
+        // uses yaw-only movement, acceleration, and strong per-tick drag like Java creative mode.
+        private const double CreativeFlightSpeed = 5.6;
+        private const double CreativeFlightAcceleration = 42.0;
+        private const double CreativeFlightHorizontalDrag = 0.78;
+        private const double CreativeFlightVerticalDrag = 0.60;
+
+        private void StepCreativeFlight(PlayerState p, TickInputState tickInput, float deltaSeconds)
+        {
+            double yaw = p.Yaw * Math.PI / 180.0;
+            var forward = new Point3D(Math.Sin(yaw), 0, Math.Cos(yaw));
+            var right = GameWorld.GetCameraRight(p.Yaw);
+            var direction = Point3D.Zero;
+            if (tickInput.MoveForward) direction += forward;
+            if (tickInput.MoveBackward) direction -= forward;
+            if (tickInput.MoveLeft) direction += right;
+            if (tickInput.MoveRight) direction -= right;
+            if (tickInput.MoveUp) direction += new Point3D(0, 1, 0);
+            if (tickInput.MoveDown) direction += new Point3D(0, -1, 0);
+
+            bool hasInput = direction.X != 0 || direction.Y != 0 || direction.Z != 0;
+            if (hasInput) direction = direction.Normalized();
+
+            double dt = Math.Max(0, deltaSeconds);
+            double vx = p.Velocity.X * Math.Pow(CreativeFlightHorizontalDrag, dt * 20.0);
+            double vy = p.Velocity.Y * Math.Pow(CreativeFlightVerticalDrag, dt * 20.0);
+            double vz = p.Velocity.Z * Math.Pow(CreativeFlightHorizontalDrag, dt * 20.0);
+            if (hasInput)
+            {
+                double speedMultiplier = tickInput.MoveFast ? 1.5 : 1.0;
+                double targetSpeed = CreativeFlightSpeed * speedMultiplier;
+                var target = new Point3D(
+                    direction.X * targetSpeed,
+                    direction.Y * targetSpeed * (direction.Y > 0 ? 1.2 : 1.0),
+                    direction.Z * targetSpeed);
+                double dx = target.X - vx, dy = target.Y - vy, dz = target.Z - vz;
+                double distance = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                double maxStep = CreativeFlightAcceleration * dt;
+                if (distance <= maxStep)
+                {
+                    vx = target.X; vy = target.Y; vz = target.Z;
+                }
+                else if (distance > 0)
+                {
+                    double ratio = maxStep / distance;
+                    vx += dx * ratio; vy += dy * ratio; vz += dz * ratio;
+                }
+            }
+
+            p.Velocity = new Point3D(vx, vy, vz);
+            MovePlayerWithCollisions(p, p.Velocity * dt);
+            double horizontalSpeed = Math.Sqrt(p.Velocity.X * p.Velocity.X + p.Velocity.Z * p.Velocity.Z);
+            p.WalkAmount = (float)Math.Min(1.0, horizontalSpeed / WalkSpeed);
+            p.WalkPhase += (float)dt * p.WalkAmount * 10f;
         }
 
         private void MovePlayerWithCollisions(PlayerState p, Point3D displacement)

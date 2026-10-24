@@ -126,7 +126,7 @@ namespace Cubuild
                     }
                     else
                     {
-                        StepSimulation(input.CaptureTickInput(), (float)deltaSeconds);
+                        StepSimulation(input.CaptureTickInput(World?.NoclipMode ?? false, World?.CreativeFlightMode ?? false), (float)deltaSeconds);
                         MaybeAutosave((float)deltaSeconds);
                     }
                     var t1 = stageStopwatch.ElapsedTicks;

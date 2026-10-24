@@ -48,6 +48,16 @@ namespace Cubuild.Renderer
         private const int CloudShadowRowCount = CloudCoarseSize * CloudShadowLayerCount;
         private const int CloudShadowPackedVectorCount = (CloudShadowRowCount + 3) / 4;
         private readonly float[] _fogParams = new float[FogParamsValueCount + CloudShadowPackedVectorCount * 4];
+        // F3 diagnostics for the deterministic fog roll selected by the current in-game morning.
+        private long _fogDebugScheduleDay;
+        private bool _fogDebugEligible;
+        private bool _fogDebugFoggy;
+        private float _fogDebugTargetEnd;
+        private float _fogDebugBlend;
+        private float _fogDebugEffectBlend;
+        private float _fogDebugEffectiveEnd;
+        // Visual weather opacity/haze follows the temporary fog-day sunrise/sunset transition.
+        private float _fogWeatherStrength;
         // Day/night: computed from HudState.WorldTime each frame. _nightDim scales world light,
         // _nightSkyDim scales the fog color toward night dark.
         private float _nightDim = 1f;
@@ -112,11 +122,11 @@ namespace Cubuild.Renderer
         private DeviceBuffer _skyVertexBuffer;
         private DeviceBuffer _skyIndexBuffer;
         private float[] _skyVertexScratch = new float[28];      // four pos3+ray4 vertices, reused per frame
-        private float[] _celestialVertexScratch = new float[40]; // reused per frame (no alloc)
+        private float[] _celestialVertexScratch = new float[48]; // pos3+uv2+opacity per vertex, reused per frame
         private DeviceBuffer _skyFogBuffer;
         private ResourceLayout _skyFogLayout;
         private ResourceSet _skyFogSet;
-        private readonly float[] _skyFogParams = new float[20]; // fogColor(4)+fogRange(2)+sunDirectionTwilight(4)+skyTop(4)+skyBottom(4)
+        private readonly float[] _skyFogParams = new float[20]; // fogColor(4)+weatherFogStrength(2)+sunDirectionTwilight(4)+skyTop(4)+skyBottom(4)
         // Retained for stars, galaxies, and sun/moon; the background quad writes clip coordinates
         // directly and uses the camera basis below to reconstruct its world-space rays.
         private DeviceBuffer _skyMatrixBuffer;
@@ -207,10 +217,10 @@ namespace Cubuild.Renderer
         private sealed class CloudLayer
         {
             public readonly float WorldY;
-            public readonly float CoverageThreshold;
-            public readonly int MinHeight;
-            public readonly int MaxHeight;
-            public readonly float Opacity;
+            public float CoverageThreshold;
+            public int MinHeight;
+            public int MaxHeight;
+            public float Opacity;
             public readonly float DriftUPerSecond;
             public readonly float DriftVPerSecond;
             public readonly int SeedSalt;
@@ -254,6 +264,76 @@ namespace Cubuild.Renderer
         private const float CloudFadeWidth = 300f;    // outer-radius fade so the horizon line is soft
         private float _lastCloudTime;
         private readonly System.Diagnostics.Stopwatch _cloudClock = System.Diagnostics.Stopwatch.StartNew();
+        private long _cloudWeatherDayIndex = long.MinValue;
+        private CloudWeatherProfile _cloudWeatherProfile = CloudWeatherProfile.Cumulus;
+
+        private enum CloudWeatherProfile
+        {
+            Clear,
+            Cumulus,
+            Stratocumulus,
+            OvercastStratus,
+            Altocumulus,
+            Cirrus,
+        }
+
+        private readonly struct CloudLayerWeatherSettings
+        {
+            public readonly float CoverageThreshold;
+            public readonly int MinHeight;
+            public readonly int MaxHeight;
+            public readonly float Opacity;
+
+            public CloudLayerWeatherSettings(float coverageThreshold, int minHeight, int maxHeight, float opacity)
+            {
+                CoverageThreshold = coverageThreshold;
+                MinHeight = minHeight;
+                MaxHeight = maxHeight;
+                Opacity = opacity;
+            }
+        }
+
+        // Layer order is low, mid, high. Cumulus keeps the previously tuned low-puff baseline;
+        // inactive layers use a threshold that cannot be reached, so they cast no shadows either.
+        private static readonly CloudLayerWeatherSettings[][] CloudProfileSettings =
+        {
+            new[] // Clear
+            {
+                new CloudLayerWeatherSettings(1f, 1, 1, 0f),
+                new CloudLayerWeatherSettings(1f, 1, 1, 0f),
+                new CloudLayerWeatherSettings(1f, 1, 1, 0f),
+            },
+            new[] // Cumulus: scattered low puffs
+            {
+                new CloudLayerWeatherSettings(0.62f, 2, 5, 0.54f),
+                new CloudLayerWeatherSettings(1f, 1, 1, 0f),
+                new CloudLayerWeatherSettings(1f, 1, 1, 0f),
+            },
+            new[] // Stratocumulus: broken low and mid layers
+            {
+                new CloudLayerWeatherSettings(0.56f, 1, 3, 0.49f),
+                new CloudLayerWeatherSettings(0.63f, 1, 3, 0.36f),
+                new CloudLayerWeatherSettings(1f, 1, 1, 0f),
+            },
+            new[] // Overcast stratus: dense, broad low and mid cover
+            {
+                new CloudLayerWeatherSettings(0.39f, 1, 2, 0.62f),
+                new CloudLayerWeatherSettings(0.46f, 1, 2, 0.48f),
+                new CloudLayerWeatherSettings(1f, 1, 1, 0f),
+            },
+            new[] // Altocumulus: broken mid-level puffs
+            {
+                new CloudLayerWeatherSettings(1f, 1, 1, 0f),
+                new CloudLayerWeatherSettings(0.59f, 1, 3, 0.43f),
+                new CloudLayerWeatherSettings(1f, 1, 1, 0f),
+            },
+            new[] // Cirrus: sparse, thin high wisps
+            {
+                new CloudLayerWeatherSettings(1f, 1, 1, 0f),
+                new CloudLayerWeatherSettings(1f, 1, 1, 0f),
+                new CloudLayerWeatherSettings(0.76f, 1, 2, 0.23f),
+            },
+        };
 
         // ---- Crosshair (pixel-art, colour-INVERTING) --------------------------------------
         // Drawn as a tiny 2D pass with a SUBTRACT blend (out = white - background), so it always
@@ -417,16 +497,15 @@ namespace Cubuild.Renderer
         // sort only needs re-running when the camera crosses a chunk boundary - within a chunk the
         // distance order of far-to-near chunks doesn't change enough to matter, and skipping the
         // O(n log n) sort every frame is a real win (FPS roadmap #2).
-        // NOTE: the cache is PER-PASS (indexed by pass id). The glass, water and glass-tint passes
-        // each sort their own command lists; sharing one cache keyed only on (camChunk, count)
-        // made the water pass skip its sort whenever its chunk count matched the glass pass's,
-        // leaving the water list in a stale draw order (far water painting over near water).
+        // NOTE: the cache is PER-PASS (indexed by pass id). Glass, water non-top, water top and
+        // glass-tint each sort their own command lists.
         private static readonly int SortPassGlass = 0;
-        private static readonly int SortPassWater = 1;
-        private static readonly int SortPassGlassTint = 2;
-        private readonly int[] _lastSortChunkX = { int.MinValue, int.MinValue, int.MinValue };
-        private readonly int[] _lastSortChunkZ = { int.MinValue, int.MinValue, int.MinValue };
-        private readonly int[] _lastSortCount = { -1, -1, -1 };
+        private static readonly int SortPassWaterNonTop = 1;
+        private static readonly int SortPassWaterTop = 2;
+        private static readonly int SortPassGlassTint = 3;
+        private readonly int[] _lastSortChunkX = { int.MinValue, int.MinValue, int.MinValue, int.MinValue };
+        private readonly int[] _lastSortChunkZ = { int.MinValue, int.MinValue, int.MinValue, int.MinValue };
+        private readonly int[] _lastSortCount = { -1, -1, -1, -1 };
 
         private CommandList _commandList;
         private ImGuiRenderer _imguiRenderer;
@@ -590,6 +669,7 @@ namespace Cubuild.Renderer
             public float Size;
             public float TileX, TileY, TileW, TileH; // atlas pixels
             public float Brightness;
+            public byte SkyLightLevel, BlockLightLevel;
         }
         private readonly BlockParticle[] _particles = new BlockParticle[512];
         private int _particleCount;
@@ -697,6 +777,9 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             public uint VbBytes;
             public uint IbOffsetBytes;
             public uint IndexCount;
+            // Transparent ranges share one allocation; this marks the index boundary between
+            // non-top faces and top faces. It is unused for all other chunk ranges.
+            public uint NonTopIndexCount;
         }
 
         // Shared command metadata for chunk and aggregated-patch draws. ChunkSpan controls the
@@ -725,11 +808,13 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         private readonly List<DrawEntry> _drawCommands = new();
         private readonly List<DrawEntry> _cutoutDrawCommands = new();
         private readonly List<DrawEntry> _glassDrawCommands = new();
-        private readonly List<DrawEntry> _transparentDrawCommands = new();
+        private readonly List<DrawEntry> _transparentNonTopDrawCommands = new();
+        private readonly List<DrawEntry> _transparentTopDrawCommands = new();
         private IndirectDrawIndexedArguments[] _indirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
         private IndirectDrawIndexedArguments[] _cutoutIndirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
         private IndirectDrawIndexedArguments[] _glassIndirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
-        private IndirectDrawIndexedArguments[] _transparentIndirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
+        private IndirectDrawIndexedArguments[] _transparentNonTopIndirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
+        private IndirectDrawIndexedArguments[] _transparentTopIndirectScratch = Array.Empty<IndirectDrawIndexedArguments>();
         private bool _drawCommandsDirty = true;
 
         // GPU-assisted frustum culling: a compute pass reads each chunk's AABB + draw
@@ -759,7 +844,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         private uint[] _opaqueCullData = Array.Empty<uint>();
         private uint[] _cutoutCullData = Array.Empty<uint>();
         private uint[] _glassCullData = Array.Empty<uint>();
-        private uint[] _transparentCullData = Array.Empty<uint>();
+        private uint[] _transparentNonTopCullData = Array.Empty<uint>();
+        private uint[] _transparentTopCullData = Array.Empty<uint>();
         private readonly float[] _cullPlaneFloats = new float[24];
         private bool _gpuCullDataDirty = true;
 
@@ -802,12 +888,13 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             public ushort[] GlassIndices { get; }
             public uint[] TransparentVertices { get; }
             public ushort[] TransparentIndices { get; }
+            public uint TransparentNonTopIndexCount { get; }
             public uint[] SurfaceLodVertices { get; }
             public ushort[] SurfaceLodIndices { get; }
 
             public PendingUpload(Cubuild.ChunkCoordinates coord, uint[] vertices, ushort[] indices,
                 uint[] cutoutVertices, ushort[] cutoutIndices, uint[] glassVertices, ushort[] glassIndices,
-                uint[] transparentVertices, ushort[] transparentIndices,
+                uint[] transparentVertices, ushort[] transparentIndices, uint transparentNonTopIndexCount,
                 uint[]? surfaceLodVertices = null, ushort[]? surfaceLodIndices = null)
             {
                 Coord = coord;
@@ -819,6 +906,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 GlassIndices = glassIndices;
                 TransparentVertices = transparentVertices;
                 TransparentIndices = transparentIndices;
+                TransparentNonTopIndexCount = transparentNonTopIndexCount;
                 SurfaceLodVertices = surfaceLodVertices ?? Array.Empty<uint>();
                 SurfaceLodIndices = surfaceLodIndices ?? Array.Empty<ushort>();
             }
@@ -974,6 +1062,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         public void Dispose()
         {
             _chunkRanges.Clear();
+            _transparentRanges.Clear();
             _surfaceLodRanges.Clear();
             _surfaceLodMeshes.Clear();
             _surfacePatchRanges.Clear();
@@ -982,7 +1071,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             _drawCommands.Clear();
             _cutoutDrawCommands.Clear();
             _glassDrawCommands.Clear();
-            _transparentDrawCommands.Clear();
+            _transparentNonTopDrawCommands.Clear();
+            _transparentTopDrawCommands.Clear();
             _megaVertexBuffer?.Dispose();
             _megaIndexBuffer?.Dispose();
             _indirectBuffer?.Dispose();
@@ -1131,8 +1221,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
 
         public void UploadChunk(Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces)
         {
-            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr);
-            _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr));
+            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
+            _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr, transNonTopIndexCount));
         }
 
         public void UploadChunkWithLod(Cubuild.ChunkCoordinates coords,
@@ -1145,23 +1235,23 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 return;
             }
 
-            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr);
+            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
             uint[] lodVertices = Array.Empty<uint>();
             ushort[] lodIndices = Array.Empty<ushort>();
             if (surfaceLodFaces != null && surfaceLodFaces.Count > 0)
             {
-                BuildMesh(surfaceLodFaces, out lodVertices, out lodIndices, out _, out _, out _, out _, out _, out _);
+                BuildMesh(surfaceLodFaces, out lodVertices, out lodIndices, out _, out _, out _, out _, out _, out _, out _);
             }
             _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr,
-                lodVertices, lodIndices));
+                transNonTopIndexCount, lodVertices, lodIndices));
         }
 
         // Player edits jump the line: same vertex data, but enqueued on the priority queue that
         // ProcessPendingPriorityMeshes drains every frame for instant feedback.
         public void UploadChunkPriority(Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces)
         {
-            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr);
-            _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr));
+            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
+            _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr, transNonTopIndexCount));
         }
 
         // Priority remeshes for edited chunks and their neighbors use the same ordering as direct
@@ -1177,15 +1267,15 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 return;
             }
 
-            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr);
+            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
             uint[] lodVertices = Array.Empty<uint>();
             ushort[] lodIndices = Array.Empty<ushort>();
             if (surfaceLodFaces != null && surfaceLodFaces.Count > 0)
             {
-                BuildMesh(surfaceLodFaces, out lodVertices, out lodIndices, out _, out _, out _, out _, out _, out _);
+                BuildMesh(surfaceLodFaces, out lodVertices, out lodIndices, out _, out _, out _, out _, out _, out _, out _);
             }
             _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr,
-                lodVertices, lodIndices));
+                transNonTopIndexCount, lodVertices, lodIndices));
         }
 
         // Encodes an axis-aligned face normal into pack3's three cloud-shadow direction bits.
@@ -1211,13 +1301,15 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         //                   near quads occlude far ones
         //   0 <= a < 1   -> transparent (water) - blended, depth-write-free
         // Sizes are deterministic (4 verts + 6 indices per face), so the target arrays are filled
-        // directly - no List<T>, no ToArray() copies, no double allocation per chunk upload.
+        // directly - no List<T>, no ToArray() copies, no double allocation per chunk upload. The
+        // transparent range is packed with non-top faces first, then tops, and returns that boundary.
         private void BuildMesh(
             System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces,
             out uint[] vertsArr, out ushort[] indicesArr,
             out uint[] cutoutVertsArr, out ushort[] cutoutIndicesArr,
             out uint[] glassVertsArr, out ushort[] glassIndicesArr,
-            out uint[] transVertsArr, out ushort[] transIndicesArr)
+            out uint[] transVertsArr, out ushort[] transIndicesArr,
+            out uint transNonTopIndexCount)
         {
             // vertex layout: position(3 floats) + aPack1(1 uint) + aPack2(1 uint) + aPack3(1 uint)
             // = 6 uint32s per vertex (24 bytes), decoded in the vertex shader.
@@ -1225,11 +1317,18 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             int opaqueFaces = 0;
             int cutoutFaces = 0;
             int glassFaces = 0;
+            int transNonTopFaces = 0;
+            int transTopFaces = 0;
             for (int i = 0; i < faceCount; i++)
             {
                 if (faces[i].Alpha >= 1f) opaqueFaces++;
                 else if (faces[i].Alpha < -10f) glassFaces++;
                 else if (faces[i].Alpha < 0f) cutoutFaces++;
+                else if (faces[i].Alpha < 1f)
+                {
+                    if (faces[i].Normal.Y > 0.5) transTopFaces++;
+                    else transNonTopFaces++;
+                }
             }
             int transFaces = faceCount - opaqueFaces - cutoutFaces - glassFaces;
 
@@ -1247,16 +1346,19 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             int opaqueFace = 0;
             int cutoutFace = 0;
             int glassFace = 0;
-            int transFace = 0;
+            int transNonTopFace = 0;
+            int transTopFace = 0;
             for (int fi = 0; fi < faceCount; fi++)
             {
                 var f = faces[fi];
                 bool isGlass = f.Alpha < -10f;
                 bool isCutout = !isGlass && f.Alpha < 0f;
                 bool isTrans = !isGlass && !isCutout && f.Alpha < 1f;
+                bool isTransTop = isTrans && f.Normal.Y > 0.5;
                 var dstVerts = isGlass ? glassVerts : (isCutout ? cutoutVerts : (isTrans ? transVerts : verts));
                 var dstIndices = isGlass ? glassIndices : (isCutout ? cutoutIndices : (isTrans ? transIndices : indices));
-                int faceIdx = isGlass ? glassFace : (isCutout ? cutoutFace : (isTrans ? transFace : opaqueFace));
+                int faceIdx = isGlass ? glassFace : (isCutout ? cutoutFace :
+                    (isTrans ? (isTransTop ? transNonTopFaces + transTopFace : transNonTopFace) : opaqueFace));
                 int vertexStart = faceIdx * 4;
 
                 vertsSpan[0] = f.V0;
@@ -1411,7 +1513,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
 
                 if (isGlass) glassFace++;
                 else if (isCutout) cutoutFace++;
-                else if (isTrans) transFace++;
+                else if (isTransTop) transTopFace++;
+                else if (isTrans) transNonTopFace++;
                 else opaqueFace++;
             }
 
@@ -1423,6 +1526,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             glassIndicesArr = glassIndices;
             transVertsArr = transVerts;
             transIndicesArr = transIndices;
+            transNonTopIndexCount = (uint)(transNonTopFaces * 6);
         }
 
         public void RemoveChunk(Cubuild.ChunkCoordinates coords)
@@ -1728,8 +1832,11 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         /// starts, so every world has its own sky.</summary>
         public void SetWorldSeed(int seed)
         {
-            _cloudSeed = seed;
-            if (_cloudPipeline != null) RebuildCloudGeometry(seed);
+            if (_cloudSeed != seed)
+            {
+                _cloudSeed = seed;
+                _cloudWeatherDayIndex = long.MinValue;
+            }
             _galaxySeed = int.MinValue; // force galaxies to rebuild from the new seed
         }
 
@@ -1739,7 +1846,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         {
             while (_pendingPriorityUploads.TryDequeue(out var pu))
             {
-                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices, pu.TransparentVertices, pu.TransparentIndices, pu.SurfaceLodVertices, pu.SurfaceLodIndices);
+                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices,
+                    pu.TransparentVertices, pu.TransparentIndices, pu.TransparentNonTopIndexCount, pu.SurfaceLodVertices, pu.SurfaceLodIndices);
             }
         }
 
@@ -1794,7 +1902,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             _drawCommands.Clear();
             _cutoutDrawCommands.Clear();
             _glassDrawCommands.Clear();
-            _transparentDrawCommands.Clear();
+            _transparentNonTopDrawCommands.Clear();
+            _transparentTopDrawCommands.Clear();
             _vbTailBytes = 0;
             _ibTailBytes = 0;
             _drawCommandsDirty = true;
@@ -1802,7 +1911,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         }
 
         // Spawns little textured cubes of the block's tile flying out of a broken block.
-        public void SpawnBlockBreakParticles(int worldX, int worldY, int worldZ, int blockId, int count)
+        public void SpawnBlockBreakParticles(int worldX, int worldY, int worldZ, int blockId, int count,
+            int skyLightLevel = 0, int blockLightLevel = 0)
         {
             var def = BlockRegistry.GetById(blockId);
             var tile = def.AllTexture;
@@ -1831,6 +1941,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 p.TileW = pieceW;
                 p.TileH = pieceH;
                 p.Brightness = (float)(0.85 + Random.Shared.NextDouble() * 0.15);
+                p.SkyLightLevel = (byte)Math.Clamp(skyLightLevel, 0, 15);
+                p.BlockLightLevel = (byte)Math.Clamp(blockLightLevel, 0, 15);
             }
         }
 

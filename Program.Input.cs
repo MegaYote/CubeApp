@@ -70,13 +70,15 @@ namespace Cubuild
             if (frameInput.ToggleCreativePressed && World != null && !oreCartOpen)
             {
                 World.Mode = World.Mode == GameMode.Creative ? GameMode.Survival : GameMode.Creative;
-                World.FlyMode = false; // creative no longer forces flight; use the fly toggle
             }
             if (_ignoreInteractFrames > 0) _ignoreInteractFrames--;
             if (screen == GameScreen.Playing && World != null)
             {
                 // Flight is a creative privilege.
-                if (frameInput.ToggleFlyPressed && World.IsCreative && !oreCartOpen) World.FlyMode = !World.FlyMode;
+                if (frameInput.ToggleNoclipPressed && World.IsCreative && !oreCartOpen)
+                    World.NoclipMode = !World.NoclipMode;
+                if (frameInput.ToggleCreativeFlightPressed && World.IsCreative && !oreCartOpen)
+                    World.CreativeFlightMode = !World.CreativeFlightMode;
                 if (frameInput.AdvanceTimePressed && !oreCartOpen) World.AdvanceTime();
                 if (frameInput.ToggleGpuCullPressed)
                 {

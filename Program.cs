@@ -161,7 +161,7 @@ namespace Cubuild
         /// <summary>The simulation world (null on the title screen).</summary>
         public GameWorld World { get; private set; }
 
-        /// <summary>Zero-lag background-thread audio (grass break, cave ambience).</summary>
+        /// <summary>Zero-lag background-thread audio (cave ambience).</summary>
         public SoundEngine Sound { get; private set; }
 
         public Program()

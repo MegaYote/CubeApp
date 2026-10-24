@@ -64,6 +64,11 @@ namespace Cubuild
             if (_netClient != null && _netConnected)
             {
                 _netClient.DrainIncomingEdits(World);
+                var authoritative = _netClient.LatestSnapshot;
+                if (authoritative != null)
+                {
+                    World.Mode = authoritative.CreativeWorld ? GameMode.Creative : GameMode.Survival;
+                }
                 _inputSendTimer += deltaSeconds;
                 if (_inputSendTimer >= 0.05f)
                 {
@@ -85,7 +90,7 @@ namespace Cubuild
             {
                 return new HudState
                 {
-                    ShowDebug = showFps, FlyMode = false, Menu = menu, Fps = lastFps,
+                    ShowDebug = showFps, NoclipMode = false, CreativeFlightMode = false, Menu = menu, Fps = lastFps,
                     UpdateMs = lastUpdateMs, MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                     SelectedBlockText = "Selected: -",
                     SelectedSlot = 0, WorldSeed = 0,
@@ -137,7 +142,9 @@ namespace Cubuild
             {
                 ShowDebug = showFps, InventoryOpen = inventoryOpen, CraftingOpen = craftingOpen, SmeltOpen = smeltOpen, OreCartOpen = oreCartOpen,
                 OreCartSlots = _openOreCart?.CargoSlots ?? Array.Empty<InventorySlot>(),
-                BiomeMenuOpen = biomeMenuOpen, HandEditorOpen = handEditorOpen, FlyMode = World.FlyMode, Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
+                BiomeMenuOpen = biomeMenuOpen, HandEditorOpen = handEditorOpen,
+                NoclipMode = World.NoclipMode, CreativeFlightMode = World.CreativeFlightMode,
+                Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
                 MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                 EntityMs = World.LastEntityMs, EntityCount = World.Entities.MobCount,
                 FacingText = $"{GetCompassDirection(World.PlayerYaw)} ({GameWorld.NormalizeYaw(World.PlayerYaw):0.0} deg)",

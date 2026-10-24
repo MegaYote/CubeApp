@@ -57,7 +57,8 @@ namespace Cubuild.Renderer
         public int SmeltOutputPreview;
         public bool BiomeMenuOpen;
         public bool HandEditorOpen;
-        public bool FlyMode;
+        public bool NoclipMode;
+        public bool CreativeFlightMode;
         public bool Fullbright;
         /// <summary>Day/night clock (world ticks). Used by the renderer to dim sky + world light.</summary>
         public long WorldTime;
@@ -196,7 +197,8 @@ namespace Cubuild.Renderer
             OreCartOpen = false,
             BiomeMenuOpen = false,
             HandEditorOpen = false,
-            FlyMode = false,
+            NoclipMode = false,
+            CreativeFlightMode = false,
             Fullbright = false,
             Menu = new MenuState(),
             Fps = 0f,

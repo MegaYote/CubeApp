@@ -117,6 +117,7 @@ namespace Cubuild
             {
                 StartNewWorld(_netClient.WorldSeed, _netClient.WorldName);
             }
+            World.Mode = _netClient!.IsCreativeWorld ? GameMode.Creative : GameMode.Survival;
             World.PlayerPosition = new Point3D(_netClient.SpawnX, _netClient.SpawnY, _netClient.SpawnZ);
             World.PlayerVelocity = new Point3D(0, 0, 0);
             _lastMeshPosition = World.PlayerPosition;

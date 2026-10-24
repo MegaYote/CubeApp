@@ -70,7 +70,8 @@ namespace Cubuild
         public float PlayerPitch { get => LocalPlayer.Pitch; set => LocalPlayer.Pitch = value; }
         public Point3D PlayerVelocity { get => LocalPlayer.Velocity; set => LocalPlayer.Velocity = value; }
         public bool PlayerGrounded { get => LocalPlayer.Grounded; set => LocalPlayer.Grounded = value; }
-        public bool FlyMode { get => LocalPlayer.FlyMode; set => LocalPlayer.FlyMode = value; }
+        public bool NoclipMode { get => LocalPlayer.NoclipMode; set => LocalPlayer.NoclipMode = value; }
+        public bool CreativeFlightMode { get => LocalPlayer.CreativeFlightMode; set => LocalPlayer.CreativeFlightMode = value; }
         public float PlayerWalkPhase { get => LocalPlayer.WalkPhase; set => LocalPlayer.WalkPhase = value; }
         public float PlayerWalkAmount { get => LocalPlayer.WalkAmount; set => LocalPlayer.WalkAmount = value; }
 
@@ -88,11 +89,36 @@ namespace Cubuild
         public int[] Hotbar;
 
         // ---- game mode ----
-        /// <summary>Creative (sandbox) or Survival (resource loop). Creative players may fly (off by
-        /// default; use the fly toggle), can't die, and place blocks freely; survival players must mine
-        /// to collect before placing.</summary>
-        public GameMode Mode { get; set; } = GameMode.Creative;
+        /// <summary>Creative (sandbox) or Survival (resource loop). Creative players may use
+        /// collision flight or F2 noclip; survival players must mine to collect before placing.</summary>
+        private GameMode _mode = GameMode.Creative;
+        public GameMode Mode
+        {
+            get => _mode;
+            set
+            {
+                if (_mode == value) return;
+                _mode = value;
+                ResetFlightModes();
+            }
+        }
         public bool IsCreative => Mode == GameMode.Creative;
+
+        /// <summary>Clears both flight states for every player when the world/mode changes.</summary>
+        public void ResetFlightModes()
+        {
+            LocalPlayer.NoclipMode = false;
+            LocalPlayer.CreativeFlightMode = false;
+            lock (_remoteLock)
+            {
+                foreach (var player in _remotePlayers.Values)
+                {
+                    player.NoclipMode = false;
+                    player.CreativeFlightMode = false;
+                    player.PendingInput = player.PendingInput.WithFlightModes(false, false);
+                }
+            }
+        }
         /// <summary>Minecraft faithful fork flag (persisted in save).</summary>
         public bool IsMinecraftMode { get; set; }
         /// <summary>New station-tiered Classic Survival progression; false preserves legacy recipes.</summary>

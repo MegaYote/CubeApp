@@ -78,7 +78,8 @@ namespace Cubuild.Renderer
                 uint tileH = (uint)Math.Clamp((int)p.TileH, 0, 255);
                 uint pack2 = (tileX << 24) | (tileY << 16) | (tileW << 8) | tileH;
                 uint shadeByte = (uint)Math.Clamp((int)Math.Round(p.Brightness * 255f), 0, 255);
-                uint pack3 = shadeByte | (255u << 8); // alpha byte 255, alphaMode 0 (opaque)
+                uint pack3 = shadeByte | (255u << 8) // alpha byte 255, alphaMode 0 (opaque)
+                    | ((uint)p.SkyLightLevel << 19) | ((uint)p.BlockLightLevel << 23);
                 int baseV = i * 4;
                 for (int c = 0; c < 4; c++)
                 {

@@ -21,7 +21,7 @@ namespace Cubuild.Net
     /// </summary>
     public sealed class NetHost : IDisposable
     {
-        public const int ProtocolVersion = 1;
+        public const int ProtocolVersion = 2;
         public const int DefaultPort = 26065;
 
         private readonly GameWorld _world;
@@ -74,7 +74,8 @@ namespace Cubuild.Net
                 _localSnapshot.Pitch = p.Pitch;
                 _localSnapshot.VelY = (float)p.Velocity.Y;
                 _localSnapshot.Grounded = p.Grounded;
-                _localSnapshot.Fly = p.FlyMode;
+                _localSnapshot.Noclip = p.NoclipMode;
+                _localSnapshot.CreativeFlight = p.CreativeFlightMode;
                 _localSnapshot.WalkPhase = p.WalkPhase;
                 _localSnapshot.WalkAmount = p.WalkAmount;
             }
@@ -175,6 +176,7 @@ namespace Cubuild.Net
                 welcome.WriteInt(conn.Id);
                 welcome.WriteInt(_world.Seed);
                 welcome.WriteString(_world.Name);
+                welcome.WriteBool(_world.IsCreative);
                 welcome.WriteFloat((float)state.Position.X);
                 welcome.WriteFloat((float)state.Position.Y);
                 welcome.WriteFloat((float)state.Position.Z);
@@ -337,7 +339,8 @@ namespace Cubuild.Net
                                     Pitch = ps.Pitch,
                                     VelY = (float)ps.Velocity.Y,
                                     Grounded = ps.Grounded,
-                                    Fly = ps.FlyMode,
+                                    Noclip = ps.NoclipMode,
+                                    CreativeFlight = ps.CreativeFlightMode,
                                     WalkPhase = ps.WalkPhase,
                                     WalkAmount = ps.WalkAmount,
                                 });
@@ -350,7 +353,7 @@ namespace Cubuild.Net
 
                     if (players.Length > 0 || edits.Length > 0)
                     {
-                        var snap = new NetSnapshot { Tick = tick };
+                        var snap = new NetSnapshot { Tick = tick, CreativeWorld = _world.IsCreative };
                         snap.Players.AddRange(players);
                         snap.Edits.AddRange(edits);
                         var frame = snap.Serialize();

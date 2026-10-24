@@ -1141,7 +1141,7 @@ namespace Cubuild.Renderer
                     m.SelectedMode = GameMode.Creative;
                 }
                 ImGui.SameLine();
-                if (ImGui.RadioButton("Survival", m.SelectedMode == GameMode.Survival))
+                if (ImGui.RadioButton("Survival (UNFINISHED)", m.SelectedMode == GameMode.Survival))
                 {
                     m.SelectedMode = GameMode.Survival;
                 }
@@ -1929,12 +1929,23 @@ namespace Cubuild.Renderer
                 Line($"FPS: {_hud.Fps:0.0}");
                 if (_cameraPosition.HasValue)
                     Line($"FogCam: {_cameraPosition.Value.X:0.0}, {_cameraPosition.Value.Y:0.0}, {_cameraPosition.Value.Z:0.0}  range: {_fogParams[4]:0.0}-{_fogParams[5]:0.0}");
+                string fogEligibility = _fogDebugEligible ? "eligible" : "not eligible";
+                string fogRoll = !_fogDebugEligible ? "n/a" : _fogDebugFoggy ? "foggy" : "clear";
+                string fogPreset = !_fogDebugFoggy ? "normal" : _fogDebugTargetEnd <= 32f ? "Tiny" : "Short";
+                Line($"Fog cycle: day {_fogDebugScheduleDay} ({fogEligibility}), 1/5: {fogRoll}");
+                Line($"Fog fade-in counter: {_fogDebugBlend:P0} day | active: {_fogDebugEffectBlend:P0}");
+                Line($"Fog range: {_fogDebugEffectiveEnd:0}/{_fogEnd:0} blocks | {fogPreset}");
+                Line(_cloudWeatherDayIndex == long.MinValue
+                    ? "Clouds: pending"
+                    : $"Clouds: {_cloudWeatherProfile} | weather day {_cloudWeatherDayIndex + 1}");
                 Line($"Particles: {_particleCount}");
                 Line($"Seed: {_hud.WorldSeed}");
                 Line($"Gen: saved {_hud.WorldGenSaved} / current {_hud.WorldGenCurrent}");
-                Line($"Fly: {(_hud.FlyMode ? "ON" : "OFF")}");
+                Line($"Creative flight (collision): {(_hud.CreativeFlightMode ? "ON" : "OFF")}");
+                Line($"Noclip [F2]: {(_hud.NoclipMode ? "ON" : "OFF")}");
                 Line($"Fullbright: {(_hud.Fullbright ? "ON" : "OFF")}  [F6]");
-                Line($"Cull: {(_gpuCullEnabled ? "GPU" : "CPU")}  [F7]");                if (!string.IsNullOrEmpty(_hud.NetStatus)) Line($"Net: {_hud.NetStatus}");
+                Line($"Cull: {(_gpuCullEnabled ? "GPU" : "CPU")}  [F7]");
+                if (!string.IsNullOrEmpty(_hud.NetStatus)) Line($"Net: {_hud.NetStatus}");
                 if (!string.IsNullOrEmpty(_hud.BiomeText)) Line($"Biome: {_hud.BiomeText}");
                 Line($"XYZ: {_hud.PlayerX:0.000} / {_hud.PlayerY:0.000} / {_hud.PlayerZ:0.000}");
                 Line($"Block: {(int)Math.Floor(_hud.PlayerX)} / {(int)Math.Floor(_hud.PlayerY)} / {(int)Math.Floor(_hud.PlayerZ)}");

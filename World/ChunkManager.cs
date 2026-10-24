@@ -138,17 +138,16 @@ namespace Cubuild
         public Chunk GetOrCreateChunk(int layer, int chunkX, int chunkZ)
         {
             var key = new ChunkCoordinates(layer, chunkX, chunkZ);
-            bool created = false;
+            Chunk? candidate = null;
             var result = loadedChunks.GetOrAdd(key, _ =>
             {
                 var chunk = chunkProviders[layer].GenerateChunk(chunkX, chunkZ, ChunkSize, HeightForLayer(layer));
                 chunk.NeedsRemesh = true;
-                created = true;
-                WireDirty(chunk);
+                candidate = chunk;
                 return chunk;
             });
 
-            if (created)
+            if (ReferenceEquals(candidate, result))
             {
                 // A chunk that was modified before unloading has a snapshot in the unload cache.
                 // Stamp it over the fresh generation so player edits survive chunk streaming. The
@@ -163,7 +162,6 @@ namespace Cubuild
                         result.HasRuntimeEdits = true;
                         _unloadedModifiedChunks.Remove(key);
                         result.NeedsRemesh = true;
-                        WireDirty(result);
                     }
                 }
 
@@ -199,6 +197,7 @@ namespace Cubuild
                     back.NeedsRemesh = true;
                 if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ + 1), out var front))
                     front.NeedsRemesh = true;
+                WireDirty(result);
                 // Announce the new chunk. Handlers run on a gen worker, so they must be
                 // thread-safe (rail sag only enqueues the chunk and scans it later).
                 ChunkLoaded?.Invoke(result);

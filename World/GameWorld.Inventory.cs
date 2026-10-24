@@ -589,7 +589,7 @@ namespace Cubuild
 
         // ---- physics constants (shared with render layer for third-person view) ----
         public const float WalkSpeed = 4.0f;
-        public const float FlySpeed = 10.8f;
+        public const float NoclipSpeed = 10.8f;
         public const float JumpVelocity = 8.0f;
         public const float Gravity = 28.0f;
         public const float MaxFallSpeed = 36.0f;
@@ -633,10 +633,11 @@ namespace Cubuild
             Entities = new EntityManager(Chunks, (wx, wz) => ChunkProvider.BiomeAt(wx, wz));
             // The local player's body participates in mob separation: the player shoves mobs
             // aside (and mobs give a light shove back). Velocity is added so the push decays via
-            // the normal walk friction; fly mode ignores it (velocity is overwritten each frame).
+            // the normal walk friction; flight modes ignore it (noclip overwrites velocity and
+            // collision-flight applies its own acceleration/drag).
             Entities.PlayerPushCallback = vel =>
             {
-                if (LocalPlayer.Health > 0 && !LocalPlayer.FlyMode)
+                if (LocalPlayer.Health > 0 && !LocalPlayer.NoclipMode && !LocalPlayer.CreativeFlightMode)
                 {
                     LocalPlayer.Velocity = new Point3D(
                         LocalPlayer.Velocity.X + vel.X, LocalPlayer.Velocity.Y,

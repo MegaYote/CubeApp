@@ -24,7 +24,8 @@ namespace Cubuild
             // Menu overlays free the mouse; don't move, mine, or place while they're open.
             if (handEditorOpen || inventoryOpen || craftingOpen || smeltOpen || oreCartOpen || biomeMenuOpen)
             {
-                tickInput = new TickInputState(false, false, false, false, false, false, false, false, false, Vector2.Zero);
+                tickInput = new TickInputState(false, false, false, false, false, false, false, false, false, Vector2.Zero,
+                    tickInput.NoclipMode, tickInput.CreativeFlightMode);
             }
             UpdateNetworking(tickInput, deltaSeconds);
             World.StepSimulation(tickInput, deltaSeconds);
@@ -226,9 +227,11 @@ _wasCreativeBreakHeld = breakHeldNow;
                     // Periodic shards while mining (every 20%).
                     int oldStage = (int)(oldProgress / BreakParticleInterval);
                     int newStage = (int)(_miningProgress / BreakParticleInterval);
-                    if (newStage > oldStage && _miningProgress < 1f)
+                    if (newStage > oldStage && _miningProgress < 1f && gpuRenderer != null)
                     {
-                        gpuRenderer?.SpawnBlockBreakParticles(target.x, target.y, target.z, _miningBlockId, 4);
+                        var particleLight = SampleParticleLightAround(target.x, target.y, target.z);
+                        gpuRenderer.SpawnBlockBreakParticles(target.x, target.y, target.z, _miningBlockId, 4,
+                            particleLight.Sky, particleLight.Block);
                     }
 
                     if (_miningProgress >= 1f)
@@ -262,23 +265,71 @@ _wasCreativeBreakHeld = breakHeldNow;
         private bool DeleteBlockAt(int x, int y, int z, GameWorld.WoodChopKind chop = GameWorld.WoodChopKind.None)
         {
             if (World == null) return false;
+            var particleLight = gpuRenderer != null ? SampleParticleLightAround(x, y, z) : (Sky: 0, Block: 0);
             if (!World.TryBreakBlockAt(x, y, z, out int removedBlockId, chop)) return false;
             // Creative removes the block in one instant, so MiningProgress never drives the
             // renderer's continuous mining swing. Survival also gets a short finishing swing
             // after the block disappears, rather than snapping back to idle on that frame.
             TriggerHandSwing();
-            gpuRenderer?.SpawnBlockBreakParticles(x, y, z, removedBlockId, 12);
+            gpuRenderer?.SpawnBlockBreakParticles(x, y, z, removedBlockId, 12,
+                particleLight.Sky, particleLight.Block);
             needsMeshUpdate = true;
 
-            // Only the sounds that exist are wired: grass.mp3 plays when a GRASS block breaks.
-            if (Sound != null)
+            // The hardcoded grass-break one-shot is intentionally disabled; cave ambience and
+            // the rest of the audio engine remain active.
+            return true;
+        }
+
+        private static readonly (int X, int Y, int Z)[] ParticleLightSampleOffsets =
+        {
+            (0, 0, 0), (-1, 0, 0), (1, 0, 0), (0, -1, 0), (0, 1, 0), (0, 0, -1), (0, 0, 1)
+        };
+
+        // Capture the brightest raw light around the source before breaking invalidates its grid.
+        private (int Sky, int Block) SampleParticleLightAround(int worldX, int worldY, int worldZ)
+        {
+            if (World == null) return (0, 0);
+
+            int maxSky = 0;
+            int maxBlock = 0;
+            foreach (var offset in ParticleLightSampleOffsets)
             {
-                if (removedBlockId == BlockRegistry.GetId("grass") && Sound.HasSound("grass"))
+                int x = worldX + offset.X;
+                int y = worldY + offset.Y;
+                int z = worldZ + offset.Z;
+                int layer = ChunkManager.LayerForWorldY(y);
+                int chunkX = (int)Math.Floor(x / (double)ChunkManager.ChunkSize);
+                int chunkZ = (int)Math.Floor(z / (double)ChunkManager.ChunkSize);
+                bool hasCurrentLight = false;
+
+                if (World.Chunks.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk)
+                    && chunk.TryGetCurrentLightGrid(out var grid) && grid != null)
                 {
-                    Sound.PlayAt("grass", x + 0.5f, y + 0.5f, z + 0.5f, 0.6f);
+                    int localX = x - chunk.OriginX;
+                    int localY = y - chunk.OriginY;
+                    int localZ = z - chunk.OriginZ;
+                    if (localX >= 0 && localX < chunk.Width
+                        && localY >= 0 && localY < chunk.Height
+                        && localZ >= 0 && localZ < chunk.Depth)
+                    {
+                        int index = (localX * chunk.Depth + localZ) * chunk.Height + localY;
+                        if (index < grid.Length)
+                        {
+                            byte packedLight = grid[index];
+                            maxSky = Math.Max(maxSky, packedLight >> 4);
+                            maxBlock = Math.Max(maxBlock, packedLight & 0x0F);
+                            hasCurrentLight = true;
+                        }
+                    }
+                }
+
+                if (!hasCurrentLight)
+                {
+                    maxSky = Math.Max(maxSky, World.Chunks.GetSkyLightEstimate(x, y, z, 0));
                 }
             }
-            return true;
+
+            return (maxSky, maxBlock);
         }
 
         // Plays a random ambient cave sound:

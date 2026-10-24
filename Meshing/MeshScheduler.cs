@@ -8,7 +8,12 @@ namespace Cubuild
         private readonly ChunkManager _manager;
         private readonly IMeshQueue _meshQueue;
 
-        public bool NeedsMeshUpdate { get; set; }
+        private volatile bool _needsMeshUpdate;
+        public bool NeedsMeshUpdate
+        {
+            get => _needsMeshUpdate;
+            set => _needsMeshUpdate = value;
+        }
 
         /// <summary>False when running headless with a no-op queue (dedicated server / tests):
         /// mesh versions never advance, so callers that wait on remesh must release immediately.</summary>
@@ -37,6 +42,7 @@ namespace Cubuild
             lock (_dirtyLock)
             {
                 _dirty.Add(coords);
+                NeedsMeshUpdate = true;
             }
         }
 
@@ -45,33 +51,28 @@ namespace Cubuild
             int chunkX = chunk.OriginX / ChunkManager.ChunkSize;
             int chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
             int layer = ChunkManager.LayerForWorldY(chunk.OriginY);
-            var coords = new ChunkCoordinates(layer, chunkX, chunkZ);
-            lock (_dirtyLock)
-            {
-                _dirty.Add(coords);
-            }
             // Raise the flag HERE, not only inside Update(). This is the scheduler's own
             // "pending work" signal and MainLoop pumps the queue off it, so anything that
             // dirties a chunk must set it - otherwise the work sits until something unrelated
             // happens to move the player past the pump threshold.
-            NeedsMeshUpdate = true;
+            MarkDirty(new ChunkCoordinates(layer, chunkX, chunkZ));
         }
 
         public int Update()
         {
             int queued = 0;
 
-            if (_dirty.Count == 0)
-            {
-                NeedsMeshUpdate = false;
-                return 0;
-            }
-
             // Copy so we can safely remove entries while iterating. Reuse the scratch list to
             // avoid a per-update allocation (FPS roadmap #6).
-            _dirtyScratch.Clear();
             lock (_dirtyLock)
             {
+                if (_dirty.Count == 0)
+                {
+                    NeedsMeshUpdate = false;
+                    return 0;
+                }
+
+                _dirtyScratch.Clear();
                 _dirtyScratch.AddRange(_dirty);
                 _dirty.Clear();
             }
@@ -104,7 +105,10 @@ namespace Cubuild
                 queued++;
             }
 
-            NeedsMeshUpdate = false;
+            lock (_dirtyLock)
+            {
+                NeedsMeshUpdate = _dirty.Count > 0;
+            }
 
             return queued;
         }

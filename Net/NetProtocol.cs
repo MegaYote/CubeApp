@@ -144,7 +144,8 @@ namespace Cubuild.Net
             public float Yaw, Pitch;
             public float VelY;
             public bool Grounded;
-            public bool Fly;
+            public bool Noclip;
+            public bool CreativeFlight;
             public float WalkPhase, WalkAmount;
         }
 
@@ -158,11 +159,13 @@ namespace Cubuild.Net
         public readonly List<Player> Players = new();
         public readonly List<Edit> Edits = new();
         public long Tick;
+        public bool CreativeWorld;
 
         public byte[] Serialize()
         {
             var w = new NetWriter();
             w.WriteLong(Tick);
+            w.WriteBool(CreativeWorld);
             w.WriteInt(Players.Count);
             foreach (var p in Players)
             {
@@ -171,7 +174,7 @@ namespace Cubuild.Net
                 w.WriteFloat(p.X); w.WriteFloat(p.Y); w.WriteFloat(p.Z);
                 w.WriteFloat(p.Yaw); w.WriteFloat(p.Pitch);
                 w.WriteFloat(p.VelY);
-                w.WriteBool(p.Grounded); w.WriteBool(p.Fly);
+                w.WriteBool(p.Grounded); w.WriteBool(p.Noclip); w.WriteBool(p.CreativeFlight);
                 w.WriteFloat(p.WalkPhase); w.WriteFloat(p.WalkAmount);
             }
             w.WriteInt(Edits.Count);
@@ -188,6 +191,7 @@ namespace Cubuild.Net
             var r = new NetReader(body);
             var snap = new NetSnapshot();
             if (!r.TryReadLong(out snap.Tick)) return snap;
+            snap.CreativeWorld = r.ReadBool();
             if (!r.TryReadInt(out int pc)) return snap;
             for (int i = 0; i < pc && r.Remaining > 0; i++)
             {
@@ -198,7 +202,9 @@ namespace Cubuild.Net
                 if (!r.TryReadFloat(out p.Yaw) || !r.TryReadFloat(out p.Pitch)) break;
                 if (!r.TryReadFloat(out p.VelY)) break;
                 p.Grounded = r.ReadBool();
-                p.Fly = r.ReadBool();
+                p.Noclip = r.ReadBool();
+                bool creativeFlight = r.ReadBool();
+                p.CreativeFlight = !p.Noclip && creativeFlight;
                 if (!r.TryReadFloat(out p.WalkPhase) || !r.TryReadFloat(out p.WalkAmount)) break;
                 snap.Players.Add(p);
             }
@@ -249,6 +255,9 @@ namespace Cubuild.Net
             w.WriteByte(flags);
             byte flags2 = 0;
             if (input.PlaceHeld) flags2 |= 0x01;
+            if (input.NoclipMode) flags2 |= 0x02;
+            if (input.CreativeFlightMode && !input.NoclipMode) flags2 |= 0x04;
+            if (input.MoveFast) flags2 |= 0x08;
             w.WriteByte(flags2);
             w.WriteFloat(input.LookDelta.X);
             w.WriteFloat(input.LookDelta.Y);
@@ -284,15 +293,15 @@ namespace Cubuild.Net
             yaw = 0; pitch = 0;
             var r = new NetReader(body);
             if (!r.TryReadByte(out var flags)) return false;
+            if (!r.TryReadByte(out var flags2)) return false;
+            if (!r.TryReadFloat(out var lx) || !r.TryReadFloat(out var ly)) return false;
             input = new TickInputState(
                 (flags & 0x01) != 0, (flags & 0x02) != 0, (flags & 0x04) != 0, (flags & 0x08) != 0,
                 (flags & 0x10) != 0, (flags & 0x20) != 0, (flags & 0x40) != 0,
-                (flags & 0x80) != 0, false, default);
-            if (!r.TryReadByte(out var flags2)) return false;
-            if (!r.TryReadFloat(out var lx) || !r.TryReadFloat(out var ly)) return false;
-            input = new TickInputState(input.MoveForward, input.MoveBackward, input.MoveLeft, input.MoveRight,
-                input.JumpPressed, input.MoveUp, input.MoveDown, input.BreakHeld,
-                (flags2 & 0x01) != 0, new System.Numerics.Vector2(lx, ly));
+                (flags & 0x80) != 0,
+                (flags2 & 0x01) != 0, new System.Numerics.Vector2(lx, ly),
+                (flags2 & 0x02) != 0, (flags2 & 0x04) != 0 && (flags2 & 0x02) == 0,
+                (flags2 & 0x08) != 0);
             if (!r.TryReadFloat(out yaw) || !r.TryReadFloat(out pitch)) return false;
             return true;
         }
