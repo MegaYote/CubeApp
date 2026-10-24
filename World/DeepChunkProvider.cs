@@ -41,6 +41,7 @@ namespace Cubuild.World
 
             int idBedrock = BlockRegistry.GetId("bedrock");
             int idStone = BlockRegistry.GetId("stone");
+            int idLava = BlockRegistry.GetId("lava");
 
             // Solid stone throughout, then carve caves.
             byte[] blocks = chunk.RawBlocks;
@@ -59,6 +60,13 @@ namespace Cubuild.World
 
             // Coal at any depth in the deep stone (rare).
             CoalOres.Generate(chunk, chunkX, chunkZ, 0, chunkSize, chunkHeight);
+
+            // Rare lava-lake caves carve their own sealed chamber out of deep stone. They are
+            // half as common per chunk as the ground-layer water-lake feature.
+            UndergroundFluidCaveGenerator.TryGenerate(
+                chunk, chunkX, chunkZ, seed, idLava,
+                minLocalY: 8, maxLocalY: 176,
+                chanceDenominator: 48, seedSalt: 0x4C415641); // "LAVA"
 
             return chunk;
         }

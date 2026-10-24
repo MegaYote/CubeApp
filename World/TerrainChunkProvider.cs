@@ -215,6 +215,7 @@ namespace Cubuild.World
 
             int idBedrock = BlockRegistry.GetId("bedrock");
             int idWater = BlockRegistry.GetId("water");
+            int idLava = BlockRegistry.GetId("lava");
             int idStone = BlockRegistry.GetId("stone");
             int idGrass = BlockRegistry.GetId("grass");
             int idDirt = BlockRegistry.GetId("dirt");
@@ -635,10 +636,25 @@ namespace Cubuild.World
             // unchanged unless their owning world explicitly enables the generator.
             CopperOres.Generate(chunk, chunkX, chunkZ, terrainBandStart, chunkSize, chunkHeight);
 
+            // A water lake is a dedicated sealed cave feature, not a pool dropped into an
+            // existing cave. Keep it underground and below sea level; its own one-block stone
+            // shell prevents it from flooding the ordinary dry cave network.
+            UndergroundFluidCaveGenerator.TryGenerate(
+                chunk, chunkX, chunkZ, seed, idWater,
+                minLocalY: 8, maxLocalY: seaLevelLocalY - 4,
+                chanceDenominator: 24, seedSalt: 0x57415452); // "WATR"
+
             // Decoration is deliberately last: mushrooms need the final tree canopy and plants
             // must not be overwritten by later terrain/features. Its RNG is separate from all
             // existing world-generation streams.
             GenerateVegetation(chunkX, chunkZ, chunk);
+
+            // Natural stone springs replace a cliff-face stone block, then are woken after the
+            // generated chunk (and any save overlay) reaches the simulation thread.
+            chunk.WorldgenFluidSources.AddRange(FluidSpringGenerator.Generate(
+                chunk, chunkX, chunkZ, seed, idWater, idLava,
+                minLocalY: seaLevelLocalY + 4,
+                maxLocalY: terrainBandStart + TerrainBandBlocks - 1));
 
             chunk.NeedsRemesh = true;
             return chunk;

@@ -432,10 +432,9 @@ namespace Cubuild.Renderer
             bool scaled = _scaleFramebuffer != null;
             cl.SetFramebuffer(scaled ? _scaleFramebuffer : _sc.Framebuffer);
             cl.SetFullViewport(0);
-            // Clear to the FOG color (0xC0D8FF dimmed by the celestial angle) - the same color the
-            // sky horizon fades to and the world fog fades into. The sky planes sit at +-16 blocks,
-            // so at eye level there's a gap between them where only the clear color shows; it must
-            // match the horizon fog color or a stripe appears there.
+            // Clear to the FOG color (0xC0D8FF dimmed by the celestial angle), matching the sky
+            // horizon and world fog. This remains the loading/fallback color behind the full-screen
+            // sky and keeps uncovered framebuffer areas consistent with the horizon.
             cl.ClearColorTarget(0, new RgbaFloat(
                 (192f / 255f) * _nightSkyDim,
                 (216f / 255f) * _nightSkyDim,

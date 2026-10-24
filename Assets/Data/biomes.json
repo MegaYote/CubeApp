@@ -142,8 +142,8 @@
   {
       "id": "biglands",
       "displayName": "Biglands",
-      "temperature": { "min": 0.0, "max": 0.3 },
-      "humidity": { "min": 0.0, "max": 0.3 },
+      "temperature": { "min": 0.03, "max": 0.27 },
+      "humidity": { "min": 0.03, "max": 0.27 },
       "water": false,
       "baseHeight": 0.5,
       "heightVariation": 0.25,

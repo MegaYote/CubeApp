@@ -58,6 +58,11 @@ namespace Cubuild
         /// </summary>
         public IReadOnlyList<MeshFace>? SurfaceLodFaces { get; set; }
 
+        /// <summary>Runtime-only worldgen fluid outlets to wake after this chunk is published.
+        /// The positions are world coordinates; source blocks and metadata are already in RawBlocks
+        /// and RawMeta. Saved block arrays remain authoritative, so consumers must revalidate them.</summary>
+        public List<(int X, int Y, int Z)> WorldgenFluidSources { get; } = new();
+
         /// <summary>True once block data has been edited or restored from a save. Player-edited
         /// chunks deliberately stay full-detail at every distance.</summary>
         public volatile bool HasRuntimeEdits;

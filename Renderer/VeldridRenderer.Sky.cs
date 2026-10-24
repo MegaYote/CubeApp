@@ -18,12 +18,18 @@ namespace Cubuild.Renderer
             // the fog factor there is ~0.96-1.0 (clear). Fog only ramps up toward the horizon.
             float fogStart = fogEnd * 0.25f;
 
-            // Fog color: Cubuild fog color 0xC0D8FF (192,216,255) dimmed by the celestial
-            // angle - PALER/whiter than the deep sky blue, so the horizon reads lighter (like MC's
-            // fog vs sky). The world fades into this color, so distant terrain becomes hazy-white.
+            float sunAngle = ComputeNightCelestialAngle() * MathF.PI * 2f;
+            float sunY = MathF.Cos(sunAngle);
+            float sunZ = MathF.Sin(sunAngle);
+            // This gates a localized halo around the sun; it does not tint the rest of the sky.
+            float twilightT = Math.Clamp((0.68f - MathF.Abs(sunY)) / 0.56f, 0f, 1f);
+            float twilight = twilightT * twilightT * (3f - 2f * twilightT) * _nightSkyDim;
+
+            // Keep the global horizon/fog palette unchanged. Only the sky shader adds the
+            // sun-localized golden-hour glow, avoiding a pink/purple cast over the whole sky.
             float fogR = (192f / 255f) * _nightSkyDim;
             float fogG = (216f / 255f) * _nightSkyDim;
-            float fogB = 1f * _nightSkyDim;
+            float fogB = _nightSkyDim;
 
             _fogParams[0] = fogR;
             _fogParams[1] = fogG;
@@ -58,12 +64,8 @@ namespace Cubuild.Renderer
                 _fogParams[15] = 0f;
             }
 
-            // Experimental projected cloud shadows use the exact per-layer scroll values that
-            // DrawClouds uses for its instanced tile origins. The celestial quad follows this same
-            // X-axis orbit: at high sun, shadows are short; at low/night sun, the effect fades out.
-            float sunAngle = ComputeNightCelestialAngle() * MathF.PI * 2f;
-            float sunY = MathF.Cos(sunAngle);
-            float sunZ = MathF.Sin(sunAngle);
+            // The celestial quad and the twilight halo share the same sun direction. At high sun,
+            // projected cloud shadows are short; at low/night sun, the effect fades out.
             float elevationT = Math.Clamp((sunY - 0.18f) / (0.55f - 0.18f), 0f, 1f);
             float elevationFade = elevationT * elevationT * (3f - 2f * elevationT);
             float shadowStrength = ExperimentalCloudShadowsEnabled
@@ -83,26 +85,24 @@ namespace Cubuild.Renderer
             }
             _gd.UpdateBuffer(_fogBuffer, 0, _fogParams);
 
-            // Sky fog uses the SAME range + color so the horizon blends with terrain. (The sky
-            // planes sit at +-16 blocks; the range is in world distance, matching the world fog.)
+            // Sky fog uses the SAME range + color so the horizon blends with terrain. Keep the
+            // existing uniform packing: fogColor, fogRange, sunDirectionTwilight, skyTop, skyBottom.
             _skyFogParams[0] = fogR;
             _skyFogParams[1] = fogG;
             _skyFogParams[2] = fogB;
             _skyFogParams[3] = 1f;
             _skyFogParams[4] = fogStart;
             _skyFogParams[5] = fogEnd;
-            _skyFogParams[8] = _fogParams[8];
-            _skyFogParams[9] = _fogParams[9];
-            _skyFogParams[10] = _fogParams[10];
-            _skyFogParams[11] = 1f;
-            // Sky gradient: OVERHEAD is a bright, saturated sky blue; the
-            // HORIZON (floats 0-2) is the paler fog color so the world fades into it seamlessly;
-            // BELOW the horizon is the darkened undersky. The key difference from the broken
-            // version: skyTop is the DEEPER sky color, NOT the fog color - so the sky has a real
-            // gradient from vivid blue overhead down to pale at the horizon.
-            _skyFogParams[12] = 136f / 255f * _nightSkyDim;  // 0x88BBFF deep sky blue
-            _skyFogParams[13] = 187f / 255f * _nightSkyDim;
-            _skyFogParams[14] = 1f * _nightSkyDim;
+            // Carry the world-space sun direction and twilight amount so the fragment shader can
+            // place a local halo.
+            _skyFogParams[8] = 0f;
+            _skyFogParams[9] = sunY;
+            _skyFogParams[10] = sunZ;
+            _skyFogParams[11] = twilight;
+            // Preserve the existing global sky gradient; warmth is added only near the sun.
+            _skyFogParams[12] = _nightSkyR;
+            _skyFogParams[13] = _nightSkyG;
+            _skyFogParams[14] = _nightSkyB;
             _skyFogParams[15] = 1f;
             _skyFogParams[16] = fogR * 0.2f + 0.04f;
             _skyFogParams[17] = fogG * 0.2f + 0.04f;
@@ -148,46 +148,30 @@ namespace Cubuild.Renderer
             _nightSkyB = 1f * sky;
         }
 
-        // Renders the sky: two giant planes in CAMERA SPACE - the TOP plane sits 16 blocks
-        // above the eye, the BOTTOM plane 16 below. The vertical gradient (bright overhead, fog
-        // color at the horizon, darkened undersky) is computed PER-FRAGMENT in the shader from
-        // vWorldPos.y (the vertex-color varying misreads on this pipeline). The vertices are
-        // CAMERA-space (relative to the eye, spanning the far plane in every direction),
-        // transformed by a ROTATION-ONLY view-projection, so the sky is structurally locked to the
-        // camera and can never drift as the player walks.
+        // Renders the background sky with a full-screen clip-space quad. Each vertex carries an
+        // affine world-space ray; the fragment shader normalizes its interpolated value and applies
+        // the existing vertical gradient and sun-localized twilight halo.
         private void DrawSky(CommandList cl)
         {
             if (_skyPipeline == null) return;
 
-            // Sky fog/gradient params are set once per frame in UpdateFog. Extent large enough to
-            // cover the far plane from any camera yaw (a 64-step grid out to +-384,
-            // we use the same scale).
-            float extent = Math.Max(_farPlane * 2f, 768f);
-
-            // 8 vertices in CAMERA space (eye at origin): top quad at y=+16 (verts 0-3), bottom
-            // quad at y=-16 (verts 4-7). pos(3) + color(4). Reused buffer (no per-frame alloc).
+            // Sky fog/gradient params are set once per frame in UpdateFog. Store the raw (unnormalized)
+            // ray at each corner so interpolation over either triangle reconstructs the same affine
+            // ray field; the fragment shader normalizes it. This avoids a diagonal interpolation seam.
             var v = _skyVertexScratch;
-            if (v.Length < 56) v = _skyVertexScratch = new float[56];
-            float skyR = _nightSkyR, skyG = _nightSkyG, skyB = _nightSkyB;
-            SetSkyVertex(v, 0, -extent, 16f, -extent, skyR, skyG, skyB);
-            SetSkyVertex(v, 1, extent, 16f, -extent, skyR, skyG, skyB);
-            SetSkyVertex(v, 2, extent, 16f, extent, skyR, skyG, skyB);
-            SetSkyVertex(v, 3, -extent, 16f, extent, skyR, skyG, skyB);
-            // Bottom verts: vertex colors are unused by the shader (gradient is per-fragment), so
-            // reuse the sky color - it only needs to be a valid vec4 for the layout.
-            SetSkyVertex(v, 4, -extent, -16f, -extent, skyR, skyG, skyB);
-            SetSkyVertex(v, 5, extent, -16f, -extent, skyR, skyG, skyB);
-            SetSkyVertex(v, 6, extent, -16f, extent, skyR, skyG, skyB);
-            SetSkyVertex(v, 7, -extent, -16f, extent, skyR, skyG, skyB);
+            float aspect = (float)_sc.Framebuffer.Width / _sc.Framebuffer.Height;
+            SetSkyVertex(v, 0, -1f, -1f, BuildSkyRay(-1f, -1f, aspect));
+            SetSkyVertex(v, 1,  1f, -1f, BuildSkyRay( 1f, -1f, aspect));
+            SetSkyVertex(v, 2,  1f,  1f, BuildSkyRay( 1f,  1f, aspect));
+            SetSkyVertex(v, 3, -1f,  1f, BuildSkyRay(-1f,  1f, aspect));
 
             _gd.UpdateBuffer(_skyVertexBuffer, 0, v);
 
             cl.SetPipeline(_skyPipeline);
-            cl.SetGraphicsResourceSet(0, _skyMatrixSet);
-            cl.SetGraphicsResourceSet(1, _skyFogSet);
+            cl.SetGraphicsResourceSet(0, _skyFogSet);
             cl.SetVertexBuffer(0, _skyVertexBuffer);
             cl.SetIndexBuffer(_skyIndexBuffer, IndexFormat.UInt16);
-            cl.DrawIndexed(12, 1, 0, 0, 0);
+            cl.DrawIndexed(6, 1, 0, 0, 0);
 
             // Sun, moon, galaxies and stars, glued to the sky's rotation
             // Order mirrors CubuildC++: stars, galaxies, then sun/moon
@@ -197,15 +181,22 @@ namespace Cubuild.Renderer
             DrawCelestialBodies(cl);
         }
 
-        private static void SetSkyVertex(float[] v, int index, float x, float y, float z, float r, float g, float b)
+        private Vector3 BuildSkyRay(float ndcX, float ndcY, float aspect)
+        {
+            return _skyCameraForward
+                + _skyCameraRight * (ndcX * aspect)
+                + _skyCameraUp * ndcY;
+        }
+
+        private static void SetSkyVertex(float[] v, int index, float ndcX, float ndcY, Vector3 ray)
         {
             int o = index * 7;
-            v[o] = x;
-            v[o + 1] = y;
-            v[o + 2] = z;
-            v[o + 3] = r;
-            v[o + 4] = g;
-            v[o + 5] = b;
+            v[o] = ndcX;
+            v[o + 1] = ndcY;
+            v[o + 2] = 0f;
+            v[o + 3] = ray.X;
+            v[o + 4] = ray.Y;
+            v[o + 5] = ray.Z;
             v[o + 6] = 1f;
         }
 

@@ -74,6 +74,9 @@ namespace Cubuild
         // Chunks that just loaded with rails in them; scanned on the main thread (the load itself
         // happens on a gen worker, so all we do there is enqueue the chunk).
         private readonly ConcurrentQueue<Chunk> _railSagPendingChunks = new();
+        // Generated cliff springs are activated only after the chunk and any save overlay are
+        // published. The callback runs on a gen worker, so it enqueues chunks for the sim thread.
+        private readonly ConcurrentQueue<Chunk> _worldgenFluidPendingChunks = new();
         private float _railSagPruneTimer;
         // Cells flagged this solve as hanging past RailMaxUnsupportedRun. Broken after the solve
         // finishes, so component data is never mutated while it is still being gathered/relaxed.
@@ -81,7 +84,32 @@ namespace Cubuild
 
         /// <summary>Called from ChunkManager when a chunk is created: we scan it for rails later,
         /// on the sim thread. Runs on a gen worker, so it must not touch the solver state.</summary>
-        private void OnChunkLoadedForRailSag(Chunk chunk) => _railSagPendingChunks.Enqueue(chunk);
+        private void OnChunkLoadedForRailSag(Chunk chunk)
+        {
+            _railSagPendingChunks.Enqueue(chunk);
+            if (chunk.WorldgenFluidSources.Count > 0)
+                _worldgenFluidPendingChunks.Enqueue(chunk);
+        }
+
+        /// <summary>Wake only the explicitly generated cliff springs, never every naturally
+        /// still-water block (oceans and sealed lake-caves are intentionally dormant).</summary>
+        private void WakeWorldgenFluidSources()
+        {
+            if (BlockTicks == null) return;
+            int waterId = BlockRegistry.GetId("water");
+            int lavaId = BlockRegistry.GetId("lava");
+            while (_worldgenFluidPendingChunks.TryDequeue(out var chunk))
+            {
+                foreach (var (x, y, z) in chunk.WorldgenFluidSources)
+                {
+                    // A saved chunk snapshot may have replaced the freshly generated outlet.
+                    // Revalidate live data before scheduling so the save always remains authoritative.
+                    if (!Chunks.TryGetLoadedBlock(x, y, z, out int id) || (id != waterId && id != lavaId))
+                        continue;
+                    BlockTicks.OnBlockChanged(x, y, z);
+                }
+            }
+        }
 
         /// <summary>Mark the rail cells around an edit for a re-solve. Cheap: only the 27 cells
         /// that could possibly be affected (the changed cell, the one above whose SUPPORT changed,
@@ -126,6 +154,8 @@ namespace Cubuild
         /// tracked cell toward its target and mirror the result into the chunk droop bytes.</summary>
         private void UpdateRailSag(float deltaSeconds)
         {
+            WakeWorldgenFluidSources();
+
             // 1. Any chunk that just streamed in with rails: seed a solve for its rail cells.
             while (_railSagPendingChunks.TryDequeue(out var chunk))
                 SeedRailSagFromChunk(chunk);

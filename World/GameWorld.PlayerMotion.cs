@@ -8,7 +8,8 @@ namespace Cubuild
     {
         public void AdvanceTime()
         {
-            WorldTime += 6000;
+            // T advances exactly one eighth of the 24000-tick daylight cycle (three in-game hours).
+            WorldTime += 24000 / 8;
             _worldTimeAccumulator = 0.0;
         }
 

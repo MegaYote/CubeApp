@@ -105,24 +105,20 @@ namespace Cubuild.Renderer
         private DeviceBuffer? _linkBeamVertexBuffer;
         private float[] _linkBeamVertexScratch = new float[36 * 3 * 4];
 
-        // Sky: two GIANT fog-blended planes drawn before the world
-        // with depth-write off. Top plane (glSkyList) at cameraY+16 uses the sky color, bottom plane
-        // (glSkyList2) at cameraY-16 uses the darkened color (r*0.2+0.04, g*0.2+0.04, b*0.6+0.1).
-        // Linear fog (start 0, end farPlane*0.8) fades them toward the fog
-        // color at the horizon - the whole sky gradient, no dome or shader magic.
+        // Full-screen sky background drawn before the world with depth writes off. Its clip-space
+        // quad carries world-space view rays in the color attribute, so every pixel is covered
+        // independently of camera orientation or a finite plane extent.
         private Pipeline _skyPipeline;
         private DeviceBuffer _skyVertexBuffer;
         private DeviceBuffer _skyIndexBuffer;
-        private float[] _skyVertexScratch = new float[56];      // reused per frame (no alloc)
+        private float[] _skyVertexScratch = new float[28];      // four pos3+ray4 vertices, reused per frame
         private float[] _celestialVertexScratch = new float[40]; // reused per frame (no alloc)
         private DeviceBuffer _skyFogBuffer;
         private ResourceLayout _skyFogLayout;
         private ResourceSet _skyFogSet;
-        private readonly float[] _skyFogParams = new float[20]; // fogColor(4)+fogRange(2)+cameraPos(4)+skyTop(4)+skyBottom(4)
-        // The sky is drawn in CAMERA space (the display lists sit at y=16 relative to the eye,
-        // transformed only by the camera rotation + projection). We mirror that: a static
-        // camera-space vertex buffer + this rotation-only view-projection, so the sky is
-        // structurally locked to the camera and can never drift as the player walks.
+        private readonly float[] _skyFogParams = new float[20]; // fogColor(4)+fogRange(2)+sunDirectionTwilight(4)+skyTop(4)+skyBottom(4)
+        // Retained for stars, galaxies, and sun/moon; the background quad writes clip coordinates
+        // directly and uses the camera basis below to reconstruct its world-space rays.
         private DeviceBuffer _skyMatrixBuffer;
         private ResourceSet _skyMatrixSet;
 
@@ -605,6 +601,9 @@ namespace Cubuild.Renderer
         private ushort[] _particleIndexScratch = Array.Empty<ushort>();
         private Vector3 _cameraRight = Vector3.UnitX;
         private Vector3 _cameraUp = Vector3.UnitY;
+        private Vector3 _skyCameraForward = Vector3.UnitZ;
+        private Vector3 _skyCameraRight = Vector3.UnitX;
+        private Vector3 _skyCameraUp = Vector3.UnitY;
         private readonly System.Diagnostics.Stopwatch _particleClock = System.Diagnostics.Stopwatch.StartNew();
         private long _lastParticleTicks;
 
@@ -1544,9 +1543,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 view = view * Matrix4x4.CreateRotationZ(roll);
             }
             var viewProj = Matrix4x4.Multiply(view, proj);
-            // Sky matrix: the view with its TRANSLATION removed (rotation only), so the camera-space
-            // sky planes render locked to the eye.
-            // are drawn with the camera transform applied - they follow the player automatically.
+            // Sky matrix: the view with its TRANSLATION removed (rotation only), used by stars,
+            // galaxies, and celestial bodies so they stay locked to the camera's sky rotation.
             var skyView = view;
             skyView.M41 = 0f;
             skyView.M42 = 0f;
@@ -1555,6 +1553,11 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             // Billboard basis for the particle system.
             _cameraRight = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY));
             _cameraUp = Vector3.Normalize(Vector3.Cross(_cameraRight, forward));
+            // The background shader reconstructs a world-space ray for each clip-space pixel.
+            // Keep its yaw/pitch basis alongside the camera matrices for per-pixel ray reconstruction.
+            _skyCameraForward = forward;
+            _skyCameraRight = _cameraRight;
+            _skyCameraUp = _cameraUp;
             // Cache the camera and view-projection so chunk frustum culling and the mob meshing
             // can read them without re-deriving.
             _cameraPosition = position;

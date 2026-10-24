@@ -1850,10 +1850,9 @@ void main() { outColor = vec4(0.36, 0.24, 0.12, 1.0); }"; // dark wood / rope br
                 (uint)(_linkBeamVertexScratch.Length * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
         }
 
-        // Pipeline for the sky: two huge flat planes (glSkyList at y+16, glSkyList2 at y-16,
-        // centered on the camera) that get linear fog applied per-fragment - bright sky color
-        // overhead, fog color at the horizon, and a darkened indigo below the horizon. Drawn with
-        // depth-write OFF before the world so terrain always paints over it.
+        // Full-screen sky background: clip-space positions cover the viewport while the color
+        // attribute carries an affine world-space ray that the fragment shader normalizes. Drawn
+        // with depth-write OFF before the world so terrain always paints over it.
         private void CreateSkyPipeline()
         {
             var factory = _gd.ResourceFactory;
@@ -1861,36 +1860,54 @@ void main() { outColor = vec4(0.36, 0.24, 0.12, 1.0); }"; // dark wood / rope br
             string vsCode = @"#version 450
 layout(location=0) in vec3 aPosition;
 layout(location=1) in vec4 aColor;
-layout(location=0) out vec3 vWorldPos;
-layout(location=1) out vec4 vColor;
-layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
-void main() { vWorldPos = aPosition; vColor = aColor; gl_Position = projView * vec4(aPosition, 1.0); }";
+layout(location=0) out vec3 vRayDirection;
+void main() {
+    vRayDirection = aColor.xyz;
+    gl_Position = vec4(aPosition.xy, 0.0, 1.0);
+}";
 
             string fsCode = @"#version 450
-layout(location=0) in vec3 vWorldPos;
-layout(set=1, binding=0) uniform SkyFog {
+layout(location=0) in vec3 vRayDirection;
+layout(set=0, binding=0) uniform SkyFog {
     vec4 fogColor;     // horizon/fog color (matches world fog so terrain fades in seamlessly)
     vec2 fogRange;     // start, end (unused - sky is not distance-fogged)
-    vec4 cameraPos;    // xyz + pad
+    vec4 sunDirectionTwilight; // xyz = sun direction, w = golden-hour intensity
     vec4 skyTop;       // overhead sky color
     vec4 skyBottom;    // below-horizon color
 };
 layout(location=0) out vec4 outColor;
 void main() {
-    // Vertical sky gradient in CAMERA space (planes at +-16): the horizon is the fog color so the
-    // world fades into it exactly, overhead rises to the bright sky color, and below the horizon
-    // falls to the darker undersky - the classic Cubuild gradient. Use the VIEW DIRECTION's
-    // y (normalize(vWorldPos).y), not the plane's constant y: that varies smoothly per-fragment
-    // from +1 overhead to 0 at the horizon to -1 below. Vertex colors are unused (that varying
-    // misreads on this pipeline).
-    // Sky gradient in CAMERA space: horizon = fog color (matches the clear gap), bright overhead,
-    // dark undersky below. Both halves ramp from EXACTLY the horizon (edge 0) so the color AND its
-    // slope are continuous across the seam - no hard line. The 0.55 factor spreads the transition
-    // over a wider band so the horizon blends gently.
-    float up = clamp(normalize(vWorldPos).y * 0.55, -1.0, 1.0);
-    vec3 col = up >= 0.0
-        ? mix(fogColor.rgb, skyTop.rgb, smoothstep(0.0, 1.0, up))
-        : mix(fogColor.rgb, skyBottom.rgb, smoothstep(0.0, -1.0, up));
+    // The vertex ray vectors are intentionally unnormalized: affine interpolation across either
+    // triangle reconstructs the same ray at a given clip-space coordinate, avoiding a diagonal
+    // interpolation seam. Normalize once here to get the world-space view direction.
+    vec3 viewDir = normalize(vRayDirection);
+    // Preserve the existing sky palette and gradient width: fog color at the horizon, bright
+    // overhead, and the darkened undersky below. Both ramps meet continuously at the horizon.
+    float up = clamp(viewDir.y * 0.55, -1.0, 1.0);
+    vec3 col;
+    if (up >= 0.0) {
+        col = mix(fogColor.rgb, skyTop.rgb, smoothstep(0.0, 1.0, up));
+    } else {
+        // Keep smoothstep edges ascending; reversed edges are undefined in GLSL. This ramp reaches
+        // fogColor at 0.
+        float underBlend = smoothstep(-1.0, 0.0, up);
+        col = mix(skyBottom.rgb, fogColor.rgb, underBlend);
+    }
+
+    // Keep the base sky gradient unchanged. At twilight, tint only a tight angular area around
+    // the actual sun direction with a Minecraft-like amber/orange scattering glow.
+    float twilight = clamp(sunDirectionTwilight.w, 0.0, 1.0);
+    vec3 sunDir = normalize(sunDirectionTwilight.xyz);
+    float sunAlignment = max(dot(viewDir, sunDir), 0.0);
+    float lowSunFade = 1.0 - smoothstep(0.35, 0.82, abs(sunDir.y));
+    // Keep the horizon itself warm while the sun is setting, then fade the glow out just after
+    // the sun crosses above the horizon.
+    float belowHorizonFade = 1.0 - smoothstep(0.0, 0.006, sunDir.y);
+    float halo = (pow(sunAlignment, 4.0) * 0.24
+        + pow(sunAlignment, 12.0) * 0.38
+        + pow(sunAlignment, 32.0) * 0.42)
+        * lowSunFade * twilight * belowHorizonFade;
+    col = mix(col, vec3(1.0, 0.55, 0.25), clamp(halo, 0.0, 0.72));
     outColor = vec4(col, 1.0);
 }";
 
@@ -1904,16 +1921,15 @@ void main() {
                 new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
                 new VertexElementDescription("aColor", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
 
-            // Dedicated fog uniform for the sky so its range (0 .. farPlane*0.8) doesn't disturb the
-            // world fog buffer. Layout: fogColor(16) + fogRange(8) + cameraPos(16) + skyTop(16) +
-            // skyBottom(16) = 80 bytes.
+            // Dedicated sky uniform; preserve the existing 80-byte std140 layout:
+            // fogColor(16) + fogRange(8, padded to 16) + sunDirectionTwilight(16) +
+            // skyTop(16) + skyBottom(16).
             _skyFogLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
                 new ResourceLayoutElementDescription("SkyFog", ResourceKind.UniformBuffer, ShaderStages.Fragment)));
             _skyFogBuffer = factory.CreateBuffer(new BufferDescription(80, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
             _skyFogSet = factory.CreateResourceSet(new ResourceSetDescription(_skyFogLayout, _skyFogBuffer));
 
-            // The sky matrix reuses the projView layout (mat4) but holds the ROTATION-ONLY view *
-            // projection, so the camera-space sky quads render glued to the eye.
+            // The sky matrix is still used by the celestial passes for their rotation-only view * projection.
             _skyMatrixBuffer = factory.CreateBuffer(new BufferDescription(64, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
             _skyMatrixSet = factory.CreateResourceSet(new ResourceSetDescription(_projViewLayout, _skyMatrixBuffer));
 
@@ -1923,21 +1939,19 @@ void main() {
                 DepthStencilState = DepthStencilStateDescription.Disabled,
                 RasterizerState = new RasterizerStateDescription(FaceCullMode.None, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
                 PrimitiveTopology = PrimitiveTopology.TriangleList,
-                ResourceLayouts = new[] { _projViewLayout, _skyFogLayout },
+                ResourceLayouts = new[] { _skyFogLayout },
                 ShaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { shaders[0], shaders[1] }),
                 Outputs = _sc.Framebuffer.OutputDescription
             };
 
             _skyPipeline = factory.CreateGraphicsPipeline(pipelineDesc);
 
-            // Two quads (top + bottom sky planes): 8 vertices of pos(3)+color(4) = 56 floats.
-            // The buffer is filled in DrawSky with CAMERA-SPACE coordinates (relative to the eye),
-            // so it never needs world-space rebuilding.
+            // One full-screen quad: 4 vertices of clip position(3)+world ray(4) = 28 floats.
             _skyVertexBuffer = factory.CreateBuffer(new BufferDescription(
-                8 * 7 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+                4 * 7 * sizeof(float), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
             _skyIndexBuffer = factory.CreateBuffer(new BufferDescription(
-                12 * sizeof(ushort), BufferUsage.IndexBuffer));
-            _gd.UpdateBuffer(_skyIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7 });
+                6 * sizeof(ushort), BufferUsage.IndexBuffer));
+            _gd.UpdateBuffer(_skyIndexBuffer, 0, new ushort[] { 0, 1, 2, 0, 2, 3 });
         }
 
         // Sun, moon and stars. Sun/moon are textured quads drawn
