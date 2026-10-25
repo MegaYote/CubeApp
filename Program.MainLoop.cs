@@ -111,6 +111,7 @@ namespace Cubuild
                     double deltaSeconds = (nowTicks - lastTicks) / (double)Stopwatch.Frequency;
                     lastTicks = nowTicks;
                     if (deltaSeconds > MaxFrameDeltaSeconds) deltaSeconds = MaxFrameDeltaSeconds;
+                    UpdateMusic((float)deltaSeconds);
                     stageStopwatch.Restart();
                     frameCount++;
                     if (fpsStopwatch.ElapsedMilliseconds >= 1000)

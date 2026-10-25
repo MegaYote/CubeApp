@@ -72,6 +72,10 @@
     <EmbeddedResource Include="Assets\Sounds\cavesound5.mp3" />
     <EmbeddedResource Include="Assets\Sounds\cavesound6.mp3" />
     <EmbeddedResource Include="Assets\Sounds\cavesound7.mp3" />
+    <!-- Night music: streamed by MusicPlayer, loudness-matched at bake time. -->
+    <EmbeddedResource Include="Assets\Music\floating_galaxy.mp3" />
+    <EmbeddedResource Include="Assets\Music\skyway.mp3" />
+    <EmbeddedResource Include="Assets\Music\song_puddles.mp3" />
   </ItemGroup>
   <ItemGroup>
     <!-- CubeEditor is a standalone tool — don't compile it into the game -->

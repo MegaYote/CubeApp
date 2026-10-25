@@ -217,6 +217,13 @@ namespace Cubuild
                     continue;
                 }
 
+                // Music lives in Assets/Music and is streamed by MusicPlayer; decoding it into a
+                // one-shot OpenAL buffer here would waste tens of megabytes per track.
+                if (lower.Contains(".assets.music."))
+                {
+                    continue;
+                }
+
                 // Embedded resource names use dots for the folder path (e.g. "Cubuild.Assets.Sounds.sounds.grass.mp3").
                 // The sound name is the FILE NAME without extension, regardless of which folder it lives in.
                 string[] parts = resource.Split('.');

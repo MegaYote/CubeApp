@@ -174,6 +174,7 @@ namespace Cubuild
             RefreshSavedWorlds();
             Sound = new SoundEngine();
             Sound.RegisterAllEmbedded();
+            InitMusic();
         }
 
         private static void EnsureRegistries(bool isMinecraftMode, bool frontierProgression = false)
@@ -206,6 +207,7 @@ namespace Cubuild
         public void Dispose()
         {
             StopNetworking();
+            try { _music?.Dispose(); } catch { }
             try { World?.Dispose(); } catch { }
             try { gpuRenderer?.Dispose(); } catch { }
             try { graphicsDevice?.Dispose(); } catch { }
