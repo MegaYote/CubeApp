@@ -22,7 +22,7 @@ namespace Cubuild
             if (screen == GameScreen.Paused || screen != GameScreen.Playing && screen != GameScreen.Dead) return;
             if (World == null) return;
             // Menu overlays free the mouse; don't move, mine, or place while they're open.
-            if (handEditorOpen || inventoryOpen || craftingOpen || smeltOpen || oreCartOpen || biomeMenuOpen)
+            if (handEditorOpen || inventoryOpen || craftingOpen || smeltOpen || oreCartOpen || biomeMenuOpen || chatOpen)
             {
                 tickInput = new TickInputState(false, false, false, false, false, false, false, false, false, Vector2.Zero,
                     tickInput.NoclipMode, tickInput.CreativeFlightMode);
@@ -37,6 +37,9 @@ namespace Cubuild
             // Death: when health is fully depleted, stop the sim and show the respawn screen.
             if (World.LocalPlayer.Health <= 0)
             {
+                chatOpen = false;
+                _chatJustOpened = false;
+                input.SetChatOpen(false);
                 screen = GameScreen.Dead;
                 menu.Screen = GameScreen.Dead;
                 DisableMouseLook();
@@ -55,6 +58,7 @@ namespace Cubuild
 
             // Survival mining: progress accumulates while the left mouse is held.
             UpdateMining(tickInput, deltaSeconds);
+            TryBeginBoundaryHandoff();
         }
 
         // Hold-to-mine: progress = delta / (BASE_BREAK_TIME * hardness / matching tool speed).

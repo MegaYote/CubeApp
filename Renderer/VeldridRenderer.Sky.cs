@@ -46,9 +46,9 @@ namespace Cubuild.Renderer
             if (_cameraPosition.HasValue)
             {
                 // std140: vec4 cameraPos must start at a 16-byte boundary -> floats 8-11.
-                _fogParams[8] = (float)_cameraPosition.Value.X;
-                _fogParams[9] = (float)_cameraPosition.Value.Y;
-                _fogParams[10] = (float)_cameraPosition.Value.Z;
+                _fogParams[8] = _renderCameraPosition.X;
+                _fogParams[9] = _renderCameraPosition.Y;
+                _fogParams[10] = _renderCameraPosition.Z;
             }
             _fogParams[11] = 1f;
 
@@ -57,9 +57,9 @@ namespace Cubuild.Renderer
             // std140: vec4 hiddenCell -> floats 12-15.
             if (_hud.MiningProgress > 0f && _hud.MiningBlockId > 0)
             {
-                _fogParams[12] = _hud.MiningBlockPos.X;
-                _fogParams[13] = _hud.MiningBlockPos.Y;
-                _fogParams[14] = _hud.MiningBlockPos.Z;
+                _fogParams[12] = (float)(_hud.MiningBlockPos.X - _renderOriginX);
+                _fogParams[13] = (float)(_hud.MiningBlockPos.Y - _renderOriginY);
+                _fogParams[14] = (float)(_hud.MiningBlockPos.Z - _renderOriginZ);
                 _fogParams[15] = 1f;
             }
             else
@@ -84,8 +84,13 @@ namespace Cubuild.Renderer
                 _fogParams[20 + i] = layer.ScrollU;
                 _fogParams[24 + i] = layer.ScrollV;
                 // Sample around the cloud volume's representative mid-height.
-                _fogParams[28 + i] = layer.WorldY + (layer.MinHeight + layer.MaxHeight) * 0.5f;
+                _fogParams[28 + i] = layer.WorldY - _renderOriginY + (layer.MinHeight + layer.MaxHeight) * 0.5f;
             }
+            int worldOriginOffset = FogParamsValueCount + CloudShadowPackedVectorCount * 4;
+            _fogParams[worldOriginOffset] = PositiveModulo(_renderOriginX, (int)CloudTileSize);
+            _fogParams[worldOriginOffset + 1] = 0f;
+            _fogParams[worldOriginOffset + 2] = PositiveModulo(_renderOriginZ, (int)CloudTileSize);
+            _fogParams[worldOriginOffset + 3] = 0f;
             _gd.UpdateBuffer(_fogBuffer, 0, _fogParams);
 
             // Carry weather haze strength in the existing (previously unused) SkyFog vec2 while
@@ -112,6 +117,12 @@ namespace Cubuild.Renderer
             _skyFogParams[18] = fogB * 0.6f + 0.1f;
             _skyFogParams[19] = 1f;
             _gd.UpdateBuffer(_skyFogBuffer, 0, _skyFogParams);
+        }
+
+        private static int PositiveModulo(int value, int modulus)
+        {
+            int remainder = value % modulus;
+            return remainder < 0 ? remainder + modulus : remainder;
         }
 
         // A seeded roll per fourth in-game day keeps weather stable across frames and saves.

@@ -244,6 +244,10 @@ namespace Cubuild
         private float _attackCooldown;
 
         private const float HitInvulnDuration = 1f / 3f;
+        // Being entombed in a solid block: the mob is nudged out sideways while it can, and once
+        // that fails it is being crushed at this rate (HP per second, MC-ish 0.5..1).
+        private const double SuffocationDamagePerSecond = 0.75;
+        private const double UnstuckStep = 0.25;
         private const float PanicDurationMin = 2.8f;
         private const float PanicDurationMax = 4.2f;
         private static readonly float MaxHeadYaw = 75f * (float)Math.PI / 180f;
@@ -1125,6 +1129,60 @@ namespace Cubuild
                     for (int z = z0; z <= z1; z++)
                         if (IsSolid(manager, x, y, z)) return true;
             return false;
+        }
+
+        private static readonly (double dx, double dz)[] UnstuckDirections =
+        {
+            (1, 0), (-1, 0), (0, 1), (0, -1),
+        };
+
+        private float _suffocationAccumulator;
+
+        /// <summary>
+        /// Post-physics stuck recovery. A block can end up sharing the mob's hitbox - sand lands on
+        /// it, or one is placed right where it stands. The body is slid out through the first free
+        /// horizontal direction; when every side is walled off the mob is being crushed and takes
+        /// suffocation damage (0.75 HP/s, one point at a time, still subject to the hit-immunity
+        /// window). Returns true while the mob is still embedded after the attempt.
+        /// </summary>
+        public bool UpdateBlockEmbedding(ChunkManager manager, float deltaSeconds)
+        {
+            if (_dead || Removed)
+            {
+                _suffocationAccumulator = 0f;
+                return false;
+            }
+
+            if (!IntersectsSolid(manager, Position.X, Position.Y, Position.Z))
+            {
+                _suffocationAccumulator = 0f;
+                return false;
+            }
+
+            // Small per-frame steps: the mob squeezes out over a few frames instead of being
+            // teleported, and a step this short can never skip clean across a one-block wall.
+            foreach (var (dx, dz) in UnstuckDirections)
+            {
+                var candidate = new Point3D(
+                    Position.X + dx * UnstuckStep, Position.Y, Position.Z + dz * UnstuckStep);
+                if (IntersectsSolid(manager, candidate.X, candidate.Y, candidate.Z)) continue;
+
+                Position = candidate;
+                _suffocationAccumulator = 0f;
+                return false;
+            }
+
+            _suffocationAccumulator += (float)(SuffocationDamagePerSecond * deltaSeconds);
+            if (_suffocationAccumulator >= 1f)
+            {
+                // One point at a time, gated by the normal hit-immunity window: a fresh melee hit
+                // holds the crush damage back until the mob can be hurt again.
+                if (Damage(1, Position.X, Position.Z, hasSource: false))
+                    _suffocationAccumulator = 0f;
+                else
+                    _suffocationAccumulator = 1f; // stay primed, don't bank extra damage
+            }
+            return true;
         }
 
         private static bool IsSolid(ChunkManager manager, int x, int y, int z)

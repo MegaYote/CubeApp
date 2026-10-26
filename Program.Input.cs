@@ -17,6 +17,30 @@ namespace Cubuild
     {
         private void ApplyFrameInput(FrameInputState frameInput)
         {
+            // Chat owns the keyboard before any gameplay hotkeys or Escape-to-pause behavior.
+            if (chatOpen)
+            {
+                if (frameInput.ToggleMouseCapturePressed)
+                {
+                    chatOpen = false;
+                    _chatJustOpened = false;
+                    input.SetChatOpen(false);
+                    EnableMouseLook();
+                }
+                return;
+            }
+
+            if (frameInput.OpenChatPressed && screen == GameScreen.Playing && World != null
+                && !inventoryOpen && !craftingOpen && !smeltOpen && !oreCartOpen
+                && !biomeMenuOpen && !handEditorOpen)
+            {
+                chatOpen = true;
+                _chatJustOpened = true;
+                input.SetChatOpen(true);
+                DisableMouseLook();
+                return;
+            }
+
             if (frameInput.ToggleMouseCapturePressed)
             {
                 if (screen == GameScreen.Playing)

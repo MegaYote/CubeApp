@@ -47,13 +47,14 @@ namespace Cubuild.Renderer
         private void CreatePipeline()
         {
             var factory = _gd.ResourceFactory;
-            // Packed chunk vertex format (24 bytes vs the old 52): the vertex shader decodes
+            // Packed chunk vertex format (36 bytes): the vertex shader decodes
             // the packed fields into fragment inputs, including the per-face biome grass tint bit.
-            //   aPosition  : world-space Float3 (12 bytes)
+            //   aPosition  : chunk-local Float3 (12 bytes)
             //   aPack1     : du/dv as 8.8 fixed point (uint16 each)
             //   aPack2     : tile rect as 4x uint8 ATLAS TEXELS (x,y,w,h)
             //   aPack3     : directionalShade(8) | alphaByte(8) | alphaMode(2) | hillsTint(1)
             //                | skyLight(4) | blockLight(4) | faceDirection(3) | pad(2)
+            //   aOrigin    : integer world anchor (12 bytes), subtracted from render origin in GLSL
             //                alphaMode 0 = real alpha (opaque/water), 1 = glass frame (-100
             //                sentinel), 2 = translucent glass tint (-200 sentinel).
             // Atlas size is baked in (atlas loads before CreatePipeline) so the texel decode is exact.
@@ -64,6 +65,7 @@ layout(location=0) in vec3 aPosition;
 layout(location=1) in uint aPack1;
 layout(location=2) in uint aPack2;
 layout(location=3) in uint aPack3;
+layout(location=4) in ivec3 aOrigin;
 layout(location=0) out vec2 vLocalUV;
 layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
@@ -71,7 +73,7 @@ layout(location=3) out vec3 vWorldPos;
 layout(location=4) flat out uint vBiomeHillsGreenTint;
 layout(location=5) flat out uint vLightPacked;
 layout(location=6) flat out uint vFaceDirection;
-layout(set=0, binding=0) uniform ProjectionView {{ mat4 projView; }};
+layout(set=0, binding=0) uniform ProjectionView {{ mat4 projView; ivec4 renderOrigin; }};
 const float ATLAS_INV_X = 1.0 / {atlasW.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
 const float ATLAS_INV_Y = 1.0 / {atlasH.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
 void main() {{
@@ -97,8 +99,9 @@ void main() {{
     vFaceDirection = (aPack3 >> 27) & 0x7u;
     float alpha = mode == 0u ? float(alphaByte) / 255.0 : (mode == 1u ? -100.0 : -200.0);
     vColor = vec4(shade, shade, shade, alpha);
-    vWorldPos = aPosition;
-    gl_Position = projView * vec4(aPosition, 1.0);
+    vec3 relativePos = aPosition + vec3(aOrigin - renderOrigin.xyz);
+    vWorldPos = relativePos;
+    gl_Position = projView * vec4(relativePos, 1.0);
 }}";
 
             string fsCode = @"#version 450
@@ -121,6 +124,7 @@ layout(set=2, binding=0) uniform FogParams {
     vec4 cloudShadowScrollV;   // per-layer V scroll
     vec4 cloudShadowAltitudes; // per-layer representative cloud altitude
     uvec4 cloudShadowRows[24];
+    vec4 worldOrigin; // x/z = absolute render origin modulo cloud tile
 };
 layout(location=0) out vec4 outColor;
 float lightBrightness(float level) {
@@ -161,7 +165,7 @@ float cloudLayerCoverage(vec3 worldPos, uint faceDirection, int layer, float scr
     float verticalDistance = altitude - blockCenter.y;
     if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
     float sunElevation = max(cloudShadowSun.y, 0.18);
-    vec2 projected = blockCenter.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
+    vec2 projected = blockCenter.xz + worldOrigin.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
     // Higher cloud decks cast progressively softer shadows: low 100%, mid 65%, high 35%.
     float layerWeight = layer == 0 ? 1.0 : (layer == 1 ? 0.65 : 0.35);
@@ -228,7 +232,8 @@ void main() {
                 new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
                 new VertexElementDescription("aPack1", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1),
                 new VertexElementDescription("aPack2", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1),
-                new VertexElementDescription("aPack3", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1));
+                new VertexElementDescription("aPack3", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1),
+                new VertexElementDescription("aOrigin", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Int3));
 
             var shaderSet = new ShaderSetDescription(new[] { vertexLayout }, new[] { vs, fs });
 
@@ -284,6 +289,7 @@ layout(set=2, binding=0) uniform FogParams {
     vec4 cloudShadowScrollV;
     vec4 cloudShadowAltitudes;
     uvec4 cloudShadowRows[24];
+    vec4 worldOrigin;
 };
 layout(location=0) out vec4 outColor;
 float lightBrightness(float level) {
@@ -320,7 +326,7 @@ float cloudLayerCoverage(vec3 worldPos, uint faceDirection, int layer, float scr
     float verticalDistance = altitude - blockCenter.y;
     if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
     float sunElevation = max(cloudShadowSun.y, 0.18);
-    vec2 projected = blockCenter.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
+    vec2 projected = blockCenter.xz + worldOrigin.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
     float layerWeight = layer == 0 ? 1.0 : (layer == 1 ? 0.65 : 0.35);
     return cloudMaskSample(uv, layer) * layerWeight;
@@ -418,6 +424,7 @@ layout(set=2, binding=0) uniform FogParams {
     vec4 cloudShadowScrollV;
     vec4 cloudShadowAltitudes;
     uvec4 cloudShadowRows[24];
+    vec4 worldOrigin;
 };
 layout(location=0) out vec4 outColor;
 float lightBrightness(float level) {
@@ -454,7 +461,7 @@ float cloudLayerCoverage(vec3 worldPos, uint faceDirection, int layer, float scr
     float verticalDistance = altitude - blockCenter.y;
     if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
     float sunElevation = max(cloudShadowSun.y, 0.18);
-    vec2 projected = blockCenter.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
+    vec2 projected = blockCenter.xz + worldOrigin.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
     float layerWeight = layer == 0 ? 1.0 : (layer == 1 ? 0.65 : 0.35);
     return cloudMaskSample(uv, layer) * layerWeight;
@@ -537,6 +544,7 @@ layout(location=2) out vec4 vColor;
 layout(location=3) out vec3 vWorldPos;
 layout(location=4) flat out uint vBiomeHillsGreenTint;
 layout(location=5) flat out uint vLightPacked;
+layout(location=6) flat out uint vFaceDirection;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() {
     vec3 worldPos = aCorner + iWorldPos;
@@ -546,6 +554,7 @@ void main() {
     vWorldPos = worldPos;
     vBiomeHillsGreenTint = 0u;
     vLightPacked = 15u; // moving blocks use the shared sky-only day/night scale
+    vFaceDirection = 0u;
     gl_Position = projView * vec4(worldPos, 1.0);
 }";
             var fallingVsSpirv = SpirvCompilation.CompileGlslToSpirv(fallingVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
@@ -591,6 +600,7 @@ layout(location=2) out vec4 vColor;
 layout(location=3) out vec3 vWorldPos;
 layout(location=4) flat out uint vBiomeHillsGreenTint;
 layout(location=5) flat out uint vLightPacked;
+layout(location=6) flat out uint vFaceDirection;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() {
     vec3 local = aCorner - vec3(0.15);
@@ -604,6 +614,7 @@ void main() {
     vWorldPos = worldPos;
     vBiomeHillsGreenTint = 0u;
     vLightPacked = 15u;
+    vFaceDirection = 0u;
     gl_Position = projView * vec4(worldPos, 1.0);
 }";
                 var itemDropVsSpirv = SpirvCompilation.CompileGlslToSpirv(itemDropVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
@@ -648,6 +659,7 @@ layout(location=2) out vec4 vColor;
 layout(location=3) out vec3 vWorldPos;
 layout(location=4) flat out uint vBiomeHillsGreenTint;
 layout(location=5) flat out uint vLightPacked;
+layout(location=6) flat out uint vFaceDirection;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() {
     // projView's top 3x3 rows are the camera basis scaled by the projection factors;
@@ -662,6 +674,7 @@ void main() {
     vWorldPos = worldPos;
     vBiomeHillsGreenTint = 0u;
     vLightPacked = 15u;
+    vFaceDirection = 0u;
     gl_Position = projView * vec4(worldPos, 1.0);
 }";
                 var spriteVsSpirv = SpirvCompilation.CompileGlslToSpirv(spriteVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
@@ -1602,7 +1615,8 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
                 new VertexElementDescription("aPosition", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
                 new VertexElementDescription("aPack1", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1),
                 new VertexElementDescription("aPack2", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1),
-                new VertexElementDescription("aPack3", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1));
+                new VertexElementDescription("aPack3", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1),
+                new VertexElementDescription("aOrigin", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Int3));
             float shrinkAtlasW = Math.Max(1f, _atlasWidth);
             float shrinkAtlasH = Math.Max(1f, _atlasHeight);
             // Build the shared vertex shader with a configurable clip-space depth bias: the CUBE
@@ -1614,13 +1628,14 @@ layout(location=0) in vec3 aPosition;
 layout(location=1) in uint aPack1;
 layout(location=2) in uint aPack2;
 layout(location=3) in uint aPack3;
+layout(location=4) in ivec3 aOrigin;
 layout(location=0) out vec2 vLocalUV;
 layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
 layout(location=3) out vec3 vWorldPos;
 layout(location=5) flat out uint vLightPacked;
 layout(location=6) flat out uint vFaceDirection;
-layout(set=0, binding=0) uniform ProjectionView {{ mat4 projView; }};
+layout(set=0, binding=0) uniform ProjectionView {{ mat4 projView; ivec4 renderOrigin; }};
 const float ATLAS_INV_X = 1.0 / {shrinkAtlasW.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
 const float ATLAS_INV_Y = 1.0 / {shrinkAtlasH.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
 void main() {{
@@ -1641,8 +1656,9 @@ void main() {{
     vLightPacked = skyLight | (blockLight << 4);
     vFaceDirection = (aPack3 >> 27) & 0x7u;
     vColor = vec4(shade, shade, shade, alpha);
-    vWorldPos = aPosition;
-    vec4 clip = projView * vec4(aPosition, 1.0);
+    vec3 relativePos = aPosition + vec3(aOrigin - renderOrigin.xyz);
+    vWorldPos = relativePos;
+    vec4 clip = projView * vec4(relativePos, 1.0);
     // Polygon-offset equivalent (C++ glPolygonOffset(-1,-1)): pull depth toward the camera.
     clip.z -= {biasExpr} * clip.w;
     gl_Position = clip;
@@ -1668,6 +1684,7 @@ layout(set=2, binding=0) uniform FogParams {
     vec4 cloudShadowScrollV;
     vec4 cloudShadowAltitudes;
     uvec4 cloudShadowRows[24];
+    vec4 worldOrigin;
 };
 layout(location=0) out vec4 outColor;
 float lightBrightness(float level) {
@@ -1704,7 +1721,7 @@ float cloudLayerCoverage(vec3 worldPos, uint faceDirection, int layer, float scr
     float verticalDistance = altitude - blockCenter.y;
     if (verticalDistance <= 0.0 || cloudShadowSun.w <= 0.001) return 0.0;
     float sunElevation = max(cloudShadowSun.y, 0.18);
-    vec2 projected = blockCenter.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
+    vec2 projected = blockCenter.xz + worldOrigin.xz + cloudShadowSun.xz * (verticalDistance / sunElevation);
     vec2 uv = projected / 256.0 + vec2(scrollU, scrollV);
     float layerWeight = layer == 0 ? 1.0 : (layer == 1 ? 0.65 : 0.35);
     return cloudMaskSample(uv, layer) * layerWeight;
@@ -2147,7 +2164,9 @@ void main() {
                     SamplerBorderColor.TransparentBlack))));
             // The wide-far matrix lives with the world plane (its only consumer): created HERE,
             // before the resource set that references it.
-            _cloudMatrixBuffer = factory.CreateBuffer(new BufferDescription(64, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            // Cloud vertices subtract the same integer render origin as terrain, so this buffer
+            // must include both the matrix and the trailing ivec4 origin from ProjectionView.
+            _cloudMatrixBuffer = factory.CreateBuffer(new BufferDescription(80, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
             _cloudMatrixSet = factory.CreateResourceSet(new ResourceSetDescription(_projViewLayout, _cloudMatrixBuffer));
             _worldPlaneMatrixSet = factory.CreateResourceSet(new ResourceSetDescription(_projViewLayout, _cloudMatrixBuffer));
 
@@ -2180,9 +2199,10 @@ layout(location=1) in float aShade;
 layout(location=2) in vec2 iOffset;
 layout(location=0) out vec3 vWorldPosition;
 layout(location=1) out float vShade;
-layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; ivec4 renderOrigin; };
 void main() {
     vec3 worldPosition = aPosition + vec3(iOffset.x, 0.0, iOffset.y);
+    worldPosition.y -= float(renderOrigin.y);
     vWorldPosition = worldPosition;
     vShade = aShade;
     gl_Position = projView * vec4(worldPosition, 1.0);
@@ -2549,18 +2569,20 @@ void main() {
             if (fade <= 0.01f) return;
 
             float extent = Math.Max(_cloudFarPlane * 1.5f, 1536f);
-            float camX = (float)cam.X;
-            float camZ = (float)cam.Z;
+            float camX = (float)(cam.X - _renderOriginX);
+            float camZ = (float)(cam.Z - _renderOriginZ);
+            double phaseX = cam.X - Math.Floor(cam.X / 256.0) * 256.0;
+            double phaseZ = cam.Z - Math.Floor(cam.Z / 256.0) * 256.0;
             float y = WorldPlaneY;
-            float u0 = camX / 256f, u1 = (camX + extent * 2f) / 256f;
-            float v0 = camZ / 256f, v1 = (camZ + extent * 2f) / 256f;
+            float u0 = (float)(phaseX / 256.0), u1 = u0 + extent * 2f / 256f;
+            float v0 = (float)(phaseZ / 256.0), v1 = v0 + extent * 2f / 256f;
 
             float[] verts =
             {
-                camX - extent, y, camZ - extent, u0, v0,
-                camX + extent, y, camZ - extent, u1, v0,
-                camX + extent, y, camZ + extent, u1, v1,
-                camX - extent, y, camZ + extent, u0, v1,
+                camX - extent, y - _renderOriginY, camZ - extent, u0, v0,
+                camX + extent, y - _renderOriginY, camZ - extent, u1, v0,
+                camX + extent, y - _renderOriginY, camZ + extent, u1, v1,
+                camX - extent, y - _renderOriginY, camZ + extent, u0, v1,
             };
             _gd.UpdateBuffer(_worldPlaneVertexBuffer, 0, verts);
 
@@ -2595,8 +2617,10 @@ void main() {
             if (_cloudPipeline == null || _cloudDepthPipeline == null || !_cameraPosition.HasValue) return;
 
             float extent = Math.Max(_farPlane, 768f);
-            float camX = (float)_cameraPosition.Value.X;
-            float camZ = (float)_cameraPosition.Value.Z;
+            double absoluteCamX = _cameraPosition.Value.X;
+            double absoluteCamZ = _cameraPosition.Value.Z;
+            float camX = (float)(absoluteCamX - _renderOriginX);
+            float camZ = (float)(absoluteCamZ - _renderOriginZ);
 
             int tileRadius = (int)Math.Ceiling(extent / CloudTileSize) + 1;
             int side = tileRadius * 2 + 1;
@@ -2625,14 +2649,14 @@ void main() {
                         (uint)(layer.InstanceScratch.Length * sizeof(float)), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
                 }
 
-                float centerTileX = (float)Math.Floor((camX - driftX) / CloudTileSize);
-                float centerTileZ = (float)Math.Floor((camZ - driftZ) / CloudTileSize);
+                double centerTileX = Math.Floor((absoluteCamX - driftX) / CloudTileSize);
+                double centerTileZ = Math.Floor((absoluteCamZ - driftZ) / CloudTileSize);
                 int instance = 0;
                 for (int z = -tileRadius; z <= tileRadius; z++)
                 for (int x = -tileRadius; x <= tileRadius; x++)
                 {
-                    layer.InstanceScratch[instance * 2] = (centerTileX + x) * CloudTileSize + driftX;
-                    layer.InstanceScratch[instance * 2 + 1] = (centerTileZ + z) * CloudTileSize + driftZ;
+                    layer.InstanceScratch[instance * 2] = (float)((centerTileX + x) * CloudTileSize + driftX - _renderOriginX);
+                    layer.InstanceScratch[instance * 2 + 1] = (float)((centerTileZ + z) * CloudTileSize + driftZ - _renderOriginZ);
                     instance++;
                 }
                 _gd.UpdateBuffer(layer.InstanceBuffer, 0, layer.InstanceScratch);

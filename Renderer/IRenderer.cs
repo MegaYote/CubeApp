@@ -27,6 +27,11 @@ namespace Cubuild.Renderer
         void SetWorldSeed(int seed);
         void SetCullingMode(Cubuild.CullingMode mode);
         Cubuild.CullingMode GetCullingMode();
+        /// <summary>Returns a bounded diagnostic snapshot without exposing renderer internals.</summary>
+        ChunkDiagnosticsSnapshot CaptureChunkDiagnostics(
+            int playerLayer, int playerChunkX, int playerChunkZ,
+            int targetLayer, int targetChunkX, int targetChunkZ, bool hasBlockTarget,
+            int renderRadius, int dirtyMeshQueueCount);
         void ToggleGpuCulling();
         void MeshChunkImmediate(Cubuild.ChunkCoordinates coords);
         void ProcessPendingPriorityMeshes();
@@ -36,6 +41,7 @@ namespace Cubuild.Renderer
         bool TryTakeInventoryClick(out (int Kind, int Target, int Button) click);
         int HoveredInventorySlot { get; }
         bool TryTakeBiomeSelection(out string biomeName);
+        bool TryTakeChatCommand(out string command);
         void SpawnBlockBreakParticles(int worldX, int worldY, int worldZ, int blockId, int count,
             int skyLightLevel = 0, int blockLightLevel = 0);
         void ResetWorld();

@@ -31,6 +31,40 @@ namespace Cubuild
         /// The list mutates during iteration, so callers should break out, not remove.
         /// </summary>
         public IReadOnlyList<IMobRenderable> Mobs => _mobs;
+
+        /// <summary>
+        /// True when any living mob's hitbox overlaps one of the given block collision boxes.
+        /// Block placement uses this so a cube can't be dropped on top of an entity and trap it
+        /// inside: mobs are feet-anchored (Position.Y .. +Height) and Width-centered on X/Z, the
+        /// same bounds their own physics collides with.
+        /// </summary>
+        public bool AnyMobIntersectsBox(
+            (double minX, double minY, double minZ, double maxX, double maxY, double maxZ)[] boxes,
+            int blockX, int blockY, int blockZ)
+        {
+            foreach (var renderable in _mobs)
+            {
+                if (renderable is not MobEntity mob || mob.Removed || mob.IsDead) continue;
+
+                double half = mob.Width * 0.5;
+                var pos = mob.Position;
+                double minX = pos.X - half, maxX = pos.X + half;
+                double minY = pos.Y, maxY = pos.Y + mob.Height;
+                double minZ = pos.Z - half, maxZ = pos.Z + half;
+
+                foreach (var b in boxes)
+                {
+                    if (blockX + b.maxX > minX && blockX + b.minX < maxX
+                        && blockY + b.maxY > minY && blockY + b.minY < maxY
+                        && blockZ + b.maxZ > minZ && blockZ + b.minZ < maxZ)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         // World->skylightSubtracted (0 day .. 11 night) for the monster darkness gate.
         private Func<int>? _skylightSubtractedFn;
 
@@ -367,6 +401,15 @@ namespace Cubuild
                     if (mobEntity != LocallyDrivenMob)
                         mobEntity.Update(deltaSeconds, _chunkManager);
 
+                    // Stuck-in-block recovery: a block dropped or placed onto the hitbox shoves the
+                    // mob sideways, and crushes it when there is nowhere to go. Vehicles are exempt -
+                    // a cart is not a living body to suffocate.
+                    if (mobEntity != LocallyDrivenMob && !mobEntity.Removed && !mobEntity.IsDead
+                        && mobEntity is not CartEntity && mobEntity is not BoatEntity)
+                    {
+                        mobEntity.UpdateBlockEmbedding(_chunkManager, deltaSeconds);
+                    }
+
                     if (mobEntity.Removed)
                     {
                         // A coupling cannot outlive a cart - drop either half it belonged to.
@@ -688,8 +731,7 @@ namespace Cubuild
                 if (a.Follower is not { } b || b.IsDead || b.Removed) continue;
                 LinkSegment(a, b, out var pa, out var pb);
                 list.Add(new Cubuild.Renderer.LinkBeam(
-                    new System.Numerics.Vector3((float)pa.X, (float)pa.Y, (float)pa.Z),
-                    new System.Numerics.Vector3((float)pb.X, (float)pb.Y, (float)pb.Z)));
+                    pa, pb));
             }
         }
 

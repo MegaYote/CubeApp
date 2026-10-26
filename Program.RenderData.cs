@@ -91,6 +91,7 @@ namespace Cubuild
                 return new HudState
                 {
                     ShowDebug = showFps, NoclipMode = false, CreativeFlightMode = false, Menu = menu, Fps = lastFps,
+                    WorldName = string.Empty,
                     UpdateMs = lastUpdateMs, MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                     SelectedBlockText = "Selected: -",
                     SelectedSlot = 0, WorldSeed = 0,
@@ -100,6 +101,8 @@ namespace Cubuild
                     NetStatus = netStatus,
                     MultiplayerError = mpError,
                     SaveToast = _saveToastTimer,
+                    StatusToastTimer = _statusToastTimer,
+                    StatusToast = _statusToast,
                     WorldGenCurrent = GameWorld.GenerationVersion,
                     IsMinecraftMode = false,
                     SaplingGrowthText = string.Empty,
@@ -107,8 +110,21 @@ namespace Cubuild
             }
             var forward = World.GetCameraForward();
             var pickResult = World.TryPickBlock(World.PlayerPosition, forward);
-            Vector3[]? highlightQuad = null;
+            Point3D[]? highlightQuad = null;
             if (pickResult.HasValue) highlightQuad = ComputeHighlightWorldQuad(pickResult.Value);
+            int playerChunkX = GameWorld.WorldToChunkCoord(World.PlayerPosition.X);
+            int playerChunkZ = GameWorld.WorldToChunkCoord(World.PlayerPosition.Z);
+            int playerLayer = ChunkManager.LayerForWorldY((int)Math.Floor(World.PlayerPosition.Y));
+            bool hasBlockTarget = pickResult.HasValue;
+            var targetBlock = pickResult?.Remove ?? (0, 0, 0);
+            int targetLayer = hasBlockTarget ? ChunkManager.LayerForWorldY(targetBlock.y) : playerLayer;
+            int targetChunkX = hasBlockTarget ? GameWorld.WorldToChunkCoord(targetBlock.x) : playerChunkX;
+            int targetChunkZ = hasBlockTarget ? GameWorld.WorldToChunkCoord(targetBlock.z) : playerChunkZ;
+            var chunkDiagnostics = showFps
+                ? gpuRenderer?.CaptureChunkDiagnostics(playerLayer, playerChunkX, playerChunkZ,
+                    targetLayer, targetChunkX, targetChunkZ, hasBlockTarget,
+                    ChunkRenderRadius, World.Mesher.PendingDirtyCount)
+                : null;
             string saplingText = string.Empty;
             if (pickResult.HasValue && World != null && World.BlockTicks != null)
             {
@@ -121,7 +137,7 @@ namespace Cubuild
             }
             // Mining overlay only shows on the block actually being mined.
             float miningProgress = 0f;
-            Vector3 miningBlockPos = Vector3.Zero;
+            Point3D miningBlockPos = Point3D.Zero;
             int miningBlockId = 0;
             var miningBlockNormal = new Point3D(0, 0, 0);
             if (_miningTarget.HasValue && pickResult.HasValue)
@@ -130,7 +146,7 @@ namespace Cubuild
                 if (_miningTarget.Value.x == t.x && _miningTarget.Value.y == t.y && _miningTarget.Value.z == t.z)
                 {
                     miningProgress = _miningProgress;
-                    miningBlockPos = new Vector3(t.x, t.y, t.z);
+                    miningBlockPos = new Point3D(t.x, t.y, t.z);
                     miningBlockId = _miningBlockId;
                     miningBlockNormal = _miningSlideDir;
                 }
@@ -141,10 +157,13 @@ namespace Cubuild
             return new HudState
             {
                 ShowDebug = showFps, InventoryOpen = inventoryOpen, CraftingOpen = craftingOpen, SmeltOpen = smeltOpen, OreCartOpen = oreCartOpen,
+                ChatOpen = chatOpen, ChatJustOpened = _chatJustOpened,
+                ChatResult = _chatResult, ChatResultIsError = _chatResultIsError,
                 OreCartSlots = _openOreCart?.CargoSlots ?? Array.Empty<InventorySlot>(),
                 BiomeMenuOpen = biomeMenuOpen, HandEditorOpen = handEditorOpen,
                 NoclipMode = World.NoclipMode, CreativeFlightMode = World.CreativeFlightMode,
-                Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
+                Fullbright = ChunkLighting.Fullbright, WorldTime = World.WorldTime, WorldName = World.Name,
+                ChunkDiagnostics = chunkDiagnostics, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
                 MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                 EntityMs = World.LastEntityMs, EntityCount = World.Entities.MobCount,
                 FacingText = $"{GetCompassDirection(World.PlayerYaw)} ({GameWorld.NormalizeYaw(World.PlayerYaw):0.0} deg)",
@@ -174,8 +193,8 @@ namespace Cubuild
                 PlayerX = World.PlayerPosition.X,
                 PlayerY = World.PlayerPosition.Y,
                 PlayerZ = World.PlayerPosition.Z,
-                PlayerChunkX = GameWorld.WorldToChunkCoord(World.PlayerPosition.X),
-                PlayerChunkZ = GameWorld.WorldToChunkCoord(World.PlayerPosition.Z),
+                PlayerChunkX = playerChunkX,
+                PlayerChunkZ = playerChunkZ,
                 RenderDistance = ChunkRenderRadius,
                 NetStatus = netStatus,
                 MultiplayerError = mpError,
@@ -187,6 +206,8 @@ namespace Cubuild
                 HandSwing = _handSwingTimer,
                 HandSwingSerial = _handSwingSerial,
                 SaveToast = _saveToastTimer,
+                StatusToastTimer = _statusToastTimer,
+                StatusToast = _statusToast,
                 GenWarning = _genWarningTimer,
                 WorldGenSaved = World.WorldGenVersion,
                 WorldGenCurrent = GameWorld.GenerationVersion,

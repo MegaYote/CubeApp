@@ -183,7 +183,7 @@ namespace Cubuild
                 _fallSpeeds[i] = vel;
 
                 float remaining = vel * deltaSeconds;
-                float newY = f.Y;
+                double newY = f.Y;
                 int floorX = (int)Math.Floor(f.X);
                 int floorZ = (int)Math.Floor(f.Z);
                 bool landed = false;

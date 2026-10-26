@@ -44,11 +44,13 @@ namespace Cubuild
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 11;
+        public const int Version = 12;
         /// <summary>Binary version read from disk; new/in-memory saves use the current version.</summary>
         public int FileVersion = Version;
 
         public string Name = "World 1";
+        /// <summary>Runtime-only save-file key (the path may differ from Name after a rename).</summary>
+        public string SourceFileName = "";
         public int Seed;
         /// <summary>
         /// Terrain-generation version this world was originally made with (stamped at creation).
@@ -83,6 +85,11 @@ namespace Cubuild
         public List<SavedChunk> Chunks = new();
         public List<SavedMob> Mobs = new();
         public List<SavedSapTorchTimer> SapTorchTimers = new();
+        /// <summary>v12: neighboring world-save keys for the four horizontal boundaries.</summary>
+        public string LinkedPositiveXWorld = "";
+        public string LinkedNegativeXWorld = "";
+        public string LinkedPositiveZWorld = "";
+        public string LinkedNegativeZWorld = "";
 
         public void Save(string path)
         {
@@ -163,6 +170,13 @@ namespace Cubuild
                     w.Write(timer.GraceEndTick);
                     w.Write(timer.BurnAtTick);
                 }
+
+                // v12: side-specific links are save-file keys, not display names. Older saves
+                // end immediately after the sap-torch timers and load with empty links.
+                w.Write(LinkedPositiveXWorld ?? "");
+                w.Write(LinkedNegativeXWorld ?? "");
+                w.Write(LinkedPositiveZWorld ?? "");
+                w.Write(LinkedNegativeZWorld ?? "");
             }
 
             using var file = File.Create(path);
@@ -184,6 +198,7 @@ namespace Cubuild
 
                 var save = new WorldSave();
                 save.FileVersion = version;
+                save.SourceFileName = Path.GetFileNameWithoutExtension(path);
                 save.Name = reader.ReadString();
                 save.Seed = reader.ReadInt32();
                 if (version >= 3) save.Mode = reader.ReadInt32();
@@ -255,6 +270,13 @@ namespace Cubuild
                             };
                         }
                     }
+                    else if (!string.Equals(m.Type, "orecart", StringComparison.Ordinal))
+                    {
+                        // Regular mobs serialize no cargo payload. Keep the in-memory shape aligned
+                        // with EntityManager.SaveMobs(), which uses Array.Empty for non-orecarts;
+                        // boundary handoff save verification compares this snapshot after read-back.
+                        m.CargoSlots = Array.Empty<InventorySlot>();
+                    }
                     save.Mobs.Add(m);
                 }
                 if (version >= 11)
@@ -271,6 +293,13 @@ namespace Cubuild
                             BurnAtTick = reader.ReadInt64(),
                         });
                     }
+                }
+                if (version >= 12)
+                {
+                    save.LinkedPositiveXWorld = reader.ReadString();
+                    save.LinkedNegativeXWorld = reader.ReadString();
+                    save.LinkedPositiveZWorld = reader.ReadString();
+                    save.LinkedNegativeZWorld = reader.ReadString();
                 }
                 return save;
             }

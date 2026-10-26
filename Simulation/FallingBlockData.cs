@@ -9,11 +9,11 @@ namespace Cubuild
     {
         public int BlockId { get; }
         /// <summary>Bottom of the cube in world Y (the cube occupies Y..Y+1).</summary>
-        public float X { get; }
-        public float Y { get; }
-        public float Z { get; }
+        public double X { get; }
+        public double Y { get; }
+        public double Z { get; }
 
-        public FallingBlockData(int blockId, float x, float y, float z)
+        public FallingBlockData(int blockId, double x, double y, double z)
         {
             BlockId = blockId;
             X = x;

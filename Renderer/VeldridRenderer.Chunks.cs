@@ -143,13 +143,22 @@ namespace Cubuild.Renderer
         // (growing the GPU buffers 2x if the tail would overflow).
         private (uint vbo, uint vbBytes, uint ibo, uint ibBytes) AllocateRange(uint vbBytes, uint ibBytes)
         {
-            for (int i = 0; i < _freeBlocks.Count; i++)
+            // Buffer growth copies are queued and recorded into the next frame's CommandList.
+            // Chunk uploads, however, update the current buffer immediately. If we reused a free
+            // range inside the old buffer's copied prefix during this interval, that later copy
+            // would overwrite the freshly uploaded mesh with stale bytes from the old buffer.
+            // Keep allocations append-only until all queued copies are recorded; the holes remain
+            // available for reuse on the next frame.
+            if (_pendingBufferCopies.Count == 0)
             {
-                var b = _freeBlocks[i];
-                if (b.VbBytes >= vbBytes && b.IbBytes >= ibBytes)
+                for (int i = 0; i < _freeBlocks.Count; i++)
                 {
-                    _freeBlocks.RemoveAt(i);
-                    return (b.VbOffset, vbBytes, b.IbOffset, ibBytes);
+                    var b = _freeBlocks[i];
+                    if (b.VbBytes >= vbBytes && b.IbBytes >= ibBytes)
+                    {
+                        _freeBlocks.RemoveAt(i);
+                        return (b.VbOffset, vbBytes, b.IbOffset, ibBytes);
+                    }
                 }
             }
 
@@ -259,13 +268,13 @@ namespace Cubuild.Renderer
                             patchCoord.X + dx, patchCoord.Z + dz);
                         if (!_surfaceLodMeshes.TryGetValue(member, out var mesh)
                             || mesh.Vertices.Length == 0 || mesh.Indices.Length == 0
-                            || mesh.Vertices.Length % 6 != 0)
+                            || mesh.Vertices.Length % 9 != 0)
                         {
                             complete = false;
                             break;
                         }
 
-                        int memberVertices = mesh.Vertices.Length / 6;
+                        int memberVertices = mesh.Vertices.Length / 9;
                         if (vertexCount > 65536 - memberVertices)
                         {
                             complete = false;
@@ -279,7 +288,7 @@ namespace Cubuild.Renderer
 
                 if (!complete || vertexCount == 0 || indexCount == 0) continue;
 
-                var vertices = new uint[vertexCount * 6];
+                var vertices = new uint[vertexCount * 9];
                 var indices = new ushort[indexCount];
                 int vertexWrite = 0;
                 int indexWrite = 0;
@@ -289,7 +298,7 @@ namespace Cubuild.Renderer
                     var mesh = memberMeshes[memberIndex];
                     Array.Copy(mesh.Vertices, 0, vertices, vertexWrite, mesh.Vertices.Length);
                     vertexWrite += mesh.Vertices.Length;
-                    int memberVertexCount = mesh.Vertices.Length / 6;
+                    int memberVertexCount = mesh.Vertices.Length / 9;
                     for (int i = 0; i < mesh.Indices.Length; i++)
                     {
                         int rebased = vertexBase + mesh.Indices[i];
@@ -424,12 +433,12 @@ namespace Cubuild.Renderer
                 var entry = commands[i];
                 var coord = entry.Coord;
                 var cmd = entry.Cmd;
-                float minX = coord.X * ChunkManager.ChunkSize;
+                float minX = (float)((long)coord.X * ChunkManager.ChunkSize - _renderOriginX);
                 float maxX = minX + ChunkManager.ChunkSize * entry.ChunkSpan;
-                float minZ = coord.Z * ChunkManager.ChunkSize;
+                float minZ = (float)((long)coord.Z * ChunkManager.ChunkSize - _renderOriginZ);
                 float maxZ = minZ + ChunkManager.ChunkSize * entry.ChunkSpan;
                 // Match ChunkInFrustum: layer-based Y bounds (ground -256..383, sky 384..1023).
-                float minY = ChunkManager.OriginYForLayer(coord.Layer);
+                float minY = ChunkManager.OriginYForLayer(coord.Layer) - _renderOriginY;
                 float maxY = minY + ChunkManager.HeightForLayer(coord.Layer);
 
                 int o = i * 16;
@@ -690,6 +699,231 @@ namespace Cubuild.Renderer
             return dx * dx + dz * dz > threshold * threshold;
         }
 
+        private bool IsSurfacePatchActive(Cubuild.ChunkCoordinates patchCoord)
+        {
+            if (!_surfacePatchRanges.ContainsKey(patchCoord)) return false;
+            for (int dx = 0; dx < 4; dx++)
+            {
+                for (int dz = 0; dz < 4; dz++)
+                {
+                    var member = new Cubuild.ChunkCoordinates(ChunkManager.GroundLayer,
+                        patchCoord.X + dx, patchCoord.Z + dz);
+                    if (!_chunkRanges.ContainsKey(member) || !_surfaceLodRanges.ContainsKey(member)
+                        || !ShouldUseSurfaceLod(member))
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Captures only a 9x9 neighborhood plus the selected target. GPU compute results are
+        /// intentionally not read back: they are reported as unknown, while CPU frustum math is
+        /// labeled as a prediction whenever the GPU path is active.
+        /// </summary>
+        public ChunkDiagnosticsSnapshot CaptureChunkDiagnostics(
+            int playerLayer, int playerChunkX, int playerChunkZ,
+            int targetLayer, int targetChunkX, int targetChunkZ, bool hasBlockTarget,
+            int renderRadius, int dirtyMeshQueueCount)
+        {
+            const int mapRadius = 4;
+            var mapRows = new List<string>(mapRadius * 2 + 1);
+            if (_chunkManager != null)
+            {
+                for (int dz = mapRadius; dz >= -mapRadius; dz--)
+                {
+                    var row = new char[mapRadius * 2 + 1];
+                    for (int dx = -mapRadius; dx <= mapRadius; dx++)
+                    {
+                        int cx = playerChunkX + dx;
+                        int cz = playerChunkZ + dz;
+                        char status = GetMapChunkStatus(new Cubuild.ChunkCoordinates(playerLayer, cx, cz));
+                        if (cx == playerChunkX && cz == playerChunkZ) status = '@';
+                        if (hasBlockTarget && targetLayer == playerLayer
+                            && targetChunkX == cx && targetChunkZ == cz
+                            && (cx != playerChunkX || cz != playerChunkZ))
+                        {
+                            status = 'X';
+                        }
+                        row[dx + mapRadius] = status;
+                    }
+                    mapRows.Add($"z{dz,3:+0;-0;0} {new string(row)}");
+                }
+            }
+
+            var target = new Cubuild.ChunkCoordinates(targetLayer, targetChunkX, targetChunkZ);
+            var targetLines = BuildTargetDiagnosticLines(target, hasBlockTarget);
+            int drawCommandCount = _drawCommands.Count + _cutoutDrawCommands.Count + _glassDrawCommands.Count
+                + _transparentNonTopDrawCommands.Count + _transparentTopDrawCommands.Count;
+            return new ChunkDiagnosticsSnapshot(
+                _chunkManager?.GetLoadedChunks().Count ?? 0,
+                renderRadius,
+                dirtyMeshQueueCount,
+                CountPendingUploads(),
+                _lastFrameStreamUploads,
+                _lastFramePriorityUploads,
+                _chunkRanges.Count,
+                drawCommandCount,
+                _vbCapacityBytes,
+                _ibCapacityBytes,
+                _vbTailBytes,
+                _ibTailBytes,
+                _pendingBufferCopies.Count,
+                _cullMode.ToString(),
+                _gpuCullEnabled,
+                _gpuCullSupported,
+                mapRows,
+                targetLines);
+        }
+
+        private char GetMapChunkStatus(Cubuild.ChunkCoordinates coord)
+        {
+            if (_chunkManager == null || !_chunkManager.TryGetLoadedChunk(coord, out var chunk)) return '.';
+            if (chunk.IsMeshingQueued) return 'm';
+            if (chunk.NeedsRemesh || chunk.MeshVersion == 0) return 'd';
+            if (!_chunkRanges.ContainsKey(coord)) return 'M';
+            return HasDrawableRange(coord) ? 'U' : '0';
+        }
+
+        private bool HasDrawableRange(Cubuild.ChunkCoordinates coord)
+        {
+            return _chunkRanges.TryGetValue(coord, out var opaque) && opaque.IndexCount > 0
+                || _cutoutRanges.TryGetValue(coord, out var cutout) && cutout.IndexCount > 0
+                || _glassRanges.TryGetValue(coord, out var glass) && glass.IndexCount > 0
+                || _transparentRanges.TryGetValue(coord, out var transparent) && transparent.IndexCount > 0
+                || ShouldUseSurfaceLod(coord) && _surfaceLodRanges.TryGetValue(coord, out var lod) && lod.IndexCount > 0
+                || coord.Layer == ChunkManager.GroundLayer && IsSurfacePatchActive(SurfacePatchCoord(coord));
+        }
+
+        private IReadOnlyList<string> BuildTargetDiagnosticLines(Cubuild.ChunkCoordinates coord, bool hasBlockTarget)
+        {
+            var lines = new List<string>(5);
+            if (_chunkManager == null || !_chunkManager.TryGetLoadedChunk(coord, out var chunk))
+            {
+                lines.Add($"Target {(hasBlockTarget ? "block" : "player")}: L{coord.Layer} chunk {coord.X},{coord.Z} | not loaded");
+                lines.Add("Range: not uploaded; no drawable range");
+                lines.Add("CPU frustum: unknown (no drawable mesh)");
+                lines.Add("Heightmap: not tested (chunk unavailable)");
+                lines.Add($"LOD: {(Cubuild.LodSettings.SurfaceLodEnabled ? "enabled" : "disabled")} | GPU: {GpuVerdictText()}");
+                return lines;
+            }
+
+            string meshState = chunk.IsMeshingQueued ? "queued/meshing"
+                : chunk.NeedsRemesh ? "needs mesh"
+                : chunk.MeshVersion > 0 ? "meshed" : "not meshed";
+            bool uploaded = _chunkRanges.ContainsKey(coord);
+            bool drawable = HasDrawableRange(coord);
+            uint indexCount = 0;
+            var activePatch = coord.Layer == ChunkManager.GroundLayer ? SurfacePatchCoord(coord) : default;
+            ChunkRange activePatchRange = default;
+            bool patchActive = coord.Layer == ChunkManager.GroundLayer && IsSurfacePatchActive(activePatch)
+                && _surfacePatchRanges.TryGetValue(activePatch, out activePatchRange);
+            if (patchActive)
+            {
+                indexCount += activePatchRange.IndexCount;
+            }
+            else if (ShouldUseSurfaceLod(coord) && _surfaceLodRanges.TryGetValue(coord, out var lodRange))
+            {
+                indexCount += lodRange.IndexCount;
+            }
+            else if (_chunkRanges.TryGetValue(coord, out var opaqueRange))
+            {
+                indexCount += opaqueRange.IndexCount;
+            }
+            if (_cutoutRanges.TryGetValue(coord, out var cutoutRange)) indexCount += cutoutRange.IndexCount;
+            if (_glassRanges.TryGetValue(coord, out var glassRange)) indexCount += glassRange.IndexCount;
+            if (_transparentRanges.TryGetValue(coord, out var transparentRange)) indexCount += transparentRange.IndexCount;
+
+            lines.Add($"Target {(hasBlockTarget ? "block" : "player")}: L{coord.Layer} chunk {coord.X},{coord.Z} | loaded, {meshState}, v{chunk.MeshVersion}");
+            lines.Add($"Range: uploaded={(uploaded ? "yes" : "no")}, drawable={(drawable ? "yes" : "no")} ({indexCount} indices)");
+
+            var drawEntry = GetDiagnosticDrawEntry(coord);
+            if (!_viewProjection.HasValue || !drawEntry.HasValue)
+            {
+                lines.Add("CPU frustum: unknown (no current draw entry/view)");
+            }
+            else
+            {
+                ExtractFrustumPlanes(_viewProjection.Value);
+                int rejectPlane = GetFrustumRejectPlane(drawEntry.Value);
+                string decision = rejectPlane < 0 ? "inside" : $"rejected {FrustumPlaneName(rejectPlane)}";
+                lines.Add($"CPU frustum: {decision} ({(_gpuCullEnabled ? "prediction" : "CPU path")})");
+            }
+
+            bool occluded = EvaluateHeightmapOcclusion(coord, out var blocker, out var occlusionStatus);
+            string occlusionText = occlusionStatus switch
+            {
+                HeightmapOcclusionStatus.Occluded => $"hidden by {blocker!.Value.X},{blocker.Value.Z}",
+                HeightmapOcclusionStatus.Clear => "clear",
+                HeightmapOcclusionStatus.NearSkip => "not culled (near skip)",
+                HeightmapOcclusionStatus.DistanceLimit => "not tested (>32 chunks)",
+                HeightmapOcclusionStatus.CameraAbove => "clear (camera above terrain)",
+                HeightmapOcclusionStatus.EmptyTerrain => "clear (no solid height)",
+                HeightmapOcclusionStatus.NotApplicable => "n/a (ground layer only)",
+                HeightmapOcclusionStatus.TargetUnavailable => "not tested (no target height)",
+                _ => "unknown (camera unavailable)",
+            };
+            // Keep this explicitly separate from the draw-entry result: a 4x4 LOD patch is culled
+            // only when every member chunk is hidden, but this field reports the selected chunk.
+            lines.Add($"Heightmap (target chunk): {(occluded ? "occluded" : occlusionText)}");
+            lines.Add($"LOD: {GetLodDiagnosticStatus(coord)} | GPU: {GpuVerdictText()}");
+            return lines;
+        }
+
+        private string GetLodDiagnosticStatus(Cubuild.ChunkCoordinates coord)
+        {
+            if (!Cubuild.LodSettings.SurfaceLodEnabled) return "disabled";
+            if (coord.Layer != ChunkManager.GroundLayer) return "n/a (ground only)";
+            if (ShouldUseSurfaceLod(coord))
+            {
+                var patch = SurfacePatchCoord(coord);
+                if (IsSurfacePatchActive(patch)) return "4x4 surface patch active";
+                if (_surfaceLodRanges.ContainsKey(coord)) return "per-chunk surface LOD active";
+                return "far-field, LOD mesh missing (full mesh fallback)";
+            }
+            return _surfaceLodRanges.ContainsKey(coord) ? "near full-detail (LOD cached)" : "full-detail";
+        }
+
+        private DrawEntry? GetDiagnosticDrawEntry(Cubuild.ChunkCoordinates coord)
+        {
+            if (!HasDrawableRange(coord)) return null;
+
+            if (coord.Layer == ChunkManager.GroundLayer)
+            {
+                var patchCoord = SurfacePatchCoord(coord);
+                if (IsSurfacePatchActive(patchCoord)
+                    && _surfacePatchRanges.TryGetValue(patchCoord, out var patchRange))
+                {
+                    return new DrawEntry(patchCoord, new IndirectDrawIndexedArguments
+                    {
+                        IndexCount = patchRange.IndexCount,
+                        InstanceCount = 1,
+                    }, 4);
+                }
+            }
+
+            return new DrawEntry(coord, new IndirectDrawIndexedArguments { InstanceCount = 1 }, 1);
+        }
+
+        private string GpuVerdictText()
+        {
+            if (!_gpuCullEnabled) return "n/a (CPU path; no GPU cull verdict)";
+            return "unknown (GPU compute; no readback)";
+        }
+
+        private static string FrustumPlaneName(int plane) => plane switch
+        {
+            0 => "left",
+            1 => "right",
+            2 => "bottom",
+            3 => "top",
+            4 => "near",
+            5 => "far",
+            _ => "none",
+        };
+
         // Heightmap occlusion: is the view from the camera to this chunk blocked by a NEARER
         // chunk whose terrain top subtends a larger angle than the target's own top? This is the
         // classic horizon test - a close tall ridge hides a far chunk; a far peak over a near
@@ -705,10 +939,33 @@ namespace Cubuild.Renderer
         // costs fill rate, whereas wrongly hiding a visible one would pop. Every preset up to the
         // 16-chunk Far one is entirely inside this bound, so those are unaffected.
         private const int OcclusionMaxChunks = 32;
-        private bool IsHeightmapOccluded(Cubuild.ChunkCoordinates coord)
+        private enum HeightmapOcclusionStatus
         {
+            Unknown,
+            NotApplicable,
+            NearSkip,
+            DistanceLimit,
+            TargetUnavailable,
+            EmptyTerrain,
+            CameraAbove,
+            Clear,
+            Occluded,
+        }
+
+        private bool IsHeightmapOccluded(Cubuild.ChunkCoordinates coord)
+            => EvaluateHeightmapOcclusion(coord, out _, out _);
+
+        private bool EvaluateHeightmapOcclusion(Cubuild.ChunkCoordinates coord,
+            out Cubuild.ChunkCoordinates? blockerCoord, out HeightmapOcclusionStatus status)
+        {
+            blockerCoord = null;
+            status = HeightmapOcclusionStatus.Unknown;
             if (_chunkManager == null || !_cameraPosition.HasValue) return false;
-            if (coord.Layer != ChunkManager.GroundLayer) return false; // only ground terrain occludes
+            if (coord.Layer != ChunkManager.GroundLayer)
+            {
+                status = HeightmapOcclusionStatus.NotApplicable;
+                return false; // only ground terrain occludes
+            }
 
             var cam = _cameraPosition.Value;
             double camCx = cam.X / (double)ChunkManager.ChunkSize;
@@ -719,19 +976,39 @@ namespace Cubuild.Renderer
             double dx = targetCx - camCx;
             double dz = targetCz - camCz;
             double dist = Math.Sqrt(dx * dx + dz * dz);
-            if (dist < NearSkipChunks + 1.0) return false; // too close to the camera to ever hide
-            if (dist > OcclusionMaxChunks) return false;   // too far for the horizon test to pay for itself
+            if (dist < NearSkipChunks + 1.0)
+            {
+                status = HeightmapOcclusionStatus.NearSkip;
+                return false; // too close to the camera to ever hide
+            }
+            if (dist > OcclusionMaxChunks)
+            {
+                status = HeightmapOcclusionStatus.DistanceLimit;
+                return false; // too far for the horizon test to pay for itself
+            }
 
             // Use the target's actual maximum height, not its representative height: the
             // representative can sit below a narrow mountain summit, causing this whole chunk
             // to be hidden while that summit is still visible above the nearer hill. Overstating
             // target height only reduces culling, which is the safe direction.
-            if (!_chunkManager.TryGetLoadedChunk(coord, out var targetChunk)) return false;
-            if (targetChunk.MaxSolidY == int.MinValue) return false;
+            if (!_chunkManager.TryGetLoadedChunk(coord, out var targetChunk))
+            {
+                status = HeightmapOcclusionStatus.TargetUnavailable;
+                return false;
+            }
+            if (targetChunk.MaxSolidY == int.MinValue)
+            {
+                status = HeightmapOcclusionStatus.EmptyTerrain;
+                return false;
+            }
             double targetTop = targetChunk.MaxSolidY;
 
             // Camera above the target's terrain can always see it (looking down).
-            if (cam.Y >= targetTop) return false;
+            if (cam.Y >= targetTop)
+            {
+                status = HeightmapOcclusionStatus.CameraAbove;
+                return false;
+            }
 
             // Angular height of the target's terrain top above the camera (rise over run).
             double targetSlope = (targetTop - cam.Y) / (dist * ChunkManager.ChunkSize);
@@ -741,6 +1018,7 @@ namespace Cubuild.Renderer
             double stepX = dx / dist;
             double stepZ = dz / dist;
             int steps = (int)Math.Ceiling(dist);
+            status = HeightmapOcclusionStatus.Clear;
             for (int s = 1; s < steps; s++)
             {
                 int cx = (int)Math.Floor(camCx + stepX * s + 0.5);
@@ -754,6 +1032,8 @@ namespace Cubuild.Renderer
                     double blockSlope = (blocker.TopSolidY - cam.Y) / (blockDist * ChunkManager.ChunkSize);
                     if (blockSlope > targetSlope + BlockingMargin && cam.Y < blocker.TopSolidY)
                     {
+                        blockerCoord = new Cubuild.ChunkCoordinates(ChunkManager.GroundLayer, cx, cz);
+                        status = HeightmapOcclusionStatus.Occluded;
                         return true; // this nearer column clearly rises above the target's line of sight
                     }
                 }
@@ -821,16 +1101,19 @@ namespace Cubuild.Renderer
         // AABB-vs-frustum via the positive-vertex trick. The chunk AABB covers the full world
         // height, so this culls by horizontal footprint only - still rejects everything off-screen.
         private bool DrawEntryInFrustum(DrawEntry entry)
+            => GetFrustumRejectPlane(entry) < 0;
+
+        private int GetFrustumRejectPlane(DrawEntry entry)
         {
             var coord = entry.Coord;
-            float minX = coord.X * ChunkManager.ChunkSize;
+            float minX = (float)((long)coord.X * ChunkManager.ChunkSize - _renderOriginX);
             float maxX = minX + ChunkManager.ChunkSize * entry.ChunkSpan;
-            float minZ = coord.Z * ChunkManager.ChunkSize;
+            float minZ = (float)((long)coord.Z * ChunkManager.ChunkSize - _renderOriginZ);
             float maxZ = minZ + ChunkManager.ChunkSize * entry.ChunkSpan;
             // World Y bounds come from the chunk's LAYER (ground -256..383, sky 384..1023), not
             // the ground origin. Using the ground bounds for sky chunks made them vanish when the
             // camera was up in the stratosphere (their frustum box sat below them).
-            float minY = ChunkManager.OriginYForLayer(coord.Layer);
+            float minY = ChunkManager.OriginYForLayer(coord.Layer) - _renderOriginY;
             float maxY = minY + ChunkManager.HeightForLayer(coord.Layer);
 
             for (int i = 0; i < 6; i++)
@@ -841,10 +1124,10 @@ namespace Cubuild.Renderer
                 float pz = p.Z >= 0f ? maxZ : minZ;
                 if (p.X * px + p.Y * py + p.Z * pz + p.W < 0f)
                 {
-                    return false;
+                    return i;
                 }
             }
-            return true;
+            return -1;
         }
 
     }

@@ -14,26 +14,29 @@ namespace Cubuild.Renderer
             if (!_cameraPosition.HasValue) return;
             var cam = _cameraPosition.Value;
             int camChunkX = (int)Math.Floor(cam.X / (double)ChunkManager.ChunkSize);
+            int camChunkY = (int)Math.Floor(cam.Y / (double)ChunkManager.ChunkSize);
             int camChunkZ = (int)Math.Floor(cam.Z / (double)ChunkManager.ChunkSize);
-            if (camChunkX == _lastSortChunkX[passId] && camChunkZ == _lastSortChunkZ[passId] && commands.Count == _lastSortCount[passId])
+            if (camChunkX == _lastSortChunkX[passId] && camChunkY == _lastSortChunkY[passId]
+                && camChunkZ == _lastSortChunkZ[passId] && commands.Count == _lastSortCount[passId])
             {
                 return; // nothing changed: keep the existing order
             }
             _lastSortChunkX[passId] = camChunkX;
+            _lastSortChunkY[passId] = camChunkY;
             _lastSortChunkZ[passId] = camChunkZ;
             _lastSortCount[passId] = commands.Count;
 
             commands.Sort((a, b) => ChunkCenterDistSq(b.Coord, cam).CompareTo(ChunkCenterDistSq(a.Coord, cam))); // far first
         }
 
-        private static float ChunkCenterDistSq(Cubuild.ChunkCoordinates coord, Cubuild.Point3D cam)
+        private static double ChunkCenterDistSq(Cubuild.ChunkCoordinates coord, Cubuild.Point3D cam)
         {
-            float cx = coord.X * ChunkManager.ChunkSize + ChunkManager.ChunkSize * 0.5f;
-            float cz = coord.Z * ChunkManager.ChunkSize + ChunkManager.ChunkSize * 0.5f;
-            float cy = ChunkManager.OriginYForLayer(coord.Layer) + ChunkManager.HeightForLayer(coord.Layer) * 0.5f;
-            float dx = cx - (float)cam.X;
-            float dy = cy - (float)cam.Y;
-            float dz = cz - (float)cam.Z;
+            double cx = (long)coord.X * ChunkManager.ChunkSize + ChunkManager.ChunkSize * 0.5;
+            double cz = (long)coord.Z * ChunkManager.ChunkSize + ChunkManager.ChunkSize * 0.5;
+            double cy = ChunkManager.OriginYForLayer(coord.Layer) + ChunkManager.HeightForLayer(coord.Layer) * 0.5;
+            double dx = cx - cam.X;
+            double dy = cy - cam.Y;
+            double dz = cz - cam.Z;
             return dx * dx + dy * dy + dz * dz;
         }
 
@@ -46,7 +49,7 @@ namespace Cubuild.Renderer
             float atlasW = Math.Max(1f, _atlasWidth);
             float atlasH = Math.Max(1f, _atlasHeight);
 
-            int vertFloats = n * 4 * 6;   // packed: Float3 pos + 3x UInt1 = 6 uint32s per vertex
+            int vertFloats = n * 4 * 9;   // packed local position, material, and integer render anchor
             if (_particleVertexScratch.Length < vertFloats) _particleVertexScratch = new float[vertFloats];
             int indexCount = n * 6;
             if (_particleIndexScratch.Length < indexCount) _particleIndexScratch = new ushort[indexCount];
@@ -62,7 +65,9 @@ namespace Cubuild.Renderer
                 var rx = r.X * half; var ry = r.Y * half; var rz = r.Z * half;
                 var ux = u.X * half; var uy = u.Y * half; var uz = u.Z * half;
 
-                float oX = p.X, oY = p.Y, oZ = p.Z;
+                float oX = (float)(p.X - _renderOriginX);
+                float oY = (float)(p.Y - _renderOriginY);
+                float oZ = (float)(p.Z - _renderOriginZ);
                 // corners: bottom-left, bottom-right, top-right, top-left
                 float[,] corners =
                 {
@@ -97,6 +102,9 @@ namespace Cubuild.Renderer
                     _particleVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack1);
                     _particleVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack2);
                     _particleVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack3);
+                    _particleVertexScratch[vf++] = BitConverter.Int32BitsToSingle(_renderOriginX);
+                    _particleVertexScratch[vf++] = BitConverter.Int32BitsToSingle(_renderOriginY);
+                    _particleVertexScratch[vf++] = BitConverter.Int32BitsToSingle(_renderOriginZ);
                 }
                 _particleIndexScratch[ii++] = (ushort)(baseV + 0);
                 _particleIndexScratch[ii++] = (ushort)(baseV + 1);

@@ -97,6 +97,7 @@ namespace Cubuild.Renderer
 
         public void SetHud(HudState hud)
         {
+            if (hud.ChatOpen && !_hud.ChatOpen) _chatFocusRequested = true;
             _hud = hud;
             // Any health change (gain OR damage) triggers the outline flash.
             if (hud.PlayerHealth != _lastHudHealth)
@@ -152,9 +153,9 @@ namespace Cubuild.Renderer
                 var fb = _fallingBlocks[i];
                 var def = BlockRegistry.GetById(fb.BlockId);
                 var tr = def.AllTexture ?? default;
-                _fallingInstanceScratch[vf++] = fb.X;
-                _fallingInstanceScratch[vf++] = fb.Y;
-                _fallingInstanceScratch[vf++] = fb.Z;
+                _fallingInstanceScratch[vf++] = (float)((double)fb.X - _renderOriginX);
+                _fallingInstanceScratch[vf++] = (float)((double)fb.Y - _renderOriginY);
+                _fallingInstanceScratch[vf++] = (float)((double)fb.Z - _renderOriginZ);
                 _fallingInstanceScratch[vf++] = tr.X / atlasW;
                 _fallingInstanceScratch[vf++] = tr.Y / atlasH;
                 _fallingInstanceScratch[vf++] = tr.Width / atlasW;
@@ -241,9 +242,9 @@ namespace Cubuild.Renderer
                     if (DropPassOf(it.ItemId) != pass) continue;
                     var tr = ItemRegistry.GetTile(it.ItemId, out _);
                     // Rotate around the center, so pass base + half-scale.
-                    _itemDropInstanceScratch[vf++] = it.X + halfScale;
-                    _itemDropInstanceScratch[vf++] = it.Y + halfScale;
-                    _itemDropInstanceScratch[vf++] = it.Z + halfScale;
+                    _itemDropInstanceScratch[vf++] = (float)(it.X + halfScale - _renderOriginX);
+                    _itemDropInstanceScratch[vf++] = (float)(it.Y + halfScale - _renderOriginY);
+                    _itemDropInstanceScratch[vf++] = (float)(it.Z + halfScale - _renderOriginZ);
                     _itemDropInstanceScratch[vf++] = tr.X / atlasW;
                     _itemDropInstanceScratch[vf++] = tr.Y / atlasH;
                     _itemDropInstanceScratch[vf++] = tr.Width / atlasW;
@@ -387,10 +388,12 @@ namespace Cubuild.Renderer
             }
 
             // Process priority uploads (player edits) first - no limit for instant feedback
+            int priorityUploadsThisFrame = System.Threading.Interlocked.Exchange(ref _priorityUploadsSinceRender, 0);
             while (_pendingPriorityUploads.TryDequeue(out var pu))
             {
                 WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices,
                     pu.TransparentVertices, pu.TransparentIndices, pu.TransparentNonTopIndexCount, pu.SurfaceLodVertices, pu.SurfaceLodIndices);
+                priorityUploadsThisFrame++;
             }
 
             // Stream pending chunk meshes: always take the guaranteed minimum, then keep going
@@ -410,6 +413,8 @@ namespace Cubuild.Renderer
                     break;
                 }
             }
+            _lastFramePriorityUploads = priorityUploadsThisFrame;
+            _lastFrameStreamUploads = uploadsThisFrame;
 
             // All currently processed removals and uploads have invalidated their groups. Rebuild
             // each affected patch once, after the final per-frame state is known.

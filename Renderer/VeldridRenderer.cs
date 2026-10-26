@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Runtime.InteropServices;
 using ImGuiNET;
 using Veldrid;
 using Veldrid.SPIRV;
@@ -47,7 +48,7 @@ namespace Cubuild.Renderer
         private const int CloudShadowLayerCount = 3;
         private const int CloudShadowRowCount = CloudCoarseSize * CloudShadowLayerCount;
         private const int CloudShadowPackedVectorCount = (CloudShadowRowCount + 3) / 4;
-        private readonly float[] _fogParams = new float[FogParamsValueCount + CloudShadowPackedVectorCount * 4];
+        private readonly float[] _fogParams = new float[FogParamsValueCount + CloudShadowPackedVectorCount * 4 + 4];
         // F3 diagnostics for the deterministic fog roll selected by the current in-game morning.
         private long _fogDebugScheduleDay;
         private bool _fogDebugEligible;
@@ -101,7 +102,7 @@ namespace Cubuild.Renderer
         private DeviceBuffer _shrinkCubeIndexBuffer;
         private Pipeline _shrinkCubePipeline;
         private Pipeline _shrinkWallPipeline;
-        private readonly float[] _shrinkCubeVertexScratch = new float[48 * 6]; // shrink cube (24) + neighbor walls (24) verts * 6 floats
+        private readonly float[] _shrinkCubeVertexScratch = new float[48 * 9]; // packed world vertices: position, 3 packs, integer anchor
 
         // Pipeline for chunk border wireframe rendering (F3 debug)
         private Pipeline _chunkBorderPipeline;
@@ -489,14 +490,29 @@ namespace Cubuild.Renderer
         // view-frustum planes refreshed each frame from the view-projection matrix.
         private Cubuild.Point3D? _cameraPosition;
         private System.Numerics.Matrix4x4? _viewProjection;
+        // Rendering uses a chunk-aligned integer origin. Gameplay/culling diagnostics retain the
+        // absolute double camera above; GPU-facing positions and matrices use this local frame.
+        private int _renderOriginX;
+        private int _renderOriginY;
+        private int _renderOriginZ;
+        private Vector3 _renderCameraPosition;
         public Cubuild.Point3D? CameraPosition => _cameraPosition;
         public System.Numerics.Matrix4x4? ViewProjection => _viewProjection;
         private readonly Vector4[] _frustumPlanes = new Vector4[6];
 
-        // Last chunk the camera was in when the glass/water passes were sorted. The back-to-front
-        // sort only needs re-running when the camera crosses a chunk boundary - within a chunk the
-        // distance order of far-to-near chunks doesn't change enough to matter, and skipping the
-        // O(n log n) sort every frame is a real win (FPS roadmap #2).
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ProjectionViewUniform
+        {
+            public Matrix4x4 ProjectionView;
+            public int OriginX;
+            public int OriginY;
+            public int OriginZ;
+            public int Padding;
+        }
+
+        // Last 16-block camera cell used by the glass/water sort. Re-sort on an X/Y/Z cell crossing
+        // or command-list change; within that cell the far-to-near order is stable enough to avoid
+        // the O(n log n) sort every frame (FPS roadmap #2).
         // NOTE: the cache is PER-PASS (indexed by pass id). Glass, water non-top, water top and
         // glass-tint each sort their own command lists.
         private static readonly int SortPassGlass = 0;
@@ -504,6 +520,7 @@ namespace Cubuild.Renderer
         private static readonly int SortPassWaterTop = 2;
         private static readonly int SortPassGlassTint = 3;
         private readonly int[] _lastSortChunkX = { int.MinValue, int.MinValue, int.MinValue, int.MinValue };
+        private readonly int[] _lastSortChunkY = { int.MinValue, int.MinValue, int.MinValue, int.MinValue };
         private readonly int[] _lastSortChunkZ = { int.MinValue, int.MinValue, int.MinValue, int.MinValue };
         private readonly int[] _lastSortCount = { -1, -1, -1, -1 };
 
@@ -657,13 +674,16 @@ namespace Cubuild.Renderer
         private int _hoveredInventorySlot = -1;
         // Biome teleport menu selections (biome name string).
         private readonly System.Collections.Concurrent.ConcurrentQueue<string> _biomeSelections = new();
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> _chatCommands = new();
+        private readonly byte[] _chatCommandBuffer = new byte[256];
+        private bool _chatFocusRequested;
 
         // ---- Block-break particles ---------------------------------------------------
         // Small camera-facing quads textured with the broken block's tile. Simulated on the CPU,
         // drawn with the world pipeline so they depth-test against terrain.
         private struct BlockParticle
         {
-            public float X, Y, Z;
+            public double X, Y, Z;
             public float VX, VY, VZ;
             public float Age, Lifetime;
             public float Size;
@@ -749,7 +769,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         // holes tracked in _freeBlocks. Buffer growth is a GPU CopyBuffer into a 2x buffer,
         // recorded after Begin() and before the world draw; the old buffer is released via
         // DisposeWhenIdle once the GPU is done with it.
-        private const uint VertexStrideBytes = 24;   // packed: Float3 + 3x UInt1 = 6 uint32s
+        private const uint VertexStrideBytes = 36;   // Float3 local + 3 packed words + Int3 world anchor
         private const uint IndirectCommandStride = 20; // sizeof(IndirectDrawIndexedArguments)
         private DeviceBuffer? _megaVertexBuffer;
         private DeviceBuffer? _megaIndexBuffer;
@@ -855,6 +875,9 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
 
         // Pending GPU-side buffer growth copies (old -> new, recorded after cl.Begin()).
         private readonly List<(DeviceBuffer Old, DeviceBuffer New, uint SizeBytes)> _pendingBufferCopies = new();
+        private int _priorityUploadsSinceRender;
+        private int _lastFramePriorityUploads;
+        private int _lastFrameStreamUploads;
 
         private readonly System.Collections.Concurrent.ConcurrentQueue<PendingUpload> _pendingUploads = new();
         private readonly System.Collections.Concurrent.ConcurrentQueue<PendingUpload> _pendingPriorityUploads = new(); // player edits jump the line
@@ -917,7 +940,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             _gd = graphicsDevice ?? throw new ArgumentNullException(nameof(graphicsDevice));
             _sc = swapchain ?? throw new ArgumentNullException(nameof(swapchain));
 
-            _projViewBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(64, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _projViewBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(80, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
             _projViewLayout = _gd.ResourceFactory.CreateResourceLayout(new ResourceLayoutDescription(
                 new ResourceLayoutElementDescription("ProjectionView", ResourceKind.UniformBuffer, ShaderStages.Vertex)));
             _projViewSet = _gd.ResourceFactory.CreateResourceSet(new ResourceSetDescription(_projViewLayout, _projViewBuffer));
@@ -1221,7 +1244,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
 
         public void UploadChunk(Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces)
         {
-            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
+            BuildMesh(coords, faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
             _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr, transNonTopIndexCount));
         }
 
@@ -1235,12 +1258,12 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 return;
             }
 
-            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
+            BuildMesh(coords, faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
             uint[] lodVertices = Array.Empty<uint>();
             ushort[] lodIndices = Array.Empty<ushort>();
             if (surfaceLodFaces != null && surfaceLodFaces.Count > 0)
             {
-                BuildMesh(surfaceLodFaces, out lodVertices, out lodIndices, out _, out _, out _, out _, out _, out _, out _);
+                BuildMesh(coords, surfaceLodFaces, out lodVertices, out lodIndices, out _, out _, out _, out _, out _, out _, out _);
             }
             _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr,
                 transNonTopIndexCount, lodVertices, lodIndices));
@@ -1250,7 +1273,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         // ProcessPendingPriorityMeshes drains every frame for instant feedback.
         public void UploadChunkPriority(Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces)
         {
-            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
+            BuildMesh(coords, faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
             _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr, transNonTopIndexCount));
         }
 
@@ -1267,12 +1290,12 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 return;
             }
 
-            BuildMesh(faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
+            BuildMesh(coords, faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
             uint[] lodVertices = Array.Empty<uint>();
             ushort[] lodIndices = Array.Empty<ushort>();
             if (surfaceLodFaces != null && surfaceLodFaces.Count > 0)
             {
-                BuildMesh(surfaceLodFaces, out lodVertices, out lodIndices, out _, out _, out _, out _, out _, out _, out _);
+                BuildMesh(coords, surfaceLodFaces, out lodVertices, out lodIndices, out _, out _, out _, out _, out _, out _, out _);
             }
             _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr,
                 transNonTopIndexCount, lodVertices, lodIndices));
@@ -1292,7 +1315,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             return 0u;
         }
 
-        // Builds the packed 24-byte-per-vertex chunk mesh (Float3 pos + 3x UInt1 packs) from greedy
+        // Builds a camera-rebasable 36-byte-per-vertex chunk mesh (local Float3 + 3x UInt1 packs
+        // + integer world anchor) from greedy
         // faces. Per-face alpha routes each face to one of four buffer pairs:
         //   alpha >= 1   -> opaque (culled, depth-writing)
         //   alpha < -10  -> glass (alpha-tested, depth-WRITE OFF, front-side; marker set by the
@@ -1304,6 +1328,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         // directly - no List<T>, no ToArray() copies, no double allocation per chunk upload. The
         // transparent range is packed with non-top faces first, then tops, and returns that boundary.
         private void BuildMesh(
+            Cubuild.ChunkCoordinates coords,
             System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces,
             out uint[] vertsArr, out ushort[] indicesArr,
             out uint[] cutoutVertsArr, out ushort[] cutoutIndicesArr,
@@ -1311,8 +1336,12 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             out uint[] transVertsArr, out ushort[] transIndicesArr,
             out uint transNonTopIndexCount)
         {
-            // vertex layout: position(3 floats) + aPack1(1 uint) + aPack2(1 uint) + aPack3(1 uint)
-            // = 6 uint32s per vertex (24 bytes), decoded in the vertex shader.
+            // vertex layout: local position(3 floats) + aPack1/2/3 + integer world anchor(3 ints)
+            // = 9 uint32s per vertex (36 bytes). The anchor is subtracted from the camera anchor
+            // as integers in the vertex shader, before converting the large world delta to float.
+            int originX = unchecked(coords.X * ChunkManager.ChunkSize);
+            int originY = ChunkManager.OriginYForLayer(coords.Layer);
+            int originZ = unchecked(coords.Z * ChunkManager.ChunkSize);
             int faceCount = faces.Count;
             int opaqueFaces = 0;
             int cutoutFaces = 0;
@@ -1332,13 +1361,13 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             }
             int transFaces = faceCount - opaqueFaces - cutoutFaces - glassFaces;
 
-            var verts = new uint[opaqueFaces * 4 * 6];
+            var verts = new uint[opaqueFaces * 4 * 9];
             var indices = new ushort[opaqueFaces * 6];
-            var cutoutVerts = new uint[cutoutFaces * 4 * 6];
+            var cutoutVerts = new uint[cutoutFaces * 4 * 9];
             var cutoutIndices = new ushort[cutoutFaces * 6];
-            var glassVerts = new uint[glassFaces * 4 * 6];
+            var glassVerts = new uint[glassFaces * 4 * 9];
             var glassIndices = new ushort[glassFaces * 6];
-            var transVerts = new uint[transFaces * 4 * 6];
+            var transVerts = new uint[transFaces * 4 * 9];
             var transIndices = new ushort[transFaces * 6];
             // Hoisted out of the face loop: stackalloc reserves stack for the method, so a
             // per-face stackalloc would grow the frame with face count (CA2014).
@@ -1452,7 +1481,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 double denomU = edgeU.X * edgeU.X + edgeU.Y * edgeU.Y + edgeU.Z * edgeU.Z;
                 double denomV = edgeV.X * edgeV.X + edgeV.Y * edgeV.Y + edgeV.Z * edgeV.Z;
 
-                int vertWrite = vertexStart * 6;
+                int vertWrite = vertexStart * 9;
                 for (int i = 0; i < 4; i++)
                 {
                     var vv = vertsSpan[i];
@@ -1493,14 +1522,18 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                     uint dvFixed = (uint)Math.Clamp((int)Math.Round(dv * 256.0), 0, 0xFFFF);
                     uint pack1 = (duFixed << 16) | dvFixed;
 
-                    // Position keeps full float precision (world coords).
-                    dstVerts[vertWrite] = BitConverter.SingleToUInt32Bits((float)vv.X);
-                    dstVerts[vertWrite + 1] = BitConverter.SingleToUInt32Bits((float)vv.Y);
-                    dstVerts[vertWrite + 2] = BitConverter.SingleToUInt32Bits((float)vv.Z);
+                    // Subtract the chunk's integer anchor while coordinates are still double.
+                    // Casting absolute world positions first loses block/sub-block precision.
+                    dstVerts[vertWrite] = BitConverter.SingleToUInt32Bits((float)(vv.X - originX));
+                    dstVerts[vertWrite + 1] = BitConverter.SingleToUInt32Bits((float)(vv.Y - originY));
+                    dstVerts[vertWrite + 2] = BitConverter.SingleToUInt32Bits((float)(vv.Z - originZ));
                     dstVerts[vertWrite + 3] = pack1;
                     dstVerts[vertWrite + 4] = pack2;
                     dstVerts[vertWrite + 5] = pack3;
-                    vertWrite += 6;
+                    dstVerts[vertWrite + 6] = unchecked((uint)originX);
+                    dstVerts[vertWrite + 7] = unchecked((uint)originY);
+                    dstVerts[vertWrite + 8] = unchecked((uint)originZ);
+                    vertWrite += 9;
                 }
 
                 int ib = faceIdx * 6;
@@ -1599,7 +1632,20 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             var yawRad = yaw * (float)Math.PI / 180f;
             var pitchRad = pitch * (float)Math.PI / 180f;
             var forward = new Vector3((float)(Math.Cos(pitchRad) * Math.Sin(yawRad)), (float)Math.Sin(pitchRad), (float)(Math.Cos(pitchRad) * Math.Cos(yawRad)));
-            var cameraPos = new Vector3((float)position.X, (float)position.Y, (float)position.Z);
+            int cameraChunkX = (int)Math.Floor(position.X / ChunkManager.ChunkSize);
+            int cameraChunkZ = (int)Math.Floor(position.Z / ChunkManager.ChunkSize);
+            int renderOriginX = unchecked(cameraChunkX * ChunkManager.ChunkSize);
+            int renderOriginY = (int)Math.Floor(position.Y);
+            int renderOriginZ = unchecked(cameraChunkZ * ChunkManager.ChunkSize);
+            if (renderOriginX != _renderOriginX || renderOriginY != _renderOriginY || renderOriginZ != _renderOriginZ)
+                _gpuCullDataDirty = true;
+            _renderOriginX = renderOriginX;
+            _renderOriginY = renderOriginY;
+            _renderOriginZ = renderOriginZ;
+            // Subtract the integer anchor in double before converting to float. Bob/shake are
+            // small local offsets and therefore remain smooth at arbitrarily distant coordinates.
+            var cameraPos = new Vector3((float)(position.X - _renderOriginX),
+                (float)(position.Y - _renderOriginY), (float)(position.Z - _renderOriginZ));
             // First-person head bob: a soft vertical bounce (one per step) plus a slight side sway
             // scaled by how fast you're actually moving. Only while grounded - never mid-air, and
             // the bob EASES in/out instead of snapping, so landing after a jump doesn't jolt.
@@ -1634,6 +1680,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 float flinch = _damageShakeMagnitude * t * t * 0.18f;
                 cameraPos -= forward * flinch;
             }
+            _renderCameraPosition = cameraPos;
             var target = cameraPos + forward;
             var view = Matrix4x4.CreateLookAt(cameraPos, target, Vector3.UnitY);
             // Minecraft-style hit recoil: the whole view rolls around the camera axis with a
@@ -1665,8 +1712,6 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             // Cache the camera and view-projection so chunk frustum culling and the mob meshing
             // can read them without re-deriving.
             _cameraPosition = position;
-            int cameraChunkX = (int)Math.Floor(position.X / ChunkManager.ChunkSize);
-            int cameraChunkZ = (int)Math.Floor(position.Z / ChunkManager.ChunkSize);
             int cameraLayer = ChunkManager.LayerForWorldY((int)Math.Floor(position.Y));
             if (cameraChunkX != _surfaceLodCameraX || cameraChunkZ != _surfaceLodCameraZ
                 || cameraLayer != _surfaceLodCameraLayer)
@@ -1693,7 +1738,15 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 _drawCommandsDirty = true;
             }
             _viewProjection = viewProj;
-            _gd.UpdateBuffer(_projViewBuffer, 0, ref viewProj);
+            var projectionView = new ProjectionViewUniform
+            {
+                ProjectionView = viewProj,
+                OriginX = _renderOriginX,
+                OriginY = _renderOriginY,
+                OriginZ = _renderOriginZ,
+                Padding = 0,
+            };
+            _gd.UpdateBuffer(_projViewBuffer, 0, ref projectionView);
             UpdateWaterAnimation();
             UpdateLavaAnimation();
             if (_skyMatrixBuffer != null)
@@ -1704,7 +1757,15 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 // much further than terrain. Near plane raised slightly to keep depth precision sane.
                 var wideProj = Matrix4x4.CreatePerspectiveFieldOfView((float)(Math.PI / 2.0), (float)_sc.Framebuffer.Width / _sc.Framebuffer.Height, 1.0f, _cloudFarPlane);
                 var wideVP = Matrix4x4.Multiply(view, wideProj);
-                _gd.UpdateBuffer(_cloudMatrixBuffer, 0, ref wideVP);
+                var cloudProjectionView = new ProjectionViewUniform
+                {
+                    ProjectionView = wideVP,
+                    OriginX = _renderOriginX,
+                    OriginY = _renderOriginY,
+                    OriginZ = _renderOriginZ,
+                    Padding = 0,
+                };
+                _gd.UpdateBuffer(_cloudMatrixBuffer, 0, ref cloudProjectionView);
             }
         }
 
@@ -1844,11 +1905,14 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         // the budget-limited background streaming uploads.
         public void ProcessPendingPriorityMeshes()
         {
+            int uploaded = 0;
             while (_pendingPriorityUploads.TryDequeue(out var pu))
             {
                 WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices,
                     pu.TransparentVertices, pu.TransparentIndices, pu.TransparentNonTopIndexCount, pu.SurfaceLodVertices, pu.SurfaceLodIndices);
+                uploaded++;
             }
+            if (uploaded > 0) System.Threading.Interlocked.Add(ref _priorityUploadsSinceRender, uploaded);
         }
 
         /// <summary>Total chunk meshes still queued for GPU upload. Used by the world-loading
@@ -1887,6 +1951,12 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             return _biomeSelections.TryDequeue(out biomeName);
         }
 
+        /// <summary>Pops the command submitted from the focused chat input field.</summary>
+        public bool TryTakeChatCommand(out string command)
+        {
+            return _chatCommands.TryDequeue(out command!);
+        }
+
         // Drops all chunk geometry when starting a brand new world over the previous one.
         public void ResetWorld()
         {
@@ -1921,9 +1991,12 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             for (int i = 0; i < count && _particleCount < _particles.Length; i++)
             {
                 ref var p = ref _particles[_particleCount++];
-                p.X = (float)(worldX + Random.Shared.NextDouble());
-                p.Y = (float)(worldY + Random.Shared.NextDouble());
-                p.Z = (float)(worldZ + Random.Shared.NextDouble());
+                // Keep particle world positions in double precision until DrawParticles subtracts
+                // the render origin. Casting their absolute 100k-scale coordinates here would
+                // quantize small motion before the camera-relative vertex conversion gets a chance.
+                p.X = worldX + Random.Shared.NextDouble();
+                p.Y = worldY + Random.Shared.NextDouble();
+                p.Z = worldZ + Random.Shared.NextDouble();
                 p.VX = (float)((Random.Shared.NextDouble() * 2.0 - 1.0) * 2.2);
                 p.VY = (float)(0.8 + Random.Shared.NextDouble() * 3.0);
                 p.VZ = (float)((Random.Shared.NextDouble() * 2.0 - 1.0) * 2.2);

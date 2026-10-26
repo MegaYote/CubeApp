@@ -57,7 +57,7 @@ namespace Cubuild
                 foreach (var d in _droppedItems)
                 {
                     _itemDropRenderScratch.Add(new ItemDropRenderData(
-                        d.ItemId, (float)d.Position.X, (float)d.Position.Y, (float)d.Position.Z,
+                        d.ItemId, d.Position.X, d.Position.Y, d.Position.Z,
                         d.RotX, d.RotY, d.RotZ, d.RotW));
                 }
                 return _itemDropRenderScratch;

@@ -15,7 +15,7 @@ namespace Cubuild
 {
     public sealed partial class Program : IDisposable
     {
-        private Vector3[]? ComputeHighlightWorldQuad(GameWorld.PickBlockResult hit)
+        private Point3D[]? ComputeHighlightWorldQuad(GameWorld.PickBlockResult hit)
         {
             var f = hit.Face;
             var n = hit.Normal;
@@ -47,11 +47,11 @@ namespace Cubuild
             faceCorners = CanonicalizeFaceCornersByAxes(faceCorners, n);
             const double faceEpsilon = 0.002;
             var offset = n * faceEpsilon;
-            var result = new Vector3[4];
+            var result = new Point3D[4];
             for (int i = 0; i < 4; i++)
             {
                 var pos = faceCorners[i] + offset;
-                result[i] = new Vector3((float)pos.X, (float)pos.Y, (float)pos.Z);
+                result[i] = pos;
             }
             return result;
         }

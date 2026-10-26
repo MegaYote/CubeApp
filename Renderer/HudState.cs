@@ -1,4 +1,3 @@
-using System.Numerics;
 using System.Collections.Generic;
 
 namespace Cubuild.Renderer
@@ -21,9 +20,9 @@ namespace Cubuild.Renderer
     /// </summary>
     public struct LinkBeam
     {
-        public Vector3 A;
-        public Vector3 B;
-        public LinkBeam(Vector3 a, Vector3 b) { A = a; B = b; }
+        public Cubuild.Point3D A;
+        public Cubuild.Point3D B;
+        public LinkBeam(Cubuild.Point3D a, Cubuild.Point3D b) { A = a; B = b; }
     }
 
     /// <summary>
@@ -57,9 +56,19 @@ namespace Cubuild.Renderer
         public int SmeltOutputPreview;
         public bool BiomeMenuOpen;
         public bool HandEditorOpen;
+        /// <summary>Command input overlay; captures keyboard and suppresses gameplay input.</summary>
+        public bool ChatOpen;
+        /// <summary>True on the first frame after opening, so that the opening Enter is not submitted.</summary>
+        public bool ChatJustOpened;
+        public string ChatResult;
+        public bool ChatResultIsError;
         public bool NoclipMode;
         public bool CreativeFlightMode;
         public bool Fullbright;
+        /// <summary>Current world name for the F3 diagnostics overlay.</summary>
+        public string WorldName;
+        /// <summary>Bounded world/renderer chunk diagnostics captured for the F3 overlay.</summary>
+        public ChunkDiagnosticsSnapshot? ChunkDiagnostics;
         /// <summary>Day/night clock (world ticks). Used by the renderer to dim sky + world light.</summary>
         public long WorldTime;
         /// <summary>Shared menu state (screen + create-world form + button flags).</summary>
@@ -122,7 +131,7 @@ namespace Cubuild.Renderer
         /// occluded per-pixel by any block in front of it (matching the rest of the scene),
         /// instead of always painting over everything as a 2D overlay would.
         /// </summary>
-        public Vector3[]? HighlightWorldQuad;
+        public Cubuild.Point3D[]? HighlightWorldQuad;
 
         /// <summary>
         /// Coupling beams between linked carts (null/empty when nothing is coupled). The renderer
@@ -168,6 +177,9 @@ namespace Cubuild.Renderer
         /// <summary>Remaining seconds of the "World saved" toast (set when a save completes,
         /// manual or autosave). 0 = not showing.</summary>
         public float SaveToast;
+        /// <summary>Optional world-transition status/error toast.</summary>
+        public float StatusToastTimer;
+        public string? StatusToast;
 
         /// <summary>Remaining seconds of the "older terrain generation" warning (set when a
         /// world stamped with an older generation version loads). 0 = not showing.</summary>
@@ -179,7 +191,7 @@ namespace Cubuild.Renderer
 
         /// <summary>World position + block id of the block currently being mined (for the
         /// shrinking-block overlay). Only valid while MiningProgress > 0.</summary>
-        public Vector3 MiningBlockPos;
+        public Cubuild.Point3D MiningBlockPos;
         public int MiningBlockId;
 
         /// <summary>
@@ -197,9 +209,15 @@ namespace Cubuild.Renderer
             OreCartOpen = false,
             BiomeMenuOpen = false,
             HandEditorOpen = false,
+            ChatOpen = false,
+            ChatJustOpened = false,
+            ChatResult = string.Empty,
+            ChatResultIsError = false,
             NoclipMode = false,
             CreativeFlightMode = false,
             Fullbright = false,
+            WorldName = string.Empty,
+            ChunkDiagnostics = null,
             Menu = new MenuState(),
             Fps = 0f,
             UpdateMs = 0f,
@@ -241,10 +259,12 @@ namespace Cubuild.Renderer
             HandPoke = 0f,
             HandSwing = 0f,
             HandSwingSerial = 0,
-            MiningBlockPos = Vector3.Zero,
+            MiningBlockPos = Cubuild.Point3D.Zero,
             MiningBlockId = 0,
             MiningBlockNormal = new Point3D(0, 0, 0),
             SaveToast = 0f,
+            StatusToastTimer = 0f,
+            StatusToast = string.Empty,
             GenWarning = 0f,
             WorldGenSaved = 0,
             WorldGenCurrent = 0,

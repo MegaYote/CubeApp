@@ -71,6 +71,8 @@ namespace Cubuild
         // dead-frame freeze between the click and the first loading-screen paint.
         private bool _pendingWorldFromSave;
         private WorldSave? _pendingWorldSave;
+        private string _pendingWorldSaveName = "";
+        private BoundaryHandoff? _pendingBoundaryHandoff;
         private int _pendingSeed;
         private string _pendingName = "";
         private GameMode _pendingMode;
@@ -78,6 +80,10 @@ namespace Cubuild
         private bool _pendingFrontierProgression;
         private bool _flintWorkbenchTapConsumed;
         private bool _loadingScreenShown;       // gate: first frame shows "Loading...", second does work
+        private string _activeWorldSaveName = "";
+        private float _statusToastTimer;
+        private string _statusToast = "";
+        private bool _boundaryMultiplayerWarningShown;
 
         private float lastFps;
         private readonly Stopwatch fpsStopwatch = new();
@@ -148,6 +154,11 @@ namespace Cubuild
         private OreCartEntity? _openOreCart;
         private bool handEditorOpen;
         private bool biomeMenuOpen;
+        private bool chatOpen;
+        private bool _chatJustOpened;
+        private string _chatResult = "Commands: /tp x y z (use ~ for terrain height).";
+        private bool _chatResultIsError;
+        private readonly CommandDispatcher _commandDispatcher = new();
 
         // ---- multiplayer session ----
         private Net.NetHost? _netHost;

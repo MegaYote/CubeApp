@@ -162,6 +162,14 @@ namespace Cubuild
                     var t4 = stageStopwatch.ElapsedTicks;
                     if (gpuRenderer != null)
                     {
+                        // Refresh the camera before BuildHud captures F3's CPU frustum
+                        // prediction, so the diagnostic and this rendered frame use the same view.
+                        if (World != null)
+                        {
+                            var lp = World.LocalPlayer;
+                            gpuRenderer.UpdateCamera(thirdPersonView ? GetThirdPersonCameraPosition() : lp.Position,
+                                lp.Yaw, lp.Pitch, lp.WalkPhase, lp.WalkAmount, !thirdPersonView, lp.Grounded);
+                        }
                         // Always push the HUD (even without a world: menu-only state). On the title
                         // screen the renderer MUST operate on Program's real MenuState instance, not
                         // HudState.Empty's detached copy - otherwise button clicks set flags nobody
@@ -171,11 +179,9 @@ namespace Cubuild
                             World.Entities.CollectMiningTargets(_zombieMiningScratch);
                         hud.ZombieMiningTargets = _zombieMiningScratch;
                         gpuRenderer.SetHud(hud);
+                        _chatJustOpened = false;
                         if (World != null)
                         {
-                            var lp = World.LocalPlayer;
-                            gpuRenderer.UpdateCamera(thirdPersonView ? GetThirdPersonCameraPosition() : lp.Position,
-                                lp.Yaw, lp.Pitch, lp.WalkPhase, lp.WalkAmount, !thirdPersonView, lp.Grounded);
                             _entityRenderScratch.Clear();
                             _entityRenderScratch.AddRange(World.Entities.MobRenderData);
                             if (thirdPersonView) _entityRenderScratch.Add(BuildLocalPlayerRenderData());
@@ -187,6 +193,23 @@ namespace Cubuild
                         gpuRenderer.ProcessPendingPriorityMeshes();
                         gpuRenderer.SetUiInputSnapshot(snapshot);
                         gpuRenderer.Render();
+
+                        while (gpuRenderer.TryTakeChatCommand(out string chatCommand))
+                        {
+                            try
+                            {
+                                var response = _commandDispatcher.Execute(chatCommand,
+                                    World == null ? null : new CommandContext(World, _netClient != null,
+                                        _netClient != null || _netHost != null, WorldBoundaryLimit));
+                                _chatResult = response.Message;
+                                _chatResultIsError = !response.Success;
+                            }
+                            catch (Exception commandError)
+                            {
+                                _chatResult = "Command failed: " + commandError.Message;
+                                _chatResultIsError = true;
+                            }
+                        }
 
                         while (gpuRenderer.TryTakeInventorySelection(out int invBlock))
                         {

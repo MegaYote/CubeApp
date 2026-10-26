@@ -84,5 +84,7 @@ namespace Cubuild
         Fall,
         /// <summary>Killed by a hostile mob (zombie / brute).</summary>
         Mob,
+        /// <summary>A solid block shared the player's hitbox and squeezed them to death.</summary>
+        Suffocation,
     }
 }

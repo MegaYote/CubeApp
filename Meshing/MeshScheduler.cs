@@ -19,6 +19,15 @@ namespace Cubuild
         /// mesh versions never advance, so callers that wait on remesh must release immediately.</summary>
         public bool HasRealMeshQueue { get; }
 
+        /// <summary>Count of dirty chunks awaiting scheduler/worker processing.</summary>
+        public int PendingDirtyCount
+        {
+            get
+            {
+                lock (_dirtyLock) return _dirty.Count;
+            }
+        }
+
         // Dirty-list of chunks needing a mesh rebuild (instead of scanning every loaded chunk).
         // Populated via MarkDirty (called wherever NeedsRemesh is set); Update() drains only these.
         // The list is mutated from BOTH the chunk-gen worker threads (WireDirty on a fresh chunk)

@@ -82,9 +82,9 @@ namespace Cubuild.Renderer
 
             for (int i = 0; i < 4; i++)
             {
-                _highlightVertexScratch[i * 3 + 0] = quad[i].X;
-                _highlightVertexScratch[i * 3 + 1] = quad[i].Y;
-                _highlightVertexScratch[i * 3 + 2] = quad[i].Z;
+                _highlightVertexScratch[i * 3 + 0] = (float)(quad[i].X - _renderOriginX);
+                _highlightVertexScratch[i * 3 + 1] = (float)(quad[i].Y - _renderOriginY);
+                _highlightVertexScratch[i * 3 + 2] = (float)(quad[i].Z - _renderOriginZ);
             }
 
             _gd.UpdateBuffer(_highlightVertexBuffer, 0, _highlightVertexScratch);
@@ -109,7 +109,7 @@ namespace Cubuild.Renderer
         // while holding mine) reuses the cached light instead of recomputing ~590k cells every
         // few frames. Only crossing into a new chunk (or a new mining block in a different chunk)
         // triggers the rebuild.
-        private void CaptureMiningLight(Vector3 blockPos, long chunkKey)
+        private void CaptureMiningLight(Cubuild.Point3D blockPos, long chunkKey)
         {
             if (chunkKey == _miningLightChunkKey)
             {
@@ -235,7 +235,10 @@ namespace Cubuild.Renderer
                            | (uint)(int)Math.Floor(mbp.Z / (double)ChunkManager.ChunkSize);
             CaptureMiningLight(mbp, mchunkKey);
             SelectMiningLightForCurrentTime();
-            var center = _hud.MiningBlockPos + new Vector3(0.5f);
+            var center = new Vector3(
+                (float)(mbp.X - _renderOriginX + 0.5),
+                (float)(mbp.Y - _renderOriginY + 0.5),
+                (float)(mbp.Z - _renderOriginZ + 0.5));
             var def = BlockRegistry.GetById(_hud.MiningBlockId);
             // Per-face shade (top 1.0 / bottom 0.5 / N+S 0.8 / E+W 0.6), same as the mesher.
             float[] faceShade = { 0.8f, 0.8f, 0.5f, 1.0f, 0.6f, 0.6f };
@@ -347,6 +350,9 @@ namespace Cubuild.Renderer
                     _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack1);
                     _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack2);
                     _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack3);
+                    _shrinkCubeVertexScratch[vf++] = BitConverter.Int32BitsToSingle(_renderOriginX);
+                    _shrinkCubeVertexScratch[vf++] = BitConverter.Int32BitsToSingle(_renderOriginY);
+                    _shrinkCubeVertexScratch[vf++] = BitConverter.Int32BitsToSingle(_renderOriginZ);
                 }
             }
 
@@ -428,9 +434,9 @@ namespace Cubuild.Renderer
                             u = -wallEps + u * (1f + 2f * wallEps);
                             v = -wallEps + v * (1f + 2f * wallEps);
                         }
-                        float x = bx + neighbors[i].dx + u;
-                        float y = by + neighbors[i].dy + v;
-                        float z = bz + neighbors[i].dz + w;
+                        float x = (float)((double)bx + neighbors[i].dx + u - _renderOriginX);
+                        float y = (float)((double)by + neighbors[i].dy + v - _renderOriginY);
+                        float z = (float)((double)bz + neighbors[i].dz + w - _renderOriginZ);
                         var corner = new Point3D(src[c * 3 + 0], src[c * 3 + 1], src[c * 3 + 2]);
                         float du = (float)Math.Clamp(Dot(corner, wAxis) - wMinU, 0.0, 1.0);
                         float dv = (float)Math.Clamp(Dot(corner, wVAxis) - wMinV, 0.0, 1.0);
@@ -445,6 +451,9 @@ namespace Cubuild.Renderer
                         _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack1);
                         _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack2);
                         _shrinkCubeVertexScratch[vf++] = BitConverter.UInt32BitsToSingle(pack3);
+                        _shrinkCubeVertexScratch[vf++] = BitConverter.Int32BitsToSingle(_renderOriginX);
+                        _shrinkCubeVertexScratch[vf++] = BitConverter.Int32BitsToSingle(_renderOriginY);
+                        _shrinkCubeVertexScratch[vf++] = BitConverter.Int32BitsToSingle(_renderOriginZ);
                     }
                 }
             }
@@ -457,7 +466,7 @@ namespace Cubuild.Renderer
             // indexStart=36: the index buffer is 12 quads (0-5 cube, 6-11 walls); wall quads
             // start at element 36. Starting at 24 (quad 4) drew two cube faces and dropped the
             // last two wall quads - the front/back (north/south) masks.
-            int wallQuads = vf / (4 * 6) - 6;
+            int wallQuads = vf / (4 * 9) - 6;
             if (wallQuads > 0 && _shrinkWallPipeline != null)
             {
                 cl.SetPipeline(_shrinkWallPipeline);
@@ -511,12 +520,12 @@ namespace Cubuild.Renderer
                     int chunkZ = _hud.PlayerChunkZ + dz;
 
                     // Calculate chunk world bounds
-                    float minX = chunkX * chunkSize;
+                    float minX = (float)((long)chunkX * chunkSize - _renderOriginX);
                     float maxX = minX + chunkSize;
-                    float minZ = chunkZ * chunkSize;
+                    float minZ = (float)((long)chunkZ * chunkSize - _renderOriginZ);
                     float maxZ = minZ + chunkSize;
-                    float minY = ChunkManager.WorldOriginY;
-                    float maxY = ChunkManager.WorldOriginY + chunkHeight;
+                    float minY = ChunkManager.WorldOriginY - _renderOriginY;
+                    float maxY = minY + chunkHeight;
 
                     // Add vertical edges (4 corners)
                     AddLine(minX, minY, minZ, minX, maxY, minZ, ref vertexIndex);
@@ -569,7 +578,13 @@ namespace Cubuild.Renderer
 
             int v = 0;
             foreach (var beam in beams)
-                v = WriteBeamBox(_linkBeamVertexScratch, v, beam.A, beam.B, 0.06f);
+            {
+                var a = new Vector3((float)(beam.A.X - _renderOriginX),
+                    (float)(beam.A.Y - _renderOriginY), (float)(beam.A.Z - _renderOriginZ));
+                var b = new Vector3((float)(beam.B.X - _renderOriginX),
+                    (float)(beam.B.Y - _renderOriginY), (float)(beam.B.Z - _renderOriginZ));
+                v = WriteBeamBox(_linkBeamVertexScratch, v, a, b, 0.06f);
+            }
 
             if (v == 0) return;
             _gd.UpdateBuffer(_linkBeamVertexBuffer, 0, _linkBeamVertexScratch);
@@ -694,9 +709,9 @@ namespace Cubuild.Renderer
             float renderYaw = inst.Yaw + (float)Math.PI;
             float cosY = (float)Math.Cos(renderYaw), sinY = (float)Math.Sin(renderYaw);
 
-            float px = (float)inst.Position.X;
-            float py = (float)inst.Position.Y;
-            float pz = (float)inst.Position.Z;
+            float px = (float)(inst.Position.X - _renderOriginX);
+            float py = (float)(inst.Position.Y - _renderOriginY);
+            float pz = (float)(inst.Position.Z - _renderOriginZ);
 
             // Hurt / death flash: red channel unchanged, green/blue driven toward the tint.
             float blink = isDead ? 1f : (inst.HurtTimer > 0f ? ((float)Math.Sin(inst.HurtTimer * 95.0f) > 0f ? 1f : 0.72f) : 0f);

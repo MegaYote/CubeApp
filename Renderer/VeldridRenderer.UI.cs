@@ -1330,6 +1330,7 @@ namespace Cubuild.Renderer
                     DeathCause.DebugSelf => "Your heart gave out...",
                     DeathCause.Fall => "You fell from a high place...",
                     DeathCause.Mob => "A zombie got you...",
+                    DeathCause.Suffocation => "You were crushed...",
                     _ => "You died...",
                 };
 
@@ -1453,6 +1454,53 @@ namespace Cubuild.Renderer
                 ImGui.Spacing();
                 if (ImGui.Button("Back", new Vector2(200, 34))) m.SettingsBackClicked = true;
                 ImGui.End();
+            }
+        }
+
+        private void DrawChatCommandWindow(Vector2 displaySize)
+        {
+            float width = Math.Max(220f, Math.Min(560f, displaySize.X - 32f));
+            ImGui.SetNextWindowPos(new Vector2(16f, Math.Max(16f, displaySize.Y - 142f)), ImGuiCond.Always);
+            ImGui.SetNextWindowSize(new Vector2(width, 0f), ImGuiCond.Always);
+            if (_chatFocusRequested) ImGui.SetNextWindowFocus();
+            ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0.025f, 0.035f, 0.045f, 0.92f));
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(12f, 9f));
+            ImGui.Begin("##chat-command", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
+                | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings
+                | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
+
+            ImGui.Text("Command");
+            if (_chatFocusRequested)
+            {
+                ImGui.SetKeyboardFocusHere();
+            }
+            bool submitted = ImGui.InputText("##chat-command-input", _chatCommandBuffer,
+                (uint)_chatCommandBuffer.Length, ImGuiInputTextFlags.EnterReturnsTrue);
+            _chatFocusRequested = false;
+            ImGui.TextDisabled("Enter submits  |  Escape closes  |  /tp x y z  (use ~ for terrain height)");
+            if (!string.IsNullOrEmpty(_hud.ChatResult))
+            {
+                var resultColor = _hud.ChatResultIsError
+                    ? new Vector4(1f, 0.45f, 0.40f, 1f)
+                    : new Vector4(0.55f, 0.9f, 0.62f, 1f);
+                ImGui.TextColored(resultColor, _hud.ChatResult);
+            }
+
+            ImGui.End();
+            ImGui.PopStyleVar();
+            ImGui.PopStyleColor();
+
+            // Enter also opens the window. Ignore its first-frame InputText return so opening
+            // chat cannot submit an empty command.
+            if (_hud.ChatJustOpened)
+            {
+                _chatFocusRequested = true;
+            }
+            else if (submitted)
+            {
+                _chatCommands.Enqueue(ReadBuffer(_chatCommandBuffer));
+                WriteBuffer(_chatCommandBuffer, string.Empty);
+                _chatFocusRequested = true;
             }
         }
 
@@ -1799,6 +1847,11 @@ namespace Cubuild.Renderer
                 DrawBiomeMenu(displaySize);
             }
 
+            if (_hud.ChatOpen)
+            {
+                DrawChatCommandWindow(displaySize);
+            }
+
             // Selected block label
             string label = string.IsNullOrEmpty(_hud.SelectedBlockText) ? string.Empty : _hud.SelectedBlockText;
             if (label.Length > 0)
@@ -1821,12 +1874,22 @@ namespace Cubuild.Renderer
                 drawList.AddText(toastPos, textColor, toast);
             }
 
+            if (_hud.StatusToastTimer > 0f && !string.IsNullOrWhiteSpace(_hud.StatusToast))
+            {
+                var statusPos = new Vector2(12, 64);
+                var statusSize = ImGui.CalcTextSize(_hud.StatusToast);
+                uint statusBg = ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.6f));
+                uint statusColor = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 0.82f, 0.48f, 1f));
+                drawList.AddRectFilled(statusPos - new Vector2(6, 3), statusPos + statusSize + new Vector2(6, 3), statusBg);
+                drawList.AddText(statusPos, statusColor, _hud.StatusToast);
+            }
+
             // Older-generation warning (world was made before terrain versioning, or with an
             // older generation - unexplored terrain may regenerate differently).
             if (_hud.GenWarning > 0f)
             {
                 const string warning = "Older terrain generation: unexplored areas may look different";
-                var warnPos = new Vector2(12, 64);
+                var warnPos = new Vector2(12, _hud.StatusToastTimer > 0f ? 88 : 64);
                 var warnSize = ImGui.CalcTextSize(warning);
                 uint warnBg = ImGui.ColorConvertFloat4ToU32(new Vector4(0.35f, 0.2f, 0f, 0.6f));
                 uint warnColor = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 0.85f, 0.3f, 1f));
@@ -1919,11 +1982,10 @@ namespace Cubuild.Renderer
             if (_hud.ShowDebug)
             {
                 uint debugColor = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 0f, 1f));
-                float dy = 8f;
+                var debugLines = new List<string>(48);
                 void Line(string text)
                 {
-                    drawList.AddText(new Vector2(8, dy), debugColor, text);
-                    dy += 16f;
+                    debugLines.Add(text);
                 }
 
                 Line($"FPS: {_hud.Fps:0.0}");
@@ -1938,29 +2000,47 @@ namespace Cubuild.Renderer
                 Line(_cloudWeatherDayIndex == long.MinValue
                     ? "Clouds: pending"
                     : $"Clouds: {_cloudWeatherProfile} | weather day {_cloudWeatherDayIndex + 1}");
-                Line($"Particles: {_particleCount}");
-                Line($"Seed: {_hud.WorldSeed}");
-                Line($"Gen: saved {_hud.WorldGenSaved} / current {_hud.WorldGenCurrent}");
-                Line($"Creative flight (collision): {(_hud.CreativeFlightMode ? "ON" : "OFF")}");
-                Line($"Noclip [F2]: {(_hud.NoclipMode ? "ON" : "OFF")}");
-                Line($"Fullbright: {(_hud.Fullbright ? "ON" : "OFF")}  [F6]");
-                Line($"Cull: {(_gpuCullEnabled ? "GPU" : "CPU")}  [F7]");
+                Line($"Particles: {_particleCount} | Seed: {_hud.WorldSeed} | Gen: {_hud.WorldGenSaved}/{_hud.WorldGenCurrent}");
+                Line($"Flight collision: {(_hud.CreativeFlightMode ? "ON" : "OFF")} | Noclip [F2]: {(_hud.NoclipMode ? "ON" : "OFF")} | Fullbright [F6]: {(_hud.Fullbright ? "ON" : "OFF")}");
                 if (!string.IsNullOrEmpty(_hud.NetStatus)) Line($"Net: {_hud.NetStatus}");
                 if (!string.IsNullOrEmpty(_hud.BiomeText)) Line($"Biome: {_hud.BiomeText}");
                 Line($"XYZ: {_hud.PlayerX:0.000} / {_hud.PlayerY:0.000} / {_hud.PlayerZ:0.000}");
-                Line($"Block: {(int)Math.Floor(_hud.PlayerX)} / {(int)Math.Floor(_hud.PlayerY)} / {(int)Math.Floor(_hud.PlayerZ)}");
-                Line($"Chunk: {_hud.PlayerChunkX} / {_hud.PlayerChunkZ}");
-                Line($"Upd: {_hud.UpdateMs:0.0} ms");
-                Line($"Mesh: {_hud.MeshMs:0.0} ms");
-                Line($"Entity: {_hud.EntityMs:0.0} ms  ({_hud.EntityCount} mobs)");
-                Line($"Upload: {_hud.UploadMs:0.0} ms");
-                Line($"Render: {_hud.RenderMs:0.0} ms");
+                Line($"Block: {(int)Math.Floor(_hud.PlayerX)} / {(int)Math.Floor(_hud.PlayerY)} / {(int)Math.Floor(_hud.PlayerZ)} | Chunk: L{Cubuild.ChunkManager.LayerForWorldY((int)Math.Floor(_hud.PlayerY))} {_hud.PlayerChunkX},{_hud.PlayerChunkZ}");
+                Line($"Update {_hud.UpdateMs:0.0} | Mesh {_hud.MeshMs:0.0} | Upload {_hud.UploadMs:0.0} | Render {_hud.RenderMs:0.0} ms | Entity {_hud.EntityMs:0.0} ms ({_hud.EntityCount})");
                 Line($"Facing: {_hud.FacingText}");
                 if (!string.IsNullOrEmpty(_hud.SaplingGrowthText)) Line(_hud.SaplingGrowthText);
                 if (!string.IsNullOrEmpty(_hud.RenderDistanceText))
                 {
                     Line(_hud.RenderDistanceText);
                 }
+
+                var diagnostics = _hud.ChunkDiagnostics;
+                if (diagnostics != null)
+                {
+                    long worldTicks = Math.Max(0L, _hud.WorldTime);
+                    Line($"World: {_hud.WorldName} | Day {worldTicks / 24000 + 1}, tick {worldTicks % 24000}");
+                    Line($"Render radius: {diagnostics.RenderRadius} | Cull: {diagnostics.CullMode} -> {(diagnostics.GpuCullActive ? "GPU active" : "CPU active")} (GPU supported: {(diagnostics.GpuCullSupported ? "yes" : "no")}) [F7]");
+                    Line($"Chunks: loaded {diagnostics.LoadedChunks} | dirty mesh {diagnostics.DirtyMeshQueueCount} | uploaded ranges {diagnostics.UploadedChunkRanges} | draws {diagnostics.DrawCommandCount}");
+                    Line($"Uploads: pending {diagnostics.PendingUploads} | last frame stream {diagnostics.LastFrameStreamUploads}, priority {diagnostics.LastFramePriorityUploads}");
+                    Line($"Mega buffers (tail/cap): VB {diagnostics.VertexBufferTailBytes / (1024.0 * 1024.0):0.0}/{diagnostics.VertexBufferCapacityBytes / (1024.0 * 1024.0):0.0} MiB, IB {diagnostics.IndexBufferTailBytes / (1024.0 * 1024.0):0.0}/{diagnostics.IndexBufferCapacityBytes / (1024.0 * 1024.0):0.0} MiB | pending copies {diagnostics.PendingBufferCopies}");
+                    Line($"Nearby chunks L{Cubuild.ChunkManager.LayerForWorldY((int)Math.Floor(_hud.PlayerY))} (x -4..+4; z rows +4..-4; @ player, X target):");
+                    Line("U drawable, d dirty, m queued/meshing, M awaiting upload, 0 empty, . unloaded");
+                    foreach (string mapRow in diagnostics.NearbyMapRows) Line(mapRow);
+                    foreach (string targetLine in diagnostics.TargetLines) Line(targetLine);
+                }
+
+                // A translucent backing keeps the expanded diagnostic readout legible over both
+                // bright sky and dark caves without turning it into an interactive window.
+                float maxWidth = 0f;
+                foreach (string line in debugLines)
+                    maxWidth = Math.Max(maxWidth, ImGui.CalcTextSize(line).X);
+                const float debugLineHeight = 16f;
+                var panelMin = new Vector2(4f, 4f);
+                var panelMax = new Vector2(12f + maxWidth, 8f + debugLines.Count * debugLineHeight);
+                uint panelColor = ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.58f));
+                drawList.AddRectFilled(panelMin, panelMax, panelColor, 3f);
+                for (int i = 0; i < debugLines.Count; i++)
+                    drawList.AddText(new Vector2(8f, 6f + i * debugLineHeight), debugColor, debugLines[i]);
 
                 // Nametags: project each mob's position above its head into screen space and draw
                 // its type label, so invisible/broken mobs are still verifiable in the F3 overlay.
@@ -1970,7 +2050,7 @@ namespace Cubuild.Renderer
                     for (int i = 0; i < _allMobRenderData.Count; i++)
                     {
                         var md = _allMobRenderData[i];
-                        var screen = WorldToScreen(new System.Numerics.Vector3((float)md.Position.X, (float)md.Position.Y + 1.8f, (float)md.Position.Z));
+                        var screen = WorldToScreen(new Cubuild.Point3D(md.Position.X, md.Position.Y + 1.8, md.Position.Z));
                         if (screen.HasValue)
                         {
                             drawList.AddText(screen.Value - new Vector2(0, 14), tagColor, md.MobType);
@@ -1983,11 +2063,15 @@ namespace Cubuild.Renderer
         // Projects a world-space point to screen pixel coordinates using the current
         // view-projection matrix (the renderer owns both the camera and the HUD pass). Returns
         // null when the point is behind the camera.
-        private System.Numerics.Vector2? WorldToScreen(System.Numerics.Vector3 world)
+        private System.Numerics.Vector2? WorldToScreen(Cubuild.Point3D world)
         {
             if (!_viewProjection.HasValue) return null;
             var vp = _viewProjection.Value;
-            var clip = System.Numerics.Vector4.Transform(new System.Numerics.Vector4(world, 1f), vp);
+            var relative = new System.Numerics.Vector3(
+                (float)(world.X - _renderOriginX),
+                (float)(world.Y - _renderOriginY),
+                (float)(world.Z - _renderOriginZ));
+            var clip = System.Numerics.Vector4.Transform(new System.Numerics.Vector4(relative, 1f), vp);
             if (clip.W <= 0f) return null;
             var ndc = new System.Numerics.Vector2(clip.X / clip.W, clip.Y / clip.W);
             var io = ImGui.GetIO();

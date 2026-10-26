@@ -26,6 +26,7 @@ namespace Cubuild
         public bool ToggleGpuCullPressed { get; }
         public bool ToggleFullscreenPressed { get; }
         public bool ToggleCreativePressed { get; }
+        public bool OpenChatPressed { get; }
         public bool BreakBlockPressed { get; }
         public bool PlaceBlockPressed { get; }
         public bool DropItemPressed { get; }
@@ -52,6 +53,7 @@ namespace Cubuild
             bool toggleGpuCullPressed,
             bool toggleFullscreenPressed,
             bool toggleCreativePressed,
+            bool openChatPressed,
             bool breakBlockPressed,
             bool placeBlockPressed,
             bool dropItemPressed,
@@ -77,6 +79,7 @@ namespace Cubuild
             ToggleGpuCullPressed = toggleGpuCullPressed;
             ToggleFullscreenPressed = toggleFullscreenPressed;
             ToggleCreativePressed = toggleCreativePressed;
+            OpenChatPressed = openChatPressed;
             BreakBlockPressed = breakBlockPressed;
             PlaceBlockPressed = placeBlockPressed;
             DropItemPressed = dropItemPressed;
@@ -185,6 +188,7 @@ namespace Cubuild
         private bool toggleGpuCullPressed;
         private bool toggleFullscreenPressed;
         private bool toggleCreativePressed;
+        private bool openChatPressed;
         private bool breakBlockPressed;
         private bool placeBlockPressed;
         private bool dropItemPressed;
@@ -195,6 +199,7 @@ namespace Cubuild
         private Vector2 lookDeltaAccum;
         private Vector2 lastMousePosition;
         private bool hasLastMousePosition;
+        private bool chatOpen;
         private bool spaceWasDown;
         private long lastSpaceTapMs = -1;
 
@@ -217,15 +222,34 @@ namespace Cubuild
             toggleFullbrightPressed = false;
             toggleFullscreenPressed = false;
             toggleCreativePressed = false;
+            openChatPressed = false;
             breakBlockPressed = false;
             placeBlockPressed = false;
+            dropItemPressed = false;
+            advanceTimePressed = false;
+            toggleGpuCullPressed = false;
             selectedSlot = null;
+            hotbarScroll = 0;
             lookDeltaAccum = Vector2.Zero;
         }
 
         public void ResetMouseTracking()
         {
             hasLastMousePosition = false;
+        }
+
+        public void DiscardLookDelta() => lookDeltaAccum = Vector2.Zero;
+
+        public void SetChatOpen(bool open)
+        {
+            chatOpen = open;
+            // A mouse button held before or during chat must not become a fresh block action when
+            // the player closes the box and recaptures the mouse.
+            breakHeld = false;
+            placeHeld = false;
+            breakBlockPressed = false;
+            placeBlockPressed = false;
+            DiscardLookDelta();
         }
 
         public void ProcessSnapshot(InputSnapshot snapshot, bool mouseCaptured, float sensitivity)
@@ -253,7 +277,7 @@ namespace Cubuild
                 jumpPressed = keyState[SDL_SCANCODE_SPACE] != 0;
             }
 
-            if (!mouseCaptured)
+            if (!mouseCaptured || chatOpen)
             {
                 lastSpaceTapMs = -1;
             }
@@ -331,6 +355,7 @@ namespace Cubuild
                         break;
                     case Key.Enter:
                         if (keyEvent.Modifiers.HasFlag(ModifierKeys.Alt)) toggleFullscreenPressed = true;
+                        else if (!chatOpen) openChatPressed = true;
                         break;
                     case Key.Slash:
                         toggleCreativePressed = true;
@@ -373,6 +398,7 @@ namespace Cubuild
 
             foreach (var mouseEvent in snapshot.MouseEvents)
             {
+                if (chatOpen) break;
                 // Track held state on BOTH press and release so breakHeld/placeHeld reset properly.
                 // (Skipping release events left breakHeld stuck true forever -> auto-mining.)
                 if (mouseEvent.MouseButton == MouseButton.Left)
@@ -468,6 +494,7 @@ namespace Cubuild
                 toggleGpuCullPressed,
                 toggleFullscreenPressed,
                 toggleCreativePressed,
+                openChatPressed,
                 breakBlockPressed,
                 placeBlockPressed,
                 dropItemPressed,
@@ -492,6 +519,8 @@ namespace Cubuild
             advanceTimePressed = false;
             toggleGpuCullPressed = false;
             toggleFullscreenPressed = false;
+            toggleCreativePressed = false;
+            openChatPressed = false;
             breakBlockPressed = false;
             placeBlockPressed = false;
             dropItemPressed = false;
@@ -510,6 +539,13 @@ namespace Cubuild
 
         public TickInputState CaptureTickInput(bool noclipMode = false, bool creativeFlightMode = false)
         {
+            if (chatOpen)
+            {
+                jumpPressed = false;
+                return new TickInputState(false, false, false, false, false, false, false,
+                    false, false, Vector2.Zero, noclipMode, creativeFlightMode);
+            }
+
             var result = new TickInputState(
                 moveForward,
                 moveBackward,

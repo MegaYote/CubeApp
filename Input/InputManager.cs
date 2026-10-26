@@ -15,6 +15,7 @@ namespace Cubuild
         public bool ToggleDebugRequested;
         public bool ToggleInventoryRequested;
         public bool ToggleNoclipRequested;
+        public bool OpenChatRequested;
         public bool CycleRenderDistanceRequested;
         public bool SpawnMobRequested;
         public int? SelectedSlotChangedTo;
@@ -81,6 +82,7 @@ namespace Cubuild
             if (fi.ToggleDebugPressed) action.ToggleDebugRequested = true;
             if (fi.ToggleInventoryPressed) action.ToggleInventoryRequested = true;
             if (fi.ToggleNoclipPressed) action.ToggleNoclipRequested = true;
+            if (fi.OpenChatPressed) action.OpenChatRequested = true;
             if (fi.CycleRenderDistancePressed) action.CycleRenderDistanceRequested = true;
             if (fi.SpawnMobPressed) action.SpawnMobRequested = true;
             if (fi.SelectedSlot.HasValue) action.SelectedSlotChangedTo = fi.SelectedSlot.Value;
@@ -139,6 +141,7 @@ namespace Cubuild
             fi.ToggleMouseCapturePressed
             || fi.ToggleDebugPressed
             || fi.ToggleInventoryPressed
+            || fi.OpenChatPressed
             || fi.ToggleNoclipPressed
             || fi.ToggleCreativeFlightPressed
             || fi.CycleRenderDistancePressed

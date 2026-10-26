@@ -41,7 +41,7 @@ namespace Cubuild
         public HudState Build()
         {
             var forward = _player.GetForward();
-            Vector3[]? highlightQuad = ComputeHighlightQuad();
+            Point3D[]? highlightQuad = ComputeHighlightQuad();
 
             return new HudState
             {
@@ -62,7 +62,7 @@ namespace Cubuild
             };
         }
 
-        private Vector3[]? ComputeHighlightQuad()
+        private Point3D[]? ComputeHighlightQuad()
         {
             var hit = HighlightedBlock;
             if (!hit.HasValue) return null;
@@ -101,11 +101,11 @@ namespace Cubuild
             const double faceEpsilon = 0.002;
             var offset = n * faceEpsilon;
 
-            var result = new Vector3[4];
+            var result = new Point3D[4];
             for (int i = 0; i < 4; i++)
             {
                 var pos = faceCorners[i] + offset;
-                result[i] = new Vector3((float)pos.X, (float)pos.Y, (float)pos.Z);
+                result[i] = pos;
             }
 
             return result;

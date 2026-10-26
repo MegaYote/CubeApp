@@ -18,45 +18,96 @@ namespace Cubuild
         private void StartNewWorld(int seed, string name, GameMode mode = GameMode.Creative,
             bool isMinecraftMode = false, bool frontierProgression = false)
         {
+            var candidate = CreateWorldCandidate(seed, name, mode, isMinecraftMode, frontierProgression);
+            try { ActivateWorld(candidate, SanitizeFileName(candidate.Name), skipSpawn: false); }
+            catch { candidate.Dispose(); throw; }
+        }
+
+        private GameWorld CreateWorldCandidate(int seed, string name, GameMode mode,
+            bool isMinecraftMode = false, bool frontierProgression = false)
+        {
             EnsureRegistries(isMinecraftMode, frontierProgression);
-            if (World != null)
-            {
-                // Unsubscribe before disposing so a late chunk from the dying world can't
-                // poke the new world's mesher / renderer.
-                World.ChunkGenerated -= OnChunkGenerated;
-                World.ChunkUnloaded -= OnChunkUnloaded;
-                World.Dispose();
-                World = null;
-            }
-            World = new GameWorld(seed, name, () => gpuRenderer, ChunkRenderRadius, Math.Max(1, Environment.ProcessorCount - 2));
-            World.Mode = mode;
-            World.IsMinecraftMode = isMinecraftMode;
-            World.FrontierProgression = isMinecraftMode && frontierProgression;
+            GameWorld? activeCandidate = null;
+            var candidate = new GameWorld(seed, name,
+                () => ReferenceEquals(World, activeCandidate) ? gpuRenderer : null,
+                ChunkRenderRadius, Math.Max(1, Environment.ProcessorCount - 2));
+            activeCandidate = candidate;
+            candidate.Mode = mode;
+            candidate.IsMinecraftMode = isMinecraftMode;
+            candidate.FrontierProgression = isMinecraftMode && frontierProgression;
             // Both modes start with an empty hotbar; flight states never carry across worlds.
-            World.ResetFlightModes();
-            for (int i = 0; i < GameWorld.HotbarSlots; i++) World.Hotbar[i] = BlockRegistry.AirId;
-            World.SelectedBlock = BlockRegistry.AirId;
-            World.SelectedSlot = 0;
+            candidate.ResetFlightModes();
+            for (int i = 0; i < GameWorld.HotbarSlots; i++) candidate.Hotbar[i] = BlockRegistry.AirId;
+            candidate.SelectedBlock = BlockRegistry.AirId;
+            candidate.SelectedSlot = 0;
             // Both modes start grounded unless a flight mode is toggled.
-            World.ChunkGenerated += OnChunkGenerated;
-            World.ChunkUnloaded += OnChunkUnloaded;
-            if (gpuRenderer != null)
+            return candidate;
+        }
+
+        private void ActivateWorld(GameWorld candidate, string saveName, bool skipSpawn)
+        {
+            var previous = World;
+            var previousScreen = screen;
+            var previousMenuScreen = menu.Screen;
+            var previousSaveName = _activeWorldSaveName;
+            // A save made by an older build may have the player at the old signed-int edge.
+            // Clamp it before BeginWorldLoad requests a render-radius of neighboring chunks.
+            // Fresh boundary handoffs already carry a validated destination coordinate and must
+            // retain their exact overshoot, so only apply this to ordinary save loads.
+            if (skipSpawn && _pendingBoundaryHandoff == null)
+                ClampLoadedWorldToSafeBoundary(candidate);
+            if (previous != null)
             {
-                gpuRenderer.SetChunkManager(World.Chunks);
-                gpuRenderer.SetWorldSeed(World.Seed);
-                gpuRenderer.ResetWorld();
+                previous.ChunkGenerated -= OnChunkGenerated;
+                previous.ChunkUnloaded -= OnChunkUnloaded;
             }
-            // Pre-generate + mesh a radius around spawn before entering Play so there's no pop-in.
-            BeginWorldLoad();
+            World = candidate;
+            candidate.ChunkGenerated += OnChunkGenerated;
+            candidate.ChunkUnloaded += OnChunkUnloaded;
+            try
+            {
+                _activeWorldSaveName = saveName;
+                if (gpuRenderer != null)
+                {
+                    gpuRenderer.SetChunkManager(candidate.Chunks);
+                    gpuRenderer.SetWorldSeed(candidate.Seed);
+                    gpuRenderer.ResetWorld();
+                }
+                // Pre-generate + mesh a radius around the destination before entering Play.
+                BeginWorldLoad(skipSpawn);
+            }
+            catch
+            {
+                candidate.ChunkGenerated -= OnChunkGenerated;
+                candidate.ChunkUnloaded -= OnChunkUnloaded;
+                World = previous!;
+                if (previous != null)
+                {
+                    previous.ChunkGenerated += OnChunkGenerated;
+                    previous.ChunkUnloaded += OnChunkUnloaded;
+                }
+                _activeWorldSaveName = previousSaveName;
+                screen = previousScreen;
+                menu.Screen = previousMenuScreen;
+                if (previous != null && gpuRenderer != null)
+                {
+                    gpuRenderer.SetChunkManager(previous.Chunks);
+                    gpuRenderer.SetWorldSeed(previous.Seed);
+                    gpuRenderer.ResetWorld();
+                }
+                throw;
+            }
+            try { previous?.Dispose(); }
+            catch (Exception ex) { TryLogSaveError(ex); }
         }
 
         // Begins the staged world-load. The main loop calls UpdateLoading while screen == Loading;
         // when the target radius is generated AND meshed AND uploaded, it flips to Playing.
-        private void BeginWorldLoad()
+        private void BeginWorldLoad(bool skipSpawn = false)
         {
             _loadPhase = 0;
             _loadPhaseStart = 0f;
-            _loadSkipSpawn = false;
+            _loadSkipSpawn = skipSpawn;
             _loadTargetSet.Clear();
             _loadMeshedSet.Clear();
             _loadLastMeshedCount = 0;
@@ -94,15 +145,21 @@ namespace Cubuild
             {
                 if (!_loadingScreenShown)
                 {
-                    menu.LoadingPhase = "Loading...";
+                    menu.LoadingPhase = _pendingBoundaryHandoff != null
+                        ? "Saving previous world" : "Loading...";
                     menu.LoadingPhaseProgress = 0f;
                     menu.LoadingTotalProgress = 0f;
                     _loadingScreenShown = true;
                     return; // next frame does the work, this frame just paints "Loading..."
                 }
+                if (_pendingBoundaryHandoff != null)
+                {
+                    PerformBoundaryHandoff(_pendingBoundaryHandoff);
+                    return;
+                }
                 if (_pendingWorldFromSave && _pendingWorldSave != null)
                 {
-                    LoadWorld(_pendingWorldSave);
+                    LoadWorld(_pendingWorldSave, _pendingWorldSaveName);
                 }
                 else
                 {
@@ -111,6 +168,8 @@ namespace Cubuild
                 }
                 _pendingName = "";
                 _pendingWorldSave = null;
+                _pendingWorldSaveName = "";
+                _pendingWorldFromSave = false;
                 _loadingScreenShown = false;
                 return; // StartNewWorld / LoadWorld called BeginWorldLoad, normal pipeline resumes next frame
             }
@@ -338,6 +397,7 @@ namespace Cubuild
                 _pendingIsMinecraftMode = _pendingMode == GameMode.Survival;
                 _pendingFrontierProgression = _pendingMode == GameMode.Survival && _pendingIsMinecraftMode;
                 _pendingWorldFromSave = false;
+                _pendingWorldSaveName = "";
                 screen = GameScreen.Loading;
                 menu.Screen = GameScreen.Loading;
                 DisableMouseLook();
@@ -356,6 +416,8 @@ namespace Cubuild
                         {
                             _pendingWorldSave = save;
                             _pendingWorldFromSave = true;
+                            _pendingWorldSaveName = Path.GetFileNameWithoutExtension(path);
+                            _pendingName = _pendingWorldSaveName;
                             screen = GameScreen.Loading;
                             menu.Screen = GameScreen.Loading;
                             DisableMouseLook();

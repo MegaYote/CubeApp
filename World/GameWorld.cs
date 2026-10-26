@@ -30,6 +30,11 @@ namespace Cubuild
         public const int GenerationVersion = 27;
         public int Seed { get; private set; }
         public string Name { get; private set; } = "World 1";
+        /// <summary>Persistent links to adjacent worlds, keyed by the side being crossed.</summary>
+        public string LinkedPositiveXWorld { get; set; } = "";
+        public string LinkedNegativeXWorld { get; set; } = "";
+        public string LinkedPositiveZWorld { get; set; } = "";
+        public string LinkedNegativeZWorld { get; set; } = "";
         /// <summary>The generation version this world was originally created with (from its save
         /// stamp, or <see cref="GenerationVersion"/> for freshly created worlds). Never upgraded
         /// on save, so a world keeps warning about its true age. 0 = made before versioning.</summary>

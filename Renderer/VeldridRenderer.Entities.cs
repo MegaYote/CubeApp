@@ -85,7 +85,8 @@ namespace Cubuild.Renderer
                     // global night dim.
                     float mobLight = GetMobLight(inst.Position.X, inst.Position.Y, inst.Position.Z);
                     entry.Model.WriteInstance(entry.VertexScratch, ref vf, entry.IndexScratch, ref ii, ref baseVertex,
-                        (float)inst.Position.X, (float)inst.Position.Y, (float)inst.Position.Z, inst.Yaw,
+                        (float)(inst.Position.X - _renderOriginX), (float)(inst.Position.Y - _renderOriginY),
+                        (float)(inst.Position.Z - _renderOriginZ), inst.Yaw,
                         inst.AnimTime, inst.AnimBlend, mobLight, inst.HeadYawLocal, inst.HurtTimer, inst.HeadPitchLocal,
                         inst.IsDead, inst.DeathT, inst.DeathRollDir, inst.Scale, inst.BodyPitch);
                 }
@@ -143,9 +144,9 @@ namespace Cubuild.Renderer
             float renderYaw = inst.Yaw + (float)Math.PI;
             float cosY = (float)Math.Cos(renderYaw), sinY = (float)Math.Sin(renderYaw);
 
-            float px = (float)inst.Position.X;
-            float py = (float)inst.Position.Y;
-            float pz = (float)inst.Position.Z;
+            float px = (float)(inst.Position.X - _renderOriginX);
+            float py = (float)(inst.Position.Y - _renderOriginY);
+            float pz = (float)(inst.Position.Z - _renderOriginZ);
 
             // Seated pose (riding a cart). The thighs swing forward until the legs stick out
             // ahead, roughly the pose of sitting on a stool. Legs rotate about the hip pivot on

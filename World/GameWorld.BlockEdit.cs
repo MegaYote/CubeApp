@@ -574,6 +574,7 @@ var place = pickResult.Value.Place;
             }
 
             if (WouldBlockIntersectPlayer(p, place.x, place.y, place.z, blockToPlace, meta)) return false;
+            if (WouldBlockIntersectMob(place.x, place.y, place.z, blockToPlace, meta)) return false;
 
             // Relight mechanic: right-click a BURNT TORCH with sap to relight it
             int sapItemId = ItemRegistry.GetId("sap");
@@ -664,6 +665,8 @@ var place = pickResult.Value.Place;
             if (!((BlockRegistry.IsSlab(hitId) && normal.Y > 0) || (BlockRegistry.IsSlabTop(hitId) && normal.Y < 0))) return false;
 
             int fullId = BlockRegistry.GetId(SlabMaterialOf(hitId));
+            // A merged slab becomes a full cube: refuse if that would swallow an entity.
+            if (WouldBlockIntersectMob(x, y, z, fullId, 0)) return false;
             if (!Chunks.TrySetBlock(x, y, z, fullId, 0)) return false;
             BlockTicks?.OnBlockChanged(x, y, z);
             int msLayer = ChunkManager.LayerForWorldY(y);
@@ -682,6 +685,8 @@ var place = pickResult.Value.Place;
             if (oldTop == newTop) return false;
 
             int fullId = BlockRegistry.GetId(SlabMaterialOf(oldId));
+            // Filling the other half closes the cube around whatever is standing in it.
+            if (WouldBlockIntersectMob(x, y, z, fullId, 0)) return false;
             if (!Chunks.TrySetBlock(x, y, z, fullId, 0)) return false;
             BlockTicks?.OnBlockChanged(x, y, z);
             int fsLayer = ChunkManager.LayerForWorldY(y);
@@ -823,6 +828,8 @@ var place = pickResult.Value.Place;
             // so intersecting here would trap them inside a closed door).
             if (WouldBlockIntersectPlayer(p, place.x, place.y, place.z, doorBottomId, meta)) return false;
             if (WouldBlockIntersectPlayer(p, place.x, topY, place.z, doorTopId, meta)) return false;
+            if (WouldBlockIntersectMob(place.x, place.y, place.z, doorBottomId, meta)) return false;
+            if (WouldBlockIntersectMob(place.x, topY, place.z, doorTopId, meta)) return false;
 
             if (!Chunks.TrySetBlock(place.x, place.y, place.z, doorBottomId, meta)) return false;
             if (!Chunks.TrySetBlock(place.x, topY, place.z, doorTopId, meta))
@@ -939,6 +946,17 @@ var place = pickResult.Value.Place;
             double minZ = p.Position.Z - PlayerRadius;
             double maxZ = p.Position.Z + PlayerRadius;
             return BoxesOverlapPlayer(GetBlockCollisionBoxes(blockId, meta), x, y, z, minX, maxX, minY, maxY, minZ, maxZ);
+        }
+
+        /// <summary>
+        /// Same guard as <see cref="WouldBlockIntersectPlayer"/> but against living entities.
+        /// Without it a cube could be dropped onto a mob's hitbox, burying the mob inside a block
+        /// it cannot walk out of.
+        /// </summary>
+        private bool WouldBlockIntersectMob(int x, int y, int z, int blockId, int meta)
+        {
+            if (Entities == null) return false;
+            return Entities.AnyMobIntersectsBox(GetBlockCollisionBoxes(blockId, meta), x, y, z);
         }
 
         // ------------------------------------------------------------------

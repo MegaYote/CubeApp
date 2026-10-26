@@ -119,7 +119,7 @@ namespace Cubuild
                     double len = Math.Sqrt(noclipDirection.X * noclipDirection.X + noclipDirection.Y * noclipDirection.Y + noclipDirection.Z * noclipDirection.Z);
                     noclipDirection *= 1.0 / len;
                 }
-                double noclipSpeed = NoclipSpeed * (tickInput.MoveFast ? 1.5 : 1.0);
+                double noclipSpeed = NoclipSpeed * (tickInput.MoveFast ? 10.0 : 1.0);
                 p.Velocity = new Point3D(
                     noclipDirection.X * noclipSpeed,
                     noclipDirection.Y * noclipSpeed * (noclipDirection.Y > 0 ? 1.2 : 1.0),
@@ -282,7 +282,7 @@ namespace Cubuild
             double vz = p.Velocity.Z * Math.Pow(CreativeFlightHorizontalDrag, dt * 20.0);
             if (hasInput)
             {
-                double speedMultiplier = tickInput.MoveFast ? 1.5 : 1.0;
+                double speedMultiplier = tickInput.MoveFast ? 10.0 : 1.0;
                 double targetSpeed = CreativeFlightSpeed * speedMultiplier;
                 var target = new Point3D(
                     direction.X * targetSpeed,
@@ -437,6 +437,49 @@ namespace Cubuild
                 }
             }
             return false;
+        }
+
+        private static readonly (double dx, double dz)[] PlayerUnstuckDirections =
+        {
+            (1, 0), (-1, 0), (0, 1), (0, -1),
+        };
+
+        private const double PlayerSuffocationDamagePerSecond = 0.75;
+        private float _playerSuffocationAccumulator;
+
+        /// <summary>
+        /// Player counterpart to <see cref="MobEntity.UpdateBlockEmbedding"/>: if a solid block ends
+        /// up sharing the player's hitbox (sand falling on your head, a cube placed into you), slide
+        /// them out through the first free horizontal direction. With every side walled off they are
+        /// being crushed and take suffocation damage instead. Creative and noclip ignore it.
+        /// </summary>
+        private void ResolvePlayerEmbedding(PlayerState p, float deltaSeconds)
+        {
+            if (IsCreative || p.NoclipMode || p.Health <= 0 || !IsPlayerColliding(p.Position))
+            {
+                _playerSuffocationAccumulator = 0f;
+                return;
+            }
+
+            const double step = 0.25;
+            foreach (var (dx, dz) in PlayerUnstuckDirections)
+            {
+                var candidate = new Point3D(
+                    p.Position.X + dx * step, p.Position.Y, p.Position.Z + dz * step);
+                if (IsPlayerColliding(candidate)) continue;
+
+                p.Position = candidate;
+                _playerSuffocationAccumulator = 0f;
+                return;
+            }
+
+            _playerSuffocationAccumulator += (float)(PlayerSuffocationDamagePerSecond * deltaSeconds);
+            if (_playerSuffocationAccumulator >= 1f)
+            {
+                int whole = (int)_playerSuffocationAccumulator;
+                _playerSuffocationAccumulator -= whole;
+                DamagePlayer(whole, DeathCause.Suffocation);
+            }
         }
 
         public static (double minX, double minY, double minZ, double maxX, double maxY, double maxZ)[] GetBlockCollisionBoxes(int id, int meta)
