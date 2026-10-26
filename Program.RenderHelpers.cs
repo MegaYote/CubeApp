@@ -138,16 +138,28 @@ namespace Cubuild
                 if (World != null)
                 {
                     var loaded = World.Chunks.GetLoadedChunks();
-                    foreach (var ch in loaded)
-                    {
-                        if (ch.MeshFaces != null && ch.MeshFaces.Count > 0)
+                        foreach (var ch in loaded)
                         {
                             int chunkX = ch.OriginX / ChunkManager.ChunkSize;
                             int chunkZ = ch.OriginZ / ChunkManager.ChunkSize;
                             int layer = ChunkManager.LayerForWorldY(ch.OriginY);
-                            gpuRenderer.UploadChunkWithLod(new ChunkCoordinates(layer, chunkX, chunkZ), ch.MeshFaces, ch.SurfaceLodFaces);
+                            var coords = new ChunkCoordinates(layer, chunkX, chunkZ);
+                            System.Collections.Generic.List<MeshFace> faces;
+                            System.Collections.Generic.IReadOnlyList<MeshFace>? surfaceLodFaces;
+                            int meshVersion;
+                            long meshInputRevision;
+                            bool hasCleanMesh;
+                            lock (ch.MeshLock)
+                            {
+                                faces = ch.MeshFaces;
+                                surfaceLodFaces = ch.SurfaceLodFaces;
+                                hasCleanMesh = ch.TryCaptureCleanMeshStamp(faces, surfaceLodFaces,
+                                    out meshVersion, out meshInputRevision);
+                            }
+                            if (hasCleanMesh && faces.Count > 0)
+                                gpuRenderer.UploadChunkVersioned(World.Chunks, ch, meshVersion, meshInputRevision,
+                                    coords, faces, surfaceLodFaces, false);
                         }
-                    }
                 }
             }
             catch (Exception ex)

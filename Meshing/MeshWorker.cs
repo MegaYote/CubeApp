@@ -13,15 +13,14 @@ namespace Cubuild
         private readonly ConcurrentQueue<ChunkCoordinates> _priorityQueue = new(); // player edits jump the line
         private readonly ConcurrentQueue<ChunkCoordinates> _queue = new();          // normal terrain-streaming remeshes
         private readonly ConcurrentDictionary<ChunkCoordinates, byte> _pending = new();
-        private readonly ConcurrentDictionary<ChunkCoordinates, byte> _processing = new(); // chunk a worker has "claimed" right now
-        private readonly SemaphoreSlim _workAvailable = new(0); // signals workers that work is queued
+        private readonly ConcurrentDictionary<ChunkCoordinates, byte> _processing = new();
+        private readonly ConcurrentDictionary<ChunkCoordinates, int> _failureCounts = new();
+        private readonly SemaphoreSlim _workAvailable = new(0);
         private readonly int _workerCount;
         private readonly CancellationTokenSource _cts = new();
         private readonly Task[] _workerTasks;
 
-        // workerCount = how many mesh jobs can run truly at the same time. 2 is a good starting
-        // point: enough that one slow chunk can't block everything else, without stealing so many
-        // cores that chunk generation or the render thread start to feel starved.
+        // Two workers allow a slow chunk to overlap without starving generation or rendering.
         public MeshWorker(ChunkManager manager, Func<Renderer.IRenderer?> getRenderer, int workerCount = 2)
         {
             _manager = manager ?? throw new ArgumentNullException(nameof(manager));
@@ -30,9 +29,7 @@ namespace Cubuild
 
             _workerTasks = new Task[_workerCount];
             for (int i = 0; i < _workerCount; i++)
-            {
                 _workerTasks[i] = Task.Run(WorkerLoop, _cts.Token);
-            }
         }
 
         public void Enqueue(ChunkCoordinates coords)
@@ -44,17 +41,12 @@ namespace Cubuild
             }
         }
 
-        // Deliberately does NOT check _pending like the regular Enqueue does. During heavy chunk
-        // generation, this exact chunk might already be sitting in the normal queue - if we bailed
-        // out here because of that, a player's edit would get stuck waiting behind it again, which
-        // defeats the whole point of this "express lane." Adding it twice is harmless: the worker
-        // loop below double-checks whether a chunk still needs remeshing (and claims it before
-        // touching it) so a stale duplicate is simply skipped instead of causing any problem.
+        // Priority entries may intentionally duplicate a normal queue entry. A worker claims each
+        // coordinate once and rechecks its dirty revision before spending time meshing it.
         public void EnqueuePriority(ChunkCoordinates coords)
         {
             _pending.TryAdd(coords, 0);
             _priorityQueue.Enqueue(coords);
-            // Wake workers immediately for player edits - no delay waiting for polling.
             _workAvailable.Release();
         }
 
@@ -65,11 +57,10 @@ namespace Cubuild
             {
                 while (!token.IsCancellationRequested)
                 {
-                    // Check priority queue first, then regular queue
                     ChunkCoordinates coords = default;
                     bool isPriority = false;
                     bool hasWork = false;
-                    
+
                     if (_priorityQueue.TryDequeue(out coords))
                     {
                         isPriority = true;
@@ -77,147 +68,119 @@ namespace Cubuild
                     }
                     else if (_queue.TryDequeue(out coords))
                     {
-                        isPriority = false;
                         hasWork = true;
                     }
 
-                    if (hasWork)
+                    if (!hasWork)
                     {
-                        _pending.TryRemove(coords, out _);
-
-                        // Prevent duplicate processing by multiple workers
-                        if (!_processing.TryAdd(coords, 0))
-                        {
-                            continue;
-                        }
-
-                        // Track whether we need to clear IsMeshingQueued
-                        bool needsFlagReset = false;
-                        bool meshCompleted = false;
-                        Chunk? chunk = null;
-                        try
-                        {
-                            if (_manager.TryGetLoadedChunk(coords, out chunk))
-                            {                                needsFlagReset = true;
-                                
-                                // double-check chunk still needs remesh
-                                if (!chunk.NeedsRemesh)
-                                {
-                                    continue;
-                                }
-
-                                // Do the meshing work. The target chunk plus its loaded neighbours:
-                                // cardinal neighbours for greedy border occlusion, and DIAGONAL
-                                // neighbours for the water pass (a cell's corner heights sample the
-                                // 2x2 block neighbourhood around each corner, which crosses into the
-                                // diagonal chunk at a chunk corner). Missing diagonals would make
-                                // water surfaces dip at the seams where four chunks meet.
-                                var chunksToPass = new List<Chunk> { chunk };
-                                var chunkX = chunk.OriginX / ChunkManager.ChunkSize;
-                                var chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
-                                int layer = ChunkManager.LayerForWorldY(chunk.OriginY);
-                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX - 1, chunkZ), out var left)) chunksToPass.Add(left);
-                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + 1, chunkZ), out var right)) chunksToPass.Add(right);
-                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX, chunkZ - 1), out var back)) chunksToPass.Add(back);
-                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX, chunkZ + 1), out var front)) chunksToPass.Add(front);
-                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX - 1, chunkZ - 1), out var diagNW)) chunksToPass.Add(diagNW);
-                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + 1, chunkZ - 1), out var diagNE)) chunksToPass.Add(diagNE);
-                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX - 1, chunkZ + 1), out var diagSW)) chunksToPass.Add(diagSW);
-                                if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + 1, chunkZ + 1), out var diagSE)) chunksToPass.Add(diagSE);
-                                // Vertical neighbours (layer above/below at the same X/Z): the
-                                // mesher's Y axis must occlude against the OTHER layer's blocks at
-                                // the seam (e.g. deep top row vs ground bottom row at world -65).
-                                // Without these, each layer thinks the other is air and emits the
-                                // whole seam face - a flat, fully-lit stone plane at the boundary.
-                                if (layer > 0 && _manager.TryGetLoadedChunk(new ChunkCoordinates(layer - 1, chunkX, chunkZ), out var below)) chunksToPass.Add(below);
-                                if (layer < 2 && _manager.TryGetLoadedChunk(new ChunkCoordinates(layer + 1, chunkX, chunkZ), out var above)) chunksToPass.Add(above);
-
-                                long lightingRevision = chunk.LightingRevision;
-                                var renderer = _getRenderer();
-                                var faces = Mesher.GenerateMesh(chunksToPass,
-                                    (worldX, worldZ) => _manager.BiomeAt(worldX, worldZ).Id,
-                                    out var surfaceLodFaces);
-                                if (layer == ChunkManager.GroundLayer)
-                                {
-                                    // Ground's LightGrid is freshly rebuilt by the mesher above.
-                                    // Only now can it safely seed the paired deep boundary.
-                                    _manager.RefreshDeepTopSkyLightFromGround(chunk);
-                                }
-
-                                // Lock to ensure atomic mesh update. Mesher.GenerateMesh always
-                                // returns a List<MeshFace>, and the worker owns it exclusively here,
-                                // so hand the instance straight to the chunk instead of copying it.
-                                IReadOnlyList<MeshFace> facesToUpload;
-                                lock (chunk.MeshLock)
-                                {
-                                    chunk.MeshFaces = faces as List<MeshFace> ?? new List<MeshFace>(faces);
-                                    chunk.SurfaceLodFaces = surfaceLodFaces;
-                                    chunk.MeshVersion++;
-                                    // A seam source or block edit may have changed while this
-                                    // mesh was being built. Leave it dirty and schedule one fresh
-                                    // pass rather than losing that invalidation.
-                                    chunk.NeedsRemesh = chunk.LightingRevision != lightingRevision;
-                                    meshCompleted = true;
-                                    facesToUpload = chunk.MeshFaces;
-                                }
-
-                                if (renderer != null && facesToUpload != null)
-                                {
-                                    if (facesToUpload.Count > 0)
-                                    {
-                                        if (isPriority)
-                                        {
-                                            renderer.UploadChunkPriorityWithLod(coords, facesToUpload, surfaceLodFaces);
-                                        }
-                                        else
-                                        {
-                                            renderer.UploadChunkWithLod(coords, facesToUpload, surfaceLodFaces);
-                                        }
-                                    }
-                                    else
-                                    {
-                                        // A chunk that meshes to nothing (e.g. the last block was
-                                        // removed) must release its GPU buffers, otherwise the stale
-                                        // mesh keeps rendering forever.
-                                        renderer.RemoveChunk(coords);
-                                    }
-                                }
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            // One bad chunk (meshing bug, out-of-bounds, etc.) must never kill the
-                            // whole worker pool - otherwise chunks stop appearing and it looks like
-                            // terrain generation froze. Log and move on; the chunk stays dirty so a
-                            // later pass retries it.
-                            try { System.IO.File.AppendAllText("mesh_worker.log", DateTime.Now + " mesh failed " + coords.X + "," + coords.Z + ": " + ex + Environment.NewLine); } catch { }
-                        }
-                        finally
-                        {
-                            _processing.TryRemove(coords, out _);
-                            if (needsFlagReset && chunk != null)
-                            {
-                                chunk.IsMeshingQueued = false;
-                            }
-                        }
-
-                        // A dirty event that arrived during this job may have been dequeued while
-                        // the chunk was still in _processing. Requeue after releasing the claim.
-                        if (meshCompleted && chunk != null && chunk.NeedsRemesh)
-                            Enqueue(coords);
-
+                        try { await _workAvailable.WaitAsync(100, token).ConfigureAwait(false); }
+                        catch (OperationCanceledException) { }
                         continue;
                     }
 
-                    // Wait for signal that work is available
+                    _pending.TryRemove(coords, out _);
+                    if (!_processing.TryAdd(coords, 0))
+                        continue;
+
+                    Chunk? chunk = null;
+                    bool committed = false;
+                    bool failed = false;
                     try
                     {
-                        await _workAvailable.WaitAsync(100, token).ConfigureAwait(false);
+                        if (_manager.TryGetLoadedChunk(coords, out chunk)
+                            && chunk.TryCaptureMeshInputRevision(out long meshInputRevision))
+                        {
+                            // Capture before collecting inputs or meshing. Any block, lighting, or
+                            // neighbor invalidation advances this revision and prevents stale commit.
+                            var chunksToPass = new List<Chunk> { chunk };
+                            int chunkX = chunk.OriginX / ChunkManager.ChunkSize;
+                            int chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
+                            int layer = coords.Layer;
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX - 1, chunkZ), out var left)) chunksToPass.Add(left);
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + 1, chunkZ), out var right)) chunksToPass.Add(right);
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX, chunkZ - 1), out var back)) chunksToPass.Add(back);
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX, chunkZ + 1), out var front)) chunksToPass.Add(front);
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX - 1, chunkZ - 1), out var diagNW)) chunksToPass.Add(diagNW);
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + 1, chunkZ - 1), out var diagNE)) chunksToPass.Add(diagNE);
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX - 1, chunkZ + 1), out var diagSW)) chunksToPass.Add(diagSW);
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + 1, chunkZ + 1), out var diagSE)) chunksToPass.Add(diagSE);
+                            // The mesher also occludes against the vertically adjacent layer.
+                            if (layer > ChunkManager.DeepLayer && _manager.TryGetLoadedChunk(new ChunkCoordinates(layer - 1, chunkX, chunkZ), out var below)) chunksToPass.Add(below);
+                            if (layer < ChunkManager.SkyLayer && _manager.TryGetLoadedChunk(new ChunkCoordinates(layer + 1, chunkX, chunkZ), out var above)) chunksToPass.Add(above);
+
+                            var faces = Mesher.GenerateMesh(chunksToPass,
+                                (worldX, worldZ) => _manager.BiomeAt(worldX, worldZ).Id,
+                                out var surfaceLodFaces);
+                            if (layer == ChunkManager.GroundLayer)
+                                _manager.RefreshDeepTopSkyLightFromGround(chunk);
+
+                            var facesToUpload = faces as List<MeshFace> ?? new List<MeshFace>(faces);
+                            if (chunk.TryCommitMesh(meshInputRevision, facesToUpload, surfaceLodFaces,
+                                out int meshVersion, out long committedInputRevision))
+                            {
+                                committed = true;
+                                _failureCounts.TryRemove(coords, out _);
+                                var renderer = _getRenderer();
+                                if (renderer != null)
+                                {
+                                    if (facesToUpload.Count > 0)
+                                    {
+                                        renderer.UploadChunkVersioned(_manager, chunk, meshVersion, committedInputRevision,
+                                            coords, facesToUpload, surfaceLodFaces, isPriority);
+                                    }
+                                    else
+                                    {
+                                        renderer.RemoveChunkVersioned(_manager, chunk, meshVersion, committedInputRevision);
+                                    }
+                                }
+                            }
+                        }
                     }
-                    catch (OperationCanceledException)
+                    catch (Exception ex)
                     {
-                        // Timeout expired - loop back and re-check queues
+                        failed = true;
+                        // A failed render enqueue is also retried: restore dirty state when this
+                        // exact chunk still belongs to this manager.
+                        if (chunk != null
+                            && _manager.TryGetLoadedChunk(coords, out var current)
+                            && ReferenceEquals(current, chunk))
+                        {
+                            chunk.NeedsRemesh = true;
+                        }
+                        try
+                        {
+                            System.IO.File.AppendAllText("mesh_worker.log",
+                                DateTime.Now + " mesh failed " + coords.X + "," + coords.Z + ": " + ex + Environment.NewLine);
+                        }
+                        catch { }
                     }
+                    finally
+                    {
+                        _processing.TryRemove(coords, out _);
+                        if (chunk != null)
+                            chunk.IsMeshingQueued = false;
+                    }
+
+                    if (chunk == null
+                        || !_manager.TryGetLoadedChunk(coords, out var activeChunk)
+                        || !ReferenceEquals(activeChunk, chunk)
+                        || !chunk.NeedsRemesh)
+                    {
+                        continue;
+                    }
+
+                    if (failed)
+                    {
+                        int failures = _failureCounts.AddOrUpdate(coords, 1, static (_, n) => Math.Min(n + 1, 7));
+                        int delayMs = Math.Min(5000, 100 * (1 << Math.Min(failures - 1, 6)));
+                        try { await Task.Delay(delayMs, token).ConfigureAwait(false); }
+                        catch (OperationCanceledException) { break; }
+                    }
+
+                    // A changed revision or exception must not consume the only dirty entry.
+                    // Enqueue deduplicates with any event raised while this job was running.
+                    if (!committed || chunk.NeedsRemesh)
+                        Enqueue(coords);
                 }
             }
             catch (OperationCanceledException) { }

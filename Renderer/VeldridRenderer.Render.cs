@@ -375,7 +375,7 @@ namespace Cubuild.Renderer
             // Process pending removals/uploads on render thread
             while (_pendingRemovals.TryDequeue(out var rem))
             {
-                FreeChunkRange(rem);
+                ApplyPendingRemoval(rem);
             }
 
             // Decay the health-outline flash (1/60s per frame; ImGui is updated at 60Hz).
@@ -391,9 +391,7 @@ namespace Cubuild.Renderer
             int priorityUploadsThisFrame = System.Threading.Interlocked.Exchange(ref _priorityUploadsSinceRender, 0);
             while (_pendingPriorityUploads.TryDequeue(out var pu))
             {
-                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices,
-                    pu.TransparentVertices, pu.TransparentIndices, pu.TransparentNonTopIndexCount, pu.SurfaceLodVertices, pu.SurfaceLodIndices);
-                priorityUploadsThisFrame++;
+                if (TryApplyPendingUpload(pu)) priorityUploadsThisFrame++;
             }
 
             // Stream pending chunk meshes: always take the guaranteed minimum, then keep going
@@ -404,9 +402,7 @@ namespace Cubuild.Renderer
             double ticksPerMs = System.Diagnostics.Stopwatch.Frequency / 1000.0;
             while (_pendingUploads.TryDequeue(out var pu))
             {
-                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices,
-                    pu.TransparentVertices, pu.TransparentIndices, pu.TransparentNonTopIndexCount, pu.SurfaceLodVertices, pu.SurfaceLodIndices);
-                uploadsThisFrame++;
+                if (TryApplyPendingUpload(pu)) uploadsThisFrame++;
                 if (uploadsThisFrame >= _maxUploadsPerFrame
                     && (System.Diagnostics.Stopwatch.GetTimestamp() - uploadStartTicks) / ticksPerMs >= UploadBudgetMs)
                 {

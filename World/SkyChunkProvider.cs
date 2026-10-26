@@ -24,12 +24,8 @@ namespace Cubuild.World
             // Sky layer chunks sit above the ground layer (world 384..1023).
             int originY = ChunkManager.SkyOriginY;
             var chunk = new Chunk(chunkSize, chunkHeight, chunkSize, originX, originY, originZ);
-            // When the player is already high, new sky chunks are born with their islands;
-            // otherwise they're empty air and HighFillChunk fills them lazily on approach.
-            if (Islands.AutoHighFill)
-            {
-                Islands.HighFillChunk(chunkX, chunkZ, chunk, chunkSize, chunkHeight);
-            }
+            // Keep provider output a reproducible empty baseline. ChunkManager may apply the
+            // altitude-triggered island fill afterward, but that direct mutation is full-save-only.
             return chunk;
         }
     }

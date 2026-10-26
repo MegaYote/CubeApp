@@ -1,9 +1,25 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 
 namespace Cubuild
 {
+    /// <summary>A final block/meta value stored in a sparse chunk save delta.</summary>
+    public readonly struct SavedChunkDeltaCell
+    {
+        public int Index { get; }
+        public byte Block { get; }
+        public byte Meta { get; }
+
+        public SavedChunkDeltaCell(int index, byte block, byte meta)
+        {
+            Index = index;
+            Block = block;
+            Meta = meta;
+        }
+    }
+
     public sealed class Chunk
     {
         // Flat byte array (1 byte per block instead of a 4-byte enum in a multidimensional
@@ -26,7 +42,12 @@ namespace Cubuild
         // conservatively zero until ChunkManager has a current ground LightGrid to sample.
         private readonly byte[] deepTopSkyLight;
         private readonly object _meshLock = new();
+        private readonly object _deltaLock = new();
+        private readonly Dictionary<int, DeltaCellState> _deltaCells = new();
+        private bool _deltaTrackingInitialized;
+        private bool _deltaBaselineTrusted;
         private long _lightingRevision;
+        private long _meshInputRevision;
         private long _lightGridRevision = -1;
 
         public int Width { get; }
@@ -67,6 +88,121 @@ namespace Cubuild
         /// chunks deliberately stay full-detail at every distance.</summary>
         public volatile bool HasRuntimeEdits;
 
+        private readonly struct DeltaCellState
+        {
+            public readonly byte OriginalBlock;
+            public readonly byte OriginalMeta;
+            public readonly byte FinalBlock;
+            public readonly byte FinalMeta;
+
+            public DeltaCellState(byte originalBlock, byte originalMeta, byte finalBlock, byte finalMeta)
+            {
+                OriginalBlock = originalBlock;
+                OriginalMeta = originalMeta;
+                FinalBlock = finalBlock;
+                FinalMeta = finalMeta;
+            }
+        }
+
+        /// <summary>True only when this chunk still has an exact, reproducible generated base
+        /// and every post-generation block mutation went through the tracked manager paths.</summary>
+        public bool HasTrustedDeltaBaseline
+        {
+            get { lock (_deltaLock) return _deltaTrackingInitialized && _deltaBaselineTrusted; }
+        }
+
+        /// <summary>Marks a freshly generated chunk as delta-eligible after generation and seam
+        /// initialization have completed. A chunk already marked untrusted cannot be promoted.</summary>
+        public void MarkGeneratedBaselineTrusted()
+        {
+            lock (_deltaLock)
+            {
+                if (_deltaTrackingInitialized) return;
+                _deltaTrackingInitialized = true;
+                _deltaBaselineTrusted = true;
+                _deltaCells.Clear();
+            }
+        }
+
+        /// <summary>Disables sparse-delta saving when a write bypassed the before-value tracker.</summary>
+        public void MarkDeltaBaselineUntrusted()
+        {
+            lock (_deltaLock)
+            {
+                _deltaTrackingInitialized = true;
+                _deltaBaselineTrusted = false;
+                _deltaCells.Clear();
+            }
+        }
+
+        /// <summary>Records a manager-mediated write. The first before-value is retained until the
+        /// cell returns to it, at which point the sparse entry is removed.</summary>
+        public void RecordTrackedMutation(int index, byte oldBlock, byte oldMeta, byte finalBlock, byte finalMeta)
+        {
+            lock (_deltaLock)
+            {
+                if (!_deltaTrackingInitialized || !_deltaBaselineTrusted) return;
+                if (_deltaCells.TryGetValue(index, out var existing))
+                {
+                    if (existing.OriginalBlock == finalBlock && existing.OriginalMeta == finalMeta)
+                        _deltaCells.Remove(index);
+                    else
+                        _deltaCells[index] = new DeltaCellState(existing.OriginalBlock, existing.OriginalMeta, finalBlock, finalMeta);
+                }
+                else if (oldBlock != finalBlock || oldMeta != finalMeta)
+                {
+                    _deltaCells[index] = new DeltaCellState(oldBlock, oldMeta, finalBlock, finalMeta);
+                }
+            }
+        }
+
+        /// <summary>Applies saved/cache delta values to the current generated base and seeds the
+        /// tracker with each cell's actual base value. Caller must only use this for a verified
+        /// matching generator identity.</summary>
+        public void ApplyDeltaCells(IReadOnlyList<SavedChunkDeltaCell> cells)
+        {
+            lock (_deltaLock)
+            {
+                _deltaCells.Clear();
+                _deltaTrackingInitialized = true;
+                _deltaBaselineTrusted = true;
+                int previousIndex = -1;
+                foreach (var cell in cells)
+                {
+                    if (cell.Index < 0 || cell.Index >= blocks.Length || cell.Index <= previousIndex)
+                        throw new InvalidDataException("Sparse chunk delta indexes must be unique, sorted, and inside the chunk.");
+                    previousIndex = cell.Index;
+                    byte originalBlock = blocks[cell.Index];
+                    byte originalMeta = meta[cell.Index];
+                    blocks[cell.Index] = cell.Block;
+                    meta[cell.Index] = cell.Meta;
+                    if (originalBlock != cell.Block || originalMeta != cell.Meta)
+                        _deltaCells[cell.Index] = new DeltaCellState(originalBlock, originalMeta, cell.Block, cell.Meta);
+                }
+            }
+        }
+
+        /// <summary>Copies a stable sparse view for saving. False means the caller must use full
+        /// arrays because this chunk's provenance is unknown.</summary>
+        public bool TryCaptureDelta(out SavedChunkDeltaCell[] cells)
+        {
+            lock (_deltaLock)
+            {
+                if (!_deltaTrackingInitialized || !_deltaBaselineTrusted)
+                {
+                    cells = Array.Empty<SavedChunkDeltaCell>();
+                    return false;
+                }
+
+                cells = new SavedChunkDeltaCell[_deltaCells.Count];
+                int i = 0;
+                foreach (var entry in _deltaCells)
+                    cells[i++] = new SavedChunkDeltaCell(entry.Key, entry.Value.FinalBlock, entry.Value.FinalMeta);
+                Array.Sort(cells, static (a, b) => a.Index.CompareTo(b.Index));
+                return true;
+            }
+        }
+
         /// <summary>
         /// Cached per-block combined light (0..15) for this chunk, same layout as RawBlocks
         /// (column-major ((x*Depth+z)*Height+y)). Filled by the mesher while it flood-fills light
@@ -81,22 +217,22 @@ namespace Cubuild
         private bool _needsRemesh = true;
         /// <summary>True when this chunk's mesh must be regenerated. The setter fires
         /// <see cref="OnDirty"/> (used by MeshScheduler's dirty-list) whenever it transitions
-        /// to true, so the scheduler never scans every loaded chunk to find work.
-        /// Set from BOTH chunk-gen worker threads and the main thread, so it's lock-guarded.</summary>
-        private readonly object _remeshLock = new();
-
+        /// to true, so the scheduler never scans every loaded chunk to find work. All invalidations
+        /// advance the mesh-input revision under MeshLock, including repeated true assignments.
+        /// Set from BOTH chunk-gen worker threads and the main thread.</summary>
         public bool NeedsRemesh
         {
-            get => _needsRemesh;
+            get { lock (_meshLock) return _needsRemesh; }
             set
             {
                 bool fire = false;
-                lock (_remeshLock)
+                lock (_meshLock)
                 {
-                    if (value && !_needsRemesh)
+                    if (value)
                     {
+                        _meshInputRevision++;
+                        fire = !_needsRemesh;
                         _needsRemesh = true;
-                        fire = true;
                     }
                     else
                     {
@@ -115,6 +251,74 @@ namespace Cubuild
         // Incremented each time MeshFaces is updated by the mesher
         public int MeshVersion = 0;
 
+        /// <summary>Captures the mesh input revision only while this chunk is currently dirty.</summary>
+        public bool TryCaptureMeshInputRevision(out long revision)
+        {
+            lock (_meshLock)
+            {
+                revision = _meshInputRevision;
+                return _needsRemesh;
+            }
+        }
+
+        /// <summary>Captures a stamp for a clean cached mesh, optionally requiring the supplied
+        /// face lists to be the exact lists currently published by this chunk.</summary>
+        public bool TryCaptureCleanMeshStamp(IReadOnlyList<MeshFace> expectedFaces,
+            IReadOnlyList<MeshFace>? expectedSurfaceLodFaces, out int meshVersion, out long meshInputRevision)
+        {
+            lock (_meshLock)
+            {
+                meshVersion = MeshVersion;
+                meshInputRevision = _meshInputRevision;
+                return !_needsRemesh
+                    && ReferenceEquals(MeshFaces, expectedFaces)
+                    && (expectedSurfaceLodFaces == null || ReferenceEquals(SurfaceLodFaces, expectedSurfaceLodFaces));
+            }
+        }
+
+        /// <summary>Checks that a mesh stamp is still the exact clean input/output generation.</summary>
+        public bool IsCleanMeshStampCurrent(int meshVersion, long meshInputRevision)
+        {
+            lock (_meshLock)
+            {
+                return !_needsRemesh
+                    && MeshVersion == meshVersion
+                    && _meshInputRevision == meshInputRevision;
+            }
+        }
+
+        /// <summary>Atomically publishes a mesh only if no mesh input changed since capture.</summary>
+        public bool TryCommitMesh(long sourceRevision, List<MeshFace> faces,
+            IReadOnlyList<MeshFace>? surfaceLodFaces, out int meshVersion, out long committedInputRevision)
+        {
+            bool fire = false;
+            lock (_meshLock)
+            {
+                if (_meshInputRevision != sourceRevision)
+                {
+                    if (!_needsRemesh)
+                    {
+                        _needsRemesh = true;
+                        fire = true;
+                    }
+                    meshVersion = MeshVersion;
+                    committedInputRevision = _meshInputRevision;
+                }
+                else
+                {
+                    MeshFaces = faces;
+                    SurfaceLodFaces = surfaceLodFaces;
+                    meshVersion = ++MeshVersion;
+                    committedInputRevision = _meshInputRevision;
+                    _needsRemesh = false;
+                    return true;
+                }
+            }
+
+            if (fire) OnDirty?.Invoke(this);
+            return false;
+        }
+
         /// <summary>World Y of the highest solid block in this chunk (or OriginY-1 if empty).
         /// Computed by the mesher from the live block scan. Used by heightmap occlusion culling
         /// to skip chunks hidden behind nearer terrain.</summary>
@@ -129,12 +333,17 @@ namespace Cubuild
         /// <summary>Invalidates cached lighting after block data changes.</summary>
         public void InvalidateLightGrid()
         {
-            Interlocked.Increment(ref _lightingRevision);
+            bool fire = false;
             lock (_meshLock)
             {
+                Interlocked.Increment(ref _lightingRevision);
+                _meshInputRevision++;
                 LightGrid = null;
                 _lightGridRevision = -1;
+                fire = !_needsRemesh;
+                _needsRemesh = true;
             }
+            if (fire) OnDirty?.Invoke(this);
         }
 
         /// <summary>Revision to capture before computing the chunk's next LightGrid.</summary>

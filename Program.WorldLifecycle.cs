@@ -159,7 +159,25 @@ namespace Cubuild
                 }
                 if (_pendingWorldFromSave && _pendingWorldSave != null)
                 {
-                    LoadWorld(_pendingWorldSave, _pendingWorldSaveName);
+                    try
+                    {
+                        LoadWorld(_pendingWorldSave, _pendingWorldSaveName);
+                        menu.WorldLoadError = "";
+                    }
+                    catch (Exception ex)
+                    {
+                        TryLogSaveError(ex);
+                        menu.WorldLoadError = ex.Message;
+                        screen = GameScreen.WorldSelect;
+                        menu.Screen = GameScreen.WorldSelect;
+                        _pendingName = "";
+                        _pendingWorldSave = null;
+                        _pendingWorldSaveName = "";
+                        _pendingWorldFromSave = false;
+                        _loadingScreenShown = false;
+                        menu.LoadingPhase = "";
+                        return;
+                    }
                 }
                 else
                 {
@@ -387,6 +405,7 @@ namespace Cubuild
 
             if (menu.CreateWorldClicked)
             {
+                menu.WorldLoadError = "";
                 // Show the loading screen immediately so the player sees feedback, then defer
                 // the heavy world construction to UpdateLoading (next call in this frame).
                 _pendingSeed = ParseSeed(menu.SeedInput);
@@ -414,6 +433,7 @@ namespace Cubuild
                         var save = WorldSave.Load(path);
                         if (save != null)
                         {
+                            menu.WorldLoadError = "";
                             _pendingWorldSave = save;
                             _pendingWorldFromSave = true;
                             _pendingWorldSaveName = Path.GetFileNameWithoutExtension(path);

@@ -85,8 +85,14 @@ namespace Cubuild
                 int layer = ChunkManager.SkyLayer;
                 int chunkX = ch.OriginX / ChunkManager.ChunkSize;
                 int chunkZ = ch.OriginZ / ChunkManager.ChunkSize;
-                SkyChunkProvider.Islands.HighFillChunk(chunkX, chunkZ, ch, 16, ChunkManager.SkyHeight);
-                if (ch.NeedsRemesh)
+                bool filled = SkyChunkProvider.Islands.HighFillChunk(chunkX, chunkZ, ch, 16, ChunkManager.SkyHeight);
+                if (filled)
+                {
+                    // Island filling writes raw chunk storage and is altitude-triggered, not part
+                    // of the stable empty sky baseline. Keep it as a full snapshot.
+                    Chunks.MarkChunkUntrusted(ch);
+                }
+                if (filled && ch.NeedsRemesh)
                 {
                     ch.IsMeshingQueued = false;
                     Mesher?.RequestImmediateRemesh(new ChunkCoordinates(layer, chunkX, chunkZ));

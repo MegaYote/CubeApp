@@ -55,14 +55,19 @@ namespace Cubuild.World
 
         public double DebugPlacement(int wx, int wz) => _placement.Noise2D(wx * 0.02, wz * 0.02);
 
+        /// <summary>Prevents lazy island generation from overwriting an authoritative cached
+        /// chunk snapshot when that chunk returns while the player is already high.</summary>
+        public void MarkChunkFilled(int chunkX, int chunkZ)
+            => _filled.TryAdd(new ChunkCoordinates(ChunkManager.SkyLayer, chunkX, chunkZ), 0);
+
         /// <summary>Fills the stratosphere of a chunk (world HighMin..HighMax) with islands.
         /// One-shot per chunk, like DeepFillChunk. Cheap: only columns whose placement noise is
         /// above threshold build anything, and most are far below it.</summary>
-        public void HighFillChunk(int chunkX, int chunkZ, Chunk chunk, int chunkSize, int chunkHeight)
+        public bool HighFillChunk(int chunkX, int chunkZ, Chunk chunk, int chunkSize, int chunkHeight)
         {
-            if (!Enabled) return;
+            if (!Enabled) return false;
             var key = new ChunkCoordinates(ChunkManager.SkyLayer, chunkX, chunkZ);
-            if (!_filled.TryAdd(key, 0)) return; // already filled once
+            if (!_filled.TryAdd(key, 0)) return false; // already filled once
 
             // Sky chunks live above the ground layer, so their own OriginY is the correct base
             // for the local-Y conversion (NOT the ground world origin).
@@ -96,6 +101,7 @@ namespace Cubuild.World
                 }
             }
             if (wroteAnything) chunk.NeedsRemesh = true;
+            return wroteAnything;
         }
 
         // Draws one island disk centered on this column: a flat grassy top, a few dirt blocks,

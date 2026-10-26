@@ -1096,6 +1096,7 @@ layout(local_size_x = 64) in;
 
 layout(set=0, binding=0) uniform FrustumPlanes {
     vec4 planes[6];
+    uint commandCount;
 };
 
 // One entry per chunk command, as a flat uint array (16 uint32s per chunk / 64 bytes).
@@ -1115,6 +1116,7 @@ const uint CMD_STRIDE = 5;
 
 void main() {
     uint gi = gl_GlobalInvocationID.x;
+    if (gi >= commandCount) return;
     uint base = gi * 16u;
     vec3 minAABB = vec3(uintBitsToFloat(chunkData.data[base + 0]),
                         uintBitsToFloat(chunkData.data[base + 1]),
@@ -1152,7 +1154,7 @@ void main() {
                 new ResourceLayoutElementDescription("ChunkCullData", ResourceKind.StructuredBufferReadOnly, ShaderStages.Compute),
                 new ResourceLayoutElementDescription("IndirectArgs", ResourceKind.StructuredBufferReadWrite, ShaderStages.Compute)));
 
-            _frustumBuffer = factory.CreateBuffer(new BufferDescription(96, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _frustumBuffer = factory.CreateBuffer(new BufferDescription(112, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
             _frustumSet = factory.CreateResourceSet(new ResourceSetDescription(_cullDataLayout, _frustumBuffer));
 
             // One cull-data buffer (read-only in compute) and one args-output buffer (read-write).

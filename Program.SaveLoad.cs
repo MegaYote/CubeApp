@@ -130,34 +130,15 @@ namespace Cubuild
                 save.HeldItemId = held.Value.ItemId;
                 save.HeldCount = held.Value.Count;
             }
+            bool forceFullChunks = world.WorldGenVersion != GameWorld.GenerationVersion;
             foreach (var coord in world.Chunks.ModifiedChunks)
             {
-                byte[] blocks;
-                byte[] meta;
-                if (world.Chunks.TryGetLoadedChunk(coord, out var chunk))
+                if (!world.Chunks.TryGetSaveChunk(coord, forceFullChunks, out var chunkSnapshot))
                 {
-                    blocks = chunk.RawBlocks;
-                    meta = chunk.RawMeta;
+                    string context = requireCompleteChunks ? "handoff" : "save";
+                    throw new IOException($"Modified chunk {coord.Layer}:{coord.X},{coord.Z} is unavailable; {context} was canceled to protect the save.");
                 }
-                else if (world.Chunks.TryGetCachedUnloadedChunk(coord.Layer, coord.X, coord.Z, out var cBlocks, out var cMeta))
-                {
-                    blocks = cBlocks;
-                    meta = cMeta;
-                }
-                else
-                {
-                    if (requireCompleteChunks)
-                        throw new IOException($"Modified chunk {coord.Layer}:{coord.X},{coord.Z} is unavailable; handoff was canceled to protect the save.");
-                    continue;
-                }
-                save.Chunks.Add(new SavedChunk
-                {
-                    Layer = coord.Layer,
-                    X = coord.X,
-                    Z = coord.Z,
-                    Blocks = (byte[])blocks.Clone(),
-                    Meta = (byte[])meta.Clone(),
-                });
+                save.Chunks.Add(chunkSnapshot);
             }
             save.Mobs = world.Entities.SaveMobs();
             return save;
@@ -237,8 +218,18 @@ namespace Cubuild
             {
                 var a = expected.Chunks[i];
                 var b = actual.Chunks[i];
-                if (a.Layer != b.Layer || a.X != b.X || a.Z != b.Z
-                    || !a.Blocks.AsSpan().SequenceEqual(b.Blocks)
+                if (a.Layer != b.Layer || a.X != b.X || a.Z != b.Z || a.IsDelta != b.IsDelta) return false;
+                if (a.IsDelta)
+                {
+                    if (a.DeltaCells.Length != b.DeltaCells.Length) return false;
+                    for (int cell = 0; cell < a.DeltaCells.Length; cell++)
+                    {
+                        var ac = a.DeltaCells[cell];
+                        var bc = b.DeltaCells[cell];
+                        if (ac.Index != bc.Index || ac.Block != bc.Block || ac.Meta != bc.Meta) return false;
+                    }
+                }
+                else if (!a.Blocks.AsSpan().SequenceEqual(b.Blocks)
                     || !a.Meta.AsSpan().SequenceEqual(b.Meta)) return false;
             }
             for (int i = 0; i < expected.Mobs.Count; i++)
@@ -290,10 +281,26 @@ namespace Cubuild
 
         private void ApplyWorldSave(GameWorld world, WorldSave save)
         {
+            if (save.Chunks.Exists(c => c.IsDelta))
+            {
+                // Sparse deltas only have meaning against the exact generation identity that
+                // produced their baseline. Future generator-version bumps must retain/recreate
+                // old baseline generation before enabling delta saves for those older versions.
+                if (save.GenVersion != GameWorld.GenerationVersion)
+                    throw new IOException($"Cannot load sparse chunk deltas: save terrain version {save.GenVersion} does not match supported baseline version {GameWorld.GenerationVersion}.");
+                if (save.IsMinecraftMode != world.IsMinecraftMode
+                    || save.FrontierProgression != world.FrontierProgression)
+                    throw new IOException("Cannot load sparse chunk deltas: the saved block pack/progression does not match the generated terrain baseline.");
+            }
             world.WorldGenVersion = save.GenVersion;
             if (save.GenVersion != GameWorld.GenerationVersion) _genWarningTimer = 8f;
             foreach (var c in save.Chunks)
-                world.Chunks.ApplySavedChunk(c.Layer, c.X, c.Z, c.Blocks, c.Meta);
+            {
+                if (c.IsDelta)
+                    world.Chunks.ApplySavedDeltaChunk(c.Layer, c.X, c.Z, c.DeltaCells);
+                else
+                    world.Chunks.ApplySavedChunk(c.Layer, c.X, c.Z, c.Blocks, c.Meta);
+            }
             world.PlayerPosition = new Point3D(save.PlayerX, save.PlayerY, save.PlayerZ);
             world.PlayerYaw = save.Yaw;
             world.PlayerPitch = save.Pitch;

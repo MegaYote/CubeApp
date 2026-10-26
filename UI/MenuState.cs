@@ -33,6 +33,8 @@ namespace Cubuild
     {
         public GameScreen Screen = GameScreen.Title;
         public string WorldName = "World 1";
+        /// <summary>Last world-load failure shown on the world-selection screen.</summary>
+        public string WorldLoadError = "";
         public string SeedInput = "";
         /// <summary>The mode chosen on the Create World screen (Creative by default).</summary>
         public GameMode SelectedMode = GameMode.Creative;

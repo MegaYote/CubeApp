@@ -866,7 +866,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         private uint[] _glassCullData = Array.Empty<uint>();
         private uint[] _transparentNonTopCullData = Array.Empty<uint>();
         private uint[] _transparentTopCullData = Array.Empty<uint>();
-        private readonly float[] _cullPlaneFloats = new float[24];
+        // std140: six vec4 planes followed by a uint command count and three padding uints.
+        private readonly uint[] _cullUniformData = new uint[28];
         private bool _gpuCullDataDirty = true;
 
         // Per-instance brightness multiplier (0..1) set before each mob write; combines the global
@@ -881,8 +882,10 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
 
         private readonly System.Collections.Concurrent.ConcurrentQueue<PendingUpload> _pendingUploads = new();
         private readonly System.Collections.Concurrent.ConcurrentQueue<PendingUpload> _pendingPriorityUploads = new(); // player edits jump the line
-        private readonly System.Collections.Concurrent.ConcurrentQueue<Cubuild.ChunkCoordinates> _pendingRemovals = new();
+        private readonly System.Collections.Concurrent.ConcurrentQueue<PendingRemoval> _pendingRemovals = new();
         private ChunkManager? _chunkManager; // set via SetChunkManager, used by MeshChunkImmediate
+        private long _worldGeneration;
+        private readonly Dictionary<Cubuild.ChunkCoordinates, (Cubuild.Chunk Source, int Version)> _appliedMeshVersions = new();
         // Cached mining-block light channels, captured once per mining CHUNK like the C++
         // startBreaking: the brightest of the six neighboring sky/block pairs.
         private int _miningSkyLightLevel = 15;
@@ -902,6 +905,11 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
 
         private readonly struct PendingUpload
         {
+            public ChunkManager SourceManager { get; }
+            public Cubuild.Chunk SourceChunk { get; }
+            public int MeshVersion { get; }
+            public long MeshInputRevision { get; }
+            public long WorldGeneration { get; }
             public Cubuild.ChunkCoordinates Coord { get; }
             public uint[] Vertices { get; }
             public ushort[] Indices { get; }
@@ -915,11 +923,18 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             public uint[] SurfaceLodVertices { get; }
             public ushort[] SurfaceLodIndices { get; }
 
-            public PendingUpload(Cubuild.ChunkCoordinates coord, uint[] vertices, ushort[] indices,
+            public PendingUpload(ChunkManager sourceManager, Cubuild.Chunk sourceChunk, int meshVersion,
+                long meshInputRevision, long worldGeneration, Cubuild.ChunkCoordinates coord,
+                uint[] vertices, ushort[] indices,
                 uint[] cutoutVertices, ushort[] cutoutIndices, uint[] glassVertices, ushort[] glassIndices,
                 uint[] transparentVertices, ushort[] transparentIndices, uint transparentNonTopIndexCount,
                 uint[]? surfaceLodVertices = null, ushort[]? surfaceLodIndices = null)
             {
+                SourceManager = sourceManager;
+                SourceChunk = sourceChunk;
+                MeshVersion = meshVersion;
+                MeshInputRevision = meshInputRevision;
+                WorldGeneration = worldGeneration;
                 Coord = coord;
                 Vertices = vertices;
                 Indices = indices;
@@ -1244,37 +1259,24 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
 
         public void UploadChunk(Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces)
         {
-            BuildMesh(coords, faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
-            _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr, transNonTopIndexCount));
+            UploadChunkWithLod(coords, faces, null);
         }
 
         public void UploadChunkWithLod(Cubuild.ChunkCoordinates coords,
             System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces,
             System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace>? surfaceLodFaces)
         {
-            if (!Cubuild.LodSettings.SurfaceLodEnabled)
-            {
-                UploadChunk(coords, faces);
-                return;
-            }
-
-            BuildMesh(coords, faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
-            uint[] lodVertices = Array.Empty<uint>();
-            ushort[] lodIndices = Array.Empty<ushort>();
-            if (surfaceLodFaces != null && surfaceLodFaces.Count > 0)
-            {
-                BuildMesh(coords, surfaceLodFaces, out lodVertices, out lodIndices, out _, out _, out _, out _, out _, out _, out _);
-            }
-            _pendingUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr,
-                transNonTopIndexCount, lodVertices, lodIndices));
+            if (TryCaptureUploadSource(coords, faces, surfaceLodFaces,
+                out var manager, out var chunk, out int version, out long meshInputRevision))
+                QueueChunkUpload(manager, chunk, version, meshInputRevision,
+                    coords, faces, surfaceLodFaces, false);
         }
 
         // Player edits jump the line: same vertex data, but enqueued on the priority queue that
         // ProcessPendingPriorityMeshes drains every frame for instant feedback.
         public void UploadChunkPriority(Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces)
         {
-            BuildMesh(coords, faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
-            _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr, transNonTopIndexCount));
+            UploadChunkPriorityWithLod(coords, faces, null);
         }
 
         // Priority remeshes for edited chunks and their neighbors use the same ordering as direct
@@ -1284,21 +1286,90 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces,
             System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace>? surfaceLodFaces)
         {
-            if (!Cubuild.LodSettings.SurfaceLodEnabled)
+            if (TryCaptureUploadSource(coords, faces, surfaceLodFaces,
+                out var manager, out var chunk, out int version, out long meshInputRevision))
+                QueueChunkUpload(manager, chunk, version, meshInputRevision,
+                    coords, faces, surfaceLodFaces, true);
+        }
+
+        public void UploadChunkVersioned(ChunkManager sourceManager, Cubuild.Chunk sourceChunk,
+            int meshVersion, long meshInputRevision,
+            Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces,
+            System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace>? surfaceLodFaces, bool priority)
+        {
+            QueueChunkUpload(sourceManager, sourceChunk, meshVersion, meshInputRevision,
+                coords, faces, surfaceLodFaces, priority);
+        }
+
+        private bool TryCaptureUploadSource(Cubuild.ChunkCoordinates coords,
+            System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces,
+            System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace>? surfaceLodFaces,
+            out ChunkManager manager, out Cubuild.Chunk chunk, out int meshVersion,
+            out long meshInputRevision)
+        {
+            manager = _chunkManager!;
+            chunk = null!;
+            meshVersion = -1;
+            meshInputRevision = -1;
+            if (manager == null || !manager.TryGetLoadedChunk(coords, out chunk))
+                return false;
+            lock (chunk.MeshLock)
             {
-                UploadChunkPriority(coords, faces);
-                return;
+                if (!ReferenceEquals(manager, _chunkManager)
+                    || !manager.TryGetLoadedChunk(coords, out var current)
+                    || !ReferenceEquals(current, chunk))
+                    return false;
+                return chunk.TryCaptureCleanMeshStamp(faces, surfaceLodFaces,
+                    out meshVersion, out meshInputRevision);
+            }
+        }
+
+        private void QueueChunkUpload(ChunkManager sourceManager, Cubuild.Chunk sourceChunk,
+            int meshVersion, long meshInputRevision,
+            Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces,
+            System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace>? surfaceLodFaces, bool priority)
+        {
+            long worldGeneration;
+            lock (sourceChunk.MeshLock)
+            {
+                if (!ReferenceEquals(sourceManager, _chunkManager)
+                    || !sourceManager.TryGetLoadedChunk(coords, out var current)
+                    || !ReferenceEquals(current, sourceChunk)
+                    || !sourceChunk.TryCaptureCleanMeshStamp(faces, surfaceLodFaces,
+                        out int currentMeshVersion, out long currentInputRevision)
+                    || currentMeshVersion != meshVersion
+                    || currentInputRevision != meshInputRevision)
+                    return;
+                worldGeneration = System.Threading.Interlocked.Read(ref _worldGeneration);
             }
 
-            BuildMesh(coords, faces, out var vArr, out var iArr, out var cvArr, out var ciArr, out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
+            BuildMesh(coords, faces, out var vArr, out var iArr, out var cvArr, out var ciArr,
+                out var gvArr, out var giArr, out var tvArr, out var tiArr, out var transNonTopIndexCount);
             uint[] lodVertices = Array.Empty<uint>();
             ushort[] lodIndices = Array.Empty<ushort>();
-            if (surfaceLodFaces != null && surfaceLodFaces.Count > 0)
-            {
+            if (Cubuild.LodSettings.SurfaceLodEnabled && surfaceLodFaces != null && surfaceLodFaces.Count > 0)
                 BuildMesh(coords, surfaceLodFaces, out lodVertices, out lodIndices, out _, out _, out _, out _, out _, out _, out _);
+
+            var upload = new PendingUpload(sourceManager, sourceChunk, meshVersion,
+                meshInputRevision, worldGeneration,
+                coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr,
+                transNonTopIndexCount, lodVertices, lodIndices);
+            // Mesh conversion can take long enough for an edit or world reset to happen. Check
+            // again at the actual enqueue point while holding the same lock as mesh invalidation.
+            lock (sourceChunk.MeshLock)
+            {
+                if (worldGeneration != System.Threading.Interlocked.Read(ref _worldGeneration)
+                    || !ReferenceEquals(sourceManager, _chunkManager)
+                    || !sourceManager.TryGetLoadedChunk(coords, out var current)
+                    || !ReferenceEquals(current, sourceChunk)
+                    || !sourceChunk.TryCaptureCleanMeshStamp(faces, surfaceLodFaces,
+                        out int currentMeshVersion, out long currentInputRevision)
+                    || currentMeshVersion != meshVersion
+                    || currentInputRevision != meshInputRevision)
+                    return;
+                if (priority) _pendingPriorityUploads.Enqueue(upload);
+                else _pendingUploads.Enqueue(upload);
             }
-            _pendingPriorityUploads.Enqueue(new PendingUpload(coords, vArr, iArr, cvArr, ciArr, gvArr, giArr, tvArr, tiArr,
-                transNonTopIndexCount, lodVertices, lodIndices));
         }
 
         // Encodes an axis-aligned face normal into pack3's three cloud-shadow direction bits.
@@ -1564,8 +1635,33 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
 
         public void RemoveChunk(Cubuild.ChunkCoordinates coords)
         {
-            // Enqueue removal to be processed on render thread
-            _pendingRemovals.Enqueue(coords);
+            // The regular streaming unload path has already removed this coord from its manager.
+            // The manager identity plus absence check prevents a delayed unload from deleting a
+            // newly loaded chunk at the same coordinate (or a chunk from a reset world).
+            var manager = _chunkManager;
+            if (manager == null) return;
+            _pendingRemovals.Enqueue(new PendingRemoval(manager, null, -1, -1,
+                System.Threading.Interlocked.Read(ref _worldGeneration), coords));
+        }
+
+        public void RemoveChunkVersioned(ChunkManager sourceManager, Cubuild.Chunk sourceChunk,
+            int meshVersion, long meshInputRevision)
+        {
+            lock (sourceChunk.MeshLock)
+            {
+                if (!ReferenceEquals(sourceManager, _chunkManager)
+                    || !sourceChunk.IsCleanMeshStampCurrent(meshVersion, meshInputRevision))
+                    return;
+                int chunkX = sourceChunk.OriginX / ChunkManager.ChunkSize;
+                int chunkZ = sourceChunk.OriginZ / ChunkManager.ChunkSize;
+                int layer = ChunkManager.LayerForWorldY(sourceChunk.OriginY);
+                var coords = new Cubuild.ChunkCoordinates(layer, chunkX, chunkZ);
+                if (!sourceManager.TryGetLoadedChunk(coords, out var current) || !ReferenceEquals(current, sourceChunk))
+                    return;
+                _pendingRemovals.Enqueue(new PendingRemoval(sourceManager, sourceChunk, meshVersion,
+                    meshInputRevision,
+                    System.Threading.Interlocked.Read(ref _worldGeneration), coords));
+            }
         }
 
         private static bool TryGetCubuildFaceAxes(Cubuild.Point3D normal, out Cubuild.Point3D uAxis, out Cubuild.Point3D vAxis)
@@ -1908,9 +2004,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             int uploaded = 0;
             while (_pendingPriorityUploads.TryDequeue(out var pu))
             {
-                WriteChunkData(pu.Coord, pu.Vertices, pu.Indices, pu.CutoutVertices, pu.CutoutIndices, pu.GlassVertices, pu.GlassIndices,
-                    pu.TransparentVertices, pu.TransparentIndices, pu.TransparentNonTopIndexCount, pu.SurfaceLodVertices, pu.SurfaceLodIndices);
-                uploaded++;
+                if (TryApplyPendingUpload(pu)) uploaded++;
             }
             if (uploaded > 0) System.Threading.Interlocked.Add(ref _priorityUploadsSinceRender, uploaded);
         }
@@ -1960,6 +2054,25 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         // Drops all chunk geometry when starting a brand new world over the previous one.
         public void ResetWorld()
         {
+            System.Threading.Interlocked.Increment(ref _worldGeneration);
+            while (_pendingUploads.TryDequeue(out _)) { }
+            while (_pendingPriorityUploads.TryDequeue(out _)) { }
+            while (_pendingRemovals.TryDequeue(out _)) { }
+            _appliedMeshVersions.Clear();
+
+            // Any growth copy queued before the reset describes old-world contents. Do not record
+            // it into buffers whose tails are about to restart at zero. Dispose only superseded
+            // source buffers; the current replacement buffers remain live for the new world.
+            var discardedCopySources = new HashSet<DeviceBuffer>();
+            foreach (var copy in _pendingBufferCopies)
+            {
+                if (!ReferenceEquals(copy.Old, _megaVertexBuffer)
+                    && !ReferenceEquals(copy.Old, _megaIndexBuffer)
+                    && discardedCopySources.Add(copy.Old))
+                    _gd?.DisposeWhenIdle(copy.Old);
+            }
+            _pendingBufferCopies.Clear();
+
             _chunkRanges.Clear();
             _surfaceLodRanges.Clear();
             _surfaceLodMeshes.Clear();
@@ -2019,6 +2132,28 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             }
         }
 
+        private readonly struct PendingRemoval
+        {
+            public ChunkManager SourceManager { get; }
+            public Cubuild.Chunk? SourceChunk { get; }
+            public int MeshVersion { get; }
+            public long MeshInputRevision { get; }
+            public long WorldGeneration { get; }
+            public Cubuild.ChunkCoordinates Coord { get; }
+
+            public PendingRemoval(ChunkManager sourceManager, Cubuild.Chunk? sourceChunk,
+                int meshVersion, long meshInputRevision, long worldGeneration,
+                Cubuild.ChunkCoordinates coord)
+            {
+                SourceManager = sourceManager;
+                SourceChunk = sourceChunk;
+                MeshVersion = meshVersion;
+                MeshInputRevision = meshInputRevision;
+                WorldGeneration = worldGeneration;
+                Coord = coord;
+            }
+        }
+
         // Advances the particle pool (gravity, motion, ground stop, expiry).
         private void UpdateParticles(float dt)
         {
@@ -2050,25 +2185,36 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         public void MeshChunkImmediate(Cubuild.ChunkCoordinates coords)
         {
             if (_chunkManager == null) return;
-            if (!_chunkManager.TryGetLoadedChunk(coords, out var chunk)) return;
+            var manager = _chunkManager;
+            if (!manager.TryGetLoadedChunk(coords, out var chunk)) return;
+            chunk.NeedsRemesh = true;
+            if (!chunk.TryCaptureMeshInputRevision(out long meshInputRevision)) return;
 
             var chunksToPass = new System.Collections.Generic.List<Cubuild.Chunk> { chunk };
             int chunkX = chunk.OriginX / ChunkManager.ChunkSize;
             int chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
-            if (_chunkManager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(chunkX - 1, chunkZ), out var left)) chunksToPass.Add(left);
-            if (_chunkManager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(chunkX + 1, chunkZ), out var right)) chunksToPass.Add(right);
-            if (_chunkManager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(chunkX, chunkZ - 1), out var back)) chunksToPass.Add(back);
-            if (_chunkManager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(chunkX, chunkZ + 1), out var front)) chunksToPass.Add(front);
+            int layer = coords.Layer;
+            if (manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(layer, chunkX - 1, chunkZ), out var left)) chunksToPass.Add(left);
+            if (manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(layer, chunkX + 1, chunkZ), out var right)) chunksToPass.Add(right);
+            if (manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(layer, chunkX, chunkZ - 1), out var back)) chunksToPass.Add(back);
+            if (manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(layer, chunkX, chunkZ + 1), out var front)) chunksToPass.Add(front);
 
             var faces = Mesher.GenerateMesh(chunksToPass,
-                (worldX, worldZ) => _chunkManager.BiomeAt(worldX, worldZ).Id);
-            if (faces != null && faces.Count > 0)
+                (worldX, worldZ) => manager.BiomeAt(worldX, worldZ).Id,
+                out var surfaceLodFaces);
+            var facesToUpload = faces as System.Collections.Generic.List<Cubuild.MeshFace>
+                ?? new System.Collections.Generic.List<Cubuild.MeshFace>(faces);
+            if (!chunk.TryCommitMesh(meshInputRevision, facesToUpload, surfaceLodFaces,
+                out int meshVersion, out long committedInputRevision))
+                return;
+            if (facesToUpload.Count > 0)
             {
-                UploadChunkPriority(coords, faces);
+                UploadChunkVersioned(manager, chunk, meshVersion, committedInputRevision,
+                    coords, facesToUpload, surfaceLodFaces, true);
             }
             else
             {
-                RemoveChunk(coords);
+                RemoveChunkVersioned(manager, chunk, meshVersion, committedInputRevision);
             }
         }
     }

@@ -12,7 +12,13 @@ namespace Cubuild.Renderer
         void UploadChunkPriority(Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces);
         void UploadChunkPriorityWithLod(Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces,
             System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace>? surfaceLodFaces);
+        void UploadChunkVersioned(Cubuild.ChunkManager sourceManager, Cubuild.Chunk sourceChunk, int meshVersion,
+            long meshInputRevision,
+            Cubuild.ChunkCoordinates coords, System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace> faces,
+            System.Collections.Generic.IReadOnlyList<Cubuild.MeshFace>? surfaceLodFaces, bool priority);
         void RemoveChunk(Cubuild.ChunkCoordinates coords);
+        void RemoveChunkVersioned(Cubuild.ChunkManager sourceManager, Cubuild.Chunk sourceChunk, int meshVersion,
+            long meshInputRevision);
         void UpdateCamera(Cubuild.Point3D position, float yaw, float pitch, float walkPhase = 0f, float walkAmount = 0f, bool firstPerson = false, bool grounded = true);
         Cubuild.Point3D? CameraPosition { get; }
         System.Numerics.Matrix4x4? ViewProjection { get; }

@@ -10,6 +10,10 @@ namespace Cubuild
     {
         public int Layer;
         public int X, Z;
+        /// <summary>v13: true when this record contains sparse final-cell patches instead of
+        /// full arrays. Older saves always load as full snapshots.</summary>
+        public bool IsDelta;
+        public SavedChunkDeltaCell[] DeltaCells = Array.Empty<SavedChunkDeltaCell>();
         public byte[] Blocks = Array.Empty<byte>();
         public byte[] Meta = Array.Empty<byte>();
     }
@@ -38,13 +42,13 @@ namespace Cubuild
     }
 
     /// <summary>
-    /// One world save: header (name/seed), player state, the modified chunks (block + meta
-    /// bytes), and mob state. Serialized to a Deflate-compressed .cubuild file.
+    /// One world save: header (name/seed), player state, modified chunks (full arrays or v13
+    /// sparse deltas), and mob state. Serialized to a Deflate-compressed .cubuild file.
     /// </summary>
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 12;
+        public const int Version = 13;
         /// <summary>Binary version read from disk; new/in-memory saves use the current version.</summary>
         public int FileVersion = Version;
 
@@ -93,8 +97,11 @@ namespace Cubuild
 
         public void Save(string path)
         {
-            using var ms = new MemoryStream();
-            using (var w = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true))
+            // Stream through Deflate directly. Large full-array fallbacks should not require a
+            // second, uncompressed copy of the entire world in memory.
+            using var file = File.Create(path);
+            using var deflate = new DeflateStream(file, CompressionLevel.Optimal);
+            using (var w = new BinaryWriter(deflate, Encoding.UTF8, leaveOpen: true))
             {
                 w.Write(Magic);
                 w.Write(Version);
@@ -132,10 +139,24 @@ namespace Cubuild
                     w.Write(c.Layer);
                     w.Write(c.X);
                     w.Write(c.Z);
-                    w.Write(c.Blocks.Length);
-                    w.Write(c.Blocks);
-                    w.Write(c.Meta.Length);
-                    w.Write(c.Meta);
+                    w.Write(c.IsDelta);
+                    if (c.IsDelta)
+                    {
+                        w.Write(c.DeltaCells.Length);
+                        foreach (var cell in c.DeltaCells)
+                        {
+                            w.Write(cell.Index); // Int32: sky chunks exceed 65,535 cells
+                            w.Write(cell.Block);
+                            w.Write(cell.Meta);
+                        }
+                    }
+                    else
+                    {
+                        w.Write(c.Blocks.Length);
+                        w.Write(c.Blocks);
+                        w.Write(c.Meta.Length);
+                        w.Write(c.Meta);
+                    }
                 }
 
                 w.Write(Mobs.Count);
@@ -177,12 +198,8 @@ namespace Cubuild
                 w.Write(LinkedNegativeXWorld ?? "");
                 w.Write(LinkedPositiveZWorld ?? "");
                 w.Write(LinkedNegativeZWorld ?? "");
+                w.Flush();
             }
-
-            using var file = File.Create(path);
-            using var deflate = new DeflateStream(file, CompressionLevel.Optimal);
-            ms.Position = 0;
-            ms.CopyTo(deflate);
         }
 
         public static WorldSave? Load(string path)
@@ -237,10 +254,40 @@ namespace Cubuild
                     if (version >= 2) c.Layer = reader.ReadInt32();
                     c.X = reader.ReadInt32();
                     c.Z = reader.ReadInt32();
-                    int blen = reader.ReadInt32();
-                    c.Blocks = reader.ReadBytes(blen);
-                    int mlen = reader.ReadInt32();
-                    c.Meta = reader.ReadBytes(mlen);
+                    if (version >= 13)
+                    {
+                        c.IsDelta = reader.ReadBoolean();
+                        if (c.IsDelta)
+                        {
+                            int deltaCount = reader.ReadInt32();
+                            if (deltaCount < 0) throw new InvalidDataException("Negative sparse chunk delta count.");
+                            c.DeltaCells = new SavedChunkDeltaCell[deltaCount];
+                            int previousIndex = -1;
+                            for (int cellIndex = 0; cellIndex < deltaCount; cellIndex++)
+                            {
+                                int index = reader.ReadInt32();
+                                if (index < 0 || index <= previousIndex)
+                                    throw new InvalidDataException("Sparse chunk delta indexes are not strictly sorted.");
+                                previousIndex = index;
+                                c.DeltaCells[cellIndex] = new SavedChunkDeltaCell(index, reader.ReadByte(), reader.ReadByte());
+                            }
+                        }
+                        else
+                        {
+                            int blen = reader.ReadInt32();
+                            c.Blocks = reader.ReadBytes(blen);
+                            int mlen = reader.ReadInt32();
+                            c.Meta = reader.ReadBytes(mlen);
+                        }
+                    }
+                    else
+                    {
+                        // v1-v12 chunk payload is unchanged: all records are full arrays.
+                        int blen = reader.ReadInt32();
+                        c.Blocks = reader.ReadBytes(blen);
+                        int mlen = reader.ReadInt32();
+                        c.Meta = reader.ReadBytes(mlen);
+                    }
                     save.Chunks.Add(c);
                 }
 

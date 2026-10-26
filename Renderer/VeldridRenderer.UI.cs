@@ -1161,13 +1161,19 @@ namespace Cubuild.Renderer
                 int count = m.SavedWorlds.Count;
                 float rowH = 36f;
                 float winW = 420f;
-                float winH = Math.Max(140f, 60f + count * rowH + 60f);
+                float errorH = string.IsNullOrWhiteSpace(m.WorldLoadError) ? 0f : 54f;
+                float winH = Math.Max(140f, 60f + count * rowH + 60f + errorH);
                 ImGui.SetNextWindowPos(new Vector2((size.X - winW) / 2f, size.Y / 4f + 32f), ImGuiCond.Always);
                 ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
                 ImGui.Begin("##worldselect", windowFlags);
                 ImGui.SetWindowFontScale(1.3f);
                 ImGui.Text("Select World");
                 ImGui.SetWindowFontScale(1f);
+                if (!string.IsNullOrWhiteSpace(m.WorldLoadError))
+                {
+                    ImGui.TextWrapped(m.WorldLoadError);
+                    ImGui.Spacing();
+                }
                 ImGui.Spacing();
 
                 if (count == 0)

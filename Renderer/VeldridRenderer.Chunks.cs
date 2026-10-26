@@ -9,6 +9,72 @@ namespace Cubuild.Renderer
 {
     public sealed partial class VeldridRenderer : IRenderer, IDisposable
     {
+        private bool TryApplyPendingUpload(PendingUpload upload)
+        {
+            if (upload.WorldGeneration != System.Threading.Interlocked.Read(ref _worldGeneration)
+                || !ReferenceEquals(upload.SourceManager, _chunkManager))
+                return false;
+
+            lock (upload.SourceChunk.MeshLock)
+            {
+                if (upload.WorldGeneration != System.Threading.Interlocked.Read(ref _worldGeneration)
+                    || !ReferenceEquals(upload.SourceManager, _chunkManager)
+                    || !upload.SourceManager.TryGetLoadedChunk(upload.Coord, out var current)
+                    || !ReferenceEquals(current, upload.SourceChunk)
+                    || !upload.SourceChunk.IsCleanMeshStampCurrent(
+                        upload.MeshVersion, upload.MeshInputRevision))
+                    return false;
+
+                if (_appliedMeshVersions.TryGetValue(upload.Coord, out var applied)
+                    && ReferenceEquals(applied.Source, upload.SourceChunk)
+                    && applied.Version >= upload.MeshVersion)
+                    return false;
+
+                WriteChunkData(upload.Coord, upload.Vertices, upload.Indices,
+                    upload.CutoutVertices, upload.CutoutIndices, upload.GlassVertices, upload.GlassIndices,
+                    upload.TransparentVertices, upload.TransparentIndices, upload.TransparentNonTopIndexCount,
+                    upload.SurfaceLodVertices, upload.SurfaceLodIndices);
+                _appliedMeshVersions[upload.Coord] = (upload.SourceChunk, upload.MeshVersion);
+                return true;
+            }
+        }
+
+        private void ApplyPendingRemoval(PendingRemoval removal)
+        {
+            if (removal.WorldGeneration != System.Threading.Interlocked.Read(ref _worldGeneration)
+                || !ReferenceEquals(removal.SourceManager, _chunkManager))
+                return;
+
+            if (removal.SourceChunk == null)
+            {
+                // Streaming unloads are queued after the source is removed from the active
+                // manager. A chunk already reloaded at this coordinate owns the GPU range now.
+                if (removal.SourceManager.TryGetLoadedChunk(removal.Coord, out _)) return;
+                FreeChunkRange(removal.Coord);
+                _appliedMeshVersions.Remove(removal.Coord);
+                return;
+            }
+
+            lock (removal.SourceChunk.MeshLock)
+            {
+                if (removal.WorldGeneration != System.Threading.Interlocked.Read(ref _worldGeneration)
+                    || !ReferenceEquals(removal.SourceManager, _chunkManager)
+                    || !removal.SourceManager.TryGetLoadedChunk(removal.Coord, out var current)
+                    || !ReferenceEquals(current, removal.SourceChunk)
+                    || !removal.SourceChunk.IsCleanMeshStampCurrent(
+                        removal.MeshVersion, removal.MeshInputRevision))
+                    return;
+
+                if (_appliedMeshVersions.TryGetValue(removal.Coord, out var applied)
+                    && ReferenceEquals(applied.Source, removal.SourceChunk)
+                    && applied.Version >= removal.MeshVersion)
+                    return;
+
+                FreeChunkRange(removal.Coord);
+                _appliedMeshVersions[removal.Coord] = (removal.SourceChunk, removal.MeshVersion);
+            }
+        }
+
         private void WriteChunkData(Cubuild.ChunkCoordinates coord, uint[] verts, ushort[] indices,
             uint[] cutoutVerts, ushort[] cutoutIndices, uint[] glassVerts, ushort[] glassIndices,
             uint[] transVerts, ushort[] transIndices, uint transNonTopIndexCount,
@@ -512,13 +578,17 @@ namespace Cubuild.Renderer
                 ExtractFrustumPlanes(_viewProjection.Value);
                 for (int i = 0; i < 6; i++)
                 {
-                    _cullPlaneFloats[i * 4 + 0] = _frustumPlanes[i].X;
-                    _cullPlaneFloats[i * 4 + 1] = _frustumPlanes[i].Y;
-                    _cullPlaneFloats[i * 4 + 2] = _frustumPlanes[i].Z;
-                    _cullPlaneFloats[i * 4 + 3] = _frustumPlanes[i].W;
+                    _cullUniformData[i * 4 + 0] = BitConverter.SingleToUInt32Bits(_frustumPlanes[i].X);
+                    _cullUniformData[i * 4 + 1] = BitConverter.SingleToUInt32Bits(_frustumPlanes[i].Y);
+                    _cullUniformData[i * 4 + 2] = BitConverter.SingleToUInt32Bits(_frustumPlanes[i].Z);
+                    _cullUniformData[i * 4 + 3] = BitConverter.SingleToUInt32Bits(_frustumPlanes[i].W);
                 }
-                cl.UpdateBuffer(_frustumBuffer, 0, _cullPlaneFloats);
             }
+            _cullUniformData[24] = (uint)commands.Count;
+            _cullUniformData[25] = 0;
+            _cullUniformData[26] = 0;
+            _cullUniformData[27] = 0;
+            cl.UpdateBuffer(_frustumBuffer, 0, _cullUniformData);
 
             cl.SetPipeline(_cullPipeline);
             cl.SetComputeResourceSet(0, _frustumSet);

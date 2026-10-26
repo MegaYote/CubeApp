@@ -52,18 +52,17 @@ namespace Cubuild
         // Chunk coords that have been modified (player edits / fluid flow) since load; these are
         // the only chunks a world save needs to serialize.
         private readonly HashSet<ChunkCoordinates> _modifiedChunks = new();
-        public IReadOnlyCollection<ChunkCoordinates> ModifiedChunks => _modifiedChunks;
+        private readonly object _modifiedLock = new();
+        public IReadOnlyCollection<ChunkCoordinates> ModifiedChunks
+        {
+            get { lock (_modifiedLock) return _modifiedChunks.ToArray(); }
+        }
 
         // ---- unload cache (survives chunk streaming) ----
-        // When a MODIFIED chunk unloads, its block/meta arrays are snapshotted here instead of
-        // being discarded. That makes player edits survive streaming: the data is re-stamped onto
-        // the fresh regeneration when the player returns (GetOrCreateChunk) and is still written
-        // by SaveWorld even while the chunk is unloaded. Bound the memory with a generous cap and
-        // oldest-first eviction (an evicted chunk falls back to the old lossy behaviour, but only
-        // after ~hundreds of MB of modified terrain).
-        private const int UnloadCacheMaxChunks = 1024;
-        private readonly Dictionary<ChunkCoordinates, (long Stamp, byte[] Blocks, byte[] Meta)> _unloadedModifiedChunks = new();
-        private long _unloadCacheStamp;
+        // Modified chunks remain cached until saved/reloaded. Trusted chunks keep their sparse
+        // delta here rather than a full 16x16x-height array; full/untrusted chunks retain arrays.
+        // There is intentionally no eviction: dropping an edited chunk would silently lose data.
+        private readonly Dictionary<ChunkCoordinates, SavedChunk> _unloadedModifiedChunks = new();
         private readonly object _unloadCacheLock = new();
 
         private readonly PriorityQueue<ChunkRequest, double> queue = new();
@@ -149,16 +148,28 @@ namespace Cubuild
 
             if (ReferenceEquals(candidate, result))
             {
-                // A chunk that was modified before unloading has a snapshot in the unload cache.
-                // Stamp it over the fresh generation so player edits survive chunk streaming. The
-                // coord is already in _modifiedChunks (it was added when first edited), so the
-                // next SaveWorld still picks this chunk up.
+                // Restore cached data before seam initialization. Sparse snapshots are replayed
+                // against the same in-process generated base; full snapshots remain untrusted.
+                bool restoredCachedChunk = false;
                 lock (_unloadCacheLock)
                 {
                     if (_unloadedModifiedChunks.TryGetValue(key, out var cached))
                     {
-                        Array.Copy(cached.Blocks, result.RawBlocks, Math.Min(cached.Blocks.Length, result.RawBlocks.Length));
-                        Array.Copy(cached.Meta, result.RawMeta, Math.Min(cached.Meta.Length, result.RawMeta.Length));
+                        restoredCachedChunk = true;
+                        lock (result.MeshLock)
+                        {
+                            if (cached.IsDelta)
+                            {
+                                result.ApplyDeltaCells(cached.DeltaCells);
+                            }
+                            else
+                            {
+                                Array.Copy(cached.Blocks, result.RawBlocks, Math.Min(cached.Blocks.Length, result.RawBlocks.Length));
+                                Array.Copy(cached.Meta, result.RawMeta, Math.Min(cached.Meta.Length, result.RawMeta.Length));
+                                result.MarkDeltaBaselineUntrusted();
+                            }
+                            result.InvalidateLightGrid();
+                        }
                         result.HasRuntimeEdits = true;
                         _unloadedModifiedChunks.Remove(key);
                         result.NeedsRemesh = true;
@@ -181,6 +192,20 @@ namespace Cubuild
                     {
                         SyncDeepAccess(chunkX, chunkZ, deep);
                     }
+                }
+                // Try to enable tracking only after generation/seam initialization. Any bypass
+                // write above has already marked the chunk untrusted and cannot be promoted.
+                result.MarkGeneratedBaselineTrusted();
+                // Sky islands are a lazy direct-array population whose timing depends on player
+                // altitude. Newly populated chunks are full/untrusted rather than pretending they
+                // share the empty, reproducible sky baseline.
+                if (layer == SkyLayer && chunkProviders[SkyLayer] is World.SkyChunkProvider skyProvider
+                    && skyProvider.Islands.AutoHighFill)
+                {
+                    if (restoredCachedChunk)
+                        skyProvider.Islands.MarkChunkFilled(chunkX, chunkZ);
+                    else if (skyProvider.Islands.HighFillChunk(chunkX, chunkZ, result, ChunkSize, HeightForLayer(layer)))
+                        MarkChunkUntrusted(result);
                 }
                 // A seam is meshed from the lower chunk's perspective. When either side changes
                 // residency, the other side must rebuild its border faces against the new state.
@@ -272,21 +297,33 @@ namespace Cubuild
                 }
             }
 
+            void SyncAndInvalidate()
+            {
+                SyncColumns();
+                if (metadataChanged || geometryChanged)
+                    deepChunk.InvalidateLightGrid();
+            }
+
             if (haveGround)
             {
                 // Mesh generation writes LightGrid under this same lock. If a recent edit/load
                 // invalidated it, the source remains conservatively zero until the next ground mesh.
-                lock (ground!.MeshLock) SyncColumns();
+                lock (ground!.MeshLock)
+                lock (deepChunk.MeshLock)
+                    SyncAndInvalidate();
             }
             else
             {
-                SyncColumns();
+                lock (deepChunk.MeshLock)
+                    SyncAndInvalidate();
             }
-
             if (metadataChanged || geometryChanged)
-            {
-                deepChunk.InvalidateLightGrid();
                 deepChunk.NeedsRemesh = true;
+            if (geometryChanged)
+            {
+                // Seam synchronization writes raw storage without old cell values. Persist a full
+                // snapshot; never manufacture a sparse patch for this derived mutation.
+                MarkChunkUntrusted(deepChunk);
             }
             if (geometryChanged && haveGround) ground!.NeedsRemesh = true;
         }
@@ -314,6 +351,7 @@ namespace Cubuild
 
             bool changed = false;
             lock (groundChunk.MeshLock)
+            lock (deepChunk.MeshLock)
             {
                 byte[] raw = groundChunk.RawBlocks;
                 byte[]? grid;
@@ -330,27 +368,28 @@ namespace Cubuild
                         changed |= deepChunk.SetDeepTopSkyLight(x, z, level);
                     }
                 }
+                if (changed)
+                    deepChunk.InvalidateLightGrid();
             }
 
             if (changed)
             {
-                deepChunk.InvalidateLightGrid();
                 deepChunk.NeedsRemesh = true;
             }
         }
 
-        // Stamps a saved chunk's block+meta data over the (re)generated chunk on world load.
+        // Stamps a saved full chunk's block+meta data over the (re)generated chunk on world load.
         public void ApplySavedChunk(int layer, int chunkX, int chunkZ, byte[] blocks, byte[] meta)
         {
             var chunk = GetOrCreateChunk(layer, chunkX, chunkZ);
-            chunk.InvalidateLightGrid();
-            if (blocks != null) Array.Copy(blocks, chunk.RawBlocks, Math.Min(blocks.Length, chunk.RawBlocks.Length));
-            if (meta != null) Array.Copy(meta, chunk.RawMeta, Math.Min(meta.Length, chunk.RawMeta.Length));
-            chunk.InvalidateLightGrid();
-            chunk.HasRuntimeEdits = true;
-            chunk.SurfaceLodFaces = null;
+            lock (chunk.MeshLock)
+            {
+                if (blocks != null) Array.Copy(blocks, chunk.RawBlocks, Math.Min(blocks.Length, chunk.RawBlocks.Length));
+                if (meta != null) Array.Copy(meta, chunk.RawMeta, Math.Min(meta.Length, chunk.RawMeta.Length));
+                chunk.InvalidateLightGrid();
+            }
+            MarkChunkUntrusted(chunk);
             chunk.NeedsRemesh = true;
-            _modifiedChunks.Add(new ChunkCoordinates(layer, chunkX, chunkZ));
             // Saved block arrays can change either seam row, even though their individual edits
             // are not replayed through MarkDirty.
             if (layer == GroundLayer || layer == DeepLayer)
@@ -361,22 +400,133 @@ namespace Cubuild
         public void ApplySavedChunk(int chunkX, int chunkZ, byte[] blocks, byte[] meta)
             => ApplySavedChunk(GroundLayer, chunkX, chunkZ, blocks, meta);
 
-        /// <summary>Returns the snapshot of a modified chunk that was unloaded (if any). Lets the
-        /// world save serialize edits even for chunks that are no longer loaded.</summary>
-        public bool TryGetCachedUnloadedChunk(int layer, int chunkX, int chunkZ, out byte[] blocks, out byte[] meta)
+        /// <summary>Recreates the current deterministic provider baseline, applies sparse final
+        /// cell values, and seeds provenance so later edits can continue using deltas.</summary>
+        public void ApplySavedDeltaChunk(int layer, int chunkX, int chunkZ, IReadOnlyList<SavedChunkDeltaCell> cells)
         {
+            if (layer < DeepLayer || layer > SkyLayer)
+                throw new InvalidDataException($"Sparse chunk delta has unsupported layer {layer}.");
+            if (layer == SkyLayer)
+                throw new InvalidDataException("Sparse sky-layer deltas are unsupported because sky-island fill depends on when the chunk is visited; the save must contain a full sky chunk.");
+            // GetOrCreateChunk already generates the deterministic baseline and performs the
+            // layer-seam initialization. Reuse that one chunk instead of generating a second
+            // temporary baseline (which nearly doubles load-time generation and memory cost).
+            var chunk = GetOrCreateChunk(layer, chunkX, chunkZ);
+            if (!chunk.HasTrustedDeltaBaseline)
+                throw new InvalidDataException("Sparse chunk delta does not match the generated chunk baseline; a full chunk snapshot is required.");
+            lock (chunk.MeshLock)
+            {
+                chunk.ApplyDeltaCells(cells);
+                chunk.InvalidateLightGrid();
+            }
+            chunk.HasRuntimeEdits = true;
+            chunk.SurfaceLodFaces = null;
+            chunk.NeedsRemesh = true;
+            MarkModified(new ChunkCoordinates(layer, chunkX, chunkZ));
+            if (layer == GroundLayer || layer == DeepLayer)
+                SyncDeepAccessIfLoaded(chunkX, chunkZ);
+            MarkVerticalNeighborsDirty(layer, chunkX, chunkZ);
+        }
+
+        /// <summary>Captures a modified chunk from either loaded storage or its unload cache.</summary>
+        public bool TryGetSaveChunk(ChunkCoordinates coords, bool forceFull, out SavedChunk savedChunk)
+        {
+            // Sky islands are lazily generated based on player altitude, so an empty provider
+            // baseline is not stable across when a chunk is visited. Always keep sky chunks full.
+            forceFull |= coords.Layer == SkyLayer;
+            if (loadedChunks.TryGetValue(coords, out var loaded))
+            {
+                savedChunk = CaptureChunkForSave(loaded, coords, forceFull);
+                return true;
+            }
+
+            SavedChunk? cachedSnapshot;
             lock (_unloadCacheLock)
             {
-                if (_unloadedModifiedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var cached))
+                if (!_unloadedModifiedChunks.TryGetValue(coords, out cachedSnapshot!))
                 {
-                    blocks = cached.Blocks;
-                    meta = cached.Meta;
-                    return true;
+                    savedChunk = new SavedChunk();
+                    return false;
                 }
+                cachedSnapshot = CloneSavedChunk(cachedSnapshot);
             }
-            blocks = Array.Empty<byte>();
-            meta = Array.Empty<byte>();
-            return false;
+
+            if (!forceFull || !cachedSnapshot.IsDelta)
+            {
+                savedChunk = cachedSnapshot;
+                return true;
+            }
+
+            // An old-generation world cannot advertise a delta baseline. Materialize the cached
+            // patch against the exact in-process current provider and write it as a full snapshot.
+            var materialized = chunkProviders[coords.Layer].GenerateChunk(
+                coords.X, coords.Z, ChunkSize, HeightForLayer(coords.Layer));
+            materialized.ApplyDeltaCells(cachedSnapshot.DeltaCells);
+            savedChunk = new SavedChunk
+            {
+                Layer = coords.Layer,
+                X = coords.X,
+                Z = coords.Z,
+                Blocks = (byte[])materialized.RawBlocks.Clone(),
+                Meta = (byte[])materialized.RawMeta.Clone(),
+            };
+            return true;
+        }
+
+        private static SavedChunk CaptureChunkForSave(Chunk chunk, ChunkCoordinates coords, bool forceFull)
+        {
+            if (!forceFull && chunk.TryCaptureDelta(out var cells))
+            {
+                return new SavedChunk
+                {
+                    Layer = coords.Layer,
+                    X = coords.X,
+                    Z = coords.Z,
+                    IsDelta = true,
+                    DeltaCells = cells,
+                };
+            }
+            return new SavedChunk
+            {
+                Layer = coords.Layer,
+                X = coords.X,
+                Z = coords.Z,
+                Blocks = (byte[])chunk.RawBlocks.Clone(),
+                Meta = (byte[])chunk.RawMeta.Clone(),
+            };
+        }
+
+        private static SavedChunk CloneSavedChunk(SavedChunk source) => new()
+        {
+            Layer = source.Layer,
+            X = source.X,
+            Z = source.Z,
+            IsDelta = source.IsDelta,
+            Blocks = (byte[])source.Blocks.Clone(),
+            Meta = (byte[])source.Meta.Clone(),
+            DeltaCells = (SavedChunkDeltaCell[])source.DeltaCells.Clone(),
+        };
+
+        /// <summary>Marks a direct/unknown chunk mutation as full-snapshot-only.</summary>
+        public void MarkChunkUntrusted(Chunk chunk)
+        {
+            int chunkX = FloorDiv(chunk.OriginX, ChunkSize);
+            int chunkZ = FloorDiv(chunk.OriginZ, ChunkSize);
+            int layer = LayerForWorldY(chunk.OriginY);
+            chunk.MarkDeltaBaselineUntrusted();
+            chunk.HasRuntimeEdits = true;
+            chunk.SurfaceLodFaces = null;
+            MarkModified(new ChunkCoordinates(layer, chunkX, chunkZ));
+        }
+
+        private void MarkModified(ChunkCoordinates key)
+        {
+            lock (_modifiedLock) _modifiedChunks.Add(key);
+        }
+
+        private bool IsModified(ChunkCoordinates key)
+        {
+            lock (_modifiedLock) return _modifiedChunks.Contains(key);
         }
 
         public bool TrySetBlock(int worldX, int worldY, int worldZ, int blockId)
@@ -398,10 +548,21 @@ namespace Cubuild
                 return false;
             }
 
-            int oldId = chunk[localX, localY, localZ];
-            chunk.InvalidateLightGrid();
-            chunk[localX, localY, localZ] = blockId;
-            chunk.SetMeta(localX, localY, localZ, (byte)meta);
+            byte finalMeta = (byte)meta;
+            int index = chunk.Index(localX, localY, localZ);
+            int oldId;
+            byte oldMeta;
+            lock (chunk.MeshLock)
+            {
+                oldId = chunk[localX, localY, localZ];
+                oldMeta = chunk.GetMeta(localX, localY, localZ);
+                chunk[localX, localY, localZ] = blockId;
+                chunk.SetMeta(localX, localY, localZ, finalMeta);
+                chunk.RecordTrackedMutation(index, (byte)oldId, oldMeta, (byte)blockId, finalMeta);
+                // Keep the raw mutation and its revision change indivisible to mesh capture and
+                // completion. Invalidating before the writes let a worker accept a pre-edit mesh.
+                chunk.InvalidateLightGrid();
+            }
             MarkDirty(chunkX, chunkZ, localX, localY, localZ, layer, blockId, oldId);
             return true;
         }
@@ -429,10 +590,20 @@ namespace Cubuild
                 return false;
             }
 
-            chunk.InvalidateLightGrid();
-            chunk[localX, localY, localZ] = blockId;
-            chunk.SetMeta(localX, localY, localZ, (byte)meta);
-            MarkDirty(chunkX, chunkZ, localX, localY, localZ, layer);
+            byte finalMeta = (byte)meta;
+            int index = chunk.Index(localX, localY, localZ);
+            int oldId;
+            byte oldMeta;
+            lock (chunk.MeshLock)
+            {
+                oldId = chunk[localX, localY, localZ];
+                oldMeta = chunk.GetMeta(localX, localY, localZ);
+                chunk[localX, localY, localZ] = blockId;
+                chunk.SetMeta(localX, localY, localZ, finalMeta);
+                chunk.RecordTrackedMutation(index, (byte)oldId, oldMeta, (byte)blockId, finalMeta);
+                chunk.InvalidateLightGrid();
+            }
+            MarkDirty(chunkX, chunkZ, localX, localY, localZ, layer, blockId, oldId);
             return true;
         }
 
@@ -483,13 +654,12 @@ namespace Cubuild
                 return;
             }
 
-            _modifiedChunks.Add(new ChunkCoordinates(layer, chunkX, chunkZ));
+            MarkModified(new ChunkCoordinates(layer, chunkX, chunkZ));
 
             chunk.HasRuntimeEdits = true;
             chunk.SurfaceLodFaces = null;
-            // Any block edit can change the sky flood reaching the seam. Never let the paired
-            // deep chunk continue using a LightGrid baked from pre-edit terrain.
-            chunk.InvalidateLightGrid();
+            // The block write already invalidated this chunk's light grid atomically with the
+            // storage mutation. This dirty assignment also advances its mesh-input revision.
             chunk.NeedsRemesh = true;
 
             // Only seam-row edits affect the vertically adjacent mesh; preserve the existing
@@ -887,30 +1057,11 @@ namespace Cubuild
                         // their data survives until the next world save, and can be re-applied when
                         // the player returns. Unmodified chunks regenerate identically from the seed,
                         // so they don't need caching.
-                        if (_modifiedChunks.Contains(key))
+                        if (IsModified(key))
                         {
                             lock (_unloadCacheLock)
                             {
-                                _unloadedModifiedChunks[key] = (
-                                    ++_unloadCacheStamp,
-                                    (byte[])removedChunk.RawBlocks.Clone(),
-                                    (byte[])removedChunk.RawMeta.Clone());
-                                // Oldest-first eviction when over the cap.
-                                while (_unloadedModifiedChunks.Count > UnloadCacheMaxChunks)
-                                {
-                                    ChunkCoordinates oldest = default;
-                                    long oldestStamp = long.MaxValue;
-                                    foreach (var kv in _unloadedModifiedChunks)
-                                    {
-                                        if (kv.Value.Stamp < oldestStamp)
-                                        {
-                                            oldestStamp = kv.Value.Stamp;
-                                            oldest = kv.Key;
-                                        }
-                                    }
-                                    if (oldestStamp == long.MaxValue) break;
-                                    _unloadedModifiedChunks.Remove(oldest);
-                                }
+                                _unloadedModifiedChunks[key] = CaptureChunkForSave(removedChunk, key, forceFull: false);
                             }
                         }
 
