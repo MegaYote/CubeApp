@@ -235,22 +235,26 @@ namespace Cubuild
         /// when the hit drops health to 0.
         /// </summary>
         public void DamagePlayer(int amount, DeathCause cause = DeathCause.Unknown)
+            => DamagePlayer(LocalPlayer, amount, cause);
+
+        /// <summary>Applies host-authoritative damage to a local or remote player state.</summary>
+        public void DamagePlayer(PlayerState player, int amount, DeathCause cause = DeathCause.Unknown)
         {
             // Creative players are invulnerable: no mob hits, no falls, no damage.
-            if (IsCreative) return;
+            if (IsCreative || player == null || player.Health <= 0) return;
             if (amount <= 0) return;
-            LocalPlayer.Health = Math.Max(0, LocalPlayer.Health - amount);
-            LocalPlayer.TimeSinceDamage = 0f;
-            LocalPlayer.RegenAccumulator = 0f;
+            player.Health = Math.Max(0, player.Health - amount);
+            player.TimeSinceDamage = 0f;
+            player.RegenAccumulator = 0f;
             // Hurt flash + flail on the third-person model (same 0.2s as the duck).
-            LocalPlayer.HurtTimer = Math.Max(LocalPlayer.HurtTimer, 0.2f);
-            if (LocalPlayer.Health <= 0)
+            player.HurtTimer = Math.Max(player.HurtTimer, 0.2f);
+            if (player.Health <= 0)
             {
-                LocalPlayer.DeathCause = cause;
+                player.DeathCause = cause;
                 // Start the death roll (direction random, like mobs that die without an attacker).
-                if (LocalPlayer.DeathTimer <= 0f)
-                    LocalPlayer.DeathRollDir = _regenRandom.Next(2) == 0 ? -1f : 1f;
-                LocalPlayer.DeathTimer += 1f / 60f;
+                if (player.DeathTimer <= 0f)
+                    player.DeathRollDir = _regenRandom.Next(2) == 0 ? -1f : 1f;
+                player.DeathTimer += 1f / 60f;
             }
         }
 

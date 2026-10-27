@@ -187,7 +187,7 @@ namespace Cubuild
                             if (thirdPersonView) _entityRenderScratch.Add(BuildLocalPlayerRenderData());
                             AddRemotePlayersToRender(_entityRenderScratch);
                             gpuRenderer.SetEntities(_entityRenderScratch);
-                            gpuRenderer.SetFallingBlocks(World.BlockTicks.Gravity.FallingBlocks);
+                            gpuRenderer.SetFallingBlocks(BuildFallingBlockRenderData());
                             gpuRenderer.SetItemDrops(World.ItemDropRenderData);
                         }
                         gpuRenderer.ProcessPendingPriorityMeshes();

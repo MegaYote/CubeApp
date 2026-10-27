@@ -92,6 +92,7 @@ namespace Cubuild
             // Start a placeholder world now; once Welcome arrives we get the real seed. If the
             // seed differs we rebuild. This keeps the client renderable while connecting.
             StartNewWorld(0, "Connecting...");
+            if (World != null) World.IsAuthoritative = false;
             _joinError = "";
             _netClient = new Net.NetClient(World);
             _netClient.Log += msg => System.Console.WriteLine($"[NET] {msg}");
@@ -117,6 +118,7 @@ namespace Cubuild
             {
                 StartNewWorld(_netClient.WorldSeed, _netClient.WorldName);
             }
+            World.IsAuthoritative = false;
             World.Mode = _netClient!.IsCreativeWorld ? GameMode.Creative : GameMode.Survival;
             World.PlayerPosition = new Point3D(_netClient.SpawnX, _netClient.SpawnY, _netClient.SpawnZ);
             World.PlayerVelocity = new Point3D(0, 0, 0);

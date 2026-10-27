@@ -70,6 +70,10 @@ namespace Cubuild
             {
                 // Remote players use the same physics; their input is applied by the network
                 // layer via ApplyRemoteInput (latest received TickInputState).
+                if (s.Health <= 0)
+                    s.DeathTimer = Math.Min(1f, s.DeathTimer + deltaSeconds);
+                else
+                    s.HurtTimer = Math.Max(0f, s.HurtTimer - deltaSeconds);
                 s.NoclipMode = IsCreative && s.PendingInput.NoclipMode;
                 s.CreativeFlightMode = IsCreative && !s.NoclipMode && s.PendingInput.CreativeFlightMode;
                 StepPlayer(s, s.PendingInput, deltaSeconds);

@@ -1038,7 +1038,8 @@ namespace Cubuild
             return created;
         }
 
-        public List<ChunkCoordinates> UnloadChunksOutside(int centerChunkX, int centerChunkZ, int radius)
+        public List<ChunkCoordinates> UnloadChunksOutside(int centerChunkX, int centerChunkZ, int radius,
+            IReadOnlySet<ChunkCoordinates>? pinnedChunks = null)
         {
             var removed = new List<ChunkCoordinates>();
             long radiusSq = (long)radius * radius; // circle, matching the load loops
@@ -1046,7 +1047,7 @@ namespace Cubuild
             {
                 long dx = key.X - (long)centerChunkX;
                 long dz = key.Z - (long)centerChunkZ;
-                if (dx * dx + dz * dz > radiusSq)
+                if (dx * dx + dz * dz > radiusSq && !(pinnedChunks?.Contains(key) ?? false))
                 {
                     if (loadedChunks.TryRemove(key, out var removedChunk))
                     {

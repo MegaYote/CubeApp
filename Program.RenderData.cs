@@ -17,6 +17,30 @@ namespace Cubuild
     {
         // Reused each frame so feeding the coupling beams into HudState never allocates.
         private readonly List<Cubuild.Renderer.LinkBeam> _linkBeams = new();
+        private readonly List<FallingBlockData> _fallingBlockRenderScratch = new();
+
+        private IReadOnlyList<FallingBlockData> BuildFallingBlockRenderData()
+        {
+            _fallingBlockRenderScratch.Clear();
+            if (World == null) return _fallingBlockRenderScratch;
+            _fallingBlockRenderScratch.AddRange(World.BlockTicks.Gravity.FallingBlocks);
+            int bombId = BlockRegistry.GetId("bomb");
+            if (_netClient != null && _netConnected)
+            {
+                // Client rendering is driven solely by host snapshots. No local fuse or projectile
+                // simulation runs on a multiplayer client.
+                foreach (var projectile in _netClient.GetInterpolatedBombProjectiles())
+                {
+                    _fallingBlockRenderScratch.Add(new FallingBlockData(bombId,
+                        projectile.X - 0.5, projectile.Y - 0.5, projectile.Z - 0.5));
+                }
+            }
+            else
+            {
+                _fallingBlockRenderScratch.AddRange(World.CaptureBombProjectileRenderData());
+            }
+            return _fallingBlockRenderScratch;
+        }
 
         private void AddRemotePlayersToRender(List<MobRenderData> list)
         {
@@ -31,7 +55,9 @@ namespace Cubuild
                         new Point3D(p.Position.X, p.Position.Y - GameWorld.EyeHeight, p.Position.Z),
                         p.Yaw * (float)Math.PI / 180f,
                         0f, p.WalkPhase, p.WalkAmount, 0f, 0f, 0f,
-                        (float)p.Velocity.Y, p.Grounded, false, 0f, 0f, 0f));
+                        (float)p.Velocity.Y, p.Grounded, p.Health <= 0,
+                        p.Health <= 0 ? Math.Clamp(p.DeathTimer / 0.5f, 0f, 1f) : 0f,
+                        p.DeathRollDir, p.Health <= 0 ? 0f : p.HurtTimer));
                 }
                 return;
             }
@@ -47,7 +73,9 @@ namespace Cubuild
                     new Point3D(p.X, p.Y - GameWorld.EyeHeight, p.Z),
                     p.Yaw * (float)Math.PI / 180f,
                     0f, p.WalkPhase, p.WalkAmount, 0f, 0f, 0f,
-                    p.VelY, p.Grounded, false, 0f, 0f, 0f));
+                    p.VelY, p.Grounded, p.Health <= 0,
+                    p.Health <= 0 ? Math.Clamp(p.DeathTimer / 0.5f, 0f, 1f) : 0f,
+                    p.DeathRollDir, p.Health <= 0 ? 0f : p.HurtTimer));
             }
         }
 
@@ -68,6 +96,16 @@ namespace Cubuild
                 if (authoritative != null)
                 {
                     World.Mode = authoritative.CreativeWorld ? GameMode.Creative : GameMode.Survival;
+                    foreach (var player in authoritative.Players)
+                    {
+                        if (player.Id != _netClient.ClientId) continue;
+                        World.LocalPlayer.Health = player.Health;
+                        World.LocalPlayer.DeathCause = player.DeathCause;
+                        World.LocalPlayer.DeathTimer = player.DeathTimer;
+                        World.LocalPlayer.DeathRollDir = player.DeathRollDir;
+                        World.LocalPlayer.HurtTimer = player.HurtTimer;
+                        break;
+                    }
                 }
                 _inputSendTimer += deltaSeconds;
                 if (_inputSendTimer >= 0.05f)

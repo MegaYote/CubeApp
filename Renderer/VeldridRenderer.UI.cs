@@ -1337,6 +1337,7 @@ namespace Cubuild.Renderer
                     DeathCause.Fall => "You fell from a high place...",
                     DeathCause.Mob => "A zombie got you...",
                     DeathCause.Suffocation => "You were crushed...",
+                    DeathCause.Explosion => "You were blown up...",
                     _ => "You died...",
                 };
 

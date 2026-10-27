@@ -108,6 +108,10 @@ namespace Cubuild
             }
         }
         public bool IsCreative => Mode == GameMode.Creative;
+        /// <summary>Whether this world is allowed to run authoritative timed gameplay effects.
+        /// Singleplayer and host worlds own their simulation; multiplayer clients only consume
+        /// the host's resulting block/player state.</summary>
+        public bool IsAuthoritative { get; set; } = true;
 
         /// <summary>Clears both flight states for every player when the world/mode changes.</summary>
         public void ResetFlightModes()

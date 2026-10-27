@@ -41,6 +41,22 @@ namespace Cubuild
         public long BurnAtTick;
     }
 
+    /// <summary>Absolute world-time detonation deadline for one placed bomb (v14).</summary>
+    public sealed class SavedBombFuse
+    {
+        public int X, Y, Z;
+        public long DueWorldTime;
+    }
+
+    /// <summary>Authoritative in-flight bomb state (v15).</summary>
+    public sealed class SavedBombProjectile
+    {
+        public long Id;
+        public double X, Y, Z;
+        public double VelocityX, VelocityY, VelocityZ;
+        public long DueWorldTime;
+    }
+
     /// <summary>
     /// One world save: header (name/seed), player state, modified chunks (full arrays or v13
     /// sparse deltas), and mob state. Serialized to a Deflate-compressed .cubuild file.
@@ -48,7 +64,7 @@ namespace Cubuild
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 13;
+        public const int Version = 15;
         /// <summary>Binary version read from disk; new/in-memory saves use the current version.</summary>
         public int FileVersion = Version;
 
@@ -89,6 +105,10 @@ namespace Cubuild
         public List<SavedChunk> Chunks = new();
         public List<SavedMob> Mobs = new();
         public List<SavedSapTorchTimer> SapTorchTimers = new();
+        /// <summary>v14: absolute world-time fuse deadlines; old bomb blocks have no fuse entry.</summary>
+        public List<SavedBombFuse> BombFuses = new();
+        /// <summary>v15: active launched bombs, including their absolute fuse deadlines.</summary>
+        public List<SavedBombProjectile> BombProjectiles = new();
         /// <summary>v12: neighboring world-save keys for the four horizontal boundaries.</summary>
         public string LinkedPositiveXWorld = "";
         public string LinkedNegativeXWorld = "";
@@ -198,6 +218,26 @@ namespace Cubuild
                 w.Write(LinkedNegativeXWorld ?? "");
                 w.Write(LinkedPositiveZWorld ?? "");
                 w.Write(LinkedNegativeZWorld ?? "");
+                w.Write(BombFuses.Count);
+                foreach (var fuse in BombFuses)
+                {
+                    w.Write(fuse.X);
+                    w.Write(fuse.Y);
+                    w.Write(fuse.Z);
+                    w.Write(fuse.DueWorldTime);
+                }
+                w.Write(BombProjectiles.Count);
+                foreach (var projectile in BombProjectiles)
+                {
+                    w.Write(projectile.Id);
+                    w.Write(projectile.X);
+                    w.Write(projectile.Y);
+                    w.Write(projectile.Z);
+                    w.Write(projectile.VelocityX);
+                    w.Write(projectile.VelocityY);
+                    w.Write(projectile.VelocityZ);
+                    w.Write(projectile.DueWorldTime);
+                }
                 w.Flush();
             }
         }
@@ -347,6 +387,40 @@ namespace Cubuild
                     save.LinkedNegativeXWorld = reader.ReadString();
                     save.LinkedPositiveZWorld = reader.ReadString();
                     save.LinkedNegativeZWorld = reader.ReadString();
+                }
+                if (version >= 14)
+                {
+                    int fuseCount = reader.ReadInt32();
+                    if (fuseCount < 0) throw new InvalidDataException("Negative bomb fuse count.");
+                    for (int i = 0; i < fuseCount; i++)
+                    {
+                        save.BombFuses.Add(new SavedBombFuse
+                        {
+                            X = reader.ReadInt32(),
+                            Y = reader.ReadInt32(),
+                            Z = reader.ReadInt32(),
+                            DueWorldTime = reader.ReadInt64(),
+                        });
+                    }
+                }
+                if (version >= 15)
+                {
+                    int projectileCount = reader.ReadInt32();
+                    if (projectileCount < 0) throw new InvalidDataException("Negative bomb projectile count.");
+                    for (int i = 0; i < projectileCount; i++)
+                    {
+                        save.BombProjectiles.Add(new SavedBombProjectile
+                        {
+                            Id = reader.ReadInt64(),
+                            X = reader.ReadDouble(),
+                            Y = reader.ReadDouble(),
+                            Z = reader.ReadDouble(),
+                            VelocityX = reader.ReadDouble(),
+                            VelocityY = reader.ReadDouble(),
+                            VelocityZ = reader.ReadDouble(),
+                            DueWorldTime = reader.ReadInt64(),
+                        });
+                    }
                 }
                 return save;
             }

@@ -86,5 +86,7 @@ namespace Cubuild
         Mob,
         /// <summary>A solid block shared the player's hitbox and squeezed them to death.</summary>
         Suffocation,
+        /// <summary>Killed by a bomb blast.</summary>
+        Explosion,
     }
 }

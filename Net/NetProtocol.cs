@@ -19,7 +19,7 @@ namespace Cubuild.Net
         Ping = 4,           // client time long
         // host -> client
         Welcome = 10,       // clientId int, world seed int, world name string
-        Snapshot = 11,      // players[] + edits[]
+        Snapshot = 11,      // players[] + edits[] + authoritative bomb projectiles[]
         Pong = 12,          // client time long (echo)
         ChunkData = 13,     // chunkX int, chunkZ int, blockCount int, blocks bytes, meta bytes
     }
@@ -39,6 +39,7 @@ namespace Cubuild.Net
         public void WriteInt(int value) { Ensure(4); BinaryPrimitives.WriteInt32LittleEndian(_buf.AsSpan(_len, 4), value); _len += 4; }
         public void WriteFloat(float value) { Ensure(4); BinaryPrimitives.WriteInt32LittleEndian(_buf.AsSpan(_len, 4), BitConverter.SingleToInt32Bits(value)); _len += 4; }
         public void WriteLong(long value) { Ensure(8); BinaryPrimitives.WriteInt64LittleEndian(_buf.AsSpan(_len, 8), value); _len += 8; }
+        public void WriteDouble(double value) { Ensure(8); BinaryPrimitives.WriteInt64LittleEndian(_buf.AsSpan(_len, 8), BitConverter.DoubleToInt64Bits(value)); _len += 8; }
         public void WriteString(string value)
         {
             int byteCount = value == null ? 0 : _enc.GetByteCount(value);
@@ -112,6 +113,13 @@ namespace Cubuild.Net
             _pos += 8;
             return true;
         }
+        public bool TryReadDouble(out double value)
+        {
+            if (_pos + 8 > _buf.Length) { value = 0; return false; }
+            value = BitConverter.Int64BitsToDouble(BinaryPrimitives.ReadInt64LittleEndian(_buf.AsSpan(_pos, 8)));
+            _pos += 8;
+            return true;
+        }
         public bool TryReadString(out string value)
         {
             value = string.Empty;
@@ -147,6 +155,9 @@ namespace Cubuild.Net
             public bool Noclip;
             public bool CreativeFlight;
             public float WalkPhase, WalkAmount;
+            public int Health = 10;
+            public DeathCause DeathCause;
+            public float DeathTimer, DeathRollDir = 1f, HurtTimer;
         }
 
         public sealed class Edit
@@ -156,8 +167,17 @@ namespace Cubuild.Net
             public int Meta;
         }
 
+        public sealed class BombProjectile
+        {
+            public long Id;
+            public double X, Y, Z;
+            public double VelocityX, VelocityY, VelocityZ;
+            public long DueWorldTime;
+        }
+
         public readonly List<Player> Players = new();
         public readonly List<Edit> Edits = new();
+        public readonly List<BombProjectile> BombProjectiles = new();
         public long Tick;
         public bool CreativeWorld;
 
@@ -176,12 +196,22 @@ namespace Cubuild.Net
                 w.WriteFloat(p.VelY);
                 w.WriteBool(p.Grounded); w.WriteBool(p.Noclip); w.WriteBool(p.CreativeFlight);
                 w.WriteFloat(p.WalkPhase); w.WriteFloat(p.WalkAmount);
+                w.WriteInt(p.Health); w.WriteInt((int)p.DeathCause);
+                w.WriteFloat(p.DeathTimer); w.WriteFloat(p.DeathRollDir); w.WriteFloat(p.HurtTimer);
             }
             w.WriteInt(Edits.Count);
             foreach (var e in Edits)
             {
                 w.WriteInt(e.X); w.WriteInt(e.Y); w.WriteInt(e.Z);
                 w.WriteInt(e.BlockId); w.WriteByte((byte)e.Meta);
+            }
+            w.WriteInt(BombProjectiles.Count);
+            foreach (var projectile in BombProjectiles)
+            {
+                w.WriteLong(projectile.Id);
+                w.WriteDouble(projectile.X); w.WriteDouble(projectile.Y); w.WriteDouble(projectile.Z);
+                w.WriteDouble(projectile.VelocityX); w.WriteDouble(projectile.VelocityY); w.WriteDouble(projectile.VelocityZ);
+                w.WriteLong(projectile.DueWorldTime);
             }
             return w.ToFrame(NetMsgType.Snapshot);
         }
@@ -206,6 +236,12 @@ namespace Cubuild.Net
                 bool creativeFlight = r.ReadBool();
                 p.CreativeFlight = !p.Noclip && creativeFlight;
                 if (!r.TryReadFloat(out p.WalkPhase) || !r.TryReadFloat(out p.WalkAmount)) break;
+                if (!r.TryReadInt(out p.Health) || !r.TryReadInt(out int deathCause)
+                    || !r.TryReadFloat(out p.DeathTimer) || !r.TryReadFloat(out p.DeathRollDir)
+                    || !r.TryReadFloat(out p.HurtTimer)) break;
+                p.Health = Math.Clamp(p.Health, 0, 10);
+                p.DeathCause = Enum.IsDefined(typeof(DeathCause), deathCause)
+                    ? (DeathCause)deathCause : DeathCause.Unknown;
                 snap.Players.Add(p);
             }
             if (!r.TryReadInt(out int ec)) return snap;
@@ -217,6 +253,24 @@ namespace Cubuild.Net
                 if (!r.TryReadByte(out var meta)) break;
                 e.Meta = meta;
                 snap.Edits.Add(e);
+            }
+            if (!r.TryReadInt(out int bc) || bc < 0 || bc > 16384 || bc > r.Remaining / 64) return snap;
+            for (int i = 0; i < bc; i++)
+            {
+                var projectile = new BombProjectile();
+                if (!r.TryReadLong(out projectile.Id)
+                    || !r.TryReadDouble(out projectile.X) || !r.TryReadDouble(out projectile.Y)
+                    || !r.TryReadDouble(out projectile.Z)
+                    || !r.TryReadDouble(out projectile.VelocityX) || !r.TryReadDouble(out projectile.VelocityY)
+                    || !r.TryReadDouble(out projectile.VelocityZ)
+                    || !r.TryReadLong(out projectile.DueWorldTime)) break;
+                if (double.IsNaN(projectile.X) || double.IsInfinity(projectile.X)
+                    || double.IsNaN(projectile.Y) || double.IsInfinity(projectile.Y)
+                    || double.IsNaN(projectile.Z) || double.IsInfinity(projectile.Z)
+                    || double.IsNaN(projectile.VelocityX) || double.IsInfinity(projectile.VelocityX)
+                    || double.IsNaN(projectile.VelocityY) || double.IsInfinity(projectile.VelocityY)
+                    || double.IsNaN(projectile.VelocityZ) || double.IsInfinity(projectile.VelocityZ)) return snap;
+                snap.BombProjectiles.Add(projectile);
             }
             return snap;
         }

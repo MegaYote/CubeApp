@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -43,6 +45,7 @@ namespace Cubuild.Net
         // Latest snapshot (received on the network thread).
         private NetSnapshot? _latest;
         private readonly object _snapshotLock = new();
+        private readonly List<(NetSnapshot Snapshot, long ReceivedTimestamp)> _snapshotHistory = new();
 
         // The local world, used to apply edits + place remote players.
         private GameWorld? _world;
@@ -61,6 +64,85 @@ namespace Cubuild.Net
         {
             get { lock (_snapshotLock) return _latest; }
         }
+
+        /// <summary>Returns server-authored projectile positions interpolated between received
+        /// snapshots. Clients consume this presentation state only; they never run bomb physics.</summary>
+        public List<NetSnapshot.BombProjectile> GetInterpolatedBombProjectiles()
+        {
+            lock (_snapshotLock)
+            {
+                if (_snapshotHistory.Count == 0) return new List<NetSnapshot.BombProjectile>();
+                var latest = _snapshotHistory[_snapshotHistory.Count - 1];
+                double elapsedMs = Math.Max(0.0,
+                    (Stopwatch.GetTimestamp() - latest.ReceivedTimestamp) * 1000.0 / Stopwatch.Frequency);
+                double targetTick = latest.Snapshot.Tick - 50.0 + elapsedMs;
+                int beforeIndex = 0;
+                int afterIndex = _snapshotHistory.Count - 1;
+                for (int i = 0; i < _snapshotHistory.Count; i++)
+                {
+                    if (_snapshotHistory[i].Snapshot.Tick <= targetTick) beforeIndex = i;
+                    if (_snapshotHistory[i].Snapshot.Tick >= targetTick)
+                    {
+                        afterIndex = i;
+                        break;
+                    }
+                }
+
+                var before = _snapshotHistory[beforeIndex].Snapshot;
+                var after = _snapshotHistory[afterIndex].Snapshot;
+                double span = after.Tick - before.Tick;
+                double amount = span <= 0.0 ? 1.0 : Math.Clamp((targetTick - before.Tick) / span, 0.0, 1.0);
+                var afterById = new Dictionary<long, NetSnapshot.BombProjectile>();
+                foreach (var projectile in after.BombProjectiles) afterById[projectile.Id] = projectile;
+                var beforeIds = new HashSet<long>();
+                var result = new List<NetSnapshot.BombProjectile>(Math.Max(before.BombProjectiles.Count, after.BombProjectiles.Count));
+
+                foreach (var oldProjectile in before.BombProjectiles)
+                {
+                    beforeIds.Add(oldProjectile.Id);
+                    if (afterById.TryGetValue(oldProjectile.Id, out var newProjectile))
+                    {
+                        result.Add(new NetSnapshot.BombProjectile
+                        {
+                            Id = oldProjectile.Id,
+                            X = Lerp(oldProjectile.X, newProjectile.X, amount),
+                            Y = Lerp(oldProjectile.Y, newProjectile.Y, amount),
+                            Z = Lerp(oldProjectile.Z, newProjectile.Z, amount),
+                            VelocityX = Lerp(oldProjectile.VelocityX, newProjectile.VelocityX, amount),
+                            VelocityY = Lerp(oldProjectile.VelocityY, newProjectile.VelocityY, amount),
+                            VelocityZ = Lerp(oldProjectile.VelocityZ, newProjectile.VelocityZ, amount),
+                            DueWorldTime = newProjectile.DueWorldTime,
+                        });
+                    }
+                    else if (beforeIndex == afterIndex || targetTick < after.Tick)
+                    {
+                        result.Add(CloneProjectile(oldProjectile));
+                    }
+                }
+
+                if (targetTick >= after.Tick || beforeIndex == afterIndex)
+                {
+                    foreach (var newProjectile in after.BombProjectiles)
+                        if (!beforeIds.Contains(newProjectile.Id)) result.Add(CloneProjectile(newProjectile));
+                }
+                return result;
+            }
+        }
+
+        private static double Lerp(double a, double b, double amount) => a + (b - a) * amount;
+
+        private static NetSnapshot.BombProjectile CloneProjectile(NetSnapshot.BombProjectile projectile)
+            => new()
+            {
+                Id = projectile.Id,
+                X = projectile.X,
+                Y = projectile.Y,
+                Z = projectile.Z,
+                VelocityX = projectile.VelocityX,
+                VelocityY = projectile.VelocityY,
+                VelocityZ = projectile.VelocityZ,
+                DueWorldTime = projectile.DueWorldTime,
+            };
 
         /// <summary>Connects and performs the handshake. Returns immediately; use Connected/
         /// Disconnected events. World seed/name are filled when Welcome arrives.</summary>
@@ -126,7 +208,12 @@ namespace Cubuild.Net
                     {
                         case NetMsgType.Snapshot:
                             var snap = NetSnapshot.Deserialize(frame.Value.body);
-                            lock (_snapshotLock) _latest = snap;
+                            lock (_snapshotLock)
+                            {
+                                _latest = snap;
+                                _snapshotHistory.Add((snap, Stopwatch.GetTimestamp()));
+                                if (_snapshotHistory.Count > 8) _snapshotHistory.RemoveAt(0);
+                            }
                             // Queue edits for the main thread; never touch the world here.
                             foreach (var e in snap.Edits) _incomingEdits.Enqueue(e);
                             break;
@@ -225,7 +312,7 @@ namespace Cubuild.Net
                 got += n;
             }
             int bodyLen = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(lenBuf);
-            if (bodyLen < 1 || bodyLen > 1 << 20) return null;
+            if (bodyLen < 1 || bodyLen > 1 << 22) return null;
             var body = new byte[bodyLen];
             got = 0;
             while (got < bodyLen)

@@ -116,6 +116,8 @@ namespace Cubuild
                 PlayerHealth = world.LocalPlayer.Health,
                 WorldTime = world.WorldTime,
                 SapTorchTimers = world.CaptureSapTorchBurnTimers(),
+                BombFuses = world.CaptureBombFuses(),
+                BombProjectiles = world.CaptureBombProjectiles(),
                 Bag = new InventorySlot[40],
                 LinkedPositiveXWorld = world.LinkedPositiveXWorld,
                 LinkedNegativeXWorld = world.LinkedNegativeXWorld,
@@ -211,7 +213,9 @@ namespace Cubuild
                 || expected.Bag.Length != actual.Bag.Length
                 || expected.Chunks.Count != actual.Chunks.Count
                 || expected.Mobs.Count != actual.Mobs.Count
-                || expected.SapTorchTimers.Count != actual.SapTorchTimers.Count) return false;
+                || expected.SapTorchTimers.Count != actual.SapTorchTimers.Count
+                || expected.BombFuses.Count != actual.BombFuses.Count
+                || expected.BombProjectiles.Count != actual.BombProjectiles.Count) return false;
             for (int i = 0; i < expected.Bag.Length; i++)
                 if (expected.Bag[i].ItemId != actual.Bag[i].ItemId || expected.Bag[i].Count != actual.Bag[i].Count) return false;
             for (int i = 0; i < expected.Chunks.Count; i++)
@@ -250,6 +254,21 @@ namespace Cubuild
                 var b = actual.SapTorchTimers[i];
                 if (a.X != b.X || a.Y != b.Y || a.Z != b.Z
                     || a.GraceEndTick != b.GraceEndTick || a.BurnAtTick != b.BurnAtTick) return false;
+            }
+            for (int i = 0; i < expected.BombFuses.Count; i++)
+            {
+                var a = expected.BombFuses[i];
+                var b = actual.BombFuses[i];
+                if (a.X != b.X || a.Y != b.Y || a.Z != b.Z
+                    || a.DueWorldTime != b.DueWorldTime) return false;
+            }
+            for (int i = 0; i < expected.BombProjectiles.Count; i++)
+            {
+                var a = expected.BombProjectiles[i];
+                var b = actual.BombProjectiles[i];
+                if (a.Id != b.Id || a.X != b.X || a.Y != b.Y || a.Z != b.Z
+                    || a.VelocityX != b.VelocityX || a.VelocityY != b.VelocityY
+                    || a.VelocityZ != b.VelocityZ || a.DueWorldTime != b.DueWorldTime) return false;
             }
             return true;
         }
@@ -317,6 +336,8 @@ namespace Cubuild
             world.SetWorldTime(save.WorldTime);
             if (save.FileVersion >= 11) world.RestoreSapTorchBurnTimers(save.SapTorchTimers);
             else world.InitializeSapTorchBurnTimersForLoadedTorches();
+            if (save.FileVersion >= 14) world.RestoreBombFuses(save.BombFuses);
+            if (save.FileVersion >= 15) world.RestoreBombProjectiles(save.BombProjectiles);
             world.Entities.LoadMobs(save.Mobs);
             world.LinkedPositiveXWorld = save.LinkedPositiveXWorld ?? "";
             world.LinkedNegativeXWorld = save.LinkedNegativeXWorld ?? "";

@@ -21,7 +21,7 @@ namespace Cubuild.Net
     /// </summary>
     public sealed class NetHost : IDisposable
     {
-        public const int ProtocolVersion = 2;
+        public const int ProtocolVersion = 4;
         public const int DefaultPort = 26065;
 
         private readonly GameWorld _world;
@@ -78,6 +78,11 @@ namespace Cubuild.Net
                 _localSnapshot.CreativeFlight = p.CreativeFlightMode;
                 _localSnapshot.WalkPhase = p.WalkPhase;
                 _localSnapshot.WalkAmount = p.WalkAmount;
+                _localSnapshot.Health = p.Health;
+                _localSnapshot.DeathCause = p.DeathCause;
+                _localSnapshot.DeathTimer = p.DeathTimer;
+                _localSnapshot.DeathRollDir = p.DeathRollDir;
+                _localSnapshot.HurtTimer = p.HurtTimer;
             }
         }
 
@@ -286,7 +291,7 @@ namespace Cubuild.Net
                 got += n;
             }
             int bodyLen = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(lenBuf);
-            if (bodyLen < 1 || bodyLen > 1 << 20) return null;
+            if (bodyLen < 1 || bodyLen > 1 << 22) return null;
             var body = new byte[bodyLen];
             got = 0;
             while (got < bodyLen)
@@ -319,6 +324,7 @@ namespace Cubuild.Net
                     // Collect all player states into the snapshot.
                     NetSnapshot.Player[] players;
                     NetSnapshot.Edit[] edits;
+                    NetSnapshot.BombProjectile[] bombProjectiles;
                     long tick = sw.ElapsedMilliseconds;
                     lock (_snapshotLock)
                     {
@@ -343,6 +349,11 @@ namespace Cubuild.Net
                                     CreativeFlight = ps.CreativeFlightMode,
                                     WalkPhase = ps.WalkPhase,
                                     WalkAmount = ps.WalkAmount,
+                                    Health = ps.Health,
+                                    DeathCause = ps.DeathCause,
+                                    DeathTimer = ps.DeathTimer,
+                                    DeathRollDir = ps.DeathRollDir,
+                                    HurtTimer = ps.HurtTimer,
                                 });
                             }
                         }
@@ -351,11 +362,30 @@ namespace Cubuild.Net
                         _pendingEdits.Clear();
                     }
 
-                    if (players.Length > 0 || edits.Length > 0)
+                    var worldProjectiles = _world.CaptureBombProjectiles();
+                    bombProjectiles = new NetSnapshot.BombProjectile[worldProjectiles.Count];
+                    for (int i = 0; i < worldProjectiles.Count; i++)
+                    {
+                        var projectile = worldProjectiles[i];
+                        bombProjectiles[i] = new NetSnapshot.BombProjectile
+                        {
+                            Id = projectile.Id,
+                            X = projectile.X,
+                            Y = projectile.Y,
+                            Z = projectile.Z,
+                            VelocityX = projectile.VelocityX,
+                            VelocityY = projectile.VelocityY,
+                            VelocityZ = projectile.VelocityZ,
+                            DueWorldTime = projectile.DueWorldTime,
+                        };
+                    }
+
+                    if (players.Length > 0 || edits.Length > 0 || bombProjectiles.Length > 0)
                     {
                         var snap = new NetSnapshot { Tick = tick, CreativeWorld = _world.IsCreative };
                         snap.Players.AddRange(players);
                         snap.Edits.AddRange(edits);
+                        snap.BombProjectiles.AddRange(bombProjectiles);
                         var frame = snap.Serialize();
                         foreach (var kv in _clients)
                         {

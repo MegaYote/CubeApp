@@ -42,6 +42,7 @@ namespace Cubuild
             if (!Chunks.TryGetLoadedBlock(x, y, z, out removedBlockId)) return false;
             if (!Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId)) return false;
             OnSapTorchBlockChanged(x, y, z, BlockRegistry.AirId, removedBlockId);
+            OnBombBlockChanged(x, y, z, BlockRegistry.AirId, removedBlockId);
 
             // A door is two cells, so breaking either half must remove both - otherwise you'd
             // leave a floating top half. The partner is cleared without dropping anything; the
@@ -600,8 +601,10 @@ var place = pickResult.Value.Place;
                 }
             }
 
+            Chunks.TryGetLoadedBlock(place.x, place.y, place.z, out int previousBlockId);
             if (!Chunks.TrySetBlock(place.x, place.y, place.z, blockToPlace, meta)) return false;
             OnSapTorchBlockChanged(place.x, place.y, place.z, blockToPlace);
+            OnBombBlockChanged(place.x, place.y, place.z, blockToPlace, previousBlockId);
             if (!IsCreative) TryConsumeFromInventory(spendId, 1);
             BlockTicks?.OnBlockChanged(place.x, place.y, place.z);
             int placeLayer = ChunkManager.LayerForWorldY(place.y);
@@ -623,7 +626,8 @@ var place = pickResult.Value.Place;
         {
             // Same "wait for it to fall" rule on the authoritative path (host applying a client's
             // edit): never place into a cell a falling block is passing through.
-            if (BlockTicks != null && BlockTicks.IsCellOccupiedByFalling(x, y, z)) return false;
+            if (blockId != BlockRegistry.AirId
+                && BlockTicks != null && BlockTicks.IsCellOccupiedByFalling(x, y, z)) return false;
             // Mirror the local rail-stacking rule on the authoritative / receive path too, so a
             // stray client edit can't build a rail tower where the local placement would refuse.
             if (BlockRegistry.IsRail(blockId)
@@ -637,6 +641,7 @@ var place = pickResult.Value.Place;
             Chunks.TryGetLoadedBlock(x, y, z, out int oldId);
             if (!Chunks.TrySetBlockLoadedOnly(x, y, z, blockId, meta)) return false;
             OnSapTorchBlockChanged(x, y, z, blockId, oldId);
+            OnBombBlockChanged(x, y, z, blockId, oldId);
             BlockTicks?.OnBlockChanged(x, y, z);
             int ebLayer = ChunkManager.LayerForWorldY(y);
             var editedChunk = new ChunkCoordinates(ebLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));

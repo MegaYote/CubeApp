@@ -197,6 +197,8 @@ namespace Cubuild
             WorldTime += advance;
             _worldTimeAccumulator -= advance;
             StepSapTorchBurnTimers();
+            StepBombFuses();
+            StepBombProjectiles(deltaSeconds);
             StepRegen(deltaSeconds);
             if (LocalPlayer.HurtTimer > 0f)
                 LocalPlayer.HurtTimer = Math.Max(0f, LocalPlayer.HurtTimer - deltaSeconds);
@@ -273,7 +275,8 @@ namespace Cubuild
                 // The other two layers sit idle until the player crosses into them, saving CPU
                 // and keeping generation focused on the one layer that matters right now.
                 Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, playerLayer);
-                var unloaded = Chunks.UnloadChunksOutside(chunkX, chunkZ, ChunkRenderRadius);
+                var unloaded = Chunks.UnloadChunksOutside(chunkX, chunkZ, ChunkRenderRadius,
+                    BombProjectileChunkPins);
                 foreach (var uc in unloaded) ChunkUnloaded?.Invoke(uc);
             }
 
