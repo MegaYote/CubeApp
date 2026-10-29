@@ -21,6 +21,11 @@ namespace Cubuild
         public float CostMalus;
         /// <summary>Step cost of moving onto this node (Manhattan distance + CostMalus).</summary>
         public float Cost;
+        /// <summary>The first explicitly mineable body obstruction overlapping this node.</summary>
+        public bool HasEmergencyBreakBlock;
+        public int EmergencyBreakX, EmergencyBreakY, EmergencyBreakZ;
+        public int EmergencyBreakBlockId;
+        public float EmergencyBreakHardness;
 
         public PathPoint(int x, int y, int z)
         {
@@ -49,11 +54,17 @@ namespace Cubuild
         private readonly PathPoint[] _points;
         private int _index;
 
-        public PathEntity(PathPoint[] points)
+        public PathEntity(PathPoint[] points, EmergencyBreakTarget? emergencyBreakTarget = null,
+            bool reachedGoal = true)
         {
             _points = points;
             _index = 0;
+            EmergencyBreakTarget = emergencyBreakTarget;
+            ReachedGoal = reachedGoal;
         }
+
+        public EmergencyBreakTarget? EmergencyBreakTarget { get; }
+        public bool ReachedGoal { get; }
 
         public int Length => _points.Length;
         public int CurrentIndex => _index;
@@ -89,7 +100,8 @@ namespace Cubuild
 
         public PathPoint GetFinal()
         {
-            return _points.Length > 0 ? _points[_points.Length - 1] : _points[0];
+            if (_points.Length == 0) throw new InvalidOperationException("An empty path has no final waypoint.");
+            return _points[_points.Length - 1];
         }
 
         public PathPoint[] GetPoints() => _points;

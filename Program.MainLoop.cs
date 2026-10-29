@@ -107,6 +107,11 @@ namespace Cubuild
                     ProcessMenuActions();
                     ApplyFrameInput(input.CaptureFrameInput());
                     ApplyLookInput(input.CaptureLookDelta());
+                    if (!IsSingleplayerSession()
+                        || screen == GameScreen.Title || screen == GameScreen.WorldSelect
+                        || screen == GameScreen.CreateWorld || screen == GameScreen.Multiplayer
+                        || screen == GameScreen.Loading)
+                        _fastForwardEnabled = false;
                     long nowTicks = timer.ElapsedTicks;
                     double deltaSeconds = (nowTicks - lastTicks) / (double)Stopwatch.Frequency;
                     lastTicks = nowTicks;
@@ -127,8 +132,14 @@ namespace Cubuild
                     }
                     else
                     {
-                        StepSimulation(input.CaptureTickInput(World?.NoclipMode ?? false, World?.CreativeFlightMode ?? false), (float)deltaSeconds);
-                        MaybeAutosave((float)deltaSeconds);
+                        float realDeltaSeconds = (float)deltaSeconds;
+                        var tickInput = input.CaptureTickInput(World?.NoclipMode ?? false, World?.CreativeFlightMode ?? false);
+                        if (_fastForwardEnabled)
+                            StepFastForwardSimulation(tickInput, realDeltaSeconds);
+                        else
+                            StepSimulation(tickInput, realDeltaSeconds);
+                        // Autosave and toast timers use wall-clock time, not accelerated sim time.
+                        MaybeAutosave(realDeltaSeconds);
                     }
                     var t1 = stageStopwatch.ElapsedTicks;
                     lastUpdateMs = (t1 - t0) * 1000f / Stopwatch.Frequency;
@@ -307,6 +318,43 @@ namespace Cubuild
             }
 
             SaveWorld();
+        }
+
+        private const int FastForwardMultiplier = 6;
+        private const float FastForwardSubstepSeconds = 1f / 30f;
+        private const int MaxFastForwardSubsteps = 48;
+
+        private bool IsSingleplayerSession()
+            => World != null && World.IsAuthoritative && _netHost == null && _netClient == null;
+
+        private bool CanFastForwardSimulation()
+            => IsSingleplayerSession()
+                && (screen == GameScreen.Playing || screen == GameScreen.Dead)
+                && (menu.Screen == GameScreen.Playing || menu.Screen == GameScreen.Dead);
+
+        private bool CanToggleFastForward()
+            => CanFastForwardSimulation() && !chatOpen;
+
+        private void StepFastForwardSimulation(TickInputState tickInput, float realDeltaSeconds)
+        {
+            double remaining = Math.Max(0f, realDeltaSeconds) * FastForwardMultiplier;
+            int steps = 0;
+            while (remaining > 0.000001 && steps < MaxFastForwardSubsteps && CanFastForwardSimulation())
+            {
+                float substep = (float)Math.Min(remaining, FastForwardSubstepSeconds);
+                // JumpPressed is a one-shot frame edge. Preserve it only on the first sim step;
+                // held movement/mining/place input stays active for every step.
+                StepSimulation(steps == 0 ? tickInput : tickInput.WithoutJumpPressed(), substep,
+                    advanceRealTimeEffects: false);
+                remaining -= substep;
+                steps++;
+            }
+
+            if (!IsSingleplayerSession()) _fastForwardEnabled = false;
+            // Audio ambience and hand animations remain tied to the real frame clock. The normal
+            // 1x path still updates them in StepSimulation exactly as before.
+            if (steps > 0 && World != null && screen != GameScreen.Dead)
+                AdvanceRealTimeEffects(realDeltaSeconds);
         }
 
     }

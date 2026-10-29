@@ -1,5 +1,17 @@
 namespace Cubuild
 {
+    /// <summary>One block-shaped construction preview cube in world coordinates.</summary>
+    public readonly struct BuildGhostCell
+    {
+        public readonly int X, Y, Z;
+        public readonly int BlockId;
+
+        public BuildGhostCell(int x, int y, int z, int blockId)
+        {
+            X = x; Y = y; Z = z; BlockId = blockId;
+        }
+    }
+
     /// <summary>
     /// Unified render data for any mob. The renderer can work with this struct
     /// regardless of the underlying mob implementation.

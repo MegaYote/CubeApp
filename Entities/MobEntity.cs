@@ -91,13 +91,36 @@ namespace Cubuild
         // A* pathfinding. Lazily built per-mob when a path goal is requested; a fresh PathFinder
         // and NodeProcessor are cheap (they hold no world state).
         private PathFinder? _pathFinder;
+        private PathFinder? _emergencyPathFinder;
         private PathEntity? _path;
-        private double _pathGoalX, _pathGoalZ;
+        private double _pathGoalX, _pathGoalY, _pathGoalZ;
+        private double _pathMaxDistance = 64.0;
         private int _pathRecalcCooldown;
         private bool _pathGoalActive;
+        private NavigationStatus _navigationStatus;
+        private bool _pathIsPartial;
+        private bool _allowEmergencyBreakForGoal;
+        private EmergencyBreakTarget? _emergencyBreakTarget;
+        private bool _emergencyBreakRouteReached;
+        private bool _emergencyBreakReady;
 
         /// <summary>Whether a pathfinding route is currently active.</summary>
         public bool HasPath => _path != null && !_path.IsDone;
+        /// <summary>Current result for an explicit stand-position goal.</summary>
+        public NavigationStatus PathStatus
+        {
+            get
+            {
+                if (!_pathGoalActive) return NavigationStatus.None;
+                if (IsAtPathGoal(requireCurrentGround: true)) return NavigationStatus.Arrived;
+                if (_emergencyBreakReady && _emergencyBreakTarget.HasValue) return NavigationStatus.NeedsBreak;
+                return _navigationStatus;
+            }
+        }
+        protected virtual bool UsesExternalPathGoal => false;
+        protected virtual bool CanBreakBlocksForPathfinding => Hostile;
+        protected virtual bool SupportsEmergencyBreakNavigation => false;
+        public EmergencyBreakTarget? NavigationBreakTarget => _emergencyBreakTarget;
 
         /// <summary>
         /// Supplies the current night-dim level (0..11) so environmental behaviors (zombie
@@ -425,10 +448,52 @@ namespace Cubuild
         public void SetPathGoal(double goalX, double goalZ, double maxDistance = 64.0)
         {
             _pathGoalX = goalX;
+            _pathGoalY = Position.Y;
             _pathGoalZ = goalZ;
+            _pathMaxDistance = Math.Clamp(maxDistance, 4.0, 128.0);
             _pathRecalcCooldown = 0;
             _path = null;
+            _allowEmergencyBreakForGoal = false;
+            ClearEmergencyBreakRoute();
             _pathGoalActive = true;
+            _navigationStatus = NavigationStatus.Navigating;
+            _pathIsPartial = false;
+        }
+
+        /// <summary>Request navigation to the center of a walkable feet cell.</summary>
+        public void SetNavigationGoal(int standX, int standY, int standZ, double maxDistance = 64.0,
+            bool allowEmergencyBreak = false)
+        {
+            double goalX = standX + 0.5;
+            double goalZ = standZ + 0.5;
+            allowEmergencyBreak = allowEmergencyBreak && SupportsEmergencyBreakNavigation;
+            if (_pathGoalActive && Math.Abs(_pathGoalX - goalX) < 0.001
+                && Math.Abs(_pathGoalY - standY) < 0.001 && Math.Abs(_pathGoalZ - goalZ) < 0.001
+                && _allowEmergencyBreakForGoal == allowEmergencyBreak)
+                return;
+
+            _pathGoalX = goalX;
+            _pathGoalY = standY;
+            _pathGoalZ = goalZ;
+            _pathMaxDistance = Math.Clamp(maxDistance, 4.0, 128.0);
+            _allowEmergencyBreakForGoal = allowEmergencyBreak;
+            _pathRecalcCooldown = 0;
+            _path = null;
+            ClearEmergencyBreakRoute();
+            _pathGoalActive = true;
+            _navigationStatus = NavigationStatus.Navigating;
+            _pathIsPartial = false;
+        }
+
+        /// <summary>Retry the current explicit goal after a partial or failed route.</summary>
+        public void RetryNavigationGoal()
+        {
+            if (!_pathGoalActive) return;
+            _path = null;
+            ClearEmergencyBreakRoute();
+            _pathRecalcCooldown = 0;
+            _navigationStatus = NavigationStatus.Navigating;
+            _pathIsPartial = false;
         }
 
         /// <summary>Cancel any active path goal and let the wander brain resume.</summary>
@@ -436,10 +501,51 @@ namespace Cubuild
         {
             _pathGoalActive = false;
             _path = null;
+            _allowEmergencyBreakForGoal = false;
+            ClearEmergencyBreakRoute();
+            _navigationStatus = NavigationStatus.None;
+            _pathIsPartial = false;
         }
+
+        private bool IsAtPathGoal(bool requireCurrentGround = false)
+        {
+            double dx = _pathGoalX - Position.X;
+            double dy = _pathGoalY - Position.Y;
+            double dz = _pathGoalZ - Position.Z;
+            return dx * dx + dz * dz <= 0.45 * 0.45
+                && Math.Abs(dy) <= 0.35
+                && (requireCurrentGround ? OnGround : (_prevOnGround || OnGround));
+        }
+
+        private bool IsInPathGoalCell()
+            => (int)Math.Floor(Position.X) == (int)Math.Floor(_pathGoalX)
+                && (int)Math.Floor(Position.Y) == (int)Math.Floor(_pathGoalY)
+                && (int)Math.Floor(Position.Z) == (int)Math.Floor(_pathGoalZ);
 
         private void UpdatePath(float dt, ChunkManager manager)
         {
+            if (_emergencyBreakReady)
+            {
+                _desiredMoveForward = 0f;
+                _navigationStatus = NavigationStatus.NeedsBreak;
+                return;
+            }
+            if (_emergencyBreakRouteReached)
+            {
+                if (IsAtEmergencyBreakApproach())
+                {
+                    _emergencyBreakReady = true;
+                    _navigationStatus = NavigationStatus.NeedsBreak;
+                    _desiredMoveForward = 0f;
+                }
+                else
+                {
+                    _navigationStatus = NavigationStatus.Navigating;
+                    SteerTowardEmergencyBreakApproach();
+                }
+                return;
+            }
+
             if (_path == null)
             {
                 // No route yet: compute one to the stored goal. The cooldown gates retries so a
@@ -447,20 +553,54 @@ namespace Cubuild
                 if (_pathRecalcCooldown > 0)
                 {
                     _pathRecalcCooldown--;
+                    if (_pathGoalActive && IsInPathGoalCell())
+                    {
+                        _navigationStatus = NavigationStatus.Navigating;
+                        SteerTowardPathGoal();
+                    }
                     return;
                 }
-                _pathFinder ??= new PathFinder(new PathNodeProcessor(manager, Width, Height));
-                _path = _pathFinder.FindPath(Position.X, Position.Y, Position.Z, _pathGoalX, Position.Y, _pathGoalZ, 64.0f);
+                _path = FindNavigationPath(manager);
                 if (_path == null)
                 {
+                    if (_pathGoalActive)
+                    {
+                        if (IsInPathGoalCell())
+                        {
+                            _navigationStatus = NavigationStatus.Navigating;
+                            SteerTowardPathGoal();
+                            _pathRecalcCooldown = 1;
+                            return;
+                        }
+                        _navigationStatus = NavigationStatus.Unreachable;
+                    }
                     _pathRecalcCooldown = 20;
+                    return;
+                }
+                UpdateNavigationRouteStatus();
+                if (_path.EmergencyBreakTarget.HasValue && _path.IsDone)
+                {
+                    _path = null;
+                    _emergencyBreakRouteReached = true;
                     return;
                 }
             }
 
             if (_path.IsDone)
             {
+                bool reachedEmergencyApproach = _path.EmergencyBreakTarget.HasValue;
                 _path = null;
+                if (reachedEmergencyApproach)
+                {
+                    _emergencyBreakRouteReached = true;
+                    _navigationStatus = NavigationStatus.Navigating;
+                    return;
+                }
+                if (_pathGoalActive && !_pathIsPartial)
+                {
+                    _navigationStatus = NavigationStatus.Navigating;
+                    SteerTowardPathGoal();
+                }
                 return;
             }
 
@@ -470,18 +610,29 @@ namespace Cubuild
             if (_pathRecalcCooldown <= 0)
             {
                 double gx = _pathGoalX - Position.X, gz = _pathGoalZ - Position.Z;
-                if (gx * gx + gz * gz < 2.25) // within 1.5 blocks of goal: actually arrived
+                if (!_pathGoalActive && gx * gx + gz * gz < 2.25) // legacy X/Z chase goal
                 {
                     _path = null;
                     return;
                 }
-                var final = _path.GetFinal();
-                double fdx = _pathGoalX - final.X, fdz = _pathGoalZ - final.Z;
-                if (fdx * fdx + fdz * fdz > 9.0)
+                    var final = _path.GetFinal();
+                double fdx = _pathGoalX - (final.X + 0.5);
+                double fdy = _pathGoalY - final.Y;
+                double fdz = _pathGoalZ - (final.Z + 0.5);
+                if (fdx * fdx + fdy * fdy + fdz * fdz > 9.0)
                 {
-                    _pathFinder ??= new PathFinder(new PathNodeProcessor(manager, Width, Height));
-                    var fresh = _pathFinder.FindPath(Position.X, Position.Y, Position.Z, _pathGoalX, Position.Y, _pathGoalZ, 64.0f);
-                    if (fresh != null) _path = fresh;
+                    var fresh = FindNavigationPath(manager);
+                    if (fresh != null)
+                    {
+                        _path = fresh;
+                        UpdateNavigationRouteStatus();
+                        if (_path.EmergencyBreakTarget.HasValue && _path.IsDone)
+                        {
+                            _path = null;
+                            _emergencyBreakRouteReached = true;
+                            return;
+                        }
+                    }
                 }
                 _pathRecalcCooldown = 20;
             }
@@ -503,7 +654,19 @@ namespace Cubuild
                 wp = _path.GetNext();
                 if (wp == null)
                 {
+                    bool reachedEmergencyApproach = _path.EmergencyBreakTarget.HasValue;
                     _path = null;
+                    if (reachedEmergencyApproach)
+                    {
+                        _emergencyBreakRouteReached = true;
+                        _navigationStatus = NavigationStatus.Navigating;
+                        return;
+                    }
+                    if (_pathGoalActive && !_pathIsPartial)
+                    {
+                        _navigationStatus = NavigationStatus.Navigating;
+                        SteerTowardPathGoal();
+                    }
                     return;
                 }
                 dx = wp.X + 0.5 - Position.X;
@@ -516,6 +679,110 @@ namespace Cubuild
             _idleTimer = 0f;
 
             // Let the shared steering code handle the actual turn + movement.
+        }
+
+        private void UpdateNavigationRouteStatus()
+        {
+            if (!_pathGoalActive || _path == null) return;
+            if (_path.EmergencyBreakTarget.HasValue)
+            {
+                _navigationStatus = NavigationStatus.Navigating;
+                _pathIsPartial = false;
+                _emergencyBreakTarget = _path.EmergencyBreakTarget;
+                return;
+            }
+            _emergencyBreakTarget = null;
+            if (_path.IsDone) return;
+            var final = _path.GetFinal();
+            _pathIsPartial = final.X != (int)Math.Floor(_pathGoalX)
+                || final.Y != (int)Math.Floor(_pathGoalY)
+                || final.Z != (int)Math.Floor(_pathGoalZ);
+            _navigationStatus = _pathIsPartial ? NavigationStatus.Partial : NavigationStatus.Navigating;
+        }
+
+        private PathEntity? FindNavigationPath(ChunkManager manager)
+        {
+            _pathFinder ??= new PathFinder(new PathNodeProcessor(manager, Width, Height,
+                requireLoadedCells: UsesExternalPathGoal, canBreakBlocks: CanBreakBlocksForPathfinding));
+            var ordinary = _pathFinder.FindPath(Position.X, Position.Y, Position.Z,
+                _pathGoalX, _pathGoalY, _pathGoalZ, (float)_pathMaxDistance);
+            if (PathReachesGoal(ordinary) || !_allowEmergencyBreakForGoal || !SupportsEmergencyBreakNavigation)
+            {
+                _emergencyBreakTarget = null;
+                return ordinary;
+            }
+
+            _emergencyPathFinder ??= new PathFinder(new PathNodeProcessor(manager, Width, Height,
+                requireLoadedCells: true, canBreakBlocks: true, requireMineableBreakBlocks: true));
+            var emergency = _emergencyPathFinder.FindPath(Position.X, Position.Y, Position.Z,
+                _pathGoalX, _pathGoalY, _pathGoalZ, (float)_pathMaxDistance);
+            if (PathReachesGoal(emergency) && emergency!.EmergencyBreakTarget.HasValue)
+                return emergency;
+
+            // A partial fallback must never cause destructive work without reaching the goal.
+            _emergencyBreakTarget = null;
+            return ordinary;
+        }
+
+        private bool PathReachesGoal(PathEntity? path)
+        {
+            if (path == null || !path.ReachedGoal) return false;
+            if (path.EmergencyBreakTarget.HasValue) return true;
+            if (path.Length == 0) return false;
+            var final = path.GetFinal();
+            return final.X == (int)Math.Floor(_pathGoalX)
+                && final.Y == (int)Math.Floor(_pathGoalY)
+                && final.Z == (int)Math.Floor(_pathGoalZ);
+        }
+
+        private bool IsAtEmergencyBreakApproach()
+        {
+            if (!_emergencyBreakTarget.HasValue) return false;
+            var target = _emergencyBreakTarget.Value;
+            double dx = target.ApproachX + 0.5 - Position.X;
+            double dz = target.ApproachZ + 0.5 - Position.Z;
+            return dx * dx + dz * dz <= 0.45 * 0.45
+                && Math.Abs(target.ApproachY - Position.Y) <= 0.35
+                && (_prevOnGround || OnGround);
+        }
+
+        private void SteerTowardEmergencyBreakApproach()
+        {
+            if (!_emergencyBreakTarget.HasValue) return;
+            var target = _emergencyBreakTarget.Value;
+            double dx = target.ApproachX + 0.5 - Position.X;
+            double dz = target.ApproachZ + 0.5 - Position.Z;
+            if (dx * dx + dz * dz <= 0.45 * 0.45)
+            {
+                _desiredMoveForward = 0f;
+                return;
+            }
+            _targetYaw = (float)Math.Atan2(dx, dz);
+            _desiredMoveForward = 0.35f;
+            _desiredSpeedScale = 0.8f;
+            _idleTimer = 0f;
+        }
+
+        private void ClearEmergencyBreakRoute()
+        {
+            _emergencyBreakTarget = null;
+            _emergencyBreakRouteReached = false;
+            _emergencyBreakReady = false;
+        }
+
+        private void SteerTowardPathGoal()
+        {
+            double dx = _pathGoalX - Position.X;
+            double dz = _pathGoalZ - Position.Z;
+            if (dx * dx + dz * dz < 0.18 * 0.18)
+            {
+                _desiredMoveForward = 0f;
+                return;
+            }
+            _targetYaw = (float)Math.Atan2(dx, dz);
+            _desiredMoveForward = 0.42f;
+            _desiredSpeedScale = 0.96f;
+            _idleTimer = 0f;
         }
 
         // ---- AI brain -------------------------------------------------------
@@ -554,6 +821,11 @@ namespace Cubuild
             _afterMoveRestTimer = Math.Max(0f, _afterMoveRestTimer - dt);
             _panicTimer = Math.Max(0f, _panicTimer - dt);
             _panicRetargetTimer = Math.Max(0f, _panicRetargetTimer - dt);
+            if (UsesExternalPathGoal && _pathGoalActive && _panicTimer <= 0f)
+            {
+                UpdateExternalPathGoal(dt, manager);
+                return;
+            }
             // _walkPhase advances in ApplyMoveControls (once per frame, all AI branches).
             if (HasFlap) _flapPhase += dt * (grounded ? (4.5f + _walkAmount * 4.0f) : 18.0f);
 
@@ -647,6 +919,35 @@ namespace Cubuild
             _ctrlStrafe = moveIntent > 0.04f ? Clamp(yawError * 0.14f, -0.18f, 0.18f) : 0f;
         }
 
+        /// <summary>Steers subclasses with an explicit navigation goal using the shared A* route.
+        /// Steve's bounded construction behavior uses this instead of the random wander brain.</summary>
+        private void UpdateExternalPathGoal(float dt, ChunkManager manager)
+        {
+            _desiredMoveForward = 0f;
+            _desiredSpeedScale = 0.98f;
+            bool arrived = IsAtPathGoal();
+            if (!arrived) UpdatePath(dt, manager);
+            else _path = null;
+
+            float moveIntent = arrived ? 0f : _desiredMoveForward;
+            _currentMoveForward = Lerp(_currentMoveForward, moveIntent, 1f - (float)Math.Exp(-dt * 5.0));
+            _currentSpeedScale = Lerp(_currentSpeedScale, _desiredSpeedScale, 1f - (float)Math.Exp(-dt * 3.9));
+            _headYaw = TurnToward(_headYaw, _targetYaw, HeadTurnSpeed * dt);
+            UpdateBodyYawFromHead(dt, _currentMoveForward > 0.04f);
+            float yawError = WrapAngle(_targetYaw - Yaw);
+            float turnSlow = Math.Abs(yawError) > 1.2f ? 0.22f : (Math.Abs(yawError) > 0.75f ? 0.72f : 1.0f);
+            _ctrlForward = _currentMoveForward * turnSlow;
+            _ctrlStrafe = _currentMoveForward > 0.04f ? Clamp(yawError * 0.14f, -0.18f, 0.18f) : 0f;
+
+            if ((_prevOnGround || OnGround) && _hopCooldown <= 0f && NeedsStepJump(manager, 0.6))
+            {
+                _ctrlJump = true;
+                _pendingJump = true;
+                _pendingJumpSpeed = 7.42f;
+                _hopCooldown = 0.26f;
+            }
+        }
+
         private void UpdateDead(float dt)
         {
             _hurtTimer = Math.Max(0f, _hurtTimer - dt);
@@ -687,6 +988,7 @@ namespace Cubuild
                 // when the target outruns the path end (>3 blocks) or every 20 ticks, and steers
                 // toward the next waypoint (setting _targetYaw + _desiredMoveForward).
                 _pathGoalX = target.X;
+                _pathGoalY = target.Y;
                 _pathGoalZ = target.Z;
                 UpdatePath(dt, manager);
             }

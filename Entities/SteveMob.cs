@@ -7,17 +7,21 @@ namespace Cubuild
     /// the player skin. Inherits the standard wander/panic AI and physics from
     /// <see cref="MobEntity"/>; player-sized collision box (0.6 x 1.8).
     /// </summary>
-    public sealed class SteveMob : MobEntity
+    public sealed partial class SteveMob : MobEntity
     {
         public SteveMob(Point3D position, float yaw) : base(position, yaw)
         {
-            Width = 0.75f;
-            Height = 2.25f;
+            Width = 0.60f;
+            Height = 1.80f;
             MaxHealth = 20;
             Health = MaxHealth;
-            StepHeight = 0.55f;
+            StepHeight = 0.50f;
         }
 
         public override string MobTypeName => "player";
+
+        protected override bool UsesExternalPathGoal => true;
+
+        protected override bool SupportsEmergencyBreakNavigation => true;
     }
 }

@@ -192,9 +192,32 @@ namespace Cubuild
             // Coupling beams for any linked carts (empty list when none), for the world pass to draw.
             World.Entities.CollectLinkBeams(_linkBeams);
 
+            // Steve's construction activity is host/single-player authoritative. Keep plan data
+            // private; the HUD receives only a generic activity line and no blueprint cells.
+            string steveBuilderStatus = string.Empty;
+            if (World.IsAuthoritative)
+            {
+                SteveMob? nearestSteve = null;
+                double nearestSteveDistance = double.PositiveInfinity;
+                foreach (var mob in World.Entities.Mobs)
+                {
+                    if (mob is not SteveMob steve || steve.IsDead || steve.Removed) continue;
+                    double dx = steve.Position.X - World.PlayerPosition.X;
+                    double dy = steve.Position.Y - World.PlayerPosition.Y;
+                    double dz = steve.Position.Z - World.PlayerPosition.Z;
+                    double distance = dx * dx + dy * dy + dz * dz;
+                    if (distance >= nearestSteveDistance) continue;
+                    nearestSteve = steve;
+                    nearestSteveDistance = distance;
+                }
+                if (nearestSteve != null)
+                    steveBuilderStatus = nearestSteve.GetShelterStatus();
+            }
+
             return new HudState
             {
                 ShowDebug = showFps, InventoryOpen = inventoryOpen, CraftingOpen = craftingOpen, SmeltOpen = smeltOpen, OreCartOpen = oreCartOpen,
+                FastForwardActive = _fastForwardEnabled && CanFastForwardSimulation(),
                 ChatOpen = chatOpen, ChatJustOpened = _chatJustOpened,
                 ChatResult = _chatResult, ChatResultIsError = _chatResultIsError,
                 OreCartSlots = _openOreCart?.CargoSlots ?? Array.Empty<InventorySlot>(),
@@ -214,6 +237,7 @@ namespace Cubuild
                 SelectedSlot = World.SelectedSlot, WorldSeed = World.Seed,
                 BiomeText = World.ChunkProvider?.BiomeNameAt((int)Math.Floor(World.PlayerPosition.X), (int)Math.Floor(World.PlayerPosition.Z)) ?? string.Empty,
                 Hotbar = World.Hotbar, HighlightWorldQuad = highlightQuad, LinkBeams = _linkBeams,
+                BuildGhostCells = Array.Empty<BuildGhostCell>(), SteveBuilderStatus = steveBuilderStatus,
                 ThirdPerson = thirdPersonView,
                 Mode = World.Mode, BagSlots = World.BagSlots, HotbarCounts = World.HotbarCounts, HeldStack = World.HeldStack,
                 CraftingSlots = World.CraftingGrid, CraftingResult = World.CraftingResult,

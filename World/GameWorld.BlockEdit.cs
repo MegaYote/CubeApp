@@ -1003,10 +1003,320 @@ var place = pickResult.Value.Place;
             return true;
         }
 
+        /// <summary>Tests Steve's block interaction from his actual feet-anchored position.</summary>
+        internal bool CanSteveReachBlock(SteveMob steve, int x, int y, int z)
+        {
+            if (steve == null) return false;
+            var eye = new Point3D(steve.Position.X, steve.Position.Y + EyeHeight, steve.Position.Z);
+            return TrySteveMineRay(steve, eye, x, y, z);
+        }
+
+        /// <summary>Tests a mining ray from the center of a candidate walkable stand cell.</summary>
+        internal bool CanSteveReachBlockFromStand(SteveMob steve, int x, int y, int z,
+            int standX, int standY, int standZ)
+        {
+            if (steve == null) return false;
+            var eye = new Point3D(standX + 0.5, standY + EyeHeight, standZ + 0.5);
+            return TrySteveMineRay(steve, eye, x, y, z);
+        }
+
+        /// <summary>
+        /// Tests whether Steve can place into the target cell from a stand cell by hitting a
+        /// support block whose first ray collision produces that exact Place cell.
+        /// </summary>
+        internal bool CanStevePlaceCellFromStand(SteveMob steve, int x, int y, int z,
+            int standX, int standY, int standZ)
+        {
+            if (steve == null) return false;
+            var eye = new Point3D(standX + 0.5, standY + EyeHeight, standZ + 0.5);
+            return TryStevePlaceRay(steve, eye, x, y, z);
+        }
+
+        private bool CanStevePlaceCell(SteveMob steve, int x, int y, int z)
+        {
+            var eye = new Point3D(steve.Position.X, steve.Position.Y + EyeHeight, steve.Position.Z);
+            return TryStevePlaceRay(steve, eye, x, y, z);
+        }
+
+        /// <summary>
+        /// Finds a nearby walkable stand from which the same player block ray can hit a block.
+        /// Nearby rings are preferred; the ray itself enforces the exact 6.5-block limit and LOS.
+        /// </summary>
+        internal bool TryFindSteveBlockApproach(SteveMob steve, int targetX, int targetY, int targetZ,
+            out int standX, out int standY, out int standZ, int maxSearchRing = 8)
+        {
+            standX = standY = standZ = 0;
+            if (steve == null || !IsAuthoritative) return false;
+
+            int currentX = (int)Math.Floor(steve.Position.X);
+            int currentY = (int)Math.Floor(steve.Position.Y);
+            int currentZ = (int)Math.Floor(steve.Position.Z);
+            if (SteveMob.IsWalkableStand(this, currentX, currentY, currentZ)
+                && CanSteveReachBlock(steve, targetX, targetY, targetZ))
+            {
+                standX = currentX; standY = currentY; standZ = currentZ;
+                return true;
+            }
+
+            Span<int> yCandidates = stackalloc int[8]
+            {
+                currentY, currentY - 1, currentY + 1,
+                targetY - 2, targetY - 1, targetY, targetY + 1, targetY + 2,
+            };
+            int maxRing = Math.Clamp(maxSearchRing, 0, (int)Math.Ceiling(BlockReach + 1.5f));
+            for (int ring = 0; ring <= maxRing; ring++)
+            {
+                double bestDistance = double.PositiveInfinity;
+                int bestX = 0, bestY = 0, bestZ = 0;
+                bool found = false;
+                for (int dz = -ring; dz <= ring; dz++)
+                for (int dx = -ring; dx <= ring; dx++)
+                {
+                    if (Math.Max(Math.Abs(dx), Math.Abs(dz)) != ring) continue;
+                    int sx = targetX + dx, sz = targetZ + dz;
+                    for (int yi = 0; yi < yCandidates.Length; yi++)
+                    {
+                        int sy = yCandidates[yi];
+                        bool duplicateY = false;
+                        for (int prior = 0; prior < yi; prior++)
+                        {
+                            if (yCandidates[prior] == sy) { duplicateY = true; break; }
+                        }
+                        if (duplicateY || !SteveMob.IsWalkableStand(this, sx, sy, sz)) continue;
+
+                        double ddx = sx + 0.5 - steve.Position.X;
+                        double ddy = sy - steve.Position.Y;
+                        double ddz = sz + 0.5 - steve.Position.Z;
+                        double distance = ddx * ddx + ddy * ddy + ddz * ddz;
+                        if (distance >= bestDistance
+                            || !CanSteveReachBlockFromStand(steve, targetX, targetY, targetZ, sx, sy, sz))
+                            continue;
+                        bestDistance = distance;
+                        bestX = sx; bestY = sy; bestZ = sz;
+                        found = true;
+                    }
+                }
+                if (!found) continue;
+                standX = bestX; standY = bestY; standZ = bestZ;
+                return true;
+            }
+            return false;
+        }
+
+        private bool TrySteveMineRay(SteveMob steve, Point3D eye, int x, int y, int z)
+        {
+            if (!Chunks.TryGetLoadedBlockAndMeta(x, y, z, out int blockId, out byte meta)
+                || blockId == BlockRegistry.AirId || blockId == BlockRegistry.GetId("water")) return false;
+
+            foreach (var box in GetBlockCollisionBoxes(blockId, meta))
+            {
+                double minX = x + box.minX, minY = y + box.minY, minZ = z + box.minZ;
+                double maxX = x + box.maxX, maxY = y + box.maxY, maxZ = z + box.maxZ;
+                // Aim at the nearest actual point on this collision box first. Besides being
+                // robust for partial shapes, this preserves the exact edge case where a block's
+                // face is 6.5 blocks away even though its center is farther.
+                var closest = new Point3D(Math.Clamp(eye.X, minX, maxX),
+                    Math.Clamp(eye.Y, minY, maxY), Math.Clamp(eye.Z, minZ, maxZ));
+                if (TrySteveRayHits(steve, eye, closest, x, y, z, requirePlace: false)) return true;
+                if (TrySteveRayHits(steve, eye,
+                    new Point3D((minX + maxX) * 0.5, (minY + maxY) * 0.5, (minZ + maxZ) * 0.5),
+                    x, y, z, requirePlace: false)) return true;
+
+                // A central aim can be occluded while an edge of a partial block remains visible.
+                // These interior corner samples stay within the exact collision box semantics.
+                for (int ix = 0; ix < 2; ix++)
+                for (int iy = 0; iy < 2; iy++)
+                for (int iz = 0; iz < 2; iz++)
+                {
+                    double fx = ix == 0 ? 0.12 : 0.88;
+                    double fy = iy == 0 ? 0.12 : 0.88;
+                    double fz = iz == 0 ? 0.12 : 0.88;
+                    var point = new Point3D(minX + (maxX - minX) * fx,
+                        minY + (maxY - minY) * fy, minZ + (maxZ - minZ) * fz);
+                    if (TrySteveRayHits(steve, eye, point, x, y, z, requirePlace: false)) return true;
+                }
+            }
+            return false;
+        }
+
+        private bool TryStevePlaceRay(SteveMob steve, Point3D eye, int targetX, int targetY, int targetZ)
+        {
+            ReadOnlySpan<(int X, int Y, int Z)> normals = stackalloc (int, int, int)[]
+            {
+                (1, 0, 0), (-1, 0, 0), (0, 1, 0),
+                (0, -1, 0), (0, 0, 1), (0, 0, -1),
+            };
+
+            foreach (var normal in normals)
+            {
+                int supportX = targetX - normal.X;
+                int supportY = targetY - normal.Y;
+                int supportZ = targetZ - normal.Z;
+                if (!Chunks.TryGetLoadedBlockAndMeta(supportX, supportY, supportZ,
+                    out int blockId, out byte meta)
+                    || blockId == BlockRegistry.AirId || blockId == BlockRegistry.GetId("water")) continue;
+
+                foreach (var box in GetBlockCollisionBoxes(blockId, meta))
+                {
+                    double minX = supportX + box.minX, minY = supportY + box.minY, minZ = supportZ + box.minZ;
+                    double maxX = supportX + box.maxX, maxY = supportY + box.maxY, maxZ = supportZ + box.maxZ;
+                    double planeX = normal.X > 0 ? maxX : (normal.X < 0 ? minX : 0.0);
+                    double planeY = normal.Y > 0 ? maxY : (normal.Y < 0 ? minY : 0.0);
+                    double planeZ = normal.Z > 0 ? maxZ : (normal.Z < 0 ? minZ : 0.0);
+
+                    Point3D closest = normal.X != 0
+                        ? new Point3D(planeX, Math.Clamp(eye.Y, minY, maxY), Math.Clamp(eye.Z, minZ, maxZ))
+                        : normal.Y != 0
+                            ? new Point3D(Math.Clamp(eye.X, minX, maxX), planeY, Math.Clamp(eye.Z, minZ, maxZ))
+                            : new Point3D(Math.Clamp(eye.X, minX, maxX), Math.Clamp(eye.Y, minY, maxY), planeZ);
+                    if (TrySteveRayHits(steve, eye, closest, targetX, targetY, targetZ,
+                        requirePlace: true)) return true;
+
+                    for (int u = 0; u < 3; u++)
+                    for (int v = 0; v < 3; v++)
+                    {
+                        double fu = u == 0 ? 0.15 : (u == 1 ? 0.5 : 0.85);
+                        double fv = v == 0 ? 0.15 : (v == 1 ? 0.5 : 0.85);
+                        Point3D point;
+                        if (normal.X != 0)
+                            point = new Point3D(planeX,
+                                minY + (maxY - minY) * fu, minZ + (maxZ - minZ) * fv);
+                        else if (normal.Y != 0)
+                            point = new Point3D(minX + (maxX - minX) * fu,
+                                planeY, minZ + (maxZ - minZ) * fv);
+                        else
+                            point = new Point3D(minX + (maxX - minX) * fu,
+                                minY + (maxY - minY) * fv, planeZ);
+
+                        if (TrySteveRayHits(steve, eye, point, targetX, targetY, targetZ,
+                            requirePlace: true)) return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private bool TrySteveRayHits(SteveMob steve, Point3D eye, Point3D aimPoint,
+            int targetX, int targetY, int targetZ, bool requirePlace)
+        {
+            var direction = aimPoint - eye;
+            if (direction.X * direction.X + direction.Y * direction.Y
+                + direction.Z * direction.Z < 1e-12) return false;
+            var hit = TryPickBlockInternal(eye, direction.Normalized(), out double hitDistance,
+                ignoreEntities: false, ignoredMob: steve);
+            if (!hit.HasValue || hitDistance > BlockReach) return false;
+            var cell = requirePlace ? hit.Value.Place : hit.Value.Remove;
+            return cell.x == targetX && cell.y == targetY && cell.z == targetZ;
+        }
+
+        /// <summary>
+        /// Steve's deliberately small resource-gathering path. Only common wood/stone materials
+        /// are eligible; the edit goes through the same loaded-only authoritative world path as
+        /// network edits, while the resulting material goes to Steve's private inventory.
+        /// </summary>
+        public bool TryMineForSteve(SteveMob steve, int x, int y, int z, int wantedItemId, out int gathered)
+        {
+            gathered = 0;
+            if (!IsAuthoritative || steve == null || steve.IsDead || steve.Removed) return false;
+            if (!Chunks.TryGetLoadedBlock(x, y, z, out int blockId)) return false;
+            if (!SteveMob.TryGetSteveGatherYield(this, x, y, z, blockId, out int outputItemId, out int outputCount)) return false;
+            if (outputItemId != wantedItemId || !steve.CanAcceptShelterItem(outputItemId, outputCount)) return false;
+
+            // Steve does not harvest blocks directly beside the player, and never edits an
+            // unloaded cell or an arbitrary obstruction while gathering.
+            double dx = x + 0.5 - LocalPlayer.Position.X;
+            double dz = z + 0.5 - LocalPlayer.Position.Z;
+            if (dx * dx + dz * dz < 9.0) return false;
+            if (!CanSteveReachBlock(steve, x, y, z)) return false;
+            if (!ApplyBlockEdit(x, y, z, BlockRegistry.AirId, 0)) return false;
+            gathered = outputCount;
+            return true;
+        }
+
+        /// <summary>
+        /// Steve's last-resort navigation mining. This is deliberately narrower than player
+        /// mining: only the explicit zombie-break whitelist with positive finite hardness is
+        /// accepted, and drops are spawned into the world rather than taken from player state.
+        /// </summary>
+        public bool TryBreakObstacleForSteve(SteveMob steve, int x, int y, int z, int expectedBlockId)
+        {
+            if (!IsAuthoritative || steve == null || steve.IsDead || steve.Removed
+                || expectedBlockId <= 0 || !BlockRegistry.ZombieCanBreakOf(expectedBlockId)) return false;
+            if (!Chunks.TryGetLoadedBlock(x, y, z, out int currentId) || currentId != expectedBlockId
+                || !BlockRegistry.IsSolid(currentId)) return false;
+            float hardness = BlockRegistry.HardnessOf(currentId);
+            if (!(hardness > 0f) || float.IsNaN(hardness) || float.IsInfinity(hardness)) return false;
+
+            // Keep emergency clearing away from the player's immediate build area, matching
+            // Steve's ordinary resource-gathering exclusion zone.
+            double playerDx = x + 0.5 - LocalPlayer.Position.X;
+            double playerDz = z + 0.5 - LocalPlayer.Position.Z;
+            if (playerDx * playerDx + playerDz * playerDz < 9.0) return false;
+
+            // Resolve a legitimate physical drop before editing, so an unsupported drop table
+            // can never turn a block into air without accounting for its contents. Leaves use
+            // their ordinary hand-break roll (without the player's flint bonus) and may yield nothing.
+            int configuredDropId = 0;
+            int configuredDropMin = 0, configuredDropMax = 0;
+            if (currentId != _idLeaves)
+            {
+                string configuredDrop = BlockRegistry.DropItemOf(currentId);
+                if (!string.IsNullOrWhiteSpace(configuredDrop))
+                {
+                    if (!ItemRegistry.TryGet(configuredDrop, out var configuredItem)) return false;
+                    configuredDropId = configuredItem.NumericId;
+                    configuredDropMin = BlockRegistry.DropCountMinOf(currentId);
+                    configuredDropMax = BlockRegistry.DropCountMaxOf(currentId);
+                }
+                else if (ItemRegistry.TryGet(BlockRegistry.GetName(currentId), out var blockItem))
+                {
+                    configuredDropId = blockItem.NumericId;
+                }
+                else return false;
+
+                if (configuredDropId <= 0) return false;
+            }
+
+            // Revalidate at the authoritative edit point: a route may have moved, a block may now
+            // occlude the target, or another mob may be standing in front of it.
+            if (!CanSteveReachBlock(steve, x, y, z)) return false;
+
+            if (!ApplyBlockEdit(x, y, z, BlockRegistry.AirId, 0)) return false;
+            int naturalLeafDrop = currentId == _idLeaves
+                ? RollLeafDrop(flintBonus: false, naturalDecay: false) : 0;
+            if (!IsCreative)
+            {
+                int dropId = currentId == _idLeaves ? naturalLeafDrop : configuredDropId;
+                int dropCount = currentId == _idLeaves ? 1
+                    : configuredDropMax > configuredDropMin
+                        ? DropRoll.WeightedCount(_regenRandom, configuredDropMin, configuredDropMax)
+                        : configuredDropMin > 0 ? configuredDropMin : 1;
+                if (dropId > 0) SpawnItemDrop(dropId, dropCount, new Point3D(x + 0.5, y + 0.5, z + 0.5));
+            }
+            if (currentId == _idLog) DecayLeavesNear(x, y, z);
+            return true;
+        }
+
+        /// <summary>Places one blueprint cube for Steve if the cell remains empty,
+        /// loaded, and clear of entities. Steve consumes his material only after this edit wins.</summary>
+        public bool TryPlaceBlockForSteve(SteveMob steve, int x, int y, int z, int blockId, int itemId)
+        {
+            if (!IsAuthoritative || steve == null || steve.IsDead || steve.Removed
+                || !BlockRegistry.IsPlaceable(blockId) || ItemRegistry.ResolveBlockId(itemId) != blockId
+                || !steve.CanAcceptShelterItem(itemId, 1)) return false;
+            if (!Chunks.TryGetLoadedBlock(x, y, z, out int oldId) || oldId != BlockRegistry.AirId) return false;
+            if (BlockTicks.IsCellOccupiedByFalling(x, y, z)) return false;
+            if (WouldBlockIntersectPlayer(LocalPlayer, x, y, z, blockId, 0)
+                || WouldBlockIntersectMob(x, y, z, blockId, 0)) return false;
+            if (!CanStevePlaceCell(steve, x, y, z)) return false;
+            return ApplyBlockEdit(x, y, z, blockId, 0);
+        }
+
         public PickBlockResult? TryPickBlock(Point3D origin, Point3D direction, out double hitDistance)
             => TryPickBlockInternal(origin, direction, out hitDistance, ignoreEntities: false);
 
-        private PickBlockResult? TryPickBlockInternal(Point3D origin, Point3D direction, out double hitDistance, bool ignoreEntities)
+        private PickBlockResult? TryPickBlockInternal(Point3D origin, Point3D direction,
+            out double hitDistance, bool ignoreEntities, MobEntity? ignoredMob = null)
         {
             hitDistance = double.PositiveInfinity;
             direction = direction.Normalized();
@@ -1027,7 +1337,8 @@ var place = pickResult.Value.Place;
             // A living mob's hitbox consumes the ray: blocks behind it are unreachable, so
             // fighting a mob can never accidentally break the wall behind it.
             double mobDist = double.PositiveInfinity;
-            bool mobInFront = !ignoreEntities && Entities.TryRaycastMobs(origin, direction, maxDistance, out mobDist);
+            bool mobInFront = !ignoreEntities && Entities.TryRaycastMobs(origin, direction,
+                maxDistance, out mobDist, ignoredMob);
             var distance = 0.0;
             for (int iteration = 0; iteration < 400 && distance <= maxDistance; iteration++)
             {

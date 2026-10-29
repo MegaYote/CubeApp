@@ -244,9 +244,36 @@ namespace Cubuild
                     || a.Yaw != b.Yaw || a.Health != b.Health || a.Brute != b.Brute
                     || a.VehicleMeleeHitCount != b.VehicleMeleeHitCount
                     || a.CargoSlots.Length != b.CargoSlots.Length) return false;
+                if (a.SteveBlueprintIndex != b.SteveBlueprintIndex
+                    || a.SteveAnchorX != b.SteveAnchorX || a.SteveAnchorY != b.SteveAnchorY
+                    || a.SteveAnchorZ != b.SteveAnchorZ || a.SteveRotation != b.SteveRotation
+                    || a.StevePlacedMask != b.StevePlacedMask
+                    || a.SteveHasSite != b.SteveHasSite
+                    || a.SteveProjectSeed != b.SteveProjectSeed
+                    || a.SteveMaterialItemId != b.SteveMaterialItemId
+                    || a.SteveRequiredMaterialCount != b.SteveRequiredMaterialCount
+                    || a.StevePlannerGoal != b.StevePlannerGoal
+                    || a.StevePlannerChoiceCount != b.StevePlannerChoiceCount
+                    || a.StevePlannerFailureCount != b.StevePlannerFailureCount
+                    || a.StevePlannerFailureCooldownTicks != b.StevePlannerFailureCooldownTicks
+                    || a.StevePlannerLastFailedGoal != b.StevePlannerLastFailedGoal
+                    || a.SteveHasExplorationTarget != b.SteveHasExplorationTarget
+                    || a.SteveExplorationHold != b.SteveExplorationHold
+                    || a.SteveExplorationTargetX != b.SteveExplorationTargetX
+                    || a.SteveExplorationTargetY != b.SteveExplorationTargetY
+                    || a.SteveExplorationTargetZ != b.SteveExplorationTargetZ
+                    || a.SteveExplorationOriginX != b.SteveExplorationOriginX
+                    || a.SteveExplorationOriginZ != b.SteveExplorationOriginZ
+                    || a.SteveExplorationRing != b.SteveExplorationRing
+                    || a.SteveExplorationSector != b.SteveExplorationSector
+                    || a.StevePlannerStatePresent != b.StevePlannerStatePresent
+                    || a.SteveInventory.Length != b.SteveInventory.Length) return false;
                 for (int slot = 0; slot < a.CargoSlots.Length; slot++)
                     if (a.CargoSlots[slot].ItemId != b.CargoSlots[slot].ItemId
                         || a.CargoSlots[slot].Count != b.CargoSlots[slot].Count) return false;
+                for (int slot = 0; slot < a.SteveInventory.Length; slot++)
+                    if (a.SteveInventory[slot].ItemId != b.SteveInventory[slot].ItemId
+                        || a.SteveInventory[slot].Count != b.SteveInventory[slot].Count) return false;
             }
             for (int i = 0; i < expected.SapTorchTimers.Count; i++)
             {

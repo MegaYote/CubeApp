@@ -24,6 +24,7 @@ namespace Cubuild.Renderer
         public string CullMode { get; }
         public bool GpuCullActive { get; }
         public bool GpuCullSupported { get; }
+        public string HzbStatus { get; }
         public IReadOnlyList<string> NearbyMapRows { get; }
         public IReadOnlyList<string> TargetLines { get; }
 
@@ -44,6 +45,7 @@ namespace Cubuild.Renderer
             string cullMode,
             bool gpuCullActive,
             bool gpuCullSupported,
+            string hzbStatus,
             IReadOnlyList<string> nearbyMapRows,
             IReadOnlyList<string> targetLines)
         {
@@ -63,6 +65,7 @@ namespace Cubuild.Renderer
             CullMode = cullMode;
             GpuCullActive = gpuCullActive;
             GpuCullSupported = gpuCullSupported;
+            HzbStatus = hzbStatus;
             NearbyMapRows = Array.AsReadOnly(new List<string>(nearbyMapRows).ToArray());
             TargetLines = Array.AsReadOnly(new List<string>(targetLines).ToArray());
         }

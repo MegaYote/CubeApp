@@ -188,6 +188,8 @@ namespace Cubuild
             {
                 World.SetSelectedSlot(frameInput.SelectedSlot.Value);
             }
+            if (frameInput.ToggleFastForwardPressed && CanToggleFastForward())
+                _fastForwardEnabled = !_fastForwardEnabled;
             // Q: throw one item - from the hovered inventory slot, else the cursor, else the
             // selected hotbar stack (MC survival behavior).
             if (frameInput.DropItemPressed && World != null && screen == GameScreen.Playing && !oreCartOpen)

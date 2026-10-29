@@ -30,6 +30,29 @@ namespace Cubuild
         public int VehicleMeleeHitCount;
         /// <summary>v10: ore-cart-only cargo payload; other mob types leave this empty.</summary>
         public InventorySlot[] CargoSlots = new InventorySlot[OreCartEntity.CargoSlotCount];
+        /// <summary>v16: Steve-only personal materials and resumable shelter plan.</summary>
+        public InventorySlot[] SteveInventory = Array.Empty<InventorySlot>();
+        public int SteveBlueprintIndex = -1;
+        public int SteveAnchorX, SteveAnchorY, SteveAnchorZ;
+        public int SteveRotation;
+        public long StevePlacedMask;
+        /// <summary>v17: persistent selected project and weighted planner/exploration state.</summary>
+        public bool SteveHasSite;
+        public int SteveProjectSeed;
+        public int SteveMaterialItemId;
+        public int SteveRequiredMaterialCount;
+        public int StevePlannerGoal;
+        public int StevePlannerChoiceCount;
+        public int StevePlannerFailureCount;
+        public int StevePlannerFailureCooldownTicks;
+        public int StevePlannerLastFailedGoal;
+        public bool SteveHasExplorationTarget;
+        public bool SteveExplorationHold;
+        public int SteveExplorationTargetX, SteveExplorationTargetY, SteveExplorationTargetZ;
+        public int SteveExplorationOriginX, SteveExplorationOriginZ;
+        public int SteveExplorationRing, SteveExplorationSector;
+        /// <summary>Runtime marker distinguishing v17 state from v1-v16 defaults.</summary>
+        public bool StevePlannerStatePresent;
     }
 
     /// <summary>World-time burnout schedule for one sap torch (v11).</summary>
@@ -64,7 +87,7 @@ namespace Cubuild
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 15;
+        public const int Version = 17;
         /// <summary>Binary version read from disk; new/in-memory saves use the current version.</summary>
         public int FileVersion = Version;
 
@@ -237,6 +260,48 @@ namespace Cubuild
                     w.Write(projectile.VelocityY);
                     w.Write(projectile.VelocityZ);
                     w.Write(projectile.DueWorldTime);
+                }
+                // v16-v17: Steve's private inventory, construction project, weighted planner,
+                // and exploration frontier. Keep the extension at the tail so v1-v15 stays readable.
+                int steveCount = 0;
+                for (int i = 0; i < Mobs.Count; i++)
+                    if (string.Equals(Mobs[i].Type, "steve", StringComparison.Ordinal)) steveCount++;
+                w.Write(steveCount);
+                for (int i = 0; i < Mobs.Count; i++)
+                {
+                    var mob = Mobs[i];
+                    if (!string.Equals(mob.Type, "steve", StringComparison.Ordinal)) continue;
+                    w.Write(i);
+                    for (int slotIndex = 0; slotIndex < SteveMob.InventorySlotCount; slotIndex++)
+                    {
+                        var slot = slotIndex < mob.SteveInventory.Length ? mob.SteveInventory[slotIndex] : default;
+                        w.Write(slot.ItemId);
+                        w.Write(slot.Count);
+                    }
+                    w.Write(mob.SteveBlueprintIndex);
+                    w.Write(mob.SteveAnchorX);
+                    w.Write(mob.SteveAnchorY);
+                    w.Write(mob.SteveAnchorZ);
+                    w.Write(mob.SteveRotation);
+                    w.Write(mob.StevePlacedMask);
+                    w.Write(mob.SteveHasSite);
+                    w.Write(mob.SteveProjectSeed);
+                    w.Write(mob.SteveMaterialItemId);
+                    w.Write(mob.SteveRequiredMaterialCount);
+                    w.Write(mob.StevePlannerGoal);
+                    w.Write(mob.StevePlannerChoiceCount);
+                    w.Write(mob.StevePlannerFailureCount);
+                    w.Write(mob.StevePlannerFailureCooldownTicks);
+                    w.Write(mob.StevePlannerLastFailedGoal);
+                    w.Write(mob.SteveHasExplorationTarget);
+                    w.Write(mob.SteveExplorationHold);
+                    w.Write(mob.SteveExplorationTargetX);
+                    w.Write(mob.SteveExplorationTargetY);
+                    w.Write(mob.SteveExplorationTargetZ);
+                    w.Write(mob.SteveExplorationOriginX);
+                    w.Write(mob.SteveExplorationOriginZ);
+                    w.Write(mob.SteveExplorationRing);
+                    w.Write(mob.SteveExplorationSector);
                 }
                 w.Flush();
             }
@@ -420,6 +485,57 @@ namespace Cubuild
                             VelocityZ = reader.ReadDouble(),
                             DueWorldTime = reader.ReadInt64(),
                         });
+                    }
+                }
+                if (version >= 16)
+                {
+                    int steveCount = reader.ReadInt32();
+                    if (steveCount < 0 || steveCount > save.Mobs.Count)
+                        throw new InvalidDataException("Invalid saved Steve state count.");
+                    for (int stateIndex = 0; stateIndex < steveCount; stateIndex++)
+                    {
+                        int mobIndex = reader.ReadInt32();
+                        if (mobIndex < 0 || mobIndex >= save.Mobs.Count
+                            || !string.Equals(save.Mobs[mobIndex].Type, "steve", StringComparison.Ordinal))
+                            throw new InvalidDataException("Steve state refers to a non-Steve mob.");
+                        var mob = save.Mobs[mobIndex];
+                        mob.SteveInventory = new InventorySlot[SteveMob.InventorySlotCount];
+                        for (int slotIndex = 0; slotIndex < mob.SteveInventory.Length; slotIndex++)
+                        {
+                            mob.SteveInventory[slotIndex] = new InventorySlot
+                            {
+                                ItemId = reader.ReadInt32(),
+                                Count = reader.ReadInt32(),
+                            };
+                        }
+                        mob.SteveBlueprintIndex = reader.ReadInt32();
+                        mob.SteveAnchorX = reader.ReadInt32();
+                        mob.SteveAnchorY = reader.ReadInt32();
+                        mob.SteveAnchorZ = reader.ReadInt32();
+                        mob.SteveRotation = reader.ReadInt32();
+                        mob.StevePlacedMask = reader.ReadInt64();
+                        if (version >= 17)
+                        {
+                            mob.StevePlannerStatePresent = true;
+                            mob.SteveHasSite = reader.ReadBoolean();
+                            mob.SteveProjectSeed = reader.ReadInt32();
+                            mob.SteveMaterialItemId = reader.ReadInt32();
+                            mob.SteveRequiredMaterialCount = reader.ReadInt32();
+                            mob.StevePlannerGoal = reader.ReadInt32();
+                            mob.StevePlannerChoiceCount = reader.ReadInt32();
+                            mob.StevePlannerFailureCount = reader.ReadInt32();
+                            mob.StevePlannerFailureCooldownTicks = reader.ReadInt32();
+                            mob.StevePlannerLastFailedGoal = reader.ReadInt32();
+                            mob.SteveHasExplorationTarget = reader.ReadBoolean();
+                            mob.SteveExplorationHold = reader.ReadBoolean();
+                            mob.SteveExplorationTargetX = reader.ReadInt32();
+                            mob.SteveExplorationTargetY = reader.ReadInt32();
+                            mob.SteveExplorationTargetZ = reader.ReadInt32();
+                            mob.SteveExplorationOriginX = reader.ReadInt32();
+                            mob.SteveExplorationOriginZ = reader.ReadInt32();
+                            mob.SteveExplorationRing = reader.ReadInt32();
+                            mob.SteveExplorationSector = reader.ReadInt32();
+                        }
                     }
                 }
                 return save;

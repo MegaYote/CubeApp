@@ -15,7 +15,7 @@ namespace Cubuild
 {
     public sealed partial class Program : IDisposable
     {
-        private void StepSimulation(TickInputState tickInput, float deltaSeconds)
+        private void StepSimulation(TickInputState tickInput, float deltaSeconds, bool advanceRealTimeEffects = true)
         {
             // The world only pauses for the ESC pause menu (singleplayer). The death screen keeps
             // the simulation running - the environment, mobs and time all continue while dead.
@@ -31,8 +31,8 @@ namespace Cubuild
             World.StepSimulation(tickInput, deltaSeconds);
             // The kiln keeps cooking while its screen is open (it only runs while you're at it).
             if (smeltOpen) World.TickSmelter(deltaSeconds);
-            if (_handPokeTimer > 0f) _handPokeTimer = Math.Max(0f, _handPokeTimer - deltaSeconds);
-            if (_handSwingTimer > 0f) _handSwingTimer = Math.Max(0f, _handSwingTimer - deltaSeconds);
+            if (advanceRealTimeEffects)
+                AdvanceHandAnimationTimers(deltaSeconds);
 
             // Death: when health is fully depleted, stop the sim and show the respawn screen.
             if (World.LocalPlayer.Health <= 0)
@@ -54,11 +54,24 @@ namespace Cubuild
                 _lastSkylightSubtracted = sub;
             }
 
-            UpdateCaveAmbience(deltaSeconds);
+            if (advanceRealTimeEffects)
+                UpdateCaveAmbience(deltaSeconds);
 
             // Survival mining: progress accumulates while the left mouse is held.
             UpdateMining(tickInput, deltaSeconds);
             TryBeginBoundaryHandoff();
+        }
+
+        private void AdvanceHandAnimationTimers(float deltaSeconds)
+        {
+            if (_handPokeTimer > 0f) _handPokeTimer = Math.Max(0f, _handPokeTimer - deltaSeconds);
+            if (_handSwingTimer > 0f) _handSwingTimer = Math.Max(0f, _handSwingTimer - deltaSeconds);
+        }
+
+        private void AdvanceRealTimeEffects(float realDeltaSeconds)
+        {
+            AdvanceHandAnimationTimers(realDeltaSeconds);
+            UpdateCaveAmbience(realDeltaSeconds);
         }
 
         // Hold-to-mine: progress = delta / (BASE_BREAK_TIME * hardness / matching tool speed).

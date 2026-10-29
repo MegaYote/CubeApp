@@ -33,6 +33,8 @@ namespace Cubuild.Renderer
     public struct HudState
     {
         public bool ShowDebug;
+        /// <summary>True while single-player simulation is running at 6x speed.</summary>
+        public bool FastForwardActive;
         public bool InventoryOpen;
         /// <summary>Workbench crafting menu open (right-click a workbench block).</summary>
         public bool CraftingOpen;
@@ -132,6 +134,11 @@ namespace Cubuild.Renderer
         /// instead of always painting over everything as a 2D overlay would.
         /// </summary>
         public Cubuild.Point3D[]? HighlightWorldQuad;
+
+        /// <summary>Immutable per-frame snapshot of the authoritative Steve shelter blueprint.</summary>
+        public IReadOnlyList<Cubuild.BuildGhostCell> BuildGhostCells;
+        /// <summary>Normal-play construction status (empty when no authoritative Steve is active).</summary>
+        public string SteveBuilderStatus;
 
         /// <summary>
         /// Coupling beams between linked carts (null/empty when nothing is coupled). The renderer
@@ -249,6 +256,8 @@ namespace Cubuild.Renderer
             CarriedWeightUnits = 0,
             DeathCause = DeathCause.Unknown,
             HighlightWorldQuad = null,
+            BuildGhostCells = System.Array.Empty<Cubuild.BuildGhostCell>(),
+            SteveBuilderStatus = string.Empty,
             LinkBeams = null,
             PlayerChunkX = 0,
             PlayerChunkZ = 0,

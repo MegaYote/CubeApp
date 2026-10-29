@@ -71,6 +71,86 @@ namespace Cubuild
         /// <summary>How long the magnet pickup flight lasts (seconds) before the drop is forced
         /// into your inventory. Usually collected earlier on arrival.</summary>
         public const float PickupFlyDuration = 0.45f;
+        internal const double SteveDropPickupSearchDistance = 12.0;
+
+        /// <summary>
+        /// Player and Steve use the same short-range pickup volume as the existing player
+        /// trigger. <paramref name="feetPosition"/> is feet-anchored (unlike PlayerPosition).
+        /// </summary>
+        internal static bool IsItemDropInPickupRange(DroppedItem drop, Point3D feetPosition)
+        {
+            if (drop == null) return false;
+            double centerY = drop.Position.Y + 0.2;
+            return Math.Abs(drop.Position.X - feetPosition.X) < 1.2
+                && Math.Abs(drop.Position.Z - feetPosition.Z) < 1.2
+                && centerY > feetPosition.Y - 0.5 && centerY < feetPosition.Y + 2.0;
+        }
+
+        /// <summary>True for a drop in the player's current pickup volume or already magnetized.</summary>
+        internal bool IsDropInLocalPlayerPickupRange(DroppedItem drop)
+        {
+            if (drop == null || IsCreative) return false;
+            if (drop.FlyTime > 0f) return true;
+            var playerFeet = new Point3D(LocalPlayer.Position.X,
+                LocalPlayer.Position.Y - EyeHeight, LocalPlayer.Position.Z);
+            return IsItemDropInPickupRange(drop, playerFeet);
+        }
+
+        /// <summary>
+        /// Recipe feasibility probe: is there a non-player-claimed copy of this item within the
+        /// bounded area where Steve's pickup planner is willing to route?
+        /// </summary>
+        internal bool HasNearbyStevePickupDrop(SteveMob steve, int itemId)
+        {
+            if (!IsAuthoritative || steve == null || itemId <= 0) return false;
+            double maxRouteDistanceSquared = SteveDropPickupSearchDistance * SteveDropPickupSearchDistance;
+            foreach (var drop in _droppedItems)
+            {
+                if (drop.ItemId != itemId || drop.Count <= 0 || drop.Age <= ItemDropPickupDelay
+                    || drop.FlyTime > 0f || IsDropInLocalPlayerPickupRange(drop)) continue;
+                if (IsItemDropInPickupRange(drop, steve.Position)) return true;
+
+                int centerX = (int)Math.Floor(drop.Position.X);
+                int centerY = (int)Math.Floor(drop.Position.Y);
+                int centerZ = (int)Math.Floor(drop.Position.Z);
+                for (int sy = centerY - 1; sy <= centerY + 1; sy++)
+                for (int sz = centerZ - 1; sz <= centerZ + 1; sz++)
+                for (int sx = centerX - 1; sx <= centerX + 1; sx++)
+                {
+                    if (!SteveMob.IsWalkableStand(this, sx, sy, sz)
+                        || !IsItemDropInPickupRange(drop, new Point3D(sx + 0.5, sy, sz + 0.5))) continue;
+                    double dx = sx + 0.5 - steve.Position.X;
+                    double dy = sy - steve.Position.Y;
+                    double dz = sz + 0.5 - steve.Position.Z;
+                    if (dx * dx + dy * dy + dz * dz <= maxRouteDistanceSquared) return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Transfers a useful physical drop to Steve's private eight-slot inventory. Every check
+        /// is repeated on the authoritative simulation thread; a partial pickup shrinks the world
+        /// stack and never touches the local player's inventory.
+        /// </summary>
+        internal bool TryPickupDropForSteve(SteveMob steve, DroppedItem drop, out int pickedUp)
+        {
+            pickedUp = 0;
+            if (!IsAuthoritative || steve == null || steve.IsDead || steve.Removed || drop == null
+                || drop.Count <= 0 || drop.Age <= ItemDropPickupDelay || drop.FlyTime > 0f
+                || !_droppedItems.Contains(drop) || IsDropInLocalPlayerPickupRange(drop)
+                || !IsItemDropInPickupRange(drop, steve.Position)) return false;
+
+            int usefulDemand = steve.GetUsefulShelterDropDemand(this, drop.ItemId);
+            int capacity = steve.GetShelterItemCapacity(drop.ItemId);
+            int amount = Math.Min(drop.Count, Math.Min(usefulDemand, capacity));
+            if (amount <= 0 || !steve.AddShelterItem(drop.ItemId, amount)) return false;
+
+            drop.Count -= amount;
+            pickedUp = amount;
+            if (drop.Count <= 0) _droppedItems.Remove(drop);
+            return true;
+        }
 
         /// <summary>Spawns a physical item drop at a world position (survival only). If
         /// <paramref name="throwVelocity"/> is given the drop flies that way (thrown items);

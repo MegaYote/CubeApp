@@ -720,6 +720,10 @@ namespace Cubuild.Renderer
         private uint _fallingInstanceCapacity;
         private float[] _fallingInstanceScratch = Array.Empty<float>();
         private Pipeline? _fallingPipeline;
+        private Pipeline? _buildGhostPipeline;
+        private DeviceBuffer? _buildGhostInstanceBuffer;
+        private uint _buildGhostInstanceCapacity;
+        private float[] _buildGhostInstanceScratch = Array.Empty<float>();
         private const int FallingCubeVerts = 24;  // 6 faces x 4
         private const int FallingCubeIndices = 36;
 
@@ -797,24 +801,56 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             public uint VbBytes;
             public uint IbOffsetBytes;
             public uint IndexCount;
+            public ChunkBounds Bounds;
             // Transparent ranges share one allocation; this marks the index boundary between
             // non-top faces and top faces. It is unused for all other chunk ranges.
             public uint NonTopIndexCount;
         }
 
-        // Shared command metadata for chunk and aggregated-patch draws. ChunkSpan controls the
-        // conservative horizontal bounds used by both CPU and GPU culling (1 for chunks, 4 for patches).
+        // Absolute double-precision bounds for the actual uploaded mesh geometry. Keeping these
+        // in world coordinates lets render-origin changes preserve precision; GPU data is
+        // converted to the current local frame immediately before dispatch.
+        private readonly struct ChunkBounds
+        {
+            public readonly double MinX, MinY, MinZ;
+            public readonly double MaxX, MaxY, MaxZ;
+            public readonly bool IsValid;
+
+            public ChunkBounds(double minX, double minY, double minZ, double maxX, double maxY, double maxZ)
+            {
+                MinX = minX; MinY = minY; MinZ = minZ;
+                MaxX = maxX; MaxY = maxY; MaxZ = maxZ;
+                IsValid = double.IsFinite(minX) && double.IsFinite(minY) && double.IsFinite(minZ)
+                    && double.IsFinite(maxX) && double.IsFinite(maxY) && double.IsFinite(maxZ)
+                    && minX <= maxX && minY <= maxY && minZ <= maxZ;
+            }
+
+            public static ChunkBounds Union(in ChunkBounds a, in ChunkBounds b)
+            {
+                if (!a.IsValid) return b;
+                if (!b.IsValid) return a;
+                return new ChunkBounds(
+                    Math.Min(a.MinX, b.MinX), Math.Min(a.MinY, b.MinY), Math.Min(a.MinZ, b.MinZ),
+                    Math.Max(a.MaxX, b.MaxX), Math.Max(a.MaxY, b.MaxY), Math.Max(a.MaxZ, b.MaxZ));
+            }
+        }
+
+        // Shared command metadata for chunk and aggregated-patch draws. Bounds are derived from
+        // their uploaded mesh; ChunkSpan remains the fail-open fallback for invalid/empty bounds.
         private readonly struct DrawEntry
         {
             public Cubuild.ChunkCoordinates Coord { get; }
             public IndirectDrawIndexedArguments Cmd { get; }
             public int ChunkSpan { get; }
+            public ChunkBounds Bounds { get; }
 
-            public DrawEntry(Cubuild.ChunkCoordinates coord, IndirectDrawIndexedArguments cmd, int chunkSpan)
+            public DrawEntry(Cubuild.ChunkCoordinates coord, IndirectDrawIndexedArguments cmd, int chunkSpan,
+                ChunkBounds bounds = default)
             {
                 Coord = coord;
                 Cmd = cmd;
                 ChunkSpan = chunkSpan;
+                Bounds = bounds;
             }
         }
 
@@ -858,16 +894,16 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
         private ResourceSet _cullArgsWriteSet;    // binds cull args (set 1 binding 1)
         private uint _cullDataCapacityCommands;
 
-        // Per-pass cull data is packed 11 uint32s per chunk: AABB min xyz (3 float bits), AABB
-        // max xyz (3), then the IndirectDrawIndexedArguments (5). Refreshed when draw commands
-        // change (RebuildDrawCommands / GPU-cull frame).
+        // Per-pass cull data is packed as 16 uint32s per draw: AABB min/max, indirect arguments,
+        // and a tight-bounds-valid flag used to fail open in the HZB shader.
         private uint[] _opaqueCullData = Array.Empty<uint>();
         private uint[] _cutoutCullData = Array.Empty<uint>();
         private uint[] _glassCullData = Array.Empty<uint>();
         private uint[] _transparentNonTopCullData = Array.Empty<uint>();
         private uint[] _transparentTopCullData = Array.Empty<uint>();
-        // std140: six vec4 planes followed by a uint command count and three padding uints.
-        private readonly uint[] _cullUniformData = new uint[28];
+        // std140: six vec4 planes, one uvec4 of command/HZB/viewport settings, then a mat4.
+        // The frustum-only shader reads the prefix; the HZB shader also consumes the matrix.
+        private readonly uint[] _cullUniformData = new uint[44];
         private bool _gpuCullDataDirty = true;
 
         // Per-instance brightness multiplier (0..1) set before each mob write; combines the global
@@ -1114,6 +1150,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             _megaVertexBuffer?.Dispose();
             _megaIndexBuffer?.Dispose();
             _indirectBuffer?.Dispose();
+            DisposeHzbPipelines();
             _cullPipeline?.Dispose();
             _cullDataLayout?.Dispose();
             _cullChunkLayout?.Dispose();
@@ -1125,6 +1162,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             _cullArgsWriteSet?.Dispose();
             _particleVertexBuffer?.Dispose();
             _particleIndexBuffer?.Dispose();
+            _buildGhostPipeline?.Dispose();
+            _buildGhostInstanceBuffer?.Dispose();
 
             _projViewSet?.Dispose();
             _projViewLayout?.Dispose();
@@ -1818,6 +1857,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 _drawCommandsDirty = true;
             }
             bool allowSurfaceLod = false;
+            // TopSolidY is retained only as a camera-relative surface-LOD policy input; it is
+            // never used to reject a chunk or patch from either rendering path.
             if (cameraLayer == ChunkManager.GroundLayer && _surfaceLodStartChunks != int.MaxValue
                 && _chunkManager != null
                 && _chunkManager.TryGetLoadedChunk(

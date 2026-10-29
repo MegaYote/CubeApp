@@ -1390,6 +1390,7 @@ namespace Cubuild.Renderer
                 {
                     ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "GPU culling not supported on this device");
                 }
+                ImGui.TextWrapped("HZB occlusion runs only in explicit GPU mode. Auto stays frustum-only (including D3D11).");
                 ImGui.Spacing();
                 ImGui.Separator();
                 ImGui.Spacing();
@@ -1870,6 +1871,29 @@ namespace Cubuild.Renderer
                 drawList.AddText(labelPos, textColor, label);
             }
 
+            // Construction progress is normal-play HUD feedback, not a debug-only diagnostic.
+            if (!string.IsNullOrWhiteSpace(_hud.SteveBuilderStatus))
+            {
+                var statusSize = ImGui.CalcTextSize(_hud.SteveBuilderStatus);
+                var statusPos = new Vector2(Math.Max(12f, displaySize.X - statusSize.X - 18f), 12f);
+                uint statusBg = ImGui.ColorConvertFloat4ToU32(new Vector4(0.02f, 0.10f, 0.15f, 0.72f));
+                uint statusColor = ImGui.ColorConvertFloat4ToU32(new Vector4(0.62f, 0.91f, 1.0f, 1f));
+                drawList.AddRectFilled(statusPos - new Vector2(6, 3), statusPos + statusSize + new Vector2(6, 3), statusBg);
+                drawList.AddText(statusPos, statusColor, _hud.SteveBuilderStatus);
+            }
+
+            if (_hud.FastForwardActive)
+            {
+                const string fastForwardLabel = "6× FAST FORWARD";
+                var fastForwardSize = ImGui.CalcTextSize(fastForwardLabel);
+                float fastForwardY = string.IsNullOrWhiteSpace(_hud.SteveBuilderStatus) ? 12f : 36f;
+                var fastForwardPos = new Vector2(Math.Max(12f, displaySize.X - fastForwardSize.X - 18f), fastForwardY);
+                uint fastForwardBg = ImGui.ColorConvertFloat4ToU32(new Vector4(0.12f, 0.08f, 0.01f, 0.76f));
+                uint fastForwardColor = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 0.78f, 0.32f, 1f));
+                drawList.AddRectFilled(fastForwardPos - new Vector2(6, 3), fastForwardPos + fastForwardSize + new Vector2(6, 3), fastForwardBg);
+                drawList.AddText(fastForwardPos, fastForwardColor, fastForwardLabel);
+            }
+
             // "World saved" toast (appears after manual saves and background autosaves).
             if (_hud.SaveToast > 0f)
             {
@@ -2027,6 +2051,7 @@ namespace Cubuild.Renderer
                     long worldTicks = Math.Max(0L, _hud.WorldTime);
                     Line($"World: {_hud.WorldName} | Day {worldTicks / 24000 + 1}, tick {worldTicks % 24000}");
                     Line($"Render radius: {diagnostics.RenderRadius} | Cull: {diagnostics.CullMode} -> {(diagnostics.GpuCullActive ? "GPU active" : "CPU active")} (GPU supported: {(diagnostics.GpuCullSupported ? "yes" : "no")}) [F7]");
+                    Line($"HZB: {diagnostics.HzbStatus}");
                     Line($"Chunks: loaded {diagnostics.LoadedChunks} | dirty mesh {diagnostics.DirtyMeshQueueCount} | uploaded ranges {diagnostics.UploadedChunkRanges} | draws {diagnostics.DrawCommandCount}");
                     Line($"Uploads: pending {diagnostics.PendingUploads} | last frame stream {diagnostics.LastFrameStreamUploads}, priority {diagnostics.LastFramePriorityUploads}");
                     Line($"Mega buffers (tail/cap): VB {diagnostics.VertexBufferTailBytes / (1024.0 * 1024.0):0.0}/{diagnostics.VertexBufferCapacityBytes / (1024.0 * 1024.0):0.0} MiB, IB {diagnostics.IndexBufferTailBytes / (1024.0 * 1024.0):0.0}/{diagnostics.IndexBufferCapacityBytes / (1024.0 * 1024.0):0.0} MiB | pending copies {diagnostics.PendingBufferCopies}");

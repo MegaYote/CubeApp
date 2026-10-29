@@ -32,6 +32,7 @@ namespace Cubuild
         public bool DropItemPressed { get; }
         public int? SelectedSlot { get; }
         public int HotbarScroll { get; }
+        public bool ToggleFastForwardPressed { get; }
 
         public FrameInputState(
             bool toggleMouseCapturePressed,
@@ -58,7 +59,8 @@ namespace Cubuild
             bool placeBlockPressed,
             bool dropItemPressed,
             int? selectedSlot,
-            int hotbarScroll)
+            int hotbarScroll,
+            bool toggleFastForwardPressed)
         {
             ToggleMouseCapturePressed = toggleMouseCapturePressed;
             ToggleDebugPressed = toggleDebugPressed;
@@ -85,6 +87,7 @@ namespace Cubuild
             DropItemPressed = dropItemPressed;
             SelectedSlot = selectedSlot;
             HotbarScroll = hotbarScroll;
+            ToggleFastForwardPressed = toggleFastForwardPressed;
         }
     }
 
@@ -137,6 +140,10 @@ namespace Cubuild
         public TickInputState WithFlightModes(bool noclipMode, bool creativeFlightMode) => new(
             MoveForward, MoveBackward, MoveLeft, MoveRight, JumpPressed, MoveUp, MoveDown,
             BreakHeld, PlaceHeld, LookDelta, noclipMode, creativeFlightMode && !noclipMode, MoveFast);
+
+        public TickInputState WithoutJumpPressed() => new(
+            MoveForward, MoveBackward, MoveLeft, MoveRight, false, MoveUp, MoveDown,
+            BreakHeld, PlaceHeld, LookDelta, NoclipMode, CreativeFlightMode, MoveFast);
     }
 
     // Collects per-frame snapshots and exposes deterministic per-tick input for fixed-step simulation.
@@ -158,6 +165,7 @@ namespace Cubuild
         private const int SDL_SCANCODE_LCTRL = 224;
         private const int SDL_SCANCODE_RCTRL = 228;
         private const int SDL_SCANCODE_SLASH = 56; // forward slash /
+        private const int SDL_SCANCODE_L = 15;
         private const long SpaceDoubleTapWindowMs = 300;
 
         private bool moveForward;
@@ -192,6 +200,7 @@ namespace Cubuild
         private bool breakBlockPressed;
         private bool placeBlockPressed;
         private bool dropItemPressed;
+        private bool toggleFastForwardPressed;
         private bool breakHeld;
         private bool placeHeld;
         private int? selectedSlot;
@@ -201,6 +210,7 @@ namespace Cubuild
         private bool hasLastMousePosition;
         private bool chatOpen;
         private bool spaceWasDown;
+        private bool fastForwardKeyWasDown;
         private long lastSpaceTapMs = -1;
 
         public void BeginFrame()
@@ -226,6 +236,7 @@ namespace Cubuild
             breakBlockPressed = false;
             placeBlockPressed = false;
             dropItemPressed = false;
+            toggleFastForwardPressed = false;
             advanceTimePressed = false;
             toggleGpuCullPressed = false;
             selectedSlot = null;
@@ -260,6 +271,7 @@ namespace Cubuild
             // reads the hardware state and always reflects reality.
             IntPtr keyStatePtr = SDL_GetKeyboardState(out int numkeys);
             bool spaceDown;
+            bool fastForwardDown;
             unsafe
             {
                 byte* keyState = (byte*)keyStatePtr;
@@ -275,7 +287,13 @@ namespace Cubuild
                 // jumpPressed is consumed each tick (one-shot).  Set it whenever Space is
                 // physically held so StepPlayer can trigger a jump each time the player lands.
                 jumpPressed = keyState[SDL_SCANCODE_SPACE] != 0;
+                fastForwardDown = keyState[SDL_SCANCODE_L] != 0;
             }
+
+            // Poll the physical key state so OS key-repeat events cannot toggle this more than
+            // once per press. Like other frame actions, the resulting edge is consumed once.
+            if (fastForwardDown && !fastForwardKeyWasDown) toggleFastForwardPressed = true;
+            fastForwardKeyWasDown = fastForwardDown;
 
             if (!mouseCaptured || chatOpen)
             {
@@ -499,7 +517,8 @@ namespace Cubuild
                 placeBlockPressed,
                 dropItemPressed,
                 selectedSlot,
-                hotbarScroll);
+                hotbarScroll,
+                toggleFastForwardPressed);
 
             toggleMouseCapturePressed = false;
             toggleDebugPressed = false;
@@ -524,6 +543,7 @@ namespace Cubuild
             breakBlockPressed = false;
             placeBlockPressed = false;
             dropItemPressed = false;
+            toggleFastForwardPressed = false;
             selectedSlot = null;
             hotbarScroll = 0;
 

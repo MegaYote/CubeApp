@@ -394,7 +394,8 @@ namespace Cubuild
                     }
                     else
                     {
-                        mobEntity.SetChaseTarget(null);
+                        // Do not clear generic path goals here. Non-hostile subclasses (Steve's
+                        // shelter prototype) own their route independently of zombie chase state.
                         mobEntity.OnAttack = null;
                     }
 
@@ -919,7 +920,8 @@ namespace Cubuild
         /// break or place through a living mob (no more accidental wall-damage while fighting).
         /// AABB math matches TryPickMob exactly (Position.Y = feet).
         /// </summary>
-        public bool TryRaycastMobs(Point3D origin, Point3D direction, double maxDistance, out double hitDistance)
+        public bool TryRaycastMobs(Point3D origin, Point3D direction, double maxDistance,
+            out double hitDistance, MobEntity? ignoredMob = null)
         {
             hitDistance = double.PositiveInfinity;
             var dir = direction.Normalized();
@@ -928,6 +930,7 @@ namespace Cubuild
             {
                 if (mob.IsDead || mob is MobEntity { Removed: true }) continue;
                 if (mob is not MobEntity mobEntity) continue;
+                if (ReferenceEquals(mobEntity, ignoredMob)) continue;
 
                 float half = mobEntity.Width * 0.5f;
                 double minX = mob.Position.X - half;
@@ -1026,6 +1029,32 @@ namespace Cubuild
                 Yaw = mob.Yaw, Health = health, Brute = brute,
                 VehicleMeleeHitCount = mob is MobEntity me3 ? me3.VehicleMeleeHitCount : 0,
                 CargoSlots = mob is OreCartEntity oreCart ? oreCart.CopyCargoSlots() : Array.Empty<InventorySlot>(),
+                SteveInventory = mob is SteveMob steve ? steve.CaptureShelterInventory() : Array.Empty<InventorySlot>(),
+                SteveBlueprintIndex = mob is SteveMob plannedSteve ? plannedSteve.ShelterBlueprintIndex : -1,
+                SteveAnchorX = mob is SteveMob sx ? sx.ShelterAnchorX : 0,
+                SteveAnchorY = mob is SteveMob sy ? sy.ShelterAnchorY : 0,
+                SteveAnchorZ = mob is SteveMob sz ? sz.ShelterAnchorZ : 0,
+                SteveRotation = mob is SteveMob sr ? sr.ShelterRotation : 0,
+                StevePlacedMask = mob is SteveMob sm ? sm.ShelterPlacedMask : 0,
+                SteveHasSite = mob is SteveMob hs && hs.ShelterHasSite,
+                SteveProjectSeed = mob is SteveMob ps ? ps.ShelterProjectSeed : 0,
+                SteveMaterialItemId = mob is SteveMob mi ? mi.ShelterMaterialItemId : 0,
+                SteveRequiredMaterialCount = mob is SteveMob rc ? rc.ShelterRequiredMaterialCount : 0,
+                StevePlannerGoal = mob is SteveMob pg ? pg.ShelterPlannerGoal : 0,
+                StevePlannerChoiceCount = mob is SteveMob pc ? pc.ShelterPlannerChoiceCount : 0,
+                StevePlannerFailureCount = mob is SteveMob pf ? pf.ShelterPlannerFailureCount : 0,
+                StevePlannerFailureCooldownTicks = mob is SteveMob pfc ? pfc.ShelterPlannerFailureCooldownTicks : 0,
+                StevePlannerLastFailedGoal = mob is SteveMob plf ? plf.ShelterPlannerLastFailedGoal : 0,
+                SteveHasExplorationTarget = mob is SteveMob het && het.ShelterHasExplorationTarget,
+                SteveExplorationHold = mob is SteveMob eh && eh.ShelterExplorationHold,
+                SteveExplorationTargetX = mob is SteveMob etx ? etx.ShelterExplorationTargetX : 0,
+                SteveExplorationTargetY = mob is SteveMob ety ? ety.ShelterExplorationTargetY : 0,
+                SteveExplorationTargetZ = mob is SteveMob etz ? etz.ShelterExplorationTargetZ : 0,
+                SteveExplorationOriginX = mob is SteveMob eox ? eox.ShelterExplorationOriginX : 0,
+                SteveExplorationOriginZ = mob is SteveMob eoz ? eoz.ShelterExplorationOriginZ : 0,
+                SteveExplorationRing = mob is SteveMob er ? er.ShelterExplorationRing : 0,
+                SteveExplorationSector = mob is SteveMob es ? es.ShelterExplorationSector : 0,
+                StevePlannerStatePresent = mob is SteveMob,
             };
         }
 
@@ -1150,6 +1179,17 @@ namespace Cubuild
             {
                 var mob = new SteveMob(pos, m.Yaw);
                 mob.RestoreState(pos, m.Yaw, m.Health, m.VehicleMeleeHitCount);
+                mob.RestoreShelterState(m.SteveInventory, m.SteveBlueprintIndex,
+                    m.SteveAnchorX, m.SteveAnchorY, m.SteveAnchorZ, m.SteveRotation, m.StevePlacedMask);
+                if (m.StevePlannerStatePresent)
+                    mob.RestoreShelterPlannerState(m.SteveHasSite, m.SteveProjectSeed,
+                        m.SteveMaterialItemId, m.SteveRequiredMaterialCount, m.StevePlannerGoal,
+                        m.StevePlannerChoiceCount, m.StevePlannerFailureCount,
+                        m.StevePlannerFailureCooldownTicks, m.StevePlannerLastFailedGoal,
+                        m.SteveHasExplorationTarget, m.SteveExplorationHold, m.SteveExplorationTargetX,
+                        m.SteveExplorationTargetY, m.SteveExplorationTargetZ,
+                        m.SteveExplorationOriginX, m.SteveExplorationOriginZ,
+                        m.SteveExplorationRing, m.SteveExplorationSector);
                 _mobs.Add(mob);
             }
             else if (m.Type == "cart")

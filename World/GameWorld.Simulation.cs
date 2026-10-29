@@ -245,7 +245,17 @@ namespace Cubuild
                 LocalPlayer.Position.X,
                 LocalPlayer.Position.Y - EyeHeight + PlayerHeight * 0.5,
                 LocalPlayer.Position.Z);
+            if (IsAuthoritative)
+            {
+                foreach (var mob in Entities.Mobs)
+                    if (mob is SteveMob steve && !steve.IsDead) steve.PrepareShelterWork(this, deltaSeconds);
+            }
             Entities.Update(deltaSeconds, LocalPlayer.Position, true, LocalPlayer.Health > 0);
+            if (IsAuthoritative)
+            {
+                foreach (var mob in Entities.Mobs)
+                    if (mob is SteveMob steve && !steve.IsDead && !steve.Removed) steve.FinishShelterWork(this, deltaSeconds);
+            }
             LastEntityMs = Entities.LastUpdateMs;
             // The train pass inside Entities.Update places a hauled carriage, which may be the very
             // cart the player is sitting in, so re-pin the eye now that it has moved (see PinRiderEye).

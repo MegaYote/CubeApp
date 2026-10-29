@@ -975,6 +975,7 @@ _itemDropIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)smallInd
             CreateCrosshairPipeline(factory);
             CreateBlitPipeline(factory);
             CreateVignettePipeline(factory);
+            CreateBuildGhostPipeline();
         }
 
         // Fullscreen blit used by resolution scale < 1: samples the offscreen world texture and
@@ -1085,6 +1086,10 @@ void main() {
                 System.Console.Error.WriteLine($"[GPU-Cull] compute pipeline failed: {ex}");
                 _gpuCullSupported = false;
             }
+
+            // HZB support is deliberately independent from ordinary GPU frustum culling. A
+            // format, shader, or storage-resource failure leaves the existing culler available.
+            if (_gpuCullSupported) InitializeHzbComputePipelines();
         }
 
         private void CreateCullComputePipelineCore()
@@ -1154,7 +1159,7 @@ void main() {
                 new ResourceLayoutElementDescription("ChunkCullData", ResourceKind.StructuredBufferReadOnly, ShaderStages.Compute),
                 new ResourceLayoutElementDescription("IndirectArgs", ResourceKind.StructuredBufferReadWrite, ShaderStages.Compute)));
 
-            _frustumBuffer = factory.CreateBuffer(new BufferDescription(112, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
+            _frustumBuffer = factory.CreateBuffer(new BufferDescription(176, BufferUsage.UniformBuffer | BufferUsage.Dynamic));
             _frustumSet = factory.CreateResourceSet(new ResourceSetDescription(_cullDataLayout, _frustumBuffer));
 
             // One cull-data buffer (read-only in compute) and one args-output buffer (read-write).
@@ -1543,6 +1548,69 @@ void main() {
             {
                 _playerTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _playerView, _playerSampler));
             }
+        }
+
+        // Textured translucent cube pipeline for Steve's host-authoritative blueprint preview.
+        // It depth-tests against the world but never writes depth, so the preview cannot hide
+        // terrain, mobs, water, or later ghost cells.
+        private void CreateBuildGhostPipeline()
+        {
+            var factory = _gd.ResourceFactory;
+            string vsCode = @"#version 450
+layout(location=0) in vec3 aCorner;
+layout(location=1) in vec2 aLocalUV;
+layout(location=2) in vec4 aShade;
+layout(location=3) in vec3 iWorldPos;
+layout(location=4) in vec4 iTileRect;
+layout(location=0) out vec2 vLocalUV;
+layout(location=1) out vec4 vTileRect;
+layout(location=2) out vec4 vColor;
+layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
+void main() {
+    vec3 worldPos = aCorner + iWorldPos;
+    vLocalUV = aLocalUV;
+    vTileRect = iTileRect;
+    vColor = aShade;
+    gl_Position = projView * vec4(worldPos, 1.0);
+}";
+            string fsCode = @"#version 450
+layout(location=0) in vec2 vLocalUV;
+layout(location=1) in vec4 vTileRect;
+layout(location=2) in vec4 vColor;
+layout(set=1, binding=0) uniform sampler2D uAtlas;
+layout(location=0) out vec4 outColor;
+void main() {
+    vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
+    vec4 tex = texture(uAtlas, atlasUV);
+    if (tex.a < 0.05) discard;
+    vec3 base = tex.rgb * vColor.rgb;
+    vec3 blueprintTint = vec3(0.22, 0.82, 1.0);
+    outColor = vec4(mix(base, blueprintTint, 0.48), tex.a * 0.42);
+}";
+            var vsSpirv = SpirvCompilation.CompileGlslToSpirv(vsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
+            var fsSpirv = SpirvCompilation.CompileGlslToSpirv(fsCode, "main", ShaderStages.Fragment, GlslCompileOptions.Default);
+            var shaders = factory.CreateFromSpirv(
+                new ShaderDescription(ShaderStages.Vertex, vsSpirv.SpirvBytes, "main"),
+                new ShaderDescription(ShaderStages.Fragment, fsSpirv.SpirvBytes, "main"));
+            var vertexLayout = new VertexLayoutDescription(
+                new VertexElementDescription("aCorner", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                new VertexElementDescription("aLocalUV", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float2),
+                new VertexElementDescription("aShade", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
+            var instanceLayout = new VertexLayoutDescription(
+                new VertexElementDescription("iWorldPos", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float3),
+                new VertexElementDescription("iTileRect", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Float4));
+            instanceLayout.InstanceStepRate = 1;
+            var shaderSet = new ShaderSetDescription(new[] { vertexLayout, instanceLayout }, new[] { shaders[0], shaders[1] });
+            _buildGhostPipeline = factory.CreateGraphicsPipeline(new GraphicsPipelineDescription
+            {
+                BlendState = BlendStateDescription.SingleAlphaBlend,
+                DepthStencilState = new DepthStencilStateDescription(true, false, ComparisonKind.LessEqual),
+                RasterizerState = new RasterizerStateDescription(FaceCullMode.Back, PolygonFillMode.Solid, FrontFace.CounterClockwise, true, false),
+                PrimitiveTopology = PrimitiveTopology.TriangleList,
+                ResourceLayouts = new[] { _projViewLayout, _textureLayout },
+                ShaderSet = shaderSet,
+                Outputs = _sc.Framebuffer.OutputDescription,
+            });
         }
 
         // Pipeline for the targeted block-face highlight: a translucent quad drawn in world space

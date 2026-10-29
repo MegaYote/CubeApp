@@ -14,7 +14,8 @@ namespace Cubuild.Renderer
             System.Collections.Generic.List<DrawEntry> commands,
             IndirectDrawIndexedArguments[] scratch,
             Pipeline pipeline,
-            ref uint[] cullData)
+            ref uint[] cullData,
+            bool useHzb = false)
         {
             if (commands.Count == 0)
             {
@@ -26,7 +27,7 @@ namespace Cubuild.Renderer
             {
                 // GPU-assisted culling: compute pass writes the args, we draw ALL commands and
                 // culled chunks simply have InstanceCount=0 (no CPU scan, no compaction).
-                RunGpuCull(cl, commands, ref cullData);
+                RunGpuCull(cl, commands, ref cullData, useHzb);
                 drawCount = (uint)commands.Count;
             }
             else

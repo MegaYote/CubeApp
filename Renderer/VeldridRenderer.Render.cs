@@ -55,12 +55,22 @@ namespace Cubuild.Renderer
             if (_scaleFramebuffer != null) { _scaleFramebuffer.Dispose(); _scaleFramebuffer = null; }
             if (_blitResourceSet != null) { _blitResourceSet.Dispose(); _blitResourceSet = null; }
 
-            if (_resolutionScale >= 0.999f || _sc == null || _gd == null) return;
+            if (_sc == null || _gd == null)
+            {
+                DisposeHzbTargets();
+                return;
+            }
+
+            var depthFmt = _sc.Framebuffer.OutputDescription.DepthAttachment.Value.Format;
+            if (_resolutionScale >= 0.999f)
+            {
+                RecreateHzbTargets(_sc.Framebuffer.Width, _sc.Framebuffer.Height, depthFmt);
+                return;
+            }
 
             uint w = Math.Max(1u, (uint)(_sc.Framebuffer.Width * _resolutionScale));
             uint h = Math.Max(1u, (uint)(_sc.Framebuffer.Height * _resolutionScale));
             var colorFmt = _sc.Framebuffer.OutputDescription.ColorAttachments[0].Format;
-            var depthFmt = _sc.Framebuffer.OutputDescription.DepthAttachment.Value.Format;
 
             _scaleColorTexture = _gd.ResourceFactory.CreateTexture(TextureDescription.Texture2D(
                 w, h, 1, 1, colorFmt, TextureUsage.RenderTarget | TextureUsage.Sampled));
@@ -70,6 +80,7 @@ namespace Cubuild.Renderer
             _scaleFramebuffer = _gd.ResourceFactory.CreateFramebuffer(new FramebufferDescription(
                 _scaleDepthTexture, _scaleColorTexture));
             RebuildBlitResourceSet();
+            RecreateHzbTargets(w, h, depthFmt);
         }
 
         // Draws the scaled world texture across the whole swapchain. Sampled with linear filtering
@@ -184,6 +195,53 @@ namespace Cubuild.Renderer
                     Math.Max(bytes, 512), BufferUsage.VertexBuffer | BufferUsage.Dynamic));
                 _fallingInstanceCapacity = Math.Max(bytes, 512);
             }
+        }
+
+        // Draw the current immutable Steve blueprint snapshot as textured, tinted cube ghosts.
+        // This has its own instance buffer so an upload cannot overwrite falling-block data that
+        // has already been recorded in this frame's command list.
+        private void DrawBuildGhost(CommandList cl)
+        {
+            var cells = _hud.BuildGhostCells;
+            int n = cells?.Count ?? 0;
+            if (n == 0 || _buildGhostPipeline == null || _fallingVertexBuffer == null
+                || _fallingIndexBuffer == null || _textureSet == null) return;
+
+            int floats = n * 7;
+            if (_buildGhostInstanceScratch.Length < floats) _buildGhostInstanceScratch = new float[floats];
+            float atlasW = Math.Max(1f, _atlasWidth);
+            float atlasH = Math.Max(1f, _atlasHeight);
+            int at = 0;
+            for (int i = 0; i < n; i++)
+            {
+                var cell = cells[i];
+                var texture = BlockRegistry.GetById(cell.BlockId).AllTexture ?? default;
+                _buildGhostInstanceScratch[at++] = (float)(cell.X - _renderOriginX);
+                _buildGhostInstanceScratch[at++] = (float)(cell.Y - _renderOriginY);
+                _buildGhostInstanceScratch[at++] = (float)(cell.Z - _renderOriginZ);
+                _buildGhostInstanceScratch[at++] = texture.X / atlasW;
+                _buildGhostInstanceScratch[at++] = texture.Y / atlasH;
+                _buildGhostInstanceScratch[at++] = texture.Width / atlasW;
+                _buildGhostInstanceScratch[at++] = texture.Height / atlasH;
+            }
+
+            uint bytes = (uint)(floats * sizeof(float));
+            if (_buildGhostInstanceBuffer == null || _buildGhostInstanceCapacity < bytes)
+            {
+                _buildGhostInstanceBuffer?.Dispose();
+                _buildGhostInstanceCapacity = Math.Max(bytes, 512);
+                _buildGhostInstanceBuffer = _gd.ResourceFactory.CreateBuffer(new BufferDescription(
+                    _buildGhostInstanceCapacity, BufferUsage.VertexBuffer | BufferUsage.Dynamic));
+            }
+            _gd.UpdateBuffer(_buildGhostInstanceBuffer, 0, _buildGhostInstanceScratch);
+
+            cl.SetPipeline(_buildGhostPipeline);
+            cl.SetGraphicsResourceSet(0, _projViewSet);
+            cl.SetGraphicsResourceSet(1, _textureSet);
+            cl.SetVertexBuffer(0, _fallingVertexBuffer);
+            cl.SetVertexBuffer(1, _buildGhostInstanceBuffer);
+            cl.SetIndexBuffer(_fallingIndexBuffer, IndexFormat.UInt16);
+            cl.DrawIndexed(FallingCubeIndices, (uint)n, 0, 0, 0);
         }
 
 // Draws survival item drops as small tumbling cubes (same vertex layout as falling
@@ -433,7 +491,8 @@ namespace Cubuild.Renderer
             // still draws at native res so menus stay crisp. At full scale this is a no-op and
             // everything draws straight to the swapchain as before.
             bool scaled = _scaleFramebuffer != null;
-            cl.SetFramebuffer(scaled ? _scaleFramebuffer : _sc.Framebuffer);
+            var worldFramebuffer = scaled ? _scaleFramebuffer! : _sc.Framebuffer;
+            cl.SetFramebuffer(worldFramebuffer);
             cl.SetFullViewport(0);
             // Clear to the FOG color (0xC0D8FF dimmed by the celestial angle), matching the sky
             // horizon and world fog. This remains the loading/fallback color behind the full-screen
@@ -475,6 +534,30 @@ namespace Cubuild.Renderer
             UpdateCloudScroll();
             UpdateFog();
 
+            // Buffer growth copies must precede both the HZB depth prepass and the color pass;
+            // uploads may have replaced the mega buffers earlier in this frame.
+            foreach (var cp in _pendingBufferCopies)
+            {
+                cl.CopyBuffer(cp.Old, 0, cp.New, 0, cp.SizeBytes);
+                _gd.DisposeWhenIdle(cp.Old);
+            }
+            _pendingBufferCopies.Clear();
+
+            // Explicit GPU mode builds an opaque-only depth source from this frame's active
+            // opaque command list (including any selected surface-LOD patches). Auto/CPU remain
+            // frustum-only, and every uncertain/resource-failure case fails open.
+            bool hzbFrameReady = false;
+            if (_cullMode == CullingMode.Gpu && _gpuCullEnabled && _hzbTargetsReady
+                && _drawCommands.Count > 0)
+            {
+                hzbFrameReady = RecordHzbDepthAndPyramid(cl, worldFramebuffer);
+            }
+            else
+            {
+                cl.SetFramebuffer(worldFramebuffer);
+                cl.SetFullViewport(0);
+            }
+
             DrawSky(cl);
             DrawWorldPlane(cl);
 
@@ -482,15 +565,6 @@ namespace Cubuild.Renderer
             cl.SetGraphicsResourceSet(0, _projViewSet);
             if (_textureSet != null)
                 cl.SetGraphicsResourceSet(1, _textureSet);
-
-            // Record any GPU-side mega-buffer growth copies before drawing so the world draw
-            // always sees the fully populated replacement buffer.
-            foreach (var cp in _pendingBufferCopies)
-            {
-                cl.CopyBuffer(cp.Old, 0, cp.New, 0, cp.SizeBytes);
-                _gd.DisposeWhenIdle(cp.Old);
-            }
-            _pendingBufferCopies.Clear();
 
             // One draw call for the visible chunk world via multi-draw indirect. Commands are
             // frustum-culled per frame, so chunks behind/off-screen never reach the GPU. Opaque
@@ -502,7 +576,7 @@ namespace Cubuild.Renderer
             // the globally sorted surface-top ranges.
             if (_megaVertexBuffer != null && _megaIndexBuffer != null)
             {
-                DrawWorldPass(cl, _drawCommands, _indirectScratch, _pipeline, ref _opaqueCullData);
+                DrawWorldPass(cl, _drawCommands, _indirectScratch, _pipeline, ref _opaqueCullData, hzbFrameReady);
                 if (_cutoutDrawCommands.Count > 0)
                 {
                     DrawWorldPass(cl, _cutoutDrawCommands, _cutoutIndirectScratch, _cutoutPipeline, ref _cutoutCullData);
@@ -521,6 +595,7 @@ namespace Cubuild.Renderer
                 DrawDucks(cl);
                 DrawPlayers(cl);
                 DrawModelMobs(cl);
+                DrawBuildGhost(cl);
                 if (_transparentNonTopDrawCommands.Count > 0)
                 {
                     SortPassBackToFront(SortPassWaterNonTop, _transparentNonTopDrawCommands);

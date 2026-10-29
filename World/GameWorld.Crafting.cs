@@ -108,6 +108,71 @@ namespace Cubuild
         public int CraftingTableId { get; private set; }
 
         /// <summary>
+        /// Finds a loaded station and a walkable stand from which Steve's player-equivalent block
+        /// ray can reach it. This is deliberately actor-local: it does not open or mutate the
+        /// player's crafting menu/grid.
+        /// </summary>
+        internal bool TryFindSteveCraftingStation(SteveMob steve, string station,
+            out int stationX, out int stationY, out int stationZ,
+            out int standX, out int standY, out int standZ)
+        {
+            stationX = stationY = stationZ = 0;
+            standX = standY = standZ = 0;
+            if (!IsAuthoritative || steve == null || steve.IsDead || steve.Removed) return false;
+            bool frontier = FrontierProgression;
+            int carpenter = frontier ? _idCarpentersWorkbench : _idWorkbench;
+            int mason = _idMasonsWorkbench;
+            bool anyStation = string.IsNullOrEmpty(station);
+            bool wantsMasonry = string.Equals(station, "masonry", StringComparison.OrdinalIgnoreCase);
+            bool wantsCarpenter = string.Equals(station, "carpenter", StringComparison.OrdinalIgnoreCase)
+                || (!wantsMasonry && !anyStation);
+            if (frontier && wantsCarpenter && carpenter <= 0) return false;
+
+            int centerX = (int)Math.Floor(steve.Position.X);
+            int centerY = (int)Math.Floor(steve.Position.Y);
+            int centerZ = (int)Math.Floor(steve.Position.Z);
+            double best = double.PositiveInfinity;
+            bool found = false;
+            for (int y = centerY - 5; y <= centerY + 5; y++)
+            for (int z = centerZ - 16; z <= centerZ + 16; z++)
+            for (int x = centerX - 16; x <= centerX + 16; x++)
+            {
+                if (!Chunks.TryGetLoadedBlock(x, y, z, out int blockId)) continue;
+                bool isMason = blockId == mason;
+                bool isCarpenter = blockId == carpenter
+                    || (!frontier && blockId == _idCarpentersWorkbench);
+                bool matches = anyStation ? (isCarpenter || isMason)
+                    : wantsMasonry ? isMason : wantsCarpenter && isCarpenter;
+                if (!matches) continue;
+
+                if (!TryFindSteveBlockApproach(steve, x, y, z,
+                    out int sx, out int sy, out int sz)) continue;
+                double dx = sx + 0.5 - steve.Position.X;
+                double dy = sy - steve.Position.Y;
+                double dz = sz + 0.5 - steve.Position.Z;
+                double distance = dx * dx + dy * dy + dz * dz;
+                if (distance >= best) continue;
+                best = distance;
+                stationX = x; stationY = y; stationZ = z;
+                standX = sx; standY = sy; standZ = sz;
+                found = true;
+            }
+            return found;
+        }
+
+        /// <summary>Revalidates an existing station interaction from Steve's current eye ray.</summary>
+        internal bool CanSteveUseCraftingStation(SteveMob steve, int x, int y, int z, string station)
+        {
+            if (!IsAuthoritative || steve == null || steve.IsDead || steve.Removed
+                || !Chunks.TryGetLoadedBlock(x, y, z, out int blockId)) return false;
+            bool expected = string.Equals(station, "masonry", StringComparison.OrdinalIgnoreCase)
+                ? blockId == _idMasonsWorkbench
+                : blockId == (FrontierProgression ? _idCarpentersWorkbench : _idWorkbench)
+                    || (!FrontierProgression && blockId == _idCarpentersWorkbench);
+            return expected && CanSteveReachBlock(steve, x, y, z);
+        }
+
+        /// <summary>
         /// Inventory-style drag interaction with one crafting grid slot (0..8). Cells outside
         /// the active box are inert. Left click: empty cursor picks up the whole stack, held
         /// cursor places/stacks/swaps. Right click: empty cursor picks up half, held cursor

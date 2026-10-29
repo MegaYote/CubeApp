@@ -166,6 +166,7 @@ namespace Cubuild
         private string _joinError = "";
         private float _inputSendTimer;
         private bool _netConnected;
+        private bool _fastForwardEnabled;
         private int _activeHostPort = Net.NetHost.DefaultPort;
         private string _playerName = "Player" + Environment.ProcessId % 1000;
 
