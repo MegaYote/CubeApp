@@ -2040,6 +2040,11 @@ namespace Cubuild.Renderer
                 Line($"Update {_hud.UpdateMs:0.0} | Mesh {_hud.MeshMs:0.0} | Upload {_hud.UploadMs:0.0} | Render {_hud.RenderMs:0.0} ms | Entity {_hud.EntityMs:0.0} ms ({_hud.EntityCount})");
                 Line($"Facing: {_hud.FacingText}");
                 if (!string.IsNullOrEmpty(_hud.SaplingGrowthText)) Line(_hud.SaplingGrowthText);
+                if (_hud.SteveAIDiagnostics != null)
+                {
+                    foreach (string steveDiagnostic in _hud.SteveAIDiagnostics)
+                        Line(steveDiagnostic);
+                }
                 if (!string.IsNullOrEmpty(_hud.RenderDistanceText))
                 {
                     Line(_hud.RenderDistanceText);

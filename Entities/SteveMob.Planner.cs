@@ -73,7 +73,7 @@ namespace Cubuild
         public int ShelterExplorationSector => _explorationSector;
 
         /// <summary>
-        /// Restores v17 planner state. Older saves intentionally call only
+        /// Restores v17+ planner state. Older saves intentionally call only
         /// RestoreShelterState and deterministically initialize the missing planner fields later.
         /// </summary>
         public void RestoreShelterPlannerState(bool hasSite, int projectSeed, int materialItemId,
@@ -116,53 +116,41 @@ namespace Cubuild
                     _projectSeed = CreateProjectSeed(world.Seed, Position);
                 if (TryResolveTemplate(_blueprintIndex, out var savedTemplate, out int savedItemId, out _))
                 {
+                    bool projectChanged = _projectMaterialItemId != savedItemId
+                        || (_projectRequiredCount <= 0 && savedTemplate.Cells.Length > 0);
                     _projectMaterialItemId = savedItemId;
                     if (_projectRequiredCount <= 0) _projectRequiredCount = savedTemplate.Cells.Length;
+                    if (projectChanged) InvalidateUsefulShelterDropDemandCache();
                 }
                 return;
             }
 
             var projectPosition = Position + new Point3D(_plannerChoiceCount * 0.37, 0, _plannerChoiceCount * 0.61);
             _projectSeed = CreateProjectSeed(world.Seed, projectPosition);
-            uint state = unchecked((uint)_projectSeed ^ 0xA511E9B3u);
-            if (state == 0) state = 0x6D2B79F5u;
-            double totalWeight = 0;
-            for (int i = 0; i < ShelterTemplates.Length; i++)
-                totalWeight += TemplateProjectWeight(i);
-            double pick = (NextProjectRandom(ref state) / (double)uint.MaxValue) * totalWeight;
-            int selected = 0;
-            for (int i = 0; i < ShelterTemplates.Length; i++)
-            {
-                pick -= TemplateProjectWeight(i);
-                if (pick <= 0)
-                {
-                    selected = i;
-                    break;
-                }
-            }
-
-            // Keep the selected design even when the material or a safe site is not currently
-            // available. Project identity is independent of local resource scans.
-            for (int offset = 0; offset < ShelterTemplates.Length; offset++)
-            {
-                int index = (selected + offset) % ShelterTemplates.Length;
-                if (!TryResolveTemplate(index, out var template, out int itemId, out _)) continue;
-                _blueprintIndex = index;
-                _lastShelterTemplateIndex = index;
-                _projectMaterialItemId = itemId;
-                _projectRequiredCount = template.Cells.Length;
-                _anchorX = _anchorY = _anchorZ = 0;
-                _rotation = 0;
-                _placedMask = 0;
-                _hasShelterSite = false;
-                _siteBlocked = false;
-                _activeBuildCell = -1;
-                _plannedBuildCell = -1;
-                _hasGatherTarget = false;
-                _taskExecutor.SetPlan();
-                ClearPathGoal();
-                return;
-            }
+            // Generate the complete, hidden room/porch/roof design before looking for a site or
+            // gathering materials. Its seed and exact cells are both persisted with the project.
+            var generated = BuildProceduralShelterPlan(_projectSeed);
+            if (!TrySelectProceduralMaterial(world, generated.ItemName, generated.Cells.Length,
+                out string selectedMaterial, out int generatedItemId)) return;
+            generated = new ShelterTemplate(generated.Name, selectedMaterial,
+                generated.Size, generated.Cells);
+            _blueprintIndex = ProceduralBlueprintIndex;
+            _proceduralPlan = generated;
+            _proceduralShell = generated;
+            _proceduralPlanGeneratorVersion = ProceduralPlanGeneratorVersion;
+            _projectMaterialItemId = generatedItemId;
+            _projectRequiredCount = generated.Cells.Length;
+            InvalidateUsefulShelterDropDemandCache();
+            _anchorX = _anchorY = _anchorZ = 0;
+            _rotation = 0;
+            _placedMask = 0;
+            _hasShelterSite = false;
+            _siteBlocked = false;
+            _activeBuildCell = -1;
+            _plannedBuildCell = -1;
+            _hasGatherTarget = false;
+            _taskExecutor.SetPlan();
+            ClearPathGoal();
         }
 
         private double TemplateProjectWeight(int index)
@@ -435,12 +423,22 @@ namespace Cubuild
             _hasShelterSite = false;
             _siteBlocked = false;
             _projectSeed = 0;
+            _proceduralPlan = null;
+            _proceduralShell = null;
+            _proceduralPlanGeneratorVersion = 0;
             _projectMaterialItemId = 0;
             _projectRequiredCount = 0;
             _activeBuildCell = -1;
             _plannedBuildCell = -1;
             _hasGatherTarget = false;
+            _gatherTargetValidationTimer = 0f;
             _pickupDropTarget = null;
+            _pickupDropScanTimer = 0f;
+            _pickupDropTargetValidationTimer = 0f;
+            _ignoredPickupDrop = null;
+            _ignoredPickupDropTimer = 0f;
+            InvalidateUsefulShelterDropDemandCache();
+            InvalidateGatherTargetSearchCaches();
             _plannerGoal = ShelterGoal.None;
             _plannerDecisionTimer = 0f;
             _plannerScanTimer = 0f;

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace Cubuild
 {
@@ -19,8 +20,13 @@ namespace Cubuild
         private bool _hasGatherTarget;
         private int _gatherX, _gatherY, _gatherZ;
         private int _gatherStandX, _gatherStandY, _gatherStandZ;
+        private float _gatherTargetValidationTimer;
         private int _plannedBuildCell = -1;
         private DroppedItem? _pickupDropTarget;
+        private float _pickupDropScanTimer;
+        private float _pickupDropTargetValidationTimer;
+        private DroppedItem? _ignoredPickupDrop;
+        private float _ignoredPickupDropTimer;
         private int _buildStandX, _buildStandY, _buildStandZ;
         private float _ignoredSiteTimer, _ignoredGatherTimer;
         private float _toolUpgradeRetryTimer;
@@ -28,6 +34,15 @@ namespace Cubuild
         private int _ignoredSiteX, _ignoredSiteY, _ignoredSiteZ;
         private int _ignoredGatherX, _ignoredGatherY, _ignoredGatherZ;
         private WorkMode _workMode;
+        private readonly Func<AgentTask, bool> _taskExecutorAction;
+        private GameWorld? _taskActionWorld;
+        private ShelterTemplate? _taskActionTemplate;
+        private int _taskActionItemId, _taskActionBlockId;
+        private const int ProceduralBlueprintIndex = 27;
+        private const int ProceduralPlanGeneratorVersion = 1;
+        private ShelterTemplate? _proceduralPlan;
+        private ShelterTemplate? _proceduralShell;
+        private int _proceduralPlanGeneratorVersion;
 
         private enum WorkMode { None, Gather, Build, Waiting, ToolUp }
 
@@ -56,12 +71,15 @@ namespace Cubuild
         private readonly struct GatherTarget
         {
             public readonly int X, Y, Z;
+            public readonly int ItemId;
             public readonly int StandX, StandY, StandZ;
             public readonly int OutputCount;
             public readonly double Score;
-            public GatherTarget(int x, int y, int z, int standX, int standY, int standZ, int outputCount, double score)
+            public GatherTarget(int x, int y, int z, int standX, int standY, int standZ,
+                int outputCount, double score, int itemId = 0)
             {
                 X = x; Y = y; Z = z;
+                ItemId = itemId;
                 StandX = standX; StandY = standY; StandZ = standZ;
                 OutputCount = outputCount;
                 Score = score;
@@ -238,22 +256,156 @@ namespace Cubuild
             return (int)(state % (uint)exclusiveMax);
         }
 
+        private static ShelterTemplate BuildProceduralShelterPlan(int seed)
+        {
+            uint state = unchecked((uint)seed ^ 0xD1B54A35u);
+            if (state == 0) state = 0x6D2B79F5u;
+            int width = 3 + NextTemplateChoice(ref state, 2);
+            int depth = 3 + NextTemplateChoice(ref state, 2);
+            int porchDepth = NextTemplateChoice(ref state, 3) == 0 ? 0 : 1 + NextTemplateChoice(ref state, 2);
+            if (depth + porchDepth > 5) porchDepth = 5 - depth;
+            int size = Math.Max(width, depth + porchDepth);
+            int wallHeight = width == 4 && depth == 4 ? 1 : 1 + NextTemplateChoice(ref state, 2);
+            int roofProfile = NextTemplateChoice(ref state, 3); // flat, raised ridge, or flat with vent
+            int roofAxis = NextTemplateChoice(ref state, 2);
+            int materialChoice = NextTemplateChoice(ref state, 5);
+            string itemName = materialChoice == 0 ? "cobblestone" : "planks";
+
+            var footprint = new HashSet<(int X, int Z)>();
+            for (int z = 0; z < depth; z++)
+                for (int x = 0; x < width; x++) footprint.Add((x, z));
+            int porchWidth = Math.Max(1, width - (NextTemplateChoice(ref state, 2) == 0 ? 0 : 1));
+            int porchStartX = (width - porchWidth) / 2;
+            for (int z = 0; z < porchDepth; z++)
+            {
+                for (int x = porchStartX; x < porchStartX + porchWidth; x++) footprint.Add((x, depth + z));
+            }
+
+            var perimeter = new List<(int X, int Z)>();
+            for (int z = 0; z < size; z++)
+            for (int x = 0; x < size; x++)
+            {
+                if (!footprint.Contains((x, z))) continue;
+                if (!footprint.Contains((x - 1, z)) || !footprint.Contains((x + 1, z))
+                    || !footprint.Contains((x, z - 1)) || !footprint.Contains((x, z + 1)))
+                    perimeter.Add((x, z));
+            }
+
+            // The porch extends along +Z, so its entrance belongs in the outside wall.
+            // Without a porch, vary the exterior entrance across the room's four sides.
+            int doorX, doorZ;
+            if (porchDepth > 0)
+            {
+                doorX = porchStartX + porchWidth / 2;
+                doorZ = depth + porchDepth - 1;
+            }
+            else
+            {
+                int doorSide = NextTemplateChoice(ref state, 4);
+                doorX = doorSide switch { 0 or 2 => width / 2, 1 => width - 1, _ => 0 };
+                doorZ = doorSide switch { 0 => 0, 1 or 3 => depth / 2, _ => depth - 1 };
+            }
+            var windows = new HashSet<(int X, int Z)>();
+            var windowCandidates = new List<(int X, int Z)>();
+            if (wallHeight > 1)
+            {
+                foreach (var point in perimeter)
+                {
+                    bool corner = (point.X == 0 || point.X == width - 1)
+                        && (point.Z == 0 || point.Z == depth - 1);
+                    if (!corner && !(point.X == doorX && point.Z == doorZ)) windowCandidates.Add(point);
+                }
+                int windowCount = NextTemplateChoice(ref state, 3);
+                while (windows.Count < windowCount && windowCandidates.Count > 0)
+                {
+                    int pick = NextTemplateChoice(ref state, windowCandidates.Count);
+                    windows.Add(windowCandidates[pick]);
+                    windowCandidates.RemoveAt(pick);
+                }
+            }
+
+            var cells = new List<BlueprintCell>(48);
+            foreach (var point in perimeter)
+            {
+                bool doorway = point.X == doorX && point.Z == doorZ;
+                bool window = windows.Contains(point);
+                for (int y = 0; y < wallHeight; y++)
+                {
+                    if (doorway && y < 2) continue;
+                    if (window && y == 1) continue;
+                    cells.Add(new BlueprintCell(point.X, y, point.Z));
+                }
+            }
+            for (int z = 0; z < size; z++)
+            for (int x = 0; x < size; x++)
+            {
+                if (!footprint.Contains((x, z))) continue;
+                if (roofProfile == 2 && x == width / 2 && z == depth / 2) continue;
+                int roofY = wallHeight == 1 && x == doorX && z == doorZ ? 2
+                    : wallHeight == 1 ? 1 : 2;
+                cells.Add(new BlueprintCell(x, roofY, z));
+                if (roofProfile == 1
+                    && (roofAxis == 0 ? x == width / 2 : z == depth / 2))
+                    cells.Add(new BlueprintCell(x, roofY + 1, z));
+            }
+            // Keep the plan within the current 63-bit progress mask even for future generator
+            // tweaks. A compact, single-room design is the deterministic safe fallback.
+            if (cells.Count > 63)
+            {
+                cells.Clear();
+                for (int z = 0; z < 3; z++)
+                    for (int x = 0; x < 3; x++)
+                    {
+                        if ((x == 0 || x == 2 || z == 0 || z == 2) && !(x == 1 && z == 2))
+                            cells.Add(new BlueprintCell(x, 0, z));
+                        cells.Add(new BlueprintCell(x, x == 1 && z == 2 ? 2 : 1, z));
+                    }
+                size = 3;
+            }
+            return new ShelterTemplate("procedural", itemName, size, cells.ToArray());
+        }
+
         public int ShelterBlueprintIndex => _blueprintIndex;
         public int ShelterAnchorX => _anchorX;
         public int ShelterAnchorY => _anchorY;
         public int ShelterAnchorZ => _anchorZ;
         public int ShelterRotation => _rotation;
         public long ShelterPlacedMask => _placedMask;
+        public int ShelterPlanSize => _proceduralPlan?.Size ?? 0;
+        public int ShelterPlanMaterialItemId => _proceduralPlan != null
+            && TryResolveTemplate(ProceduralBlueprintIndex, out _, out int itemId, out _) ? itemId : 0;
+        public int ShelterPlanGeneratorVersion => _proceduralPlanGeneratorVersion;
+
+        public int[] CaptureShelterPlanCells()
+        {
+            if (_proceduralPlan == null) return Array.Empty<int>();
+            var result = new int[_proceduralPlan.Cells.Length * 3];
+            for (int i = 0; i < _proceduralPlan.Cells.Length; i++)
+            {
+                result[i * 3] = _proceduralPlan.Cells[i].X;
+                result[i * 3 + 1] = _proceduralPlan.Cells[i].Y;
+                result[i * 3 + 2] = _proceduralPlan.Cells[i].Z;
+            }
+            return result;
+        }
 
         public InventorySlot[] CaptureShelterInventory() => (InventorySlot[])_shelterInventory.Clone();
 
         public void RestoreShelterState(InventorySlot[]? inventory, int blueprintIndex,
-            int anchorX, int anchorY, int anchorZ, int rotation, long placedMask)
+            int anchorX, int anchorY, int anchorZ, int rotation, long placedMask,
+            int planSize = 0, int planMaterialItemId = 0, int planGeneratorVersion = 0,
+            int[]? planCells = null)
         {
+            InvalidateUsefulShelterDropDemandCache();
+            InvalidateGatherTargetSearchCaches();
+            InvalidateSteveCraftingStationSearchCaches();
             _lastShelterTemplateIndex = -1;
             _hasShelterSite = false;
             _siteBlocked = false;
             _projectSeed = 0;
+            _proceduralPlan = null;
+            _proceduralShell = null;
+            _proceduralPlanGeneratorVersion = 0;
             _projectMaterialItemId = 0;
             _projectRequiredCount = 0;
             _plannerGoal = ShelterGoal.None;
@@ -283,7 +435,37 @@ namespace Cubuild
                 }
             }
 
-            if (blueprintIndex < 0 || blueprintIndex >= ShelterTemplates.Length)
+            if (blueprintIndex == ProceduralBlueprintIndex
+                && planGeneratorVersion > 0
+                && planSize >= 3 && planSize <= 5
+                && planCells != null && planCells.Length >= 3 && planCells.Length <= 63 * 3
+                && planCells.Length % 3 == 0
+                && planMaterialItemId > 0 && planMaterialItemId < ItemRegistry.Count)
+            {
+                var cells = new BlueprintCell[planCells.Length / 3];
+                var uniqueCells = new HashSet<(int X, int Y, int Z)>();
+                bool valid = true;
+                for (int i = 0; i < cells.Length; i++)
+                {
+                    int x = planCells[i * 3], y = planCells[i * 3 + 1], z = planCells[i * 3 + 2];
+                    if (x < 0 || x >= planSize || z < 0 || z >= planSize || y < -2 || y > 3
+                        || !uniqueCells.Add((x, y, z)))
+                    { valid = false; break; }
+                    cells[i] = new BlueprintCell(x, y, z);
+                }
+                string itemName = ItemRegistry.GetName(planMaterialItemId);
+                if (valid && IsSafeSteveBuildMaterial(planMaterialItemId))
+                {
+                    _proceduralPlan = new ShelterTemplate("procedural", itemName, planSize, cells);
+                    _proceduralPlanGeneratorVersion = planGeneratorVersion;
+                    var shellCells = new List<BlueprintCell>(cells.Length);
+                    foreach (var cell in cells) if (cell.Y >= 0) shellCells.Add(cell);
+                    if (shellCells.Count > 0)
+                        _proceduralShell = new ShelterTemplate("procedural", itemName, planSize, shellCells.ToArray());
+                }
+            }
+            if (blueprintIndex < 0 || (blueprintIndex >= ShelterTemplates.Length
+                && !(blueprintIndex == ProceduralBlueprintIndex && _proceduralPlan != null)))
             {
                 ClearShelterPlan();
                 return;
@@ -293,11 +475,16 @@ namespace Cubuild
             _lastShelterTemplateIndex = blueprintIndex;
             _anchorX = anchorX; _anchorY = anchorY; _anchorZ = anchorZ;
             _rotation = ((rotation % 4) + 4) % 4;
-            _placedMask = placedMask & ValidPlacedMask(ShelterTemplates[blueprintIndex].Cells.Length);
+            if (!TryResolveTemplate(blueprintIndex, out var template, out _, out _))
+            {
+                ClearShelterPlan();
+                return;
+            }
+            _placedMask = placedMask & ValidPlacedMask(template.Cells.Length);
             // v16 and earlier only serialized plans that already had a site. v17 may persist a
             // selected project before a site has been found.
             _hasShelterSite = true;
-            if (TryResolveTemplate(blueprintIndex, out var template, out int itemId, out _))
+            if (TryResolveTemplate(blueprintIndex, out template, out int itemId, out _))
             {
                 _projectMaterialItemId = itemId;
                 _projectRequiredCount = template.Cells.Length;
@@ -306,9 +493,14 @@ namespace Cubuild
             _planRetryTimer = 0f;
             _plannerScanTimer = 0f;
             _hasGatherTarget = false;
+            _gatherTargetValidationTimer = 0f;
             _hasToolGatherTarget = false;
             _toolUpgradeRetryTimer = 0f;
             _pickupDropTarget = null;
+            _pickupDropScanTimer = 0f;
+            _pickupDropTargetValidationTimer = 0f;
+            _ignoredPickupDrop = null;
+            _ignoredPickupDropTimer = 0f;
             _gatherOutputCount = 0;
             _activeBuildCell = -1;
             _plannedBuildCell = -1;
@@ -370,7 +562,9 @@ namespace Cubuild
                 _shelterInventory[i] = new InventorySlot { ItemId = itemId, Count = add };
                 remaining -= add;
             }
-            return remaining == 0;
+            bool added = remaining == 0;
+            if (added) InvalidateUsefulShelterDropDemandCache();
+            return added;
         }
 
         private bool TryConsumeShelterItem(int itemId, int count)
@@ -387,21 +581,64 @@ namespace Cubuild
                 _shelterInventory[i] = slot;
                 remaining -= take;
             }
-            return remaining == 0;
+            bool consumed = remaining == 0;
+            if (consumed) InvalidateUsefulShelterDropDemandCache();
+            return consumed;
         }
 
         public void PrepareShelterWork(GameWorld world, float dt)
         {
+            long started = Stopwatch.GetTimestamp();
+            ResetShelterPrepareDiagnostics();
+            try
+            {
+                PrepareShelterWorkCore(world, dt);
+            }
+            finally
+            {
+                _lastShelterPrepareTicks = Stopwatch.GetTimestamp() - started;
+            }
+        }
+
+        private void PrepareShelterWorkCore(GameWorld world, float dt)
+        {
             if (!world.IsAuthoritative || IsDead || Removed) return;
+            TickStevePlanningCaches(dt);
             _planRetryTimer = Math.Max(0f, _planRetryTimer - dt);
             _plannerDecisionTimer = Math.Max(0f, _plannerDecisionTimer - dt);
             _plannerScanTimer = Math.Max(0f, _plannerScanTimer - dt);
             _plannerFailureCooldown = Math.Max(0f, _plannerFailureCooldown - dt);
+            float oldToolRetryTimer = _toolUpgradeRetryTimer;
             _toolUpgradeRetryTimer = Math.Max(0f, _toolUpgradeRetryTimer - dt);
+            if (oldToolRetryTimer > 0f && _toolUpgradeRetryTimer <= 0f)
+                InvalidateUsefulShelterDropDemandCache();
             _ignoredSiteTimer = Math.Max(0f, _ignoredSiteTimer - dt);
+            float oldIgnoredGatherTimer = _ignoredGatherTimer;
             _ignoredGatherTimer = Math.Max(0f, _ignoredGatherTimer - dt);
             if (_ignoredSiteTimer <= 0f) _hasIgnoredSite = false;
-            if (_ignoredGatherTimer <= 0f) _hasIgnoredGather = false;
+            if (_ignoredGatherTimer <= 0f)
+            {
+                _hasIgnoredGather = false;
+                if (oldIgnoredGatherTimer > 0f) InvalidateGatherTargetSearchCaches();
+            }
+            _gatherTargetValidationTimer = Math.Max(0f, _gatherTargetValidationTimer - dt);
+            _pickupDropScanTimer = Math.Max(0f, _pickupDropScanTimer - dt);
+            _pickupDropTargetValidationTimer = Math.Max(0f, _pickupDropTargetValidationTimer - dt);
+            _ignoredPickupDropTimer = Math.Max(0f, _ignoredPickupDropTimer - dt);
+            if (_ignoredPickupDropTimer <= 0f) _ignoredPickupDrop = null;
+            UpdateSteveThreat(world, dt);
+            if (HasActiveThreat)
+            {
+                if (_cooperativeLeader != null) LeaveCooperativeWork(1.25f);
+                SetWorkMode(WorkMode.Waiting);
+                _plannerDecisionTimer = 0f;
+                PrepareSteveThreatResponse(world);
+                return;
+            }
+            // The coordinator refreshes this agent's temporary Navigate+Place plan after all
+            // personal planners have prepared. Preserve it through the movement/action phase;
+            // replanning solo here would reset the executor before its Place step can run.
+            if (_cooperativeLeader != null) return;
             if (_plannerGoal == ShelterGoal.ExploreForBuildSite && _explorationTaskInstalled
                 && PathStatus == NavigationStatus.Arrived) _plannerScanTimer = 0f;
 
@@ -432,31 +669,43 @@ namespace Cubuild
                 if (!TryChooseShelter(world)) _plannerScanTimer = 2.5f;
             }
 
-            if (_hasGatherTarget && !GatherTargetStillValid(world, itemId))
+            if (_hasGatherTarget && _gatherTargetValidationTimer <= 0f)
             {
-                _hasGatherTarget = false;
-                _gatherOutputCount = 0;
-                _plannerDecisionTimer = 0f;
+                _gatherTargetValidationTimer = 0.35f;
+                if (!GatherTargetStillValid(world, itemId))
+                {
+                    _hasGatherTarget = false;
+                    _gatherOutputCount = 0;
+                    _plannerDecisionTimer = 0f;
+                    _plannerScanTimer = 0f;
+                    plannerScanDue = true;
+                    InvalidateGatherTargetSearchCaches();
+                    InvalidateUsefulShelterDropDemandCache();
+                }
             }
             if (ShelterInventoryCount(itemId) >= _projectRequiredCount && _hasGatherTarget)
             {
                 _hasGatherTarget = false;
                 _gatherOutputCount = 0;
                 _plannerDecisionTimer = 0f;
+                InvalidateUsefulShelterDropDemandCache();
             }
             if (ShelterInventoryCount(itemId) < _projectRequiredCount && !_hasGatherTarget
-                && plannerScanDue && TryFindGatherTarget(world, itemId, out var availableTarget))
+                && plannerScanDue && TryFindGatherTargetCached(world, itemId, out var availableTarget))
             {
                 _gatherX = availableTarget.X; _gatherY = availableTarget.Y; _gatherZ = availableTarget.Z;
                 _gatherStandX = availableTarget.StandX; _gatherStandY = availableTarget.StandY; _gatherStandZ = availableTarget.StandZ;
                 _gatherOutputCount = availableTarget.OutputCount;
                 _hasGatherTarget = true;
+                _gatherTargetValidationTimer = 0.35f;
+                InvalidateUsefulShelterDropDemandCache();
             }
 
             // Physical drops are a supporting resource subtask, not a replacement construction
             // goal. Keep the selected blueprint and planner goal sticky while a useful nearby
             // drop is collected into Steve's private inventory.
-            if (TryPrepareUsefulDropPickup(world))
+            bool constructionPlanFinalized = _blueprintIndex != ProceduralBlueprintIndex || _hasShelterSite;
+            if (constructionPlanFinalized && TryPrepareUsefulDropPickup(world))
             {
                 if (_plannerScanTimer <= 0f) _plannerScanTimer = 2.5f;
                 return;
@@ -509,7 +758,8 @@ namespace Cubuild
                     gatherDistance = Math.Sqrt(dx * dx + dy * dy + dz * dz);
                 }
 
-                bool canGather = _hasGatherTarget && ShelterInventoryCount(itemId) < _projectRequiredCount;
+                bool canGather = constructionPlanFinalized && _hasGatherTarget
+                    && ShelterInventoryCount(itemId) < _projectRequiredCount;
                 bool needDecision = _plannerGoal == ShelterGoal.None || _plannerDecisionTimer <= 0f
                     || (_plannerGoal == ShelterGoal.ExploreForBuildSite && (canBuild || canGather))
                     || (_plannerGoal == ShelterGoal.ContinueConstructionProject && !canBuild)
@@ -576,7 +826,8 @@ namespace Cubuild
                     double dz = _gatherStandZ + 0.5 - Position.Z;
                     gatherDistance = Math.Sqrt(dx * dx + dy * dy + dz * dz);
                 }
-                bool canGather = _hasGatherTarget && ShelterInventoryCount(itemId) < _projectRequiredCount;
+                bool canGather = constructionPlanFinalized && _hasGatherTarget
+                    && ShelterInventoryCount(itemId) < _projectRequiredCount;
                 _plannerGoal = SelectShelterGoal(false, double.PositiveInfinity, canGather,
                     gatherDistance, canGather ? _gatherOutputCount : 0,
                     canExplore: true);
@@ -605,16 +856,59 @@ namespace Cubuild
 
         public void FinishShelterWork(GameWorld world, float dt)
         {
-            if (!world.IsAuthoritative || IsDead || Removed || _blueprintIndex < 0) return;
+            long started = Stopwatch.GetTimestamp();
+            ResetShelterFinishDiagnostics();
+            try
+            {
+                FinishShelterWorkCore(world, dt);
+            }
+            finally
+            {
+                _lastShelterFinishTicks = Stopwatch.GetTimestamp() - started;
+            }
+        }
+
+        private void FinishShelterWorkCore(GameWorld world, float dt)
+        {
+            if (!world.IsAuthoritative || IsDead || Removed) return;
+            if (HasActiveThreat)
+            {
+                _taskActionWorld = world;
+                try { _taskExecutor.Tick(dt, this, _ => false); }
+                finally { _taskActionWorld = null; }
+                FinishSteveThreatResponse(world);
+                return;
+            }
+            if (_blueprintIndex < 0) return;
             if (!TryResolveTemplate(_blueprintIndex, out var template, out int itemId, out int blockId)) return;
-            _taskExecutor.Tick(dt, this, task => ExecuteShelterAction(world, template, itemId, blockId, task));
+            _taskActionWorld = world;
+            _taskActionTemplate = template;
+            _taskActionItemId = itemId;
+            _taskActionBlockId = blockId;
+            try
+            {
+                _taskExecutor.Tick(dt, this, _taskExecutorAction);
+            }
+            finally
+            {
+                _taskActionWorld = null;
+                _taskActionTemplate = null;
+                _taskActionItemId = _taskActionBlockId = 0;
+            }
+            // Cooperative actions have their own validation and failure cooldown in the
+            // coordinator. Never feed their task failure into the helper's solo planner.
+            if (_cooperativeLeader != null) return;
             if (!_taskExecutor.Failed) return;
 
             // A stale/claimed physical drop is a failed supporting subtask, not a failed gather
             // target or construction project.
             if (_pickupDropTarget != null)
             {
+                _ignoredPickupDrop = _pickupDropTarget;
+                _ignoredPickupDropTimer = 4f;
                 _pickupDropTarget = null;
+                _pickupDropTargetValidationTimer = 0f;
+                _pickupDropScanTimer = Math.Max(_pickupDropScanTimer, 0.75f);
                 _taskExecutor.SetPlan();
                 _taskExecutor.Prepare(this);
                 _plannerDecisionTimer = 0f;
@@ -626,6 +920,7 @@ namespace Cubuild
                 // A tool chain or table route is a transient optimization, not a project
                 // failure. Cool it down and resume the actual gather task with bare hands.
                 _toolUpgradeRetryTimer = 12f;
+                InvalidateUsefulShelterDropDemandCache();
                 _hasToolGatherTarget = false;
                 _taskExecutor.SetPlan();
                 _taskExecutor.Prepare(this);
@@ -650,7 +945,10 @@ namespace Cubuild
                 _ignoredGatherTimer = 12f;
                 _hasIgnoredGather = true;
                 _hasGatherTarget = false;
+                _gatherTargetValidationTimer = 0f;
                 _gatherOutputCount = 0;
+                InvalidateGatherTargetSearchCaches();
+                InvalidateUsefulShelterDropDemandCache();
                 _taskExecutor.SetPlan();
                 _taskExecutor.Prepare(this);
             }
@@ -662,18 +960,106 @@ namespace Cubuild
 
         private void PrepareShelterTasks() => _taskExecutor.Prepare(this);
 
+        internal bool TryRecoverStuckNavigation(int recoveryAttempt)
+        {
+            if (recoveryAttempt <= 0) return TryJumpForNavigationRecovery();
+            if (recoveryAttempt != 1 || _taskActionWorld is not { IsAuthoritative: true } world
+                || IsDead || Removed) return false;
+
+            // One last-resort bridge/step per installed route. It must be attached to a safe
+            // support or fill exactly one loaded gap; emergency terrain mining is never the first
+            // response to lack of progress.
+            int cx = (int)Math.Floor(Position.X), cy = (int)Math.Floor(Position.Y), cz = (int)Math.Floor(Position.Z);
+            if (!IsWalkableStand(world, cx, cy, cz)) return false;
+            int dx = Math.Abs(Math.Sin(Yaw)) >= Math.Abs(Math.Cos(Yaw)) ? Math.Sign(Math.Sin(Yaw)) : 0;
+            int dz = dx == 0 ? Math.Sign(Math.Cos(Yaw)) : 0;
+            if (dx == 0 && dz == 0) return false;
+            int tx = cx + dx, tz = cz + dz;
+            if (!world.Chunks.TryGetLoadedBlock(tx, cy, tz, out int body)
+                || body != BlockRegistry.AirId
+                || !world.Chunks.TryGetLoadedBlock(tx, cy + 1, tz, out int head)
+                || head != BlockRegistry.AirId) return false;
+
+            int placeY;
+            if (world.Chunks.TryGetLoadedBlock(tx, cy - 1, tz, out int floor) && IsSafeGroundBlock(floor))
+                placeY = cy; // a single, jumpable step on existing ground
+            else
+            {
+                if (!world.Chunks.TryGetLoadedBlock(tx, cy - 1, tz, out int gap)
+                    || gap != BlockRegistry.AirId) return false;
+                placeY = cy - 1; // bridge one cell only; never extend a pillar or tunnel
+            }
+            if (!world.Chunks.TryGetLoadedBlock(tx, placeY, tz, out int existing)
+                || existing != BlockRegistry.AirId) return false;
+
+            for (int i = 0; i < _shelterInventory.Length; i++)
+            {
+                var slot = _shelterInventory[i];
+                int itemId = slot.ItemId;
+                if (slot.Count <= 0 || !IsSafeSteveBuildMaterial(itemId)
+                    || IsShelterItemReserved(itemId)) continue;
+                int blockId = ItemRegistry.ResolveBlockId(itemId);
+                if (blockId <= 0 || !world.TryPlaceBlockForSteve(this, tx, placeY, tz, blockId, itemId)) continue;
+                ConsumeShelterItem(itemId, 1);
+                return true;
+            }
+            return false;
+        }
+
+        private bool IsShelterItemReserved(int itemId)
+        {
+            if (itemId == _projectMaterialItemId && _blueprintIndex >= 0)
+            {
+                int unplaced = Math.Max(0, _projectRequiredCount - CountPlaced(_projectRequiredCount));
+                if (ShelterInventoryCount(itemId) <= unplaced) return true;
+            }
+            if (_cooperativeLeader != null && itemId == _cooperativeItemId)
+            {
+                int assigned = _cooperativeKind == SteveCooperativeKind.GatherMaterial
+                    ? ShelterInventoryCount(itemId) : 1;
+                if (ShelterInventoryCount(itemId) <= assigned) return true;
+            }
+            return false;
+        }
+
         private const double MaxDropPickupRouteDistance = GameWorld.SteveDropPickupSearchDistance;
 
         private bool TryPrepareUsefulDropPickup(GameWorld world)
         {
-            _pickupDropTarget = null;
-            if (!world.IsAuthoritative || _blueprintIndex < 0 || world.DroppedItems.Count == 0) return false;
+            if (!world.IsAuthoritative || _blueprintIndex < 0) return false;
+
+            if (_pickupDropTarget != null)
+            {
+                if (IsActiveUsefulDropTarget(world, _pickupDropTarget))
+                {
+                    // Keep the current pickup plan installed while its navigation/action step
+                    // advances. A throttled scan must never hand control back to wander.
+                    PrepareShelterTasks();
+                    return true;
+                }
+
+                // The selected drop was collected, claimed, exhausted, or its executor ended.
+                // Cancel only this supporting subtask, then let the project/gather planner resume.
+                _pickupDropTarget = null;
+                _pickupDropTargetValidationTimer = 0f;
+                _taskExecutor.SetPlan();
+                _pickupDropScanTimer = 0f;
+            }
+
+            if (_pickupDropScanTimer > 0f) return false;
+            _pickupDropScanTimer = 0.75f;
+            if (world.DroppedItems.Count == 0) return false;
+
+            RecordShelterDropScan();
 
             bool hasPickableDrop = false;
-            foreach (var drop in world.DroppedItems)
+            var drops = world.DroppedItems;
+            for (int i = 0; i < drops.Count; i++)
             {
+                var drop = drops[i];
                 if (drop.Count > 0 && drop.Age > GameWorld.ItemDropPickupDelay && drop.FlyTime <= 0f
-                    && !world.IsDropInLocalPlayerPickupRange(drop))
+                    && !world.IsDropInLocalPlayerPickupRange(drop)
+                    && !IsIgnoredPickupDrop(drop))
                 {
                     hasPickableDrop = true;
                     break;
@@ -681,14 +1067,15 @@ namespace Cubuild
             }
             if (!hasPickableDrop) return false;
 
-            var demandByItem = BuildUsefulShelterDropDemands(world);
+            var demandByItem = GetCachedUsefulShelterDropDemands(world);
             DroppedItem? bestDrop = null;
             int bestX = 0, bestY = 0, bestZ = 0;
             double bestDistance = double.PositiveInfinity;
-            foreach (var drop in world.DroppedItems)
+            for (int i = 0; i < drops.Count; i++)
             {
+                var drop = drops[i];
                 if (drop.Count <= 0 || drop.Age <= GameWorld.ItemDropPickupDelay || drop.FlyTime > 0f
-                    || world.IsDropInLocalPlayerPickupRange(drop)) continue;
+                    || world.IsDropInLocalPlayerPickupRange(drop) || IsIgnoredPickupDrop(drop)) continue;
 
                 int usefulCount = demandByItem.TryGetValue(drop.ItemId, out int demand)
                     ? Math.Min(demand, GetShelterItemCapacity(drop.ItemId)) : 0;
@@ -715,6 +1102,7 @@ namespace Cubuild
 
             if (bestDrop == null) return false;
             _pickupDropTarget = bestDrop;
+            _pickupDropTargetValidationTimer = StevePlanningCacheSeconds;
             if (GameWorld.IsItemDropInPickupRange(bestDrop, Position))
                 _taskExecutor.SetPlan(AgentTask.Pickup(bestDrop));
             else
@@ -723,6 +1111,35 @@ namespace Cubuild
             PrepareShelterTasks();
             return true;
         }
+
+        private bool IsActiveUsefulDropTarget(GameWorld world, DroppedItem drop)
+        {
+            if (!_taskExecutor.HasTasks || _taskExecutor.IsComplete || _taskExecutor.Failed
+                || !_taskExecutor.TryGetCurrent(out var task)
+                || task.Kind is not (AgentTaskKind.Navigate or AgentTaskKind.Pickup)
+                || (task.Kind == AgentTaskKind.Pickup && !ReferenceEquals(task.Drop, drop))) return false;
+
+            if (_pickupDropTargetValidationTimer <= 0f)
+            {
+                _pickupDropTargetValidationTimer = StevePlanningCacheSeconds;
+                bool stillPresent = false;
+                var drops = world.DroppedItems;
+                for (int i = 0; i < drops.Count; i++)
+                {
+                    if (!ReferenceEquals(drops[i], drop)) continue;
+                    stillPresent = true;
+                    break;
+                }
+                if (!stillPresent) return false;
+            }
+            return drop.Count > 0 && drop.Age > GameWorld.ItemDropPickupDelay
+                && drop.FlyTime <= 0f && !world.IsDropInLocalPlayerPickupRange(drop)
+                && GetUsefulShelterDropDemand(world, drop.ItemId) > 0
+                && GetShelterItemCapacity(drop.ItemId) > 0;
+        }
+
+        private bool IsIgnoredPickupDrop(DroppedItem drop)
+            => _ignoredPickupDropTimer > 0f && ReferenceEquals(drop, _ignoredPickupDrop);
 
         private bool TryFindDropPickupStand(GameWorld world, DroppedItem drop,
             out int standX, out int standY, out int standZ)
@@ -752,8 +1169,18 @@ namespace Cubuild
             return found;
         }
 
+        private bool ExecuteCurrentTaskAction(AgentTask task)
+        {
+            if (_taskActionWorld == null || _taskActionTemplate == null) return false;
+            if (_cooperativeLeader != null)
+                return TryExecuteCooperativeTask(_taskActionWorld, task);
+            return ExecuteShelterAction(_taskActionWorld, _taskActionTemplate,
+                _taskActionItemId, _taskActionBlockId, task);
+        }
+
         private bool ExecuteShelterAction(GameWorld world, ShelterTemplate template, int itemId, int blockId, AgentTask task)
         {
+            RecordShelterTaskAction();
             if (task.Kind == AgentTaskKind.Pickup)
             {
                 if (task.Drop == null || !ReferenceEquals(task.Drop, _pickupDropTarget)) return false;
@@ -803,6 +1230,7 @@ namespace Cubuild
                 if (!AddShelterItem(itemId, gathered)) return false;
                 _hasGatherTarget = false;
                 _gatherOutputCount = 0;
+                _gatherTargetValidationTimer = 0f;
                 _plannerDecisionTimer = 0f;
                 return true;
             }
@@ -822,6 +1250,7 @@ namespace Cubuild
             // and advance the private blueprint bit.
             ConsumeShelterItem(itemId, 1);
             _placedMask |= 1L << task.Tag;
+            InvalidateUsefulShelterDropDemandCache();
             _plannerDecisionTimer = 0f;
             return true;
         }
@@ -846,9 +1275,11 @@ namespace Cubuild
 
         private bool TryChooseShelter(GameWorld world)
         {
+            RecordShelterSiteSearch();
             double bestScore = double.NegativeInfinity;
             int bestX = 0, bestY = 0, bestZ = 0, bestRotation = 0;
             int bestStandX = 0, bestStandY = 0, bestStandZ = 0;
+            ShelterTemplate? bestTemplate = null;
             int baseX = (int)Math.Floor(Position.X);
             int baseZ = (int)Math.Floor(Position.Z);
             int nearY = (int)Math.Floor(Position.Y);
@@ -856,6 +1287,8 @@ namespace Cubuild
                 out int itemId, out _)) return false;
             _projectMaterialItemId = itemId;
             if (_projectRequiredCount <= 0) _projectRequiredCount = template.Cells.Length;
+            var siteShell = _blueprintIndex == ProceduralBlueprintIndex
+                ? _proceduralShell ?? template : template;
             int size = template.Size;
             int flatRejects = 0, safetyRejects = 0, occupiedRejects = 0, approachRejects = 0;
 
@@ -869,6 +1302,44 @@ namespace Cubuild
                     double steveDz = az + size * 0.5 - Position.Z;
                     double distance = Math.Sqrt(steveDx * steveDx + steveDz * steveDz);
                     if (distance < 2.7 || distance > 11.5) continue;
+                    if (_blueprintIndex == ProceduralBlueprintIndex)
+                    {
+                        if (!TrySampleProceduralSiteTerrain(world, ax, az, size, nearY,
+                            out var terrainSurfaces, out int terrainY))
+                        {
+                            flatRejects++;
+                            continue;
+                        }
+                        if (!IsShelterAreaSafe(world, ax, terrainY, az, size))
+                        {
+                            safetyRejects++;
+                            continue;
+                        }
+                        for (int rotation = 0; rotation < 4; rotation++)
+                        {
+                            if (!TryBuildProceduralSitePlan(world, siteShell, ax, az,
+                                terrainSurfaces, terrainY, rotation, out var siteTemplate))
+                            {
+                                flatRejects++;
+                                continue;
+                            }
+                            if (_hasIgnoredSite && _ignoredSiteTimer > 0f
+                                && ax == _ignoredSiteX && terrainY == _ignoredSiteY && az == _ignoredSiteZ) continue;
+                            if (!ShelterCellsAreClear(world, siteTemplate, ax, terrainY, az, rotation))
+                            {
+                                occupiedRejects++;
+                                continue;
+                            }
+                            if (!FindApproach(world, siteTemplate, ax, terrainY, az,
+                                out int standX, out int standY, out int standZ))
+                            {
+                                approachRejects++;
+                                continue;
+                            }
+                            ScoreCandidate(siteTemplate, terrainY, rotation, standX, standY, standZ, ax, az, distance);
+                        }
+                        continue;
+                    }
                     if (!TryFindFlatSiteY(world, ax, az, size, nearY, out int ay))
                     {
                         flatRejects++;
@@ -895,26 +1366,7 @@ namespace Cubuild
                             approachRejects++;
                             continue;
                         }
-                        double standDx = standX + 0.5 - Position.X;
-                        double standDy = standY - Position.Y;
-                        double standDz = standZ + 0.5 - Position.Z;
-                        double approachDistance = Math.Sqrt(standDx * standDx + standDy * standDy + standDz * standDz);
-                        double playerDx = ax + size * 0.5 - world.LocalPlayer.Position.X;
-                        double playerDz = az + size * 0.5 - world.LocalPlayer.Position.Z;
-                        double playerDistance = Math.Sqrt(playerDx * playerDx + playerDz * playerDz);
-                        // Exact flat ground and the existing hazard/clearance checks remain
-                        // intentional constraints. Failed candidates are classified above; when
-                        // none survive, the planner advances its explicit frontier target.
-                        double score = 8.0 - distance * 0.42 - approachDistance * 0.22
-                            - template.Cells.Length * 0.018 + Math.Min(12, playerDistance) * 0.08;
-                        score += TemplateSelectionJitter(world.Seed, ax, az, _blueprintIndex);
-                        if (score > bestScore)
-                        {
-                            bestScore = score;
-                            bestX = ax; bestY = ay; bestZ = az;
-                            bestRotation = rotation;
-                            bestStandX = standX; bestStandY = standY; bestStandZ = standZ;
-                        }
+                        ScoreCandidate(template, ay, rotation, standX, standY, standZ, ax, az, distance);
                     }
                 }
             }
@@ -926,6 +1378,12 @@ namespace Cubuild
             if (double.IsNegativeInfinity(bestScore)) return false;
             _anchorX = bestX; _anchorY = bestY; _anchorZ = bestZ;
             _rotation = bestRotation;
+            if (bestTemplate != null)
+            {
+                _proceduralPlan = bestTemplate;
+                template = bestTemplate;
+                _projectRequiredCount = template.Cells.Length;
+            }
             _placedMask = 0;
             _hasShelterSite = true;
             _siteBlocked = false;
@@ -938,6 +1396,27 @@ namespace Cubuild
             _taskExecutor.SetPlan();
             ClearPathGoal();
             return true;
+
+            void ScoreCandidate(ShelterTemplate candidate, int ay, int rotation,
+                int standX, int standY, int standZ, int ax, int az, double distance)
+            {
+                double standDx = standX + 0.5 - Position.X;
+                double standDy = standY - Position.Y;
+                double standDz = standZ + 0.5 - Position.Z;
+                double approachDistance = Math.Sqrt(standDx * standDx + standDy * standDy + standDz * standDz);
+                double playerDx = ax + size * 0.5 - world.LocalPlayer.Position.X;
+                double playerDz = az + size * 0.5 - world.LocalPlayer.Position.Z;
+                double playerDistance = Math.Sqrt(playerDx * playerDx + playerDz * playerDz);
+                double score = 8.0 - distance * 0.42 - approachDistance * 0.22
+                    - candidate.Cells.Length * 0.018 + Math.Min(12, playerDistance) * 0.08;
+                score += TemplateSelectionJitter(world.Seed, ax, az, _blueprintIndex);
+                if (score <= bestScore) return;
+                bestScore = score;
+                bestX = ax; bestY = ay; bestZ = az;
+                bestRotation = rotation;
+                bestStandX = standX; bestStandY = standY; bestStandZ = standZ;
+                bestTemplate = _blueprintIndex == ProceduralBlueprintIndex ? candidate : null;
+            }
         }
 
         private static double TemplateSelectionJitter(int worldSeed, int anchorX, int anchorZ, int templateIndex)
@@ -956,6 +1435,7 @@ namespace Cubuild
 
         private bool ValidateShelterPlan(GameWorld world)
         {
+            RecordShelterSiteValidation();
             if (!_hasShelterSite) return false;
             if (!TryResolveTemplate(_blueprintIndex, out var template, out _, out int blockId)) return false;
             if (_rotation < 0 || _rotation > 3 || template.Cells.Length > 63) return false;
@@ -992,6 +1472,75 @@ namespace Cubuild
                 if (world.BlockTicks.IsCellOccupiedByFalling(x, y, z)) return false;
             }
             return true;
+        }
+
+        private bool TrySampleProceduralSiteTerrain(GameWorld world, int ax, int az,
+            int size, int nearY, out int[,] surfaces, out int anchorY)
+        {
+            anchorY = 0;
+            surfaces = new int[size, size];
+            int lowest = int.MaxValue, highest = int.MinValue;
+            for (int z = 0; z < size; z++)
+            for (int x = 0; x < size; x++)
+            {
+                if (!TryFindSafeSurface(world, ax + x, az + z, nearY, out int surfaceY)) return false;
+                surfaces[x, z] = surfaceY;
+                lowest = Math.Min(lowest, surfaceY);
+                highest = Math.Max(highest, surfaceY);
+            }
+            if (highest - lowest > 2) return false;
+            anchorY = highest;
+            return true;
+        }
+
+        private bool TryBuildProceduralSitePlan(GameWorld world, ShelterTemplate shell,
+            int ax, int az, int[,] surfaces, int anchorY, int rotation, out ShelterTemplate sitePlan)
+        {
+            sitePlan = shell;
+            var cells = new List<BlueprintCell>(shell.Cells.Length + shell.Size * 4);
+            for (int i = 0; i < shell.Cells.Length; i++)
+            {
+                var cell = shell.Cells[i];
+                if (cell.Y != 0) continue;
+                RotateCell(cell, shell.Size, rotation, out int rx, out int rz);
+                int surfaceY = surfaces[rx, rz];
+                for (int y = surfaceY; y < anchorY; y++)
+                    cells.Add(new BlueprintCell(cell.X, y - anchorY, cell.Z));
+            }
+            // Foundations occupy negative local Y below the horizontal build plane. They are
+            // first in the build list and therefore placed before the room shell.
+            int foundationCount = cells.Count;
+            if (foundationCount + shell.Cells.Length > 63) return false;
+            cells.AddRange(shell.Cells);
+            if (foundationCount > 0)
+            {
+                for (int i = 0; i < foundationCount; i++)
+                {
+                    var foundation = cells[i];
+                    int y = anchorY + foundation.Y;
+                    RotateCell(foundation, shell.Size, rotation, out int rx, out int rz);
+                    if (!world.Chunks.TryGetLoadedBlock(ax + rx, y, az + rz, out int id)
+                        || id != BlockRegistry.AirId
+                        || world.BlockTicks.IsCellOccupiedByFalling(ax + rx, y, az + rz)) return false;
+                }
+            }
+            sitePlan = new ShelterTemplate(shell.Name, shell.ItemName, shell.Size, cells.ToArray());
+            return cells.Count <= 63;
+        }
+
+        private bool TryFindSafeSurface(GameWorld world, int x, int z, int nearY, out int surfaceY)
+        {
+            surfaceY = 0;
+            for (int y = nearY + 4; y >= nearY - 7; y--)
+            {
+                if (!world.Chunks.TryGetLoadedBlock(x, y, z, out int air)
+                    || air != BlockRegistry.AirId
+                    || !world.Chunks.TryGetLoadedBlock(x, y - 1, z, out int floor)
+                    || !IsSafeGroundBlock(floor)) continue;
+                surfaceY = y;
+                return true;
+            }
+            return false;
         }
 
         private bool TryFindFlatSiteY(GameWorld world, int ax, int az, int size, int nearY, out int anchorY)
@@ -1033,7 +1582,8 @@ namespace Cubuild
         private bool IsShelterAreaSafe(GameWorld world, int ax, int ay, int az, int size)
         {
             double minX = ax, maxX = ax + size;
-            double minY = ay, maxY = ay + 3;
+            double minY = _blueprintIndex == ProceduralBlueprintIndex ? ay - 2 : ay;
+            double maxY = ay + 4;
             double minZ = az, maxZ = az + size;
             var player = world.LocalPlayer.Position;
             double pMinY = player.Y - GameWorld.EyeHeight;
@@ -1059,7 +1609,7 @@ namespace Cubuild
                 for (int x = ax - 1; x <= ax + size; x++)
                 {
                     bool rim = x < ax || x >= ax + size || z < az || z >= az + size;
-                    for (int y = ay - 1; y <= ay + 2; y++)
+                    for (int y = ay - 3; y <= ay + 3; y++)
                     {
                         if (!world.Chunks.TryGetLoadedBlock(x, y, z, out int id))
                         {
@@ -1071,8 +1621,16 @@ namespace Cubuild
                         if (string.Equals(blockName, "lava", StringComparison.OrdinalIgnoreCase)
                             || string.Equals(blockName, "spikes", StringComparison.OrdinalIgnoreCase)) return false;
                     }
-                    if (rim && (!world.Chunks.TryGetLoadedBlock(x, ay - 1, z, out int floor)
-                        || !IsSafeGroundBlock(floor))) return false;
+                    if (rim)
+                    {
+                        if (_blueprintIndex == ProceduralBlueprintIndex)
+                        {
+                            if (!TryFindSafeSurface(world, x, z, ay, out int rimY)
+                                || Math.Abs(rimY - ay) > 2) return false;
+                        }
+                        else if (!world.Chunks.TryGetLoadedBlock(x, ay - 1, z, out int floor)
+                            || !IsSafeGroundBlock(floor)) return false;
+                    }
                 }
             }
             return true;
@@ -1114,21 +1672,27 @@ namespace Cubuild
 
             void ConsiderStand(int sx, int sz)
             {
-                if (!IsWalkableStand(world, sx, ay, sz)) return;
-                if (targetCell.HasValue
-                    && !world.CanStevePlaceCellFromStand(this, targetCell.Value.X,
-                        targetCell.Value.Y, targetCell.Value.Z, sx, ay, sz)) return;
-                double dx = sx + 0.5 - Position.X;
-                double dz = sz + 0.5 - Position.Z;
-                double score = dx * dx + dz * dz;
-                if (score >= best) return;
-                best = score;
-                foundX = sx; foundY = ay; foundZ = sz;
+                for (int standY = ay + 1; standY >= ay - 2; standY--)
+                {
+                    if (!IsWalkableStand(world, sx, standY, sz)) continue;
+                    if (targetCell.HasValue
+                        && !world.CanStevePlaceCellFromStand(this, targetCell.Value.X,
+                            targetCell.Value.Y, targetCell.Value.Z, sx, standY, sz)) continue;
+                    double dx = sx + 0.5 - Position.X;
+                    double dy = standY - Position.Y;
+                    double dz = sz + 0.5 - Position.Z;
+                    double score = dx * dx + dy * dy + dz * dz;
+                    if (score >= best) continue;
+                    best = score;
+                    foundX = sx; foundY = standY; foundZ = sz;
+                }
             }
         }
 
-        private bool TryFindGatherTarget(GameWorld world, int wantedItemId, out GatherTarget bestTarget)
+        private bool TryFindGatherTarget(GameWorld world, int wantedItemId, out GatherTarget bestTarget,
+            Func<int, int, int, bool>? targetClaimed = null)
         {
+            RecordShelterResourceSearch();
             bestTarget = default;
             double best = double.PositiveInfinity;
             int centerX = (int)Math.Floor(Position.X);
@@ -1147,8 +1711,9 @@ namespace Cubuild
                     for (int y = minY; y <= maxY; y++)
                     {
                         if (!world.Chunks.TryGetLoadedBlock(x, y, z, out int id)
+                            || (targetClaimed != null && targetClaimed(x, y, z))
                             || !TryGetSteveGatherYield(world, x, y, z, id, out int outputItem, out int outputCount)
-                            || outputItem != wantedItemId) continue;
+                            || (wantedItemId > 0 && outputItem != wantedItemId)) continue;
                         if (_hasIgnoredGather && _ignoredGatherTimer > 0f
                             && x == _ignoredGatherX && y == _ignoredGatherY && z == _ignoredGatherZ) continue;
                         double steveDx = x + 0.5 - Position.X;
@@ -1167,7 +1732,7 @@ namespace Cubuild
                             + distance * 0.08 - Math.Min(outputCount, 4) * 0.12;
                         if (score >= best) continue;
                         best = score;
-                        bestTarget = new GatherTarget(x, y, z, sx, sy, sz, outputCount, score);
+                        bestTarget = new GatherTarget(x, y, z, sx, sy, sz, outputCount, score, outputItem);
                     }
                 }
             }
@@ -1176,12 +1741,23 @@ namespace Cubuild
 
         private bool GatherTargetStillValid(GameWorld world, int wantedItemId)
         {
-            return world.Chunks.TryGetLoadedBlock(_gatherX, _gatherY, _gatherZ, out int id)
-                && TryGetSteveGatherYield(world, _gatherX, _gatherY, _gatherZ, id, out int outputItem, out _)
-                && outputItem == wantedItemId
-                && IsWalkableStand(world, _gatherStandX, _gatherStandY, _gatherStandZ)
-                && world.CanSteveReachBlockFromStand(this, _gatherX, _gatherY, _gatherZ,
-                    _gatherStandX, _gatherStandY, _gatherStandZ);
+            var target = new GatherTarget(_gatherX, _gatherY, _gatherZ,
+                _gatherStandX, _gatherStandY, _gatherStandZ, _gatherOutputCount, 0.0);
+            return GatherTargetStillValid(world, wantedItemId, target);
+        }
+
+        private bool GatherTargetStillValid(GameWorld world, int wantedItemId, GatherTarget target)
+        {
+            if (_hasIgnoredGather && _ignoredGatherTimer > 0f
+                && target.X == _ignoredGatherX && target.Y == _ignoredGatherY
+                && target.Z == _ignoredGatherZ) return false;
+            return world.Chunks.TryGetLoadedBlock(target.X, target.Y, target.Z, out int id)
+                && TryGetSteveGatherYield(world, target.X, target.Y, target.Z, id,
+                    out int outputItem, out int outputCount)
+                && outputItem == wantedItemId && outputCount == target.OutputCount
+                && IsWalkableStand(world, target.StandX, target.StandY, target.StandZ)
+                && world.CanSteveReachBlockFromStand(this, target.X, target.Y, target.Z,
+                    target.StandX, target.StandY, target.StandZ);
         }
 
         private bool TryFindGatherStand(GameWorld world, int blockX, int blockY, int blockZ,
@@ -1224,18 +1800,90 @@ namespace Cubuild
                 outputName = "cobblestone";
                 count = 1;
             }
-            else return false;
+            else
+            {
+                // Other materials are gathered only when the block's own registered item is a
+                // safe full cube with an exact place-back mapping. Do not invent crafting or drops.
+                if (!IsSafeSteveBuildBlock(blockId)
+                    || !string.IsNullOrWhiteSpace(BlockRegistry.DropItemOf(blockId))
+                    || BlockRegistry.ToolRequiredOf(blockId)
+                    || BlockRegistry.HarvestLevelOf(blockId) > 0) return false;
+                outputName = name;
+                int min = BlockRegistry.DropCountMinOf(blockId);
+                int max = BlockRegistry.DropCountMaxOf(blockId);
+                count = min > 0 && max >= min && max <= 16 ? max : 1;
+            }
 
             try
             {
                 itemId = ItemRegistry.GetId(outputName);
-                return itemId > 0;
+                return itemId > 0 && (itemId == BlockRegistry.GetId("planks")
+                    || itemId == BlockRegistry.GetId("cobblestone")
+                    || (itemId == blockId && IsSafeSteveBuildMaterial(itemId)));
             }
             catch
             {
                 itemId = 0; count = 0;
                 return false;
             }
+        }
+
+        private static bool IsSafeSteveBuildBlock(int blockId)
+        {
+            if (blockId <= 0 || blockId >= BlockRegistry.Count
+                || !BlockRegistry.IsPlaceable(blockId) || !BlockRegistry.IsSolid(blockId)
+                || BlockRegistry.IsPartialShape(blockId) || BlockRegistry.IsCross(blockId)
+                || BlockRegistry.IsGravity(blockId) || BlockRegistry.IsDoor(blockId)
+                || BlockRegistry.IsRail(blockId) || BlockRegistry.IsTranslucent(blockId)) return false;
+            string material = BlockRegistry.MaterialOf(blockId);
+            if (material is not ("wood" or "rock" or "soil" or "misc")) return false;
+            string name = BlockRegistry.GetName(blockId);
+            if (name.Contains("workbench", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("furnace", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("kiln", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("forge", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("door", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("rail", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("spike", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("lava", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("bomb", StringComparison.OrdinalIgnoreCase)) return false;
+            return ItemRegistry.IsInInventory(blockId)
+                && ItemRegistry.ResolveBlockId(blockId) == blockId;
+        }
+
+        internal static bool IsSafeSteveBuildMaterial(int itemId)
+            => itemId > 0 && itemId < BlockRegistry.Count
+                && IsSafeSteveBuildBlock(itemId);
+
+        private bool TrySelectProceduralMaterial(GameWorld world, string fallbackName, int requiredCount,
+            out string itemName, out int itemId)
+        {
+            itemName = fallbackName;
+            itemId = 0;
+            int bestItem = 0, bestCount = 0;
+            foreach (var slot in _shelterInventory)
+            {
+                if (slot.Count <= bestCount || !IsSafeSteveBuildMaterial(slot.ItemId)) continue;
+                bestItem = slot.ItemId;
+                bestCount = slot.Count;
+            }
+            if (bestItem > 0)
+            {
+                if (bestCount >= requiredCount || TryFindGatherTarget(world, bestItem, out _))
+                {
+                    itemId = bestItem;
+                    itemName = ItemRegistry.GetName(bestItem);
+                    return true;
+                }
+            }
+
+            if (TryFindGatherTarget(world, 0, out var target) && target.ItemId > 0)
+            {
+                itemId = target.ItemId;
+                itemName = ItemRegistry.GetName(itemId);
+                return true;
+            }
+            return TryResolveTemplateMaterial(fallbackName, out itemId, out _);
         }
 
         private static bool HasNearbyLeaves(GameWorld world, int x, int y, int z)
@@ -1256,16 +1904,30 @@ namespace Cubuild
             return false;
         }
 
-        private static bool TryResolveTemplate(int index, out ShelterTemplate template, out int itemId, out int blockId)
+        private bool TryResolveTemplate(int index, out ShelterTemplate template, out int itemId, out int blockId)
         {
             template = null!;
             itemId = blockId = 0;
-            if (index < 0 || index >= ShelterTemplates.Length) return false;
-            template = ShelterTemplates[index];
-            if (!BlockRegistry.TryGet(template.ItemName, out var block) || !BlockRegistry.IsPlaceable(block.NumericId)) return false;
+            if (index == ProceduralBlueprintIndex)
+            {
+                if (_proceduralPlan == null) return false;
+                template = _proceduralPlan;
+            }
+            else
+            {
+                if (index < 0 || index >= ShelterTemplates.Length) return false;
+                template = ShelterTemplates[index];
+            }
+            return TryResolveTemplateMaterial(template.ItemName, out itemId, out blockId);
+        }
+
+        private static bool TryResolveTemplateMaterial(string itemName, out int itemId, out int blockId)
+        {
+            itemId = blockId = 0;
+            if (!BlockRegistry.TryGet(itemName, out var block) || !BlockRegistry.IsPlaceable(block.NumericId)) return false;
             try
             {
-                itemId = ItemRegistry.GetId(template.ItemName);
+                itemId = ItemRegistry.GetId(itemName);
                 blockId = block.NumericId;
                 return itemId > 0;
             }
@@ -1307,9 +1969,14 @@ namespace Cubuild
         private void SetWorkMode(WorkMode mode)
         {
             if (_workMode == mode) return;
+            bool clearsGatherTarget = mode is not (WorkMode.Gather or WorkMode.ToolUp)
+                && _hasGatherTarget;
+            bool clearsToolGatherTarget = mode != WorkMode.ToolUp && _hasToolGatherTarget;
             _workMode = mode;
             if (mode is not (WorkMode.Gather or WorkMode.ToolUp)) _hasGatherTarget = false;
             if (mode != WorkMode.ToolUp) _hasToolGatherTarget = false;
+            if (clearsGatherTarget || clearsToolGatherTarget)
+                InvalidateUsefulShelterDropDemandCache();
         }
 
         private void ReplanShelter(float retryDelay)
@@ -1325,6 +1992,11 @@ namespace Cubuild
                     _siteBlocked = false;
                     _anchorX = _anchorY = _anchorZ = 0;
                     _rotation = 0;
+                    if (_blueprintIndex == ProceduralBlueprintIndex && _proceduralShell != null)
+                    {
+                        _proceduralPlan = _proceduralShell;
+                        _projectRequiredCount = _proceduralShell.Cells.Length;
+                    }
                 }
                 else
                 {
@@ -1338,7 +2010,10 @@ namespace Cubuild
             _activeBuildCell = -1;
             _plannedBuildCell = -1;
             _hasGatherTarget = false;
+            _gatherTargetValidationTimer = 0f;
             _gatherOutputCount = 0;
+            InvalidateUsefulShelterDropDemandCache();
+            InvalidateGatherTargetSearchCaches();
             _taskExecutor.SetPlan();
             _explorationTaskInstalled = false;
             _plannerGoal = ShelterGoal.ExploreForBuildSite;
@@ -1355,12 +2030,23 @@ namespace Cubuild
             _hasShelterSite = false;
             _siteBlocked = false;
             _projectSeed = 0;
+            _proceduralPlan = null;
+            _proceduralShell = null;
+            _proceduralPlanGeneratorVersion = 0;
             _projectMaterialItemId = 0;
             _projectRequiredCount = 0;
             _activeBuildCell = -1;
             _plannedBuildCell = -1;
             _hasGatherTarget = false;
+            _gatherTargetValidationTimer = 0f;
             _pickupDropTarget = null;
+            _pickupDropScanTimer = 0f;
+            _pickupDropTargetValidationTimer = 0f;
+            _ignoredPickupDrop = null;
+            _ignoredPickupDropTimer = 0f;
+            InvalidateUsefulShelterDropDemandCache();
+            InvalidateGatherTargetSearchCaches();
+            InvalidateSteveCraftingStationSearchCaches();
             _plannerGoal = ShelterGoal.None;
             _plannerDecisionTimer = 0f;
             _hasExplorationTarget = false;

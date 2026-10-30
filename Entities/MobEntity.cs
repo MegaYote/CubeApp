@@ -253,6 +253,7 @@ namespace Cubuild
         private bool _ctrlJump;
         private bool _pendingJump;
         private float _pendingJumpSpeed;
+        private bool _navigationRecoveryJump;
 
         // Block-breaking: when a zombie is blocked by a breakable wall it starts mining it.
         private int _miningBlockX, _miningBlockY, _miningBlockZ;
@@ -494,6 +495,15 @@ namespace Cubuild
             _pathRecalcCooldown = 0;
             _navigationStatus = NavigationStatus.Navigating;
             _pathIsPartial = false;
+        }
+
+        /// <summary>One bounded jump attempt used by an external task's stuck-route watchdog.</summary>
+        internal bool TryJumpForNavigationRecovery()
+        {
+            if (_dead || !(_prevOnGround || OnGround) || _hopCooldown > 0f) return false;
+            _navigationRecoveryJump = true;
+            _hopCooldown = 0.26f;
+            return true;
         }
 
         /// <summary>Cancel any active path goal and let the wander brain resume.</summary>
@@ -945,6 +955,13 @@ namespace Cubuild
                 _pendingJump = true;
                 _pendingJumpSpeed = 7.42f;
                 _hopCooldown = 0.26f;
+            }
+            if (_navigationRecoveryJump && (_prevOnGround || OnGround))
+            {
+                _ctrlJump = true;
+                _pendingJump = true;
+                _pendingJumpSpeed = 7.42f;
+                _navigationRecoveryJump = false;
             }
         }
 

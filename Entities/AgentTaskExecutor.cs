@@ -3,7 +3,7 @@ using System;
 namespace Cubuild
 {
     /// <summary>The deliberately small action vocabulary shared by autonomous mob tasks.</summary>
-    public enum AgentTaskKind { Navigate, Mine, Place, Hold, BreakObstacle, Craft, Pickup }
+    public enum AgentTaskKind { Navigate, Mine, Place, Hold, BreakObstacle, Craft, Pickup, Deliver }
 
     /// <summary>One immutable step in a short, transient agent task sequence.</summary>
     public readonly struct AgentTask : IEquatable<AgentTask>
@@ -53,6 +53,9 @@ namespace Cubuild
             => new(AgentTaskKind.Pickup, 0, 0, 0, drop?.ItemId ?? 0, 0, 0, 0f,
                 drop: drop);
 
+        public static AgentTask Deliver(int itemId)
+            => new(AgentTaskKind.Deliver, 0, 0, 0, itemId, 0, 0, 0f);
+
         public bool Equals(AgentTask other)
             => Kind == other.Kind && X == other.X && Y == other.Y && Z == other.Z
                 && ItemId == other.ItemId && BlockId == other.BlockId && Tag == other.Tag
@@ -84,6 +87,10 @@ namespace Cubuild
         private int _emergencyBreakCount;
         private bool _hasLastEmergencyTarget;
         private int _lastEmergencyX, _lastEmergencyY, _lastEmergencyZ, _lastEmergencyBlockId;
+        private bool _hasNavigationProgressSample;
+        private Point3D _lastNavigationPosition;
+        private float _stuckNavigationTimer;
+        private int _navigationRecoveryAttempts;
 
         public bool Failed { get; private set; }
         public bool IsComplete => _tasks.Length > 0 && _index >= _tasks.Length && !Failed;
@@ -104,6 +111,44 @@ namespace Cubuild
             _actionStarted = false;
             _emergencyBreakCount = 0;
             _hasLastEmergencyTarget = false;
+            _hasNavigationProgressSample = false;
+            _stuckNavigationTimer = 0f;
+            _navigationRecoveryAttempts = 0;
+            Failed = false;
+        }
+
+        /// <summary>
+        /// Allocation-free fast path for the common single-step plan. A replacement array is
+        /// created only when the task actually changes.
+        /// </summary>
+        public void SetPlan(AgentTask task)
+        {
+            if (_tasks.Length == 1 && task.Equals(_tasks[0])) return;
+            SetPlanCore(new[] { task });
+        }
+
+        /// <summary>
+        /// Allocation-free comparison for the common navigate/action pair used by Steve. A
+        /// replacement array is created only when the task sequence actually changes.
+        /// </summary>
+        public void SetPlan(AgentTask first, AgentTask second)
+        {
+            if (_tasks.Length == 2 && first.Equals(_tasks[0]) && second.Equals(_tasks[1])) return;
+            SetPlanCore(new[] { first, second });
+        }
+
+        private void SetPlanCore(AgentTask[] tasks)
+        {
+            _tasks = tasks;
+            _index = 0;
+            _attempts = 0;
+            _actionTimer = _navigationTimer = 0f;
+            _actionStarted = false;
+            _emergencyBreakCount = 0;
+            _hasLastEmergencyTarget = false;
+            _hasNavigationProgressSample = false;
+            _stuckNavigationTimer = 0f;
+            _navigationRecoveryAttempts = 0;
             Failed = false;
         }
 
@@ -212,6 +257,9 @@ namespace Cubuild
                     return;
                 }
 
+                if (task.Kind == AgentTaskKind.Navigate && TryRecoverStuckNavigation(dt, agent))
+                    return;
+
                 bool routeExhausted = status == NavigationStatus.Unreachable
                     || (status == NavigationStatus.Partial && !agent.HasPath);
                 if (routeExhausted || _navigationTimer >= NavigationTimeout)
@@ -276,6 +324,38 @@ namespace Cubuild
             if (_attempts < MaxAttempts) return true;
             Failed = true;
             return false;
+        }
+
+        private bool TryRecoverStuckNavigation(float dt, MobEntity agent)
+        {
+            var position = agent.Position;
+            if (!_hasNavigationProgressSample)
+            {
+                _hasNavigationProgressSample = true;
+                _lastNavigationPosition = position;
+                _stuckNavigationTimer = 0f;
+                return false;
+            }
+
+            double dx = position.X - _lastNavigationPosition.X;
+            double dy = position.Y - _lastNavigationPosition.Y;
+            double dz = position.Z - _lastNavigationPosition.Z;
+            if (dx * dx + dy * dy + dz * dz >= 0.04)
+            {
+                _lastNavigationPosition = position;
+                _stuckNavigationTimer = 0f;
+                return false;
+            }
+
+            _stuckNavigationTimer += Math.Max(0f, dt);
+            if (_stuckNavigationTimer < 1.25f) return false;
+            _stuckNavigationTimer = 0f;
+            bool recovered = false;
+            if (_navigationRecoveryAttempts < 2 && agent is SteveMob steve)
+                recovered = steve.TryRecoverStuckNavigation(_navigationRecoveryAttempts);
+            _navigationRecoveryAttempts++;
+            if (recovered) agent.RetryNavigationGoal();
+            return recovered;
         }
 
         private void Advance(MobEntity agent)

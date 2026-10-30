@@ -11,6 +11,7 @@ namespace Cubuild
     {
         public SteveMob(Point3D position, float yaw) : base(position, yaw)
         {
+            _taskExecutorAction = ExecuteCurrentTaskAction;
             Width = 0.60f;
             Height = 1.80f;
             MaxHealth = 20;

@@ -17,6 +17,214 @@ namespace Cubuild
         private int _toolGatherStandX, _toolGatherStandY, _toolGatherStandZ;
         private int _toolGatherOutputCount;
 
+        private const float StevePlanningCacheSeconds = 0.75f;
+
+        private struct GatherSearchCache
+        {
+            public GameWorld? World;
+            public bool Valid, Found, IgnoringGather;
+            public float Remaining;
+            public int SteveX, SteveY, SteveZ, PlayerX, PlayerZ;
+            public int IgnoredX, IgnoredY, IgnoredZ;
+            public GatherTarget Target;
+        }
+
+        private struct StationSearchCache
+        {
+            public GameWorld? World;
+            public bool Valid, Found, Frontier;
+            public float Remaining;
+            public int CenterX, CenterY, CenterZ;
+            public int StationX, StationY, StationZ, StationBlockId;
+            public int StandX, StandY, StandZ;
+        }
+
+        private GatherSearchCache _planksGatherSearchCache;
+        private GatherSearchCache _cobblestoneGatherSearchCache;
+        private StationSearchCache _carpenterStationSearchCache;
+        private StationSearchCache _masonryStationSearchCache;
+        private readonly Dictionary<int, int> _usefulDropDemandCache = new();
+        private bool _usefulDropDemandCacheValid;
+        private float _usefulDropDemandCacheTimer;
+
+        private void TickStevePlanningCaches(float dt)
+        {
+            float step = Math.Max(0f, dt);
+            _usefulDropDemandCacheTimer = Math.Max(0f, _usefulDropDemandCacheTimer - step);
+            _planksGatherSearchCache.Remaining = Math.Max(0f, _planksGatherSearchCache.Remaining - step);
+            _cobblestoneGatherSearchCache.Remaining = Math.Max(0f, _cobblestoneGatherSearchCache.Remaining - step);
+            _carpenterStationSearchCache.Remaining = Math.Max(0f, _carpenterStationSearchCache.Remaining - step);
+            _masonryStationSearchCache.Remaining = Math.Max(0f, _masonryStationSearchCache.Remaining - step);
+        }
+
+        private void InvalidateUsefulShelterDropDemandCache()
+        {
+            _usefulDropDemandCacheValid = false;
+            _usefulDropDemandCacheTimer = 0f;
+            _usefulDropDemandCacheWorld = null;
+        }
+
+        private void InvalidateGatherTargetSearchCaches()
+        {
+            _planksGatherSearchCache.Valid = false;
+            _planksGatherSearchCache.World = null;
+            _planksGatherSearchCache.Remaining = 0f;
+            _cobblestoneGatherSearchCache.Valid = false;
+            _cobblestoneGatherSearchCache.World = null;
+            _cobblestoneGatherSearchCache.Remaining = 0f;
+        }
+
+        private void InvalidateSteveCraftingStationSearchCaches()
+        {
+            _carpenterStationSearchCache.Valid = false;
+            _carpenterStationSearchCache.World = null;
+            _carpenterStationSearchCache.Remaining = 0f;
+            _masonryStationSearchCache.Valid = false;
+            _masonryStationSearchCache.World = null;
+            _masonryStationSearchCache.Remaining = 0f;
+        }
+
+        private bool TryFindGatherTargetCached(GameWorld world, int wantedItemId,
+            out GatherTarget bestTarget)
+        {
+            if (wantedItemId == ItemRegistry.GetId("planks"))
+                return TryFindGatherTargetCached(ref _planksGatherSearchCache, world,
+                    wantedItemId, out bestTarget);
+            if (wantedItemId == ItemRegistry.GetId("cobblestone"))
+                return TryFindGatherTargetCached(ref _cobblestoneGatherSearchCache, world,
+                    wantedItemId, out bestTarget);
+            return TryFindGatherTarget(world, wantedItemId, out bestTarget);
+        }
+
+        private bool TryFindGatherTargetCached(ref GatherSearchCache cache, GameWorld world,
+            int wantedItemId, out GatherTarget bestTarget)
+        {
+            int steveX = (int)Math.Floor(Position.X);
+            int steveY = (int)Math.Floor(Position.Y);
+            int steveZ = (int)Math.Floor(Position.Z);
+            int playerX = (int)Math.Floor(world.LocalPlayer.Position.X);
+            int playerZ = (int)Math.Floor(world.LocalPlayer.Position.Z);
+            bool ignoringGather = _hasIgnoredGather && _ignoredGatherTimer > 0f;
+            bool sameIgnoredTarget = !ignoringGather
+                || (cache.IgnoringGather && cache.IgnoredX == _ignoredGatherX
+                    && cache.IgnoredY == _ignoredGatherY && cache.IgnoredZ == _ignoredGatherZ);
+            bool cacheMatches = cache.Valid && cache.Remaining > 0f
+                && ReferenceEquals(cache.World, world)
+                && cache.SteveX == steveX && cache.SteveY == steveY && cache.SteveZ == steveZ
+                && cache.PlayerX == playerX && cache.PlayerZ == playerZ
+                && cache.IgnoringGather == ignoringGather && sameIgnoredTarget;
+            if (cacheMatches)
+            {
+                if (!cache.Found)
+                {
+                    bestTarget = default;
+                    return false;
+                }
+                if (GatherTargetStillValid(world, wantedItemId, cache.Target))
+                {
+                    bestTarget = cache.Target;
+                    return true;
+                }
+            }
+
+            cache.Valid = false;
+            bool found = TryFindGatherTarget(world, wantedItemId, out bestTarget);
+            cache.World = world;
+            cache.Valid = true;
+            cache.Found = found;
+            cache.Remaining = StevePlanningCacheSeconds;
+            cache.SteveX = steveX; cache.SteveY = steveY; cache.SteveZ = steveZ;
+            cache.PlayerX = playerX; cache.PlayerZ = playerZ;
+            cache.IgnoringGather = ignoringGather;
+            cache.IgnoredX = _ignoredGatherX; cache.IgnoredY = _ignoredGatherY;
+            cache.IgnoredZ = _ignoredGatherZ;
+            cache.Target = found ? bestTarget : default;
+            return found;
+        }
+
+        private bool TryFindSteveCraftingStationCached(GameWorld world, string station,
+            out int stationX, out int stationY, out int stationZ,
+            out int standX, out int standY, out int standZ)
+        {
+            if (string.Equals(station, "masonry", StringComparison.OrdinalIgnoreCase))
+                return TryFindSteveCraftingStationCached(ref _masonryStationSearchCache,
+                    world, station, out stationX, out stationY, out stationZ,
+                    out standX, out standY, out standZ);
+            if (string.Equals(station, "carpenter", StringComparison.OrdinalIgnoreCase))
+                return TryFindSteveCraftingStationCached(ref _carpenterStationSearchCache,
+                    world, station, out stationX, out stationY, out stationZ,
+                    out standX, out standY, out standZ);
+
+            RecordShelterStationSearch();
+            return world.TryFindSteveCraftingStation(this, station,
+                out stationX, out stationY, out stationZ,
+                out standX, out standY, out standZ);
+        }
+
+        private bool TryFindSteveCraftingStationCached(ref StationSearchCache cache,
+            GameWorld world, string station, out int stationX, out int stationY, out int stationZ,
+            out int standX, out int standY, out int standZ)
+        {
+            stationX = stationY = stationZ = standX = standY = standZ = 0;
+            int centerX = (int)Math.Floor(Position.X);
+            int centerY = (int)Math.Floor(Position.Y);
+            int centerZ = (int)Math.Floor(Position.Z);
+            bool sameQuery = cache.Valid && cache.Remaining > 0f
+                && ReferenceEquals(cache.World, world)
+                && cache.Frontier == world.FrontierProgression
+                && cache.CenterX == centerX && cache.CenterY == centerY && cache.CenterZ == centerZ;
+            if (sameQuery)
+            {
+                if (!cache.Found)
+                {
+                    RecordShelterStationCacheHit();
+                    return false;
+                }
+                if (world.Chunks.TryGetLoadedBlock(cache.StationX, cache.StationY,
+                        cache.StationZ, out int blockId)
+                    && blockId == cache.StationBlockId
+                    && IsWalkableStand(world, cache.StandX, cache.StandY, cache.StandZ)
+                    && world.CanSteveReachBlockFromStand(this, cache.StationX,
+                        cache.StationY, cache.StationZ,
+                        cache.StandX, cache.StandY, cache.StandZ))
+                {
+                    RecordShelterStationCacheHit();
+                    stationX = cache.StationX; stationY = cache.StationY; stationZ = cache.StationZ;
+                    standX = cache.StandX; standY = cache.StandY; standZ = cache.StandZ;
+                    return true;
+                }
+                // A removed, unloaded, blocked, or otherwise stale candidate fails open to a
+                // fresh loaded-world scan in this same call.
+                cache.Valid = false;
+            }
+
+            RecordShelterStationSearch();
+            bool found = world.TryFindSteveCraftingStation(this, station,
+                out stationX, out stationY, out stationZ,
+                out standX, out standY, out standZ);
+            cache.World = world;
+            cache.Valid = true;
+            cache.Found = found;
+            cache.Remaining = StevePlanningCacheSeconds;
+            cache.Frontier = world.FrontierProgression;
+            cache.CenterX = centerX; cache.CenterY = centerY; cache.CenterZ = centerZ;
+            if (found && world.Chunks.TryGetLoadedBlock(stationX, stationY, stationZ,
+                out int stationBlockId))
+            {
+                cache.StationX = stationX; cache.StationY = stationY; cache.StationZ = stationZ;
+                cache.StationBlockId = stationBlockId;
+                cache.StandX = standX; cache.StandY = standY; cache.StandZ = standZ;
+            }
+            else if (found)
+            {
+                // A station cannot be used from an unloaded cell. Do not retain a false success.
+                cache.Valid = false;
+                stationX = stationY = stationZ = standX = standY = standZ = 0;
+                return false;
+            }
+            return found;
+        }
+
         private readonly struct ToolCraftOption
         {
             public readonly int OutputItemId;
@@ -48,6 +256,15 @@ namespace Cubuild
         private bool TryPrepareToolUpgrade(GameWorld world, int targetBlockId)
         {
             if (_toolUpgradeRetryTimer > 0f) return false;
+            if (_workMode == WorkMode.ToolUp && _taskExecutor.HasTasks
+                && !_taskExecutor.IsComplete && !_taskExecutor.Failed)
+            {
+                // The executor already owns the active route/craft/mine step. Preserve its
+                // navigation tick and do not rebuild recipes or repeat a station search.
+                RecordShelterToolTaskContinuation();
+                return true;
+            }
+            RecordShelterToolPlanCheck();
             string family = BlockRegistry.ToolTypeOf(targetBlockId);
             if (string.IsNullOrWhiteSpace(family))
             {
@@ -103,7 +320,7 @@ namespace Cubuild
                 int stationX = 0, stationY = 0, stationZ = 0;
                 int stationStandX = 0, stationStandY = 0, stationStandZ = 0;
                 if (option.GridSize == 3
-                    && !world.TryFindSteveCraftingStation(this, option.Station,
+                    && !TryFindSteveCraftingStationCached(world, option.Station,
                         out stationX, out stationY, out stationZ,
                         out stationStandX, out stationStandY, out stationStandZ))
                 {
@@ -118,7 +335,11 @@ namespace Cubuild
                     }
                     if (stationStatus != PrivateItemStatus.Ready) continue;
                     if (ShelterInventoryCount(stationItemId) <= 0) continue;
-                    if (TryPlaceSteveCraftingStation(world, stationItemId)) return true;
+                    if (TryPlaceSteveCraftingStation(world, stationItemId))
+                    {
+                        InvalidateSteveCraftingStationSearchCaches();
+                        return true;
+                    }
                     continue;
                 }
 
@@ -126,7 +347,12 @@ namespace Cubuild
                 if (option.GridSize == 2)
                 {
                     if (TryCraftShelterItem(option.OutputItemId, option.GridSize, option.Station))
+                    {
+                        // Hand crafting needs no executor route; leave the live project gather
+                        // task in Gather mode so its next action remains valid.
+                        SetWorkMode(WorkMode.Gather);
                         return true;
+                    }
                     continue;
                 }
 
@@ -146,6 +372,7 @@ namespace Cubuild
             // Avoid rescanning the loaded region for the same unavailable recipe chain every
             // simulation tick. The real project gather task continues during this short pause.
             _toolUpgradeRetryTimer = 3f;
+            InvalidateUsefulShelterDropDemandCache();
             return false;
         }
 
@@ -265,7 +492,7 @@ namespace Cubuild
                 }
 
                 if (IsSteveGatherableMaterial(itemId)
-                    && TryFindGatherTarget(world, itemId, out var target)
+                    && TryFindGatherTargetCached(world, itemId, out var target)
                     && CanAcceptShelterItem(itemId, target.OutputCount))
                 {
                     gatherItemId = itemId;
@@ -304,14 +531,32 @@ namespace Cubuild
             if (!world.IsAuthoritative || _blueprintIndex < 0
                 || itemId <= 0 || itemId >= ItemRegistry.Count) return 0;
 
-            var demands = BuildUsefulShelterDropDemands(world);
+            var demands = GetCachedUsefulShelterDropDemands(world);
             if (!demands.TryGetValue(itemId, out int wanted)) return 0;
             return Math.Min(Math.Max(0, wanted), GetShelterItemCapacity(itemId));
         }
 
-        private Dictionary<int, int> BuildUsefulShelterDropDemands(GameWorld world)
+        private GameWorld? _usefulDropDemandCacheWorld;
+
+        private Dictionary<int, int> GetCachedUsefulShelterDropDemands(GameWorld world)
         {
-            var demands = new Dictionary<int, int>();
+            bool activeToolTask = _workMode == WorkMode.ToolUp && _taskExecutor.HasTasks
+                && !_taskExecutor.IsComplete && !_taskExecutor.Failed;
+            if (_usefulDropDemandCacheValid && ReferenceEquals(_usefulDropDemandCacheWorld, world)
+                && (_usefulDropDemandCacheTimer > 0f || activeToolTask))
+                return _usefulDropDemandCache;
+
+            _usefulDropDemandCache.Clear();
+            BuildUsefulShelterDropDemands(world, _usefulDropDemandCache);
+            _usefulDropDemandCacheWorld = world;
+            _usefulDropDemandCacheValid = true;
+            _usefulDropDemandCacheTimer = StevePlanningCacheSeconds;
+            RecordShelterDropDemandBuild();
+            return _usefulDropDemandCache;
+        }
+
+        private void BuildUsefulShelterDropDemands(GameWorld world, Dictionary<int, int> demands)
+        {
             int unplaced = Math.Max(0, _projectRequiredCount - CountPlaced(_projectRequiredCount));
             int projectDeficit = Math.Max(0, unplaced - ShelterInventoryCount(_projectMaterialItemId));
             if (projectDeficit > 0)
@@ -322,7 +567,6 @@ namespace Cubuild
             }
 
             AddActiveToolRecipeDropDemand(world, demands);
-            return demands;
         }
 
         private void AddActiveToolRecipeDropDemand(GameWorld world, Dictionary<int, int> demands)
@@ -370,7 +614,7 @@ namespace Cubuild
                 {
                     if (!stationReadiness.TryGetValue(option.Station, out var readiness))
                     {
-                        stationExists = world.TryFindSteveCraftingStation(this, option.Station,
+                        stationExists = TryFindSteveCraftingStationCached(world, option.Station,
                             out _, out _, out _, out _, out _, out _);
                         stationItemId = GetSteveStationItemId(world, option.Station);
                         bool usable = stationExists || (stationItemId > 0
@@ -449,7 +693,7 @@ namespace Cubuild
             {
                 if (!gatherTargetAvailability.TryGetValue(itemId, out bool hasTarget))
                 {
-                    hasTarget = TryFindGatherTarget(world, itemId, out _);
+                    hasTarget = TryFindGatherTargetCached(world, itemId, out _);
                     gatherTargetAvailability[itemId] = hasTarget;
                 }
                 if (hasTarget) return true;
@@ -494,8 +738,7 @@ namespace Cubuild
         }
 
         private static bool IsSteveGatherableMaterial(int itemId)
-            => string.Equals(ItemRegistry.GetName(itemId), "planks", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(ItemRegistry.GetName(itemId), "cobblestone", StringComparison.OrdinalIgnoreCase);
+            => IsSafeSteveBuildMaterial(itemId);
 
         private int AvailablePrivateCount(int itemId)
         {
@@ -511,13 +754,14 @@ namespace Cubuild
                 || !ToolGatherTargetStillValid(world))
             {
                 _hasToolGatherTarget = false;
-                if (!TryFindGatherTarget(world, itemId, out var target)) return false;
+                if (!TryFindGatherTargetCached(world, itemId, out var target)) return false;
                 _toolGatherX = target.X; _toolGatherY = target.Y; _toolGatherZ = target.Z;
                 _toolGatherStandX = target.StandX; _toolGatherStandY = target.StandY;
                 _toolGatherStandZ = target.StandZ;
                 _toolGatherOutputCount = target.OutputCount;
                 _toolGatherItemId = itemId;
                 _hasToolGatherTarget = true;
+                InvalidateUsefulShelterDropDemandCache();
             }
             if (!CanAcceptShelterItem(itemId, _toolGatherOutputCount))
             {
@@ -621,6 +865,7 @@ namespace Cubuild
                 if (!hasInputs || !AddSlots(staged, outputItemId, matched.OutputCount)) continue;
 
                 Array.Copy(staged, _shelterInventory, InventorySlotCount);
+                InvalidateUsefulShelterDropDemandCache();
                 return true;
             }
             return false;

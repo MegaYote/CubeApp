@@ -18,6 +18,7 @@ namespace Cubuild
         // Reused each frame so feeding the coupling beams into HudState never allocates.
         private readonly List<Cubuild.Renderer.LinkBeam> _linkBeams = new();
         private readonly List<FallingBlockData> _fallingBlockRenderScratch = new();
+        private readonly List<string> _steveAIDebugLines = new(16);
 
         private IReadOnlyList<FallingBlockData> BuildFallingBlockRenderData()
         {
@@ -122,6 +123,7 @@ namespace Cubuild
 
         private HudState BuildHud()
         {
+            _steveAIDebugLines.Clear();
             string netStatus = BuildNetStatus();
             string mpError = BuildMultiplayerError();
             if (World == null)
@@ -138,6 +140,7 @@ namespace Cubuild
                     RenderDistance = ChunkRenderRadius,
                     NetStatus = netStatus,
                     MultiplayerError = mpError,
+                    SteveAIDiagnostics = _steveAIDebugLines,
                     SaveToast = _saveToastTimer,
                     StatusToastTimer = _statusToastTimer,
                     StatusToast = _statusToast,
@@ -199,9 +202,16 @@ namespace Cubuild
             {
                 SteveMob? nearestSteve = null;
                 double nearestSteveDistance = double.PositiveInfinity;
+                int debugSteveCount = 0;
                 foreach (var mob in World.Entities.Mobs)
                 {
                     if (mob is not SteveMob steve || steve.IsDead || steve.Removed) continue;
+                    if (showFps)
+                    {
+                        if (debugSteveCount < 8)
+                            steve.AppendShelterAIDiagnostics(_steveAIDebugLines, debugSteveCount);
+                        debugSteveCount++;
+                    }
                     double dx = steve.Position.X - World.PlayerPosition.X;
                     double dy = steve.Position.Y - World.PlayerPosition.Y;
                     double dz = steve.Position.Z - World.PlayerPosition.Z;
@@ -210,6 +220,8 @@ namespace Cubuild
                     nearestSteve = steve;
                     nearestSteveDistance = distance;
                 }
+                if (showFps && debugSteveCount > 8)
+                    _steveAIDebugLines.Add($"Steve AI: {debugSteveCount - 8} more not shown");
                 if (nearestSteve != null)
                     steveBuilderStatus = nearestSteve.GetShelterStatus();
             }
@@ -238,6 +250,7 @@ namespace Cubuild
                 BiomeText = World.ChunkProvider?.BiomeNameAt((int)Math.Floor(World.PlayerPosition.X), (int)Math.Floor(World.PlayerPosition.Z)) ?? string.Empty,
                 Hotbar = World.Hotbar, HighlightWorldQuad = highlightQuad, LinkBeams = _linkBeams,
                 BuildGhostCells = Array.Empty<BuildGhostCell>(), SteveBuilderStatus = steveBuilderStatus,
+                SteveAIDiagnostics = _steveAIDebugLines,
                 ThirdPerson = thirdPersonView,
                 Mode = World.Mode, BagSlots = World.BagSlots, HotbarCounts = World.HotbarCounts, HeldStack = World.HeldStack,
                 CraftingSlots = World.CraftingGrid, CraftingResult = World.CraftingResult,

@@ -10,6 +10,7 @@ namespace Cubuild
         private const float RegenDelay = 15f;
         private const float RegenIntervalBase = 8.5f;
         private readonly Random _regenRandom = new();
+        private readonly SteveShelterCoordinator _steveShelterCoordinator = new();
 
         // Steps dropped items: gravity, ground settle, player pickup, and despawn. Purely
         // survival-facing - creative breaks don't even spawn drops.
@@ -249,6 +250,7 @@ namespace Cubuild
             {
                 foreach (var mob in Entities.Mobs)
                     if (mob is SteveMob steve && !steve.IsDead) steve.PrepareShelterWork(this, deltaSeconds);
+                _steveShelterCoordinator.Update(this, Entities.Mobs, deltaSeconds);
             }
             Entities.Update(deltaSeconds, LocalPlayer.Position, true, LocalPlayer.Health > 0);
             if (IsAuthoritative)

@@ -36,6 +36,11 @@ namespace Cubuild
         public int SteveAnchorX, SteveAnchorY, SteveAnchorZ;
         public int SteveRotation;
         public long StevePlacedMask;
+        /// <summary>v18: exact hidden procedural construction geometry and generator identity.</summary>
+        public int StevePlanSize;
+        public int StevePlanMaterialItemId;
+        public int StevePlanGeneratorVersion;
+        public int[] StevePlanCells = Array.Empty<int>();
         /// <summary>v17: persistent selected project and weighted planner/exploration state.</summary>
         public bool SteveHasSite;
         public int SteveProjectSeed;
@@ -51,7 +56,7 @@ namespace Cubuild
         public int SteveExplorationTargetX, SteveExplorationTargetY, SteveExplorationTargetZ;
         public int SteveExplorationOriginX, SteveExplorationOriginZ;
         public int SteveExplorationRing, SteveExplorationSector;
-        /// <summary>Runtime marker distinguishing v17 state from v1-v16 defaults.</summary>
+        /// <summary>Runtime marker distinguishing v17+ state from v1-v16 defaults.</summary>
         public bool StevePlannerStatePresent;
     }
 
@@ -87,7 +92,7 @@ namespace Cubuild
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 17;
+        public const int Version = 18;
         /// <summary>Binary version read from disk; new/in-memory saves use the current version.</summary>
         public int FileVersion = Version;
 
@@ -261,7 +266,7 @@ namespace Cubuild
                     w.Write(projectile.VelocityZ);
                     w.Write(projectile.DueWorldTime);
                 }
-                // v16-v17: Steve's private inventory, construction project, weighted planner,
+                // v16-v18: Steve's private inventory, construction project, weighted planner,
                 // and exploration frontier. Keep the extension at the tail so v1-v15 stays readable.
                 int steveCount = 0;
                 for (int i = 0; i < Mobs.Count; i++)
@@ -302,6 +307,17 @@ namespace Cubuild
                     w.Write(mob.SteveExplorationOriginZ);
                     w.Write(mob.SteveExplorationRing);
                     w.Write(mob.SteveExplorationSector);
+                    w.Write(mob.StevePlanSize);
+                    w.Write(mob.StevePlanMaterialItemId);
+                    w.Write(mob.StevePlanGeneratorVersion);
+                    int planCellCount = Math.Min(63, mob.StevePlanCells.Length / 3);
+                    w.Write(planCellCount);
+                    for (int cell = 0; cell < planCellCount; cell++)
+                    {
+                        w.Write(mob.StevePlanCells[cell * 3]);
+                        w.Write(mob.StevePlanCells[cell * 3 + 1]);
+                        w.Write(mob.StevePlanCells[cell * 3 + 2]);
+                    }
                 }
                 w.Flush();
             }
@@ -535,6 +551,22 @@ namespace Cubuild
                             mob.SteveExplorationOriginZ = reader.ReadInt32();
                             mob.SteveExplorationRing = reader.ReadInt32();
                             mob.SteveExplorationSector = reader.ReadInt32();
+                        }
+                        if (version >= 18)
+                        {
+                            mob.StevePlanSize = reader.ReadInt32();
+                            mob.StevePlanMaterialItemId = reader.ReadInt32();
+                            mob.StevePlanGeneratorVersion = reader.ReadInt32();
+                            int planCellCount = reader.ReadInt32();
+                            if (planCellCount < 0 || planCellCount > 63)
+                                throw new InvalidDataException("Invalid saved Steve plan cell count.");
+                            mob.StevePlanCells = new int[planCellCount * 3];
+                            for (int cell = 0; cell < planCellCount; cell++)
+                            {
+                                mob.StevePlanCells[cell * 3] = reader.ReadInt32();
+                                mob.StevePlanCells[cell * 3 + 1] = reader.ReadInt32();
+                                mob.StevePlanCells[cell * 3 + 2] = reader.ReadInt32();
+                            }
                         }
                     }
                 }

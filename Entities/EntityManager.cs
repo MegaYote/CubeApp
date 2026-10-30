@@ -118,7 +118,6 @@ namespace Cubuild
             };
             creatures.Rules.Add(new MobSpawnRule { MobId = "duck", Weight = 6, PackMin = 1, PackMax = 3, NearWater = false });
             creatures.Rules.Add(new MobSpawnRule { MobId = "coyote", Weight = 3, PackMin = 1, PackMax = 2 });
-            creatures.Rules.Add(new MobSpawnRule { MobId = "steve", Weight = 1, PackMin = 1, PackMax = 1 });
 
             var monsters = new SpawnCategory
             {
@@ -1036,6 +1035,10 @@ namespace Cubuild
                 SteveAnchorZ = mob is SteveMob sz ? sz.ShelterAnchorZ : 0,
                 SteveRotation = mob is SteveMob sr ? sr.ShelterRotation : 0,
                 StevePlacedMask = mob is SteveMob sm ? sm.ShelterPlacedMask : 0,
+                StevePlanSize = mob is SteveMob psiz ? psiz.ShelterPlanSize : 0,
+                StevePlanMaterialItemId = mob is SteveMob pm ? pm.ShelterPlanMaterialItemId : 0,
+                StevePlanGeneratorVersion = mob is SteveMob pgv ? pgv.ShelterPlanGeneratorVersion : 0,
+                StevePlanCells = mob is SteveMob pcell ? pcell.CaptureShelterPlanCells() : Array.Empty<int>(),
                 SteveHasSite = mob is SteveMob hs && hs.ShelterHasSite,
                 SteveProjectSeed = mob is SteveMob ps ? ps.ShelterProjectSeed : 0,
                 SteveMaterialItemId = mob is SteveMob mi ? mi.ShelterMaterialItemId : 0,
@@ -1180,7 +1183,8 @@ namespace Cubuild
                 var mob = new SteveMob(pos, m.Yaw);
                 mob.RestoreState(pos, m.Yaw, m.Health, m.VehicleMeleeHitCount);
                 mob.RestoreShelterState(m.SteveInventory, m.SteveBlueprintIndex,
-                    m.SteveAnchorX, m.SteveAnchorY, m.SteveAnchorZ, m.SteveRotation, m.StevePlacedMask);
+                    m.SteveAnchorX, m.SteveAnchorY, m.SteveAnchorZ, m.SteveRotation, m.StevePlacedMask,
+                    m.StevePlanSize, m.StevePlanMaterialItemId, m.StevePlanGeneratorVersion, m.StevePlanCells);
                 if (m.StevePlannerStatePresent)
                     mob.RestoreShelterPlannerState(m.SteveHasSite, m.SteveProjectSeed,
                         m.SteveMaterialItemId, m.SteveRequiredMaterialCount, m.StevePlannerGoal,

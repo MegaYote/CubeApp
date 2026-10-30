@@ -139,6 +139,8 @@ namespace Cubuild.Renderer
         public IReadOnlyList<Cubuild.BuildGhostCell> BuildGhostCells;
         /// <summary>Normal-play construction status (empty when no authoritative Steve is active).</summary>
         public string SteveBuilderStatus;
+        /// <summary>Transient, design-neutral per-Steve performance diagnostics (F3 only).</summary>
+        public IReadOnlyList<string> SteveAIDiagnostics;
 
         /// <summary>
         /// Coupling beams between linked carts (null/empty when nothing is coupled). The renderer
@@ -258,6 +260,7 @@ namespace Cubuild.Renderer
             HighlightWorldQuad = null,
             BuildGhostCells = System.Array.Empty<Cubuild.BuildGhostCell>(),
             SteveBuilderStatus = string.Empty,
+            SteveAIDiagnostics = Array.Empty<string>(),
             LinkBeams = null,
             PlayerChunkX = 0,
             PlayerChunkZ = 0,

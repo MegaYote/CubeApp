@@ -248,6 +248,10 @@ namespace Cubuild
                     || a.SteveAnchorX != b.SteveAnchorX || a.SteveAnchorY != b.SteveAnchorY
                     || a.SteveAnchorZ != b.SteveAnchorZ || a.SteveRotation != b.SteveRotation
                     || a.StevePlacedMask != b.StevePlacedMask
+                    || a.StevePlanSize != b.StevePlanSize
+                    || a.StevePlanMaterialItemId != b.StevePlanMaterialItemId
+                    || a.StevePlanGeneratorVersion != b.StevePlanGeneratorVersion
+                    || !a.StevePlanCells.AsSpan().SequenceEqual(b.StevePlanCells)
                     || a.SteveHasSite != b.SteveHasSite
                     || a.SteveProjectSeed != b.SteveProjectSeed
                     || a.SteveMaterialItemId != b.SteveMaterialItemId

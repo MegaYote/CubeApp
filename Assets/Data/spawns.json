@@ -52,13 +52,6 @@
           "packMin": 1,
           "packMax": 2,
           "biomes": ["plains", "lowlands", "hills", "desert", "paradise"]
-        },
-        {
-          "mobId": "steve",
-          "weight": 1,
-          "packMin": 1,
-          "packMax": 1,
-          "biomes": ["plains", "lowlands", "hills", "paradise"]
         }
       ]
     },
