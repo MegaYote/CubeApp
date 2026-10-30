@@ -996,7 +996,7 @@ namespace Cubuild
             {
                 var slot = _shelterInventory[i];
                 int itemId = slot.ItemId;
-                if (slot.Count <= 0 || !IsSafeSteveBuildMaterial(itemId)
+                if (slot.Count <= 0 || !IsDefaultProceduralMaterial(itemId)
                     || IsShelterItemReserved(itemId)) continue;
                 int blockId = ItemRegistry.ResolveBlockId(itemId);
                 if (blockId <= 0 || !world.TryPlaceBlockForSteve(this, tx, placeY, tz, blockId, itemId)) continue;
@@ -1800,19 +1800,8 @@ namespace Cubuild
                 outputName = "cobblestone";
                 count = 1;
             }
-            else
-            {
-                // Other materials are gathered only when the block's own registered item is a
-                // safe full cube with an exact place-back mapping. Do not invent crafting or drops.
-                if (!IsSafeSteveBuildBlock(blockId)
-                    || !string.IsNullOrWhiteSpace(BlockRegistry.DropItemOf(blockId))
-                    || BlockRegistry.ToolRequiredOf(blockId)
-                    || BlockRegistry.HarvestLevelOf(blockId) > 0) return false;
-                outputName = name;
-                int min = BlockRegistry.DropCountMinOf(blockId);
-                int max = BlockRegistry.DropCountMaxOf(blockId);
-                count = min > 0 && max >= min && max <= 16 ? max : 1;
-            }
+            else return false;
+            if (world.IsSteveConstructionCellProtected(x, y, z)) return false;
 
             try
             {
@@ -1828,7 +1817,7 @@ namespace Cubuild
             }
         }
 
-        private static bool IsSafeSteveBuildBlock(int blockId)
+        internal static bool IsSafeSteveBuildBlock(int blockId)
         {
             if (blockId <= 0 || blockId >= BlockRegistry.Count
                 || !BlockRegistry.IsPlaceable(blockId) || !BlockRegistry.IsSolid(blockId)
@@ -1855,34 +1844,62 @@ namespace Cubuild
             => itemId > 0 && itemId < BlockRegistry.Count
                 && IsSafeSteveBuildBlock(itemId);
 
+        internal bool IsCommittedShelterCell(int x, int y, int z)
+        {
+            if (!_hasShelterSite || _blueprintIndex < 0
+                || !TryResolveTemplate(_blueprintIndex, out var template, out _, out _)) return false;
+            for (int i = 0; i < template.Cells.Length; i++)
+            {
+                var cell = template.Cells[i];
+                RotateCell(cell, template.Size, _rotation, out int rx, out int rz);
+                if (_anchorX + rx == x && _anchorY + cell.Y == y && _anchorZ + rz == z)
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool IsDefaultProceduralMaterial(int itemId)
+        {
+            if (!IsSafeSteveBuildMaterial(itemId)) return false;
+            string name = ItemRegistry.GetName(itemId);
+            string material = BlockRegistry.MaterialOf(itemId);
+            return material is "wood" or "rock" or "misc"
+                && !string.Equals(name, "log", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(name, "stone", StringComparison.OrdinalIgnoreCase);
+        }
+
         private bool TrySelectProceduralMaterial(GameWorld world, string fallbackName, int requiredCount,
             out string itemName, out int itemId)
         {
             itemName = fallbackName;
             itemId = 0;
-            int bestItem = 0, bestCount = 0;
+            int fullyStockedItem = 0, fullyStockedCount = 0;
             foreach (var slot in _shelterInventory)
             {
-                if (slot.Count <= bestCount || !IsSafeSteveBuildMaterial(slot.ItemId)) continue;
-                bestItem = slot.ItemId;
-                bestCount = slot.Count;
+                if (!IsDefaultProceduralMaterial(slot.ItemId)
+                    || ShelterInventoryCount(slot.ItemId) < requiredCount) continue;
+                int count = ShelterInventoryCount(slot.ItemId);
+                if (count <= fullyStockedCount) continue;
+                fullyStockedItem = slot.ItemId;
+                fullyStockedCount = count;
             }
-            if (bestItem > 0)
+            if (fullyStockedItem > 0)
             {
-                if (bestCount >= requiredCount || TryFindGatherTarget(world, bestItem, out _))
-                {
-                    itemId = bestItem;
-                    itemName = ItemRegistry.GetName(bestItem);
-                    return true;
-                }
-            }
-
-            if (TryFindGatherTarget(world, 0, out var target) && target.ItemId > 0)
-            {
-                itemId = target.ItemId;
-                itemName = ItemRegistry.GetName(itemId);
+                itemId = fullyStockedItem;
+                itemName = ItemRegistry.GetName(fullyStockedItem);
                 return true;
             }
+
+            if (TryResolveTemplateMaterial(fallbackName, out int fallbackItem, out _)
+                && IsDefaultProceduralMaterial(fallbackItem)
+                && (ShelterInventoryCount(fallbackItem) >= requiredCount
+                    || TryFindGatherTarget(world, fallbackItem, out _)))
+            {
+                itemId = fallbackItem;
+                itemName = ItemRegistry.GetName(fallbackItem);
+                return true;
+            }
+
             return TryResolveTemplateMaterial(fallbackName, out itemId, out _);
         }
 

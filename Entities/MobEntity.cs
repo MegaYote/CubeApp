@@ -723,7 +723,10 @@ namespace Cubuild
             }
 
             _emergencyPathFinder ??= new PathFinder(new PathNodeProcessor(manager, Width, Height,
-                requireLoadedCells: true, canBreakBlocks: true, requireMineableBreakBlocks: true));
+                requireLoadedCells: true, canBreakBlocks: true, requireMineableBreakBlocks: true,
+                canBreakBlock: this is SteveMob
+                    ? id => !SteveMob.IsSafeSteveBuildBlock(id)
+                    : null));
             var emergency = _emergencyPathFinder.FindPath(Position.X, Position.Y, Position.Z,
                 _pathGoalX, _pathGoalY, _pathGoalZ, (float)_pathMaxDistance);
             if (PathReachesGoal(emergency) && emergency!.EmergencyBreakTarget.HasValue)

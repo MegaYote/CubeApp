@@ -19,10 +19,11 @@ namespace Cubuild
         private readonly bool _requireLoadedCells;
         private readonly bool _canBreakBlocks;
         private readonly bool _requireMineableBreakBlocks;
+        private readonly Func<int, bool>? _canBreakBlock;
 
         public PathNodeProcessor(ChunkManager manager, float mobWidth, float mobHeight,
             bool requireLoadedCells = false, bool canBreakBlocks = false,
-            bool requireMineableBreakBlocks = false)
+            bool requireMineableBreakBlocks = false, Func<int, bool>? canBreakBlock = null)
         {
             _manager = manager;
             _mobWidth = mobWidth;
@@ -30,6 +31,7 @@ namespace Cubuild
             _requireLoadedCells = requireLoadedCells;
             _canBreakBlocks = canBreakBlocks;
             _requireMineableBreakBlocks = requireMineableBreakBlocks;
+            _canBreakBlock = canBreakBlock;
         }
 
         public PathPoint GetStart(double x, double y, double z)
@@ -202,7 +204,7 @@ namespace Cubuild
 
         private bool IsPermittedBreakBlock(int id)
         {
-            if (!BlockRegistry.ZombieCanBreakOf(id)) return false;
+            if (!BlockRegistry.ZombieCanBreakOf(id) || (_canBreakBlock != null && !_canBreakBlock(id))) return false;
             if (!_requireMineableBreakBlocks) return true;
             float hardness = BlockRegistry.HardnessOf(id);
             return hardness > 0f && !float.IsNaN(hardness) && !float.IsInfinity(hardness);

@@ -1218,6 +1218,7 @@ var place = pickResult.Value.Place;
         {
             gathered = 0;
             if (!IsAuthoritative || steve == null || steve.IsDead || steve.Removed) return false;
+            if (IsSteveConstructionCellProtected(x, y, z)) return false;
             if (!Chunks.TryGetLoadedBlock(x, y, z, out int blockId)) return false;
             if (!SteveMob.TryGetSteveGatherYield(this, x, y, z, blockId, out int outputItemId, out int outputCount)) return false;
             if (outputItemId != wantedItemId || !steve.CanAcceptShelterItem(outputItemId, outputCount)) return false;
@@ -1227,10 +1228,21 @@ var place = pickResult.Value.Place;
             double dx = x + 0.5 - LocalPlayer.Position.X;
             double dz = z + 0.5 - LocalPlayer.Position.Z;
             if (dx * dx + dz * dz < 9.0) return false;
-            if (!CanSteveReachBlock(steve, x, y, z)) return false;
+            if (IsSteveConstructionCellProtected(x, y, z)
+                || !CanSteveReachBlock(steve, x, y, z)) return false;
             if (!ApplyBlockEdit(x, y, z, BlockRegistry.AirId, 0)) return false;
             gathered = outputCount;
             return true;
+        }
+
+        /// <summary>Committed Steve blueprint cells are not resource or obstacle targets.</summary>
+        internal bool IsSteveConstructionCellProtected(int x, int y, int z)
+        {
+            if (Entities == null) return false;
+            foreach (var renderable in Entities.Mobs)
+                if (renderable is SteveMob steve && !steve.Removed
+                    && steve.IsCommittedShelterCell(x, y, z)) return true;
+            return false;
         }
 
         /// <summary>
@@ -1242,6 +1254,8 @@ var place = pickResult.Value.Place;
         {
             if (!IsAuthoritative || steve == null || steve.IsDead || steve.Removed
                 || expectedBlockId <= 0 || !BlockRegistry.ZombieCanBreakOf(expectedBlockId)) return false;
+            if (IsSteveConstructionCellProtected(x, y, z)
+                || SteveMob.IsSafeSteveBuildBlock(expectedBlockId)) return false;
             if (!Chunks.TryGetLoadedBlock(x, y, z, out int currentId) || currentId != expectedBlockId
                 || !BlockRegistry.IsSolid(currentId)) return false;
             float hardness = BlockRegistry.HardnessOf(currentId);
@@ -1279,7 +1293,9 @@ var place = pickResult.Value.Place;
 
             // Revalidate at the authoritative edit point: a route may have moved, a block may now
             // occlude the target, or another mob may be standing in front of it.
-            if (!CanSteveReachBlock(steve, x, y, z)) return false;
+            if (IsSteveConstructionCellProtected(x, y, z)
+                || SteveMob.IsSafeSteveBuildBlock(currentId)
+                || !CanSteveReachBlock(steve, x, y, z)) return false;
 
             if (!ApplyBlockEdit(x, y, z, BlockRegistry.AirId, 0)) return false;
             int naturalLeafDrop = currentId == _idLeaves
