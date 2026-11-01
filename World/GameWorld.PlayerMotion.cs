@@ -369,7 +369,7 @@ namespace Cubuild
         {
             const double maxStepHeight = 0.5;
             var raised = new Point3D(start.X, start.Y + maxStepHeight, start.Z);
-            if (IsPlayerColliding(raised)) return null;
+            if (IsPlayerColliding(raised, start)) return null;
             bool hx = false, hz = false;
             var moved = MoveAlongAxis(raised, displacement.X, Axis.X, ref hx);
             moved = MoveAlongAxis(moved, displacement.Z, Axis.Z, ref hz);
@@ -378,7 +378,7 @@ namespace Cubuild
             while (down.Y > start.Y)
             {
                 var candidate = new Point3D(down.X, down.Y - CollisionStep, down.Z);
-                if (IsPlayerColliding(candidate)) break;
+                if (IsPlayerColliding(candidate, down)) break;
                 down = candidate;
             }
             return down;
@@ -399,7 +399,7 @@ namespace Cubuild
                     Axis.Z => new Point3D(current.X, current.Y, current.Z + step),
                     _ => current,
                 };
-                if (IsPlayerColliding(next))
+                if (IsPlayerColliding(next, current))
                 {
                     collided = true;
                     return current;
@@ -410,6 +410,9 @@ namespace Cubuild
         }
 
         public bool IsPlayerColliding(Point3D eyePosition)
+            => IsPlayerColliding(eyePosition, previousEyePosition: null);
+
+        private bool IsPlayerColliding(Point3D eyePosition, Point3D? previousEyePosition)
         {
             // While riding a cart the VEHICLE is what moves and collides. The rider is carried
             // inside it, so their own body must pass through the world - otherwise the player's
@@ -436,8 +439,39 @@ namespace Cubuild
             {
                 if (Chunks.TryGetLoadedBlockAndMeta(x, y, z, out var block, out var meta) && BlockRegistry.IsSolid(block))
                 {
-                    if (BoxesOverlapPlayer(GetBlockCollisionBoxes(block, meta), x, y, z, minX, maxX, minY, maxY, minZ, maxZ))
+                    var boxes = GetBlockCollisionBoxes(block, meta);
+                    if (BlockRegistry.IsDoor(block))
+                    {
+                        double previousMinX = previousEyePosition.HasValue ? previousEyePosition.Value.X - PlayerRadius : 0;
+                        double previousMaxX = previousEyePosition.HasValue ? previousEyePosition.Value.X + PlayerRadius : 0;
+                        double previousMinY = previousEyePosition.HasValue ? previousEyePosition.Value.Y - EyeHeight : 0;
+                        double previousMaxY = previousEyePosition.HasValue ? previousMinY + PlayerHeight : 0;
+                        double previousMinZ = previousEyePosition.HasValue ? previousEyePosition.Value.Z - PlayerRadius : 0;
+                        double previousMaxZ = previousEyePosition.HasValue ? previousEyePosition.Value.Z + PlayerRadius : 0;
+                        foreach (var box in boxes)
+                        {
+                            double candidateOverlap = CollisionBoxOverlapVolume(box, x, y, z,
+                                minX, maxX, minY, maxY, minZ, maxZ);
+                            if (candidateOverlap <= 0) continue;
+
+                            double previousOverlap = previousEyePosition.HasValue
+                                ? CollisionBoxOverlapVolume(box, x, y, z,
+                                    previousMinX, previousMaxX, previousMinY, previousMaxY,
+                                    previousMinZ, previousMaxZ)
+                                : 0;
+                            // A door may close around an entity, but it must not become a way
+                            // into a panel: the entity must already overlap it, and this move
+                            // may not increase that overlap. Equal-overlap steps let an entity
+                            // slide parallel to the panel until it can move clear.
+                            const double egressTolerance = 1e-8;
+                            if (previousOverlap <= 0
+                                || candidateOverlap > previousOverlap + egressTolerance) return true;
+                        }
+                    }
+                    else if (BoxesOverlapPlayer(boxes, x, y, z, minX, maxX, minY, maxY, minZ, maxZ))
+                    {
                         return true;
+                    }
                 }
             }
             return false;
@@ -454,8 +488,9 @@ namespace Cubuild
         /// <summary>
         /// Player counterpart to <see cref="MobEntity.UpdateBlockEmbedding"/>: if a solid block ends
         /// up sharing the player's hitbox (sand falling on your head, a cube placed into you), slide
-        /// them out through the first free horizontal direction. With every side walled off they are
-        /// being crushed and take suffocation damage instead. Creative and noclip ignore it.
+        /// them through a collision-safe horizontal step. Door-panel overlap may remain temporarily
+        /// only while it strictly decreases; with every exit blocked, they take suffocation damage.
+        /// Creative and noclip ignore it.
         /// </summary>
         private void ResolvePlayerEmbedding(PlayerState p, float deltaSeconds)
         {
@@ -470,7 +505,7 @@ namespace Cubuild
             {
                 var candidate = new Point3D(
                     p.Position.X + dx * step, p.Position.Y, p.Position.Z + dz * step);
-                if (IsPlayerColliding(candidate)) continue;
+                if (IsPlayerColliding(candidate, p.Position)) continue;
 
                 p.Position = candidate;
                 _playerSuffocationAccumulator = 0f;
@@ -549,6 +584,20 @@ namespace Cubuild
                 }
             }
             return false;
+        }
+
+        /// <summary>Intersection volume between an entity AABB and one cell-relative collision box.</summary>
+        public static double CollisionBoxOverlapVolume(
+            (double minX, double minY, double minZ, double maxX, double maxY, double maxZ) box,
+            int bx, int by, int bz,
+            double minX, double maxX, double minY, double maxY, double minZ, double maxZ)
+        {
+            double overlapX = Math.Min(maxX, bx + box.maxX) - Math.Max(minX, bx + box.minX);
+            double overlapY = Math.Min(maxY, by + box.maxY) - Math.Max(minY, by + box.minY);
+            double overlapZ = Math.Min(maxZ, bz + box.maxZ) - Math.Max(minZ, bz + box.minZ);
+            return overlapX > 0 && overlapY > 0 && overlapZ > 0
+                ? overlapX * overlapY * overlapZ
+                : 0;
         }
 
         // ------------------------------------------------------------------

@@ -873,8 +873,10 @@ var place = pickResult.Value.Place;
 
         /// <summary>Flips the open bit on a door and both of its halves. Returns false when the targeted
         /// block isn't part of a door. Used by right-click (see Program.Input) and by clients
-        /// replaying the host's edit.
+        /// replaying the host's edit. A closing panel may overlap an entity; movement collision
+        /// then permits that entity to leave only while its panel overlap strictly decreases.
         /// </summary>
+        /// <param name="allowTrap">Retained for caller compatibility; closures now always allow egress.</param>
         public bool TryToggleDoor(int x, int y, int z, bool allowTrap = false)
         {
             if (!Chunks.TryGetLoadedBlockAndMeta(x, y, z, out int id, out byte meta)) return false;
@@ -886,12 +888,6 @@ var place = pickResult.Value.Place;
             int doorTopId = clickedTop ? id : DoorTopIdFor(id);
             int doorBottomId = clickedTop ? DoorBottomIdFor(id) : id;
             if (doorTopId < 0 || doorBottomId < 0) return false;
-
-            bool open = BlockRegistry.IsDoorOpen(meta);
-            // Don't slam a door shut on top of the player - the collision resolver would leave
-            // them stuck inside it with no way out. allowTrap is set for remote/replayed edits,
-            // where the local player isn't the one standing in the doorway.
-            if (!open && !allowTrap && WouldDoorTrapPlayer(x, y, z, doorBottomId, meta)) return false;
 
             byte toggled = (byte)(meta ^ BlockRegistry.DoorOpenBit);
             int bottomY = clickedTop ? y - 1 : y;
@@ -908,18 +904,6 @@ var place = pickResult.Value.Place;
             BlockEdited?.Invoke(x, bottomY, z, doorBottomId, toggled);
             BlockEdited?.Invoke(x, topY, z, doorTopId, toggled);
             return true;
-        }
-
-        /// <summary>
-        /// True when closing the door would leave the local player standing inside the closed
-        /// panel. The collision resolver only rejects steps, it never pushes the player out, so
-        /// a door allowed to close over them would trap them with no way to escape.
-        /// </summary>
-        private bool WouldDoorTrapPlayer(int x, int y, int z, int doorBottomId, byte meta)
-        {
-            int bottomY = BlockRegistry.IsDoorTop(doorBottomId) ? y - 1 : y;
-            return WouldBlockIntersectPlayer(LocalPlayer, x, bottomY, z, doorBottomId, meta)
-                || WouldBlockIntersectPlayer(LocalPlayer, x, bottomY + 1, z, doorBottomId, meta);
         }
 
         // Computes the face rectangle (minX,minY,minZ,maxX,maxY,maxZ) for a fluid block

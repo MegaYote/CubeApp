@@ -1153,10 +1153,18 @@ namespace Cubuild
                     }
                 }
 
-                int nly = ny - lighting.OriginY;
+                // A thin door can have a broad face inside its own voxel. Sampling the full
+                // neighboring voxel from that face can pick up an unrelated dark cell and make
+                // one side render black. Interior door faces sample their own transparent cell;
+                // cell-boundary faces keep the normal neighbor light sample.
+                bool sampleDoorCell = BlockRegistry.IsDoor(blockId) && !onCellBoundary;
+                int lightX = sampleDoorCell ? wx : nx;
+                int lightY = sampleDoorCell ? wy : ny;
+                int lightZ = sampleDoorCell ? wz : nz;
+                int nly = lightY - lighting.OriginY;
                 double shade = off.dy > 0 ? 1.0 : (off.dy < 0 ? 0.5 : (off.dx != 0 ? 0.6 : 0.8));
-                int skyLight = lighting.GetSkyLight(nx, nly, nz);
-                int blockLight = lighting.GetBlockLight(nx, nly, nz);
+                int skyLight = lighting.GetSkyLight(lightX, nly, lightZ);
+                int blockLight = lighting.GetBlockLight(lightX, nly, lightZ);
 
                 var normal = new Point3D(off.dx, off.dy, off.dz);
                 var verts = FaceVertices[i];

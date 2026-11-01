@@ -270,17 +270,16 @@ namespace Cubuild
         }
 
         /// <summary>
-        /// Per-cell light attenuation. <paramref name="meta"/> is needed for doors, whose
-        /// opacity depends on state: a closed door seals the cell (Minecraft behaviour), an
-        /// open one is just a panel swung aside so light passes through. Lighting is rebuilt
-        /// on every remesh, so toggling a door re-lights the region for free.
+        /// Per-cell light attenuation. Door panels are thin and glass-like, so light passes
+        /// through them in either state; <paramref name="meta"/> is retained for this shared
+        /// metadata-aware entry point.
         /// </summary>
         private static byte LightOpacity(int id, byte meta)
         {
             if (id == BlockRegistry.AirId) return 0;
             if (id == _idWater) return 3;
             if (id == _idLeaves) return 1;
-            if (BlockRegistry.IsDoor(id)) return BlockRegistry.IsDoorOpen(meta) ? (byte)0 : (byte)255;
+            if (BlockRegistry.IsDoor(id)) return 0;
             if (!BlockRegistry.IsOpaque(id)) return 0;
             if (BlockRegistry.IsCross(id)) return 0;
             if (BlockRegistry.IsPartialShape(id)) return 0;

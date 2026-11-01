@@ -116,8 +116,8 @@ namespace Cubuild
 
                     // Try same level first.
                     if (TryNode(nx, point.Y, nz, target, maxDistance, out var same)
-                        && CanApproachBreakNode(point, same, dx, dz)
-                        && CanTraverse(point, same))
+                        && CanTraverse(point, same)
+                        && CanApproachBreakNode(point, same, dx, dz))
                     {
                         _pathOptions[count++] = same;
                         continue;
@@ -125,14 +125,14 @@ namespace Cubuild
 
                     // Then one block up (step-up) and one block down (step-down).
                     if (TryNode(nx, point.Y + 1, nz, target, maxDistance, out var up)
-                        && CanApproachBreakNode(point, up, dx, dz)
-                        && CanTraverse(point, up))
+                        && CanTraverse(point, up)
+                        && CanApproachBreakNode(point, up, dx, dz))
                     {
                         _pathOptions[count++] = up;
                     }
                     else if (TryNode(nx, point.Y - 1, nz, target, maxDistance, out var down)
-                        && CanApproachBreakNode(point, down, dx, dz)
-                        && CanTraverse(point, down))
+                        && CanTraverse(point, down)
+                        && CanApproachBreakNode(point, down, dx, dz))
                     {
                         _pathOptions[count++] = down;
                     }
@@ -146,6 +146,23 @@ namespace Cubuild
         {
             int dx = to.X - from.X;
             int dz = to.Z - from.Z;
+            // Nodes are sampled at cell centers; checking only their endpoint AABBs can miss a
+            // thin door panel at the boundary crossed between them.
+            if (!_processor.IsBodyClearAlongStep(from.X, from.Y, from.Z, to.X, to.Y, to.Z))
+            {
+                if (!_processor.TryGetEmergencyBreakBlockForStep(from.X, from.Y, from.Z,
+                    to.X, to.Y, to.Z, out int blockX, out int blockY, out int blockZ,
+                    out int blockId, out float hardness)) return false;
+                if (!to.HasEmergencyBreakBlock)
+                {
+                    to.HasEmergencyBreakBlock = true;
+                    to.EmergencyBreakX = blockX;
+                    to.EmergencyBreakY = blockY;
+                    to.EmergencyBreakZ = blockZ;
+                    to.EmergencyBreakBlockId = blockId;
+                    to.EmergencyBreakHardness = hardness;
+                }
+            }
             if (dx == 0 || dz == 0) return true;
 
             int minY = Math.Min(from.Y, to.Y);

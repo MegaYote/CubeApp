@@ -1594,7 +1594,7 @@ namespace Cubuild
                 double delta = Math.Sign(remaining) * Math.Min(Math.Abs(remaining), baseStep);
                 double nx = Position.X, ny = Position.Y, nz = Position.Z;
                 switch (axis) { case Axis.X: nx += delta; break; case Axis.Y: ny += delta; break; case Axis.Z: nz += delta; break; }
-                if (!IntersectsSolid(manager, nx, ny, nz))
+                if (!IntersectsSolid(manager, nx, ny, nz, Position))
                 {
                     Position = new Point3D(nx, ny, nz);
                     remaining -= delta; continue;
@@ -1610,7 +1610,7 @@ namespace Cubuild
             if (StepHeight <= 0 || !OnGround) return false;
             double bx = Position.X, by = Position.Y + StepHeight, bz = Position.Z;
             switch (axis) { case Axis.X: bx += delta; break; case Axis.Z: bz += delta; break; }
-            if (IntersectsSolid(manager, bx, by, bz)) return false;
+            if (IntersectsSolid(manager, bx, by, bz, Position)) return false;
             Position = new Point3D(bx, by, bz); OnGround = true; return true;
         }
 
@@ -1619,7 +1619,8 @@ namespace Cubuild
             switch (axis) { case Axis.X: _velX = value; break; case Axis.Y: _velY = value; break; case Axis.Z: _velZ = value; break; }
         }
 
-        protected bool IntersectsSolid(ChunkManager manager, double px, double py, double pz)
+        protected bool IntersectsSolid(ChunkManager manager, double px, double py, double pz,
+            Point3D? previousPosition = null)
         {
             double halfW = Width * 0.5;
             double minX = px - halfW, maxX = px + halfW;
@@ -1628,10 +1629,43 @@ namespace Cubuild
             int x0 = (int)Math.Floor(minX), x1 = (int)Math.Floor(maxX);
             int y0 = (int)Math.Floor(minY), y1 = (int)Math.Floor(maxY - 0.001);
             int z0 = (int)Math.Floor(minZ), z1 = (int)Math.Floor(maxZ);
+            double previousMinX = previousPosition.HasValue ? previousPosition.Value.X - halfW : 0;
+            double previousMaxX = previousPosition.HasValue ? previousPosition.Value.X + halfW : 0;
+            double previousMinY = previousPosition.HasValue ? previousPosition.Value.Y : 0;
+            double previousMaxY = previousPosition.HasValue ? previousMinY + Height : 0;
+            double previousMinZ = previousPosition.HasValue ? previousPosition.Value.Z - halfW : 0;
+            double previousMaxZ = previousPosition.HasValue ? previousPosition.Value.Z + halfW : 0;
+
             for (int x = x0; x <= x1; x++)
-                for (int y = y0; y <= y1; y++)
-                    for (int z = z0; z <= z1; z++)
-                        if (IsSolid(manager, x, y, z)) return true;
+            for (int y = y0; y <= y1; y++)
+            for (int z = z0; z <= z1; z++)
+            {
+                if (!manager.TryGetLoadedBlockAndMeta(x, y, z, out int block, out byte meta)
+                    || !BlockRegistry.IsSolid(block)) continue;
+
+                // Keep existing full-cell collision for ordinary solid blocks. Doors alone
+                // use their authoritative metadata-aware panel geometry, shared with player
+                // physics and pathfinding.
+                if (!BlockRegistry.IsDoor(block)) return true;
+                var boxes = GameWorld.GetBlockCollisionBoxes(block, meta);
+                foreach (var box in boxes)
+                {
+                    double overlap = GameWorld.CollisionBoxOverlapVolume(box, x, y, z,
+                        minX, maxX, minY, maxY, minZ, maxZ);
+                    if (overlap <= 0) continue;
+
+                    double previousOverlap = previousPosition.HasValue
+                        ? GameWorld.CollisionBoxOverlapVolume(box, x, y, z,
+                            previousMinX, previousMaxX, previousMinY, previousMaxY,
+                            previousMinZ, previousMaxZ)
+                        : 0;
+                    // Equal-overlap steps let a trapped entity slide parallel to the panel;
+                    // only a new or increasing overlap is blocked.
+                    const double egressTolerance = 1e-8;
+                    if (previousOverlap <= 0
+                        || overlap > previousOverlap + egressTolerance) return true;
+                }
+            }
             return false;
         }
 
@@ -1644,8 +1678,9 @@ namespace Cubuild
 
         /// <summary>
         /// Post-physics stuck recovery. A block can end up sharing the mob's hitbox - sand lands on
-        /// it, or one is placed right where it stands. The body is slid out through the first free
-        /// horizontal direction; when every side is walled off the mob is being crushed and takes
+        /// it, or one is placed right where it stands. The body is slid through the first
+        /// collision-safe horizontal step (door overlap may remain while it strictly decreases);
+        /// when every side is walled off the mob is being crushed and takes
         /// suffocation damage (0.75 HP/s, one point at a time, still subject to the hit-immunity
         /// window). Returns true while the mob is still embedded after the attempt.
         /// </summary>
@@ -1669,11 +1704,11 @@ namespace Cubuild
             {
                 var candidate = new Point3D(
                     Position.X + dx * UnstuckStep, Position.Y, Position.Z + dz * UnstuckStep);
-                if (IntersectsSolid(manager, candidate.X, candidate.Y, candidate.Z)) continue;
+                if (IntersectsSolid(manager, candidate.X, candidate.Y, candidate.Z, Position)) continue;
 
                 Position = candidate;
                 _suffocationAccumulator = 0f;
-                return false;
+                return IntersectsSolid(manager, Position.X, Position.Y, Position.Z);
             }
 
             _suffocationAccumulator += (float)(SuffocationDamagePerSecond * deltaSeconds);
