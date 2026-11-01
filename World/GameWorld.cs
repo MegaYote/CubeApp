@@ -27,7 +27,7 @@ namespace Cubuild
         /// stamp their own version (WorldSave.GenVersion); worlds stamped with an older version
         /// warn on load instead of silently mutating when generation changes.
         /// </summary>
-        public const int GenerationVersion = 27;
+        public const int GenerationVersion = 28;
         public int Seed { get; private set; }
         public string Name { get; private set; } = "World 1";
         /// <summary>Persistent links to adjacent worlds, keyed by the side being crossed.</summary>

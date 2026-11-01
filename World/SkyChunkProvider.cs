@@ -18,11 +18,14 @@ namespace Cubuild.World
         }
 
         public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeight)
+            => GenerateChunk(chunkX, chunkZ, chunkSize, chunkHeight, 0);
+
+        public Chunk GenerateChunk(int chunkX, int chunkZ, int chunkSize, int chunkHeight, int sectionY)
         {
             int originX = chunkX * chunkSize;
             int originZ = chunkZ * chunkSize;
             // Sky layer chunks sit above the ground layer (world 384..1023).
-            int originY = ChunkManager.SkyOriginY;
+            int originY = ChunkManager.SkySectionOriginY(sectionY);
             var chunk = new Chunk(chunkSize, chunkHeight, chunkSize, originX, originY, originZ);
             // Keep provider output a reproducible empty baseline. ChunkManager may apply the
             // altitude-triggered island fill afterward, but that direct mutation is full-save-only.

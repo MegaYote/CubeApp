@@ -1450,7 +1450,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             // = 9 uint32s per vertex (36 bytes). The anchor is subtracted from the camera anchor
             // as integers in the vertex shader, before converting the large world delta to float.
             int originX = unchecked(coords.X * ChunkManager.ChunkSize);
-            int originY = ChunkManager.OriginYForLayer(coords.Layer);
+            int originY = ChunkManager.OriginYForSection(coords.Layer, coords.SectionY);
             int originZ = unchecked(coords.Z * ChunkManager.ChunkSize);
             int faceCount = faces.Count;
             int opaqueFaces = 0;
@@ -1694,7 +1694,9 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 int chunkX = sourceChunk.OriginX / ChunkManager.ChunkSize;
                 int chunkZ = sourceChunk.OriginZ / ChunkManager.ChunkSize;
                 int layer = ChunkManager.LayerForWorldY(sourceChunk.OriginY);
-                var coords = new Cubuild.ChunkCoordinates(layer, chunkX, chunkZ);
+                int sectionY = layer == ChunkManager.SkyLayer
+                    ? (sourceChunk.OriginY - ChunkManager.SkyOriginY) / ChunkManager.SkySectionHeight : 0;
+                var coords = new Cubuild.ChunkCoordinates(layer, chunkX, chunkZ, sectionY);
                 if (!sourceManager.TryGetLoadedChunk(coords, out var current) || !ReferenceEquals(current, sourceChunk))
                     return;
                 _pendingRemovals.Enqueue(new PendingRemoval(sourceManager, sourceChunk, meshVersion,
@@ -2235,10 +2237,27 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             int chunkX = chunk.OriginX / ChunkManager.ChunkSize;
             int chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
             int layer = coords.Layer;
-            if (manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(layer, chunkX - 1, chunkZ), out var left)) chunksToPass.Add(left);
-            if (manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(layer, chunkX + 1, chunkZ), out var right)) chunksToPass.Add(right);
-            if (manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(layer, chunkX, chunkZ - 1), out var back)) chunksToPass.Add(back);
-            if (manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(layer, chunkX, chunkZ + 1), out var front)) chunksToPass.Add(front);
+            int sectionY = coords.SectionY;
+            if (manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(layer, chunkX - 1, chunkZ, sectionY), out var left)) chunksToPass.Add(left);
+            if (manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(layer, chunkX + 1, chunkZ, sectionY), out var right)) chunksToPass.Add(right);
+            if (manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(layer, chunkX, chunkZ - 1, sectionY), out var back)) chunksToPass.Add(back);
+            if (manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(layer, chunkX, chunkZ + 1, sectionY), out var front)) chunksToPass.Add(front);
+            if (layer == ChunkManager.SkyLayer)
+            {
+                for (int dx = -1; dx <= 1; dx++)
+                for (int dz = -1; dz <= 1; dz++)
+                {
+                    if (sectionY > 0 && manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(layer, chunkX + dx, chunkZ + dz, sectionY - 1), out var below)) chunksToPass.Add(below);
+                    if (sectionY + 1 < ChunkManager.SkySectionCount && manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(layer, chunkX + dx, chunkZ + dz, sectionY + 1), out var above)) chunksToPass.Add(above);
+                    if (sectionY == 0 && manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(ChunkManager.GroundLayer, chunkX + dx, chunkZ + dz), out var ground)) chunksToPass.Add(ground);
+                }
+            }
+            else if (layer == ChunkManager.GroundLayer)
+            {
+                for (int dx = -1; dx <= 1; dx++)
+                for (int dz = -1; dz <= 1; dz++)
+                    if (manager.TryGetLoadedChunk(new Cubuild.ChunkCoordinates(ChunkManager.SkyLayer, chunkX + dx, chunkZ + dz, 0), out var sky)) chunksToPass.Add(sky);
+            }
 
             var faces = Mesher.GenerateMesh(chunksToPass,
                 (worldX, worldZ) => manager.BiomeAt(worldX, worldZ).Id,

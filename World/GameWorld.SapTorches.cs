@@ -71,10 +71,8 @@ namespace Cubuild
                     continue;
 
                 BlockTicks?.OnBlockChanged(position.X, position.Y, position.Z);
-                Mesher.RequestImmediateRemesh(new ChunkCoordinates(
-                    ChunkManager.LayerForWorldY(position.Y),
-                    WorldToChunkCoord(position.X),
-                    WorldToChunkCoord(position.Z)));
+                Mesher.RequestImmediateRemesh(ChunkManager.GetChunkKeyForWorldPosition(
+                    position.X, position.Y, position.Z));
                 BlockEdited?.Invoke(position.X, position.Y, position.Z, _idBurntTorch, meta);
                 _sapTorchBurnTimers.Remove(position);
             }

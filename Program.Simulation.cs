@@ -319,7 +319,8 @@ _wasCreativeBreakHeld = breakHeldNow;
                 int chunkZ = (int)Math.Floor(z / (double)ChunkManager.ChunkSize);
                 bool hasCurrentLight = false;
 
-                if (World.Chunks.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk)
+                int sectionY = ChunkManager.SectionYForWorldY(layer, y);
+                if (World.Chunks.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX, chunkZ, sectionY), out var chunk)
                     && chunk.TryGetCurrentLightGrid(out var grid) && grid != null)
                 {
                     int localX = x - chunk.OriginX;

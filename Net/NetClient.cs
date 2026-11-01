@@ -56,7 +56,7 @@ namespace Cubuild.Net
 
         // Full chunk payloads (host's modified chunks) also land on the main thread via
         // ApplySavedChunk - same thread-safety rule.
-        private readonly ConcurrentQueue<(int X, int Z, byte[] Blocks, byte[] Meta)> _incomingChunks = new();
+        private readonly ConcurrentQueue<(int Layer, int X, int Z, int SectionY, byte[] Blocks, byte[] Meta)> _incomingChunks = new();
 
         public NetClient(GameWorld? world = null) => _world = world;
 
@@ -177,6 +177,13 @@ namespace Cubuild.Net
             {
                 // Handshake: must receive Welcome first.
                 var welcomeFrame = await ReadFrameAsync(_cts.Token);
+                if (welcomeFrame.HasValue && welcomeFrame.Value.type == NetMsgType.ProtocolError)
+                {
+                    var er = new NetReader(welcomeFrame.Value.body);
+                    er.TryReadString(out string reason);
+                    Disconnected?.Invoke(string.IsNullOrWhiteSpace(reason) ? "Host rejected the network protocol version" : reason);
+                    return;
+                }
                 if (welcomeFrame == null || welcomeFrame.Value.type != NetMsgType.Welcome)
                 {
                     Disconnected?.Invoke("No welcome from host");
@@ -218,9 +225,10 @@ namespace Cubuild.Net
                             foreach (var e in snap.Edits) _incomingEdits.Enqueue(e);
                             break;
                         case NetMsgType.ChunkData:
-                            if (NetSnapshot.TryDeserializeChunkData(frame.Value.body, out int cx, out int cz, out byte[] cblocks, out byte[] cmeta))
+                            if (NetSnapshot.TryDeserializeChunkData(frame.Value.body, out int layer, out int cx, out int cz,
+                                out int sectionY, out byte[] cblocks, out byte[] cmeta))
                             {
-                                _incomingChunks.Enqueue((cx, cz, cblocks, cmeta));
+                                _incomingChunks.Enqueue((layer, cx, cz, sectionY, cblocks, cmeta));
                             }
                             break;
                         case NetMsgType.Pong:
@@ -281,7 +289,7 @@ namespace Cubuild.Net
             }
             while (_incomingChunks.TryDequeue(out var c))
             {
-                world.Chunks.ApplySavedChunk(c.X, c.Z, c.Blocks, c.Meta);
+                world.Chunks.ApplySavedChunk(c.Layer, c.X, c.Z, c.SectionY, c.Blocks, c.Meta);
             }
         }
 

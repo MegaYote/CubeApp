@@ -270,8 +270,10 @@ namespace Cubuild
             // keeps X/Z constant but must still wake the new layer).
             double py = LocalPlayer.Position.Y;
             int playerLayer = ChunkManager.LayerForWorldY((int)py);
+            int playerSectionY = ChunkManager.SectionYForWorldY(playerLayer, (int)Math.Floor(py));
             bool crossedLayer = playerLayer != _lastPlayerLayer;
-            bool streamCurrentLayer = _forceChunkStream || chunkX != _lastStreamChunkX || chunkZ != _lastStreamChunkZ || crossedLayer;
+            bool crossedSection = playerLayer == ChunkManager.SkyLayer && playerSectionY != _lastPlayerSkySection;
+            bool streamCurrentLayer = _forceChunkStream || chunkX != _lastStreamChunkX || chunkZ != _lastStreamChunkZ || crossedLayer || crossedSection;
             int adjacentLayer = ChunkManager.AdjacentLayerNearBoundary(playerLayer, py);
             bool refreshVerticalSupport = streamCurrentLayer
                 || adjacentLayer != _lastAdjacentBoundaryLayer
@@ -283,12 +285,16 @@ namespace Cubuild
                 _lastStreamChunkX = chunkX;
                 _lastStreamChunkZ = chunkZ;
                 _lastPlayerLayer = playerLayer;
+                _lastPlayerSkySection = playerSectionY;
                 // Only stream the chunk layer the player is standing in — deep, ground, or sky.
                 // The other two layers sit idle until the player crosses into them, saving CPU
                 // and keeping generation focused on the one layer that matters right now.
-                Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, playerLayer);
+                if (playerLayer == ChunkManager.SkyLayer)
+                    Chunks.RequestSkySectionsAround(chunkX, chunkZ, ChunkRenderRadius, playerSectionY, 2, LocalPlayer.Position);
+                else
+                    Chunks.RequestChunksAround(chunkX, chunkZ, ChunkRenderRadius, LocalPlayer.Position, playerLayer);
                 var unloaded = Chunks.UnloadChunksOutside(chunkX, chunkZ, ChunkRenderRadius,
-                    BombProjectileChunkPins);
+                    playerLayer, playerSectionY, 3, BombProjectileChunkPins);
                 foreach (var uc in unloaded) ChunkUnloaded?.Invoke(uc);
             }
 
@@ -307,6 +313,7 @@ namespace Cubuild
         }
 
         private int _lastPlayerLayer = ChunkManager.GroundLayer;
+        private int _lastPlayerSkySection = -1;
         private int _lastAdjacentBoundaryLayer = -1;
         private const float VerticalBoundaryRefreshSeconds = 0.5f;
         private float _verticalBoundaryRefreshTimer;

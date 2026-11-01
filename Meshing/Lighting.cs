@@ -34,6 +34,9 @@ namespace Cubuild
         private readonly int dimX;
         private readonly int dimZ;
         private readonly bool isDeepLayer;
+        private readonly bool hasSkyBoundary;
+        private readonly int baseOriginY;
+        private readonly int regionTopWorldY;
         private readonly byte[] deepTopSkyLight;
         private readonly byte[] opacity;   // per-cell light opacity (0..255)
         private readonly byte[] sky;       // per-cell sky light (0..15)
@@ -59,7 +62,7 @@ namespace Cubuild
 
             int minChunkX = int.MaxValue, maxChunkX = int.MinValue;
             int minChunkZ = int.MaxValue, maxChunkZ = int.MinValue;
-            int originY = 0;
+            int originY = 0, minY = int.MaxValue, maxY = int.MinValue;
             bool haveOrigin = false;
             foreach (var kv in chunks)
             {
@@ -73,6 +76,8 @@ namespace Cubuild
                     originY = kv.Value.OriginY;
                     haveOrigin = true;
                 }
+                minY = Math.Min(minY, kv.Value.OriginY);
+                maxY = Math.Max(maxY, kv.Value.OriginY + kv.Value.Height);
             }
             OriginY = originY;
 
@@ -82,12 +87,21 @@ namespace Cubuild
                 minChunkZ = maxChunkZ = 0;
             }
 
-            height = chunkHeight;
+            if (!haveOrigin) minY = maxY = originY;
+            baseOriginY = minY;
+            regionTopWorldY = maxY;
+            height = Math.Max(1, maxY - minY);
             minX = minChunkX * chunkSize;
             minZ = minChunkZ * chunkSize;
             dimX = (maxChunkX - minChunkX + 1) * chunkSize;
             dimZ = (maxChunkZ - minChunkZ + 1) * chunkSize;
             isDeepLayer = OriginY == ChunkManager.DeepOriginY;
+            // Ground's top is the ground/sky seam; sky sections can assume open sky above the
+            // highest resident section because absent sections are generated empty. If an
+            // adjacent resident section contains an island, the shared vertical lighting region
+            // includes it and the column height map shades everything below it correctly.
+            hasSkyBoundary = OriginY >= ChunkManager.SkyOriginY
+                || OriginY == ChunkManager.GroundOriginY;
             deepTopSkyLight = isDeepLayer ? new byte[dimX * dimZ] : Array.Empty<byte>();
 
             int cells = dimX * height * dimZ;
@@ -132,13 +146,15 @@ namespace Cubuild
                     {
                         for (int z = 0; z < chunkSize; z++)
                         {
-                            int src = (x * chunkSize + z) * chunkHeight;
-                            for (int y = 0; y < chunkHeight; y++)
+                            int src = (x * c.Depth + z) * c.Height;
+                            int yOffset = c.OriginY - baseOriginY;
+                            for (int y = 0; y < c.Height; y++)
                             {
                                 if (raw[src + y] != 0)
                                 {
-                                    if (y < regionBottomSolidY) regionBottomSolidY = y;
-                                    if (y > regionTopSolidY) regionTopSolidY = y;
+                                    int ry = yOffset + y;
+                                    if (ry < regionBottomSolidY) regionBottomSolidY = ry;
+                                    if (ry > regionTopSolidY) regionTopSolidY = ry;
                                 }
                             }
                         }
@@ -184,7 +200,7 @@ namespace Cubuild
 
             // Fill per-block light opacity + the per-column height map (topmost light-blocking
             // cell), straight from each chunk's raw block bytes, only within the band.
-            Array.Clear(heightMap, 0, heightMap.Length);
+            Array.Fill(heightMap, -1);
             int fillTop = Math.Min(regionTopSolidY + 1, bandHi);
             foreach (var kv in chunks)
             {
@@ -203,19 +219,22 @@ namespace Cubuild
                         }
                     }
                 }
-                for (int x = 0; x < chunkSize; x++)
+                int yOffset = c.OriginY - baseOriginY;
+                for (int x = 0; x < c.Width; x++)
                 {
-                    for (int z = 0; z < chunkSize; z++)
+                    for (int z = 0; z < c.Depth; z++)
                     {
-                        int src = (x * chunkSize + z) * chunkHeight;
+                        int src = (x * c.Depth + z) * c.Height;
                         int dst = Index(baseLX + x, 0, baseLZ + z);
                         int lxR = baseLX + x;
                         int lzR = baseLZ + z;
                         int hm = -1;
-                        for (int y = bandLo; y <= fillTop; y++)
+                        for (int localY = 0; localY < c.Height; localY++)
                         {
-                            int id = raw[src + y];
-                            byte o = LightOpacity(id, rawMeta[src + y]);
+                            int y = yOffset + localY;
+                            if (y < bandLo || y > fillTop) continue;
+                            int id = raw[src + localY];
+                            byte o = LightOpacity(id, rawMeta[src + localY]);
                             opacity[dst + y] = o;
                             if (o != 0 && y > hm) hm = y;
                             // Record block light emission (torches, glowstone, ...). Seeded into
@@ -223,7 +242,8 @@ namespace Cubuild
                             int em = BlockRegistry.LightEmissionOf(id);
                             if (em > 0) block[dst + y] = (byte)Math.Min(MaxLight, em);
                         }
-                        heightMap[lxR * dimZ + lzR] = hm;
+                        int hmIndex = lxR * dimZ + lzR;
+                        if (hm > heightMap[hmIndex]) heightMap[hmIndex] = hm;
                     }
                 }
             }
@@ -291,6 +311,7 @@ namespace Cubuild
         // to the sky-light channel, so a clock tick never causes every loaded chunk to remesh.
         private void SeedSkyLight(Queue<int> queue, int bandLo, int bandHi, int fillTop)
         {
+            if (!hasSkyBoundary && !isDeepLayer) return;
             int startY = Math.Max(bandLo, Math.Min(fillTop + 1, bandHi));
             const byte skySeed = MaxLight;
             for (int lx = 0; lx < dimX; lx++)
@@ -447,17 +468,23 @@ namespace Cubuild
         {
             int lx = worldX - minX;
             int lz = worldZ - minZ;
+            int worldY = OriginY + y;
+            int ry = worldY - baseOriginY;
             // Outside the vertical region is directional: above its top can see open sky,
             // but below its bottom must not become an imaginary daylight source. In the
             // layered world this lower sample is often the face just beyond a chunk/layer's
             // bottom boundary; returning MaxLight there made unsupported lower faces glow.
-            if (y < 0) return 0;
-            if (y >= height || lx < 0 || lx >= dimX || lz < 0 || lz >= dimZ)
+            if (worldY < ChunkManager.DeepOriginY) return 0;
+            if (worldY >= regionTopWorldY)
             {
-                // Unknown space above / outside the horizontal light region is treated as sky.
-                return MaxLight;
+                if (OriginY == ChunkManager.GroundOriginY && worldY >= ChunkManager.GroundOriginY + ChunkManager.GroundHeight)
+                    return MaxLight;
+                if (worldY >= ChunkManager.SkyOriginY + ChunkManager.SkyHeight) return MaxLight;
             }
-            return sky[Index(lx, y, lz)];
+            if (lx < 0 || lx >= dimX || lz < 0 || lz >= dimZ)
+                return worldY >= regionTopWorldY ? MaxLight : 0;
+            if (ry < 0 || ry >= height) return 0;
+            return sky[Index(lx, ry, lz)];
         }
 
         /// <summary>Emitted/block-light channel (0..15). Outside the computed region, assume dark.</summary>
@@ -465,11 +492,12 @@ namespace Cubuild
         {
             int lx = worldX - minX;
             int lz = worldZ - minZ;
-            if (lx < 0 || lx >= dimX || lz < 0 || lz >= dimZ || y < 0 || y >= height)
+            int ry = OriginY + y - baseOriginY;
+            if (lx < 0 || lx >= dimX || lz < 0 || lz >= dimZ || ry < 0 || ry >= height)
             {
                 return 0;
             }
-            return block[Index(lx, y, lz)];
+            return block[Index(lx, ry, lz)];
         }
 
         /// <summary>

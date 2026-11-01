@@ -156,6 +156,11 @@ namespace Cubuild
             }
         }
 
+        public bool IsTrackedCellChanged(int index)
+        {
+            lock (_deltaLock) return _deltaTrackingInitialized && _deltaBaselineTrusted && _deltaCells.ContainsKey(index);
+        }
+
         /// <summary>Applies saved/cache delta values to the current generated base and seeds the
         /// tracker with each cell's actual base value. Caller must only use this for a verified
         /// matching generator identity.</summary>

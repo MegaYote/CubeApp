@@ -10,6 +10,7 @@ namespace Cubuild
     {
         public int Layer;
         public int X, Z;
+        public int SectionY;
         /// <summary>v13: true when this record contains sparse final-cell patches instead of
         /// full arrays. Older saves always load as full snapshots.</summary>
         public bool IsDelta;
@@ -95,7 +96,7 @@ namespace Cubuild
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 19;
+        public const int Version = 20;
         /// <summary>Binary version read from disk; new/in-memory saves use the current version.</summary>
         public int FileVersion = Version;
 
@@ -190,6 +191,7 @@ namespace Cubuild
                     w.Write(c.Layer);
                     w.Write(c.X);
                     w.Write(c.Z);
+                    w.Write(c.SectionY);
                     w.Write(c.IsDelta);
                     if (c.IsDelta)
                     {
@@ -391,6 +393,7 @@ namespace Cubuild
                     if (version >= 2) c.Layer = reader.ReadInt32();
                     c.X = reader.ReadInt32();
                     c.Z = reader.ReadInt32();
+                    if (version >= 20) c.SectionY = reader.ReadInt32();
                     if (version >= 13)
                     {
                         c.IsDelta = reader.ReadBoolean();
@@ -427,6 +430,7 @@ namespace Cubuild
                     }
                     save.Chunks.Add(c);
                 }
+                if (version < 20) MigrateLegacySkyChunks(save);
 
                 int mobCount = reader.ReadInt32();
                 for (int i = 0; i < mobCount; i++)
@@ -610,6 +614,74 @@ namespace Cubuild
             {
                 return null;
             }
+        }
+
+        private static void MigrateLegacySkyChunks(WorldSave save)
+        {
+            const int oldHeight = ChunkManager.SkyHeight;
+            const int sectionHeight = ChunkManager.SkySectionHeight;
+            const int columnCount = ChunkManager.ChunkSize * ChunkManager.ChunkSize;
+            var migrated = new List<SavedChunk>(save.Chunks.Count);
+            foreach (var chunk in save.Chunks)
+            {
+                if (chunk.Layer != ChunkManager.SkyLayer)
+                {
+                    migrated.Add(chunk);
+                    continue;
+                }
+
+                if (chunk.IsDelta)
+                {
+                    var grouped = new SortedDictionary<int, List<SavedChunkDeltaCell>>();
+                    foreach (var cell in chunk.DeltaCells)
+                    {
+                        if (cell.Index < 0 || cell.Index >= columnCount * oldHeight)
+                            throw new InvalidDataException("Legacy sky delta index is outside the old full-height chunk.");
+                        int column = cell.Index / oldHeight;
+                        int localY = cell.Index % oldHeight;
+                        int sectionY = localY / sectionHeight;
+                        int sectionIndex = column * sectionHeight + localY % sectionHeight;
+                        if (!grouped.TryGetValue(sectionY, out var cells))
+                            grouped[sectionY] = cells = new List<SavedChunkDeltaCell>();
+                        cells.Add(new SavedChunkDeltaCell(sectionIndex, cell.Block, cell.Meta));
+                    }
+                    foreach (var group in grouped)
+                    {
+                        group.Value.Sort(static (a, b) => a.Index.CompareTo(b.Index));
+                        migrated.Add(new SavedChunk
+                        {
+                            Layer = chunk.Layer, X = chunk.X, Z = chunk.Z, SectionY = group.Key,
+                            IsDelta = true, DeltaCells = group.Value.ToArray(),
+                        });
+                    }
+                    continue;
+                }
+
+                int oldLength = columnCount * oldHeight;
+                if (chunk.Blocks.Length != oldLength || chunk.Meta.Length != oldLength)
+                {
+                    throw new InvalidDataException("Legacy sky full-height chunk has an invalid payload length.");
+                }
+
+                for (int sectionY = 0; sectionY < ChunkManager.SkySectionCount; sectionY++)
+                {
+                    var blocks = new byte[columnCount * sectionHeight];
+                    var meta = new byte[columnCount * sectionHeight];
+                    for (int column = 0; column < columnCount; column++)
+                    {
+                        int oldBase = column * oldHeight + sectionY * sectionHeight;
+                        int newBase = column * sectionHeight;
+                        Buffer.BlockCopy(chunk.Blocks, oldBase, blocks, newBase, sectionHeight);
+                        Buffer.BlockCopy(chunk.Meta, oldBase, meta, newBase, sectionHeight);
+                    }
+                    migrated.Add(new SavedChunk
+                    {
+                        Layer = chunk.Layer, X = chunk.X, Z = chunk.Z, SectionY = sectionY,
+                        Blocks = blocks, Meta = meta,
+                    });
+                }
+            }
+            save.Chunks = migrated;
         }
     }
 }

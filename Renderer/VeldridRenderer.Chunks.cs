@@ -850,8 +850,8 @@ namespace Cubuild.Renderer
         /// labeled as a prediction whenever the GPU path is active.
         /// </summary>
         public ChunkDiagnosticsSnapshot CaptureChunkDiagnostics(
-            int playerLayer, int playerChunkX, int playerChunkZ,
-            int targetLayer, int targetChunkX, int targetChunkZ, bool hasBlockTarget,
+            int playerLayer, int playerChunkX, int playerChunkZ, int playerSectionY,
+            int targetLayer, int targetChunkX, int targetChunkZ, int targetSectionY, bool hasBlockTarget,
             int renderRadius, int dirtyMeshQueueCount)
         {
             const int mapRadius = 4;
@@ -865,7 +865,7 @@ namespace Cubuild.Renderer
                     {
                         int cx = playerChunkX + dx;
                         int cz = playerChunkZ + dz;
-                        char status = GetMapChunkStatus(new Cubuild.ChunkCoordinates(playerLayer, cx, cz));
+                        char status = GetMapChunkStatus(new Cubuild.ChunkCoordinates(playerLayer, cx, cz, playerSectionY));
                         if (cx == playerChunkX && cz == playerChunkZ) status = '@';
                         if (hasBlockTarget && targetLayer == playerLayer
                             && targetChunkX == cx && targetChunkZ == cz
@@ -879,7 +879,7 @@ namespace Cubuild.Renderer
                 }
             }
 
-            var target = new Cubuild.ChunkCoordinates(targetLayer, targetChunkX, targetChunkZ);
+            var target = new Cubuild.ChunkCoordinates(targetLayer, targetChunkX, targetChunkZ, targetSectionY);
             var targetLines = BuildTargetDiagnosticLines(target, hasBlockTarget);
             int drawCommandCount = _drawCommands.Count + _cutoutDrawCommands.Count + _glassDrawCommands.Count
                 + _transparentNonTopDrawCommands.Count + _transparentTopDrawCommands.Count;
@@ -1115,10 +1115,10 @@ namespace Cubuild.Renderer
         {
             long minX = (long)entry.Coord.X * ChunkManager.ChunkSize;
             long minZ = (long)entry.Coord.Z * ChunkManager.ChunkSize;
-            double minY = ChunkManager.OriginYForLayer(entry.Coord.Layer);
+            double minY = ChunkManager.OriginYForSection(entry.Coord.Layer, entry.Coord.SectionY);
             return new ChunkBounds(minX, minY, minZ,
                 minX + ChunkManager.ChunkSize * entry.ChunkSpan,
-                minY + ChunkManager.HeightForLayer(entry.Coord.Layer),
+                minY + ChunkManager.HeightForSection(entry.Coord.Layer),
                 minZ + ChunkManager.ChunkSize * entry.ChunkSpan);
         }
 

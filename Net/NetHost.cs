@@ -21,7 +21,7 @@ namespace Cubuild.Net
     /// </summary>
     public sealed class NetHost : IDisposable
     {
-        public const int ProtocolVersion = 4;
+        public const int ProtocolVersion = 5;
         public const int DefaultPort = 26065;
 
         private readonly GameWorld _world;
@@ -166,7 +166,11 @@ namespace Cubuild.Net
                 var hr = new NetReader(helloFrame.Value.body);
                 if (!hr.TryReadInt(out int version) || version != ProtocolVersion)
                 {
-                    Log?.Invoke($"Client {conn.Id} protocol mismatch (got {version}, want {ProtocolVersion}); dropping.");
+                    string reason = $"Protocol mismatch: client {version}, host {ProtocolVersion}. Update both clients to the same version.";
+                    Log?.Invoke($"Client {conn.Id} {reason}; dropping.");
+                    var error = new NetWriter();
+                    error.WriteString(reason);
+                    try { await conn.Stream.WriteAsync(error.ToFrame(NetMsgType.ProtocolError), _cts.Token); } catch { }
                     return;
                 }
                 hr.TryReadString(out conn.Name);
@@ -254,17 +258,15 @@ namespace Cubuild.Net
             foreach (var c in coords)
             {
                 if (_cts.IsCancellationRequested) break;
-                if (!_world.Chunks.TryGetLoadedChunk(c, out var chunk)) continue;
+                // Modified chunks can be outside the resident streaming window. Pull their
+                // cached snapshot too, materializing a full payload for the client if needed.
+                if (!_world.Chunks.TryGetSaveChunk(c, forceFull: true, out var snapshot)) continue;
                 try
                 {
-                    byte[] blocks;
-                    byte[] meta;
-                    lock (chunk.MeshLock)
-                    {
-                        blocks = (byte[])chunk.RawBlocks.Clone();
-                        meta = (byte[])chunk.RawMeta.Clone();
-                    }
-                    var frame = NetSnapshot.SerializeChunkData(c.X, c.Z, blocks, meta);
+                    if (snapshot.IsDelta)
+                        throw new InvalidDataException("Modified chunk snapshot must be full for network transfer.");
+                    var frame = NetSnapshot.SerializeChunkData(c.Layer, c.X, c.Z, c.SectionY,
+                        snapshot.Blocks, snapshot.Meta);
                     await conn.Stream.WriteAsync(frame, _cts.Token);
                     sent++;
                 }

@@ -222,7 +222,8 @@ namespace Cubuild
             {
                 var a = expected.Chunks[i];
                 var b = actual.Chunks[i];
-                if (a.Layer != b.Layer || a.X != b.X || a.Z != b.Z || a.IsDelta != b.IsDelta) return false;
+                if (a.Layer != b.Layer || a.X != b.X || a.Z != b.Z
+                    || a.SectionY != b.SectionY || a.IsDelta != b.IsDelta) return false;
                 if (a.IsDelta)
                 {
                     if (a.DeltaCells.Length != b.DeltaCells.Length) return false;
@@ -337,10 +338,13 @@ namespace Cubuild
         {
             if (save.Chunks.Exists(c => c.IsDelta))
             {
-                // Sparse deltas only have meaning against the exact generation identity that
-                // produced their baseline. Future generator-version bumps must retain/recreate
-                // old baseline generation before enabling delta saves for those older versions.
-                if (save.GenVersion != GameWorld.GenerationVersion)
+                // Version 27 changed only sky generation, so its deep/ground sparse deltas
+                // still have the current baseline. Sky deltas (including those split from
+                // legacy full-height records during load) cannot use the changed sky baseline.
+                bool compatibleVersion27Deltas = save.GenVersion == 27
+                    && save.Chunks.TrueForAll(c => !c.IsDelta
+                        || c.Layer == DeepLayer || c.Layer == GroundLayer);
+                if (save.GenVersion != GameWorld.GenerationVersion && !compatibleVersion27Deltas)
                     throw new IOException($"Cannot load sparse chunk deltas: save terrain version {save.GenVersion} does not match supported baseline version {GameWorld.GenerationVersion}.");
                 if (save.IsMinecraftMode != world.IsMinecraftMode
                     || save.FrontierProgression != world.FrontierProgression)
@@ -351,9 +355,9 @@ namespace Cubuild
             foreach (var c in save.Chunks)
             {
                 if (c.IsDelta)
-                    world.Chunks.ApplySavedDeltaChunk(c.Layer, c.X, c.Z, c.DeltaCells);
+                    world.Chunks.ApplySavedDeltaChunk(c.Layer, c.X, c.Z, c.SectionY, c.DeltaCells);
                 else
-                    world.Chunks.ApplySavedChunk(c.Layer, c.X, c.Z, c.Blocks, c.Meta);
+                    world.Chunks.ApplySavedChunk(c.Layer, c.X, c.Z, c.SectionY, c.Blocks, c.Meta);
             }
             world.PlayerPosition = new Point3D(save.PlayerX, save.PlayerY, save.PlayerZ);
             world.PlayerYaw = save.Yaw;

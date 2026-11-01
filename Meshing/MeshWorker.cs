@@ -96,17 +96,36 @@ namespace Cubuild
                             int chunkX = chunk.OriginX / ChunkManager.ChunkSize;
                             int chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
                             int layer = coords.Layer;
-                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX - 1, chunkZ), out var left)) chunksToPass.Add(left);
-                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + 1, chunkZ), out var right)) chunksToPass.Add(right);
-                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX, chunkZ - 1), out var back)) chunksToPass.Add(back);
-                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX, chunkZ + 1), out var front)) chunksToPass.Add(front);
-                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX - 1, chunkZ - 1), out var diagNW)) chunksToPass.Add(diagNW);
-                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + 1, chunkZ - 1), out var diagNE)) chunksToPass.Add(diagNE);
-                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX - 1, chunkZ + 1), out var diagSW)) chunksToPass.Add(diagSW);
-                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + 1, chunkZ + 1), out var diagSE)) chunksToPass.Add(diagSE);
+                            int sectionY = coords.SectionY;
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX - 1, chunkZ, sectionY), out var left)) chunksToPass.Add(left);
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + 1, chunkZ, sectionY), out var right)) chunksToPass.Add(right);
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX, chunkZ - 1, sectionY), out var back)) chunksToPass.Add(back);
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX, chunkZ + 1, sectionY), out var front)) chunksToPass.Add(front);
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX - 1, chunkZ - 1, sectionY), out var diagNW)) chunksToPass.Add(diagNW);
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + 1, chunkZ - 1, sectionY), out var diagNE)) chunksToPass.Add(diagNE);
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX - 1, chunkZ + 1, sectionY), out var diagSW)) chunksToPass.Add(diagSW);
+                            if (_manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + 1, chunkZ + 1, sectionY), out var diagSE)) chunksToPass.Add(diagSE);
                             // The mesher also occludes against the vertically adjacent layer.
-                            if (layer > ChunkManager.DeepLayer && _manager.TryGetLoadedChunk(new ChunkCoordinates(layer - 1, chunkX, chunkZ), out var below)) chunksToPass.Add(below);
-                            if (layer < ChunkManager.SkyLayer && _manager.TryGetLoadedChunk(new ChunkCoordinates(layer + 1, chunkX, chunkZ), out var above)) chunksToPass.Add(above);
+                            if (layer == ChunkManager.SkyLayer)
+                            {
+                                for (int dx = -1; dx <= 1; dx++)
+                                for (int dz = -1; dz <= 1; dz++)
+                                {
+                                    if (sectionY > 0 && _manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + dx, chunkZ + dz, sectionY - 1), out var belowSection)) chunksToPass.Add(belowSection);
+                                    if (sectionY + 1 < ChunkManager.SkySectionCount && _manager.TryGetLoadedChunk(new ChunkCoordinates(layer, chunkX + dx, chunkZ + dz, sectionY + 1), out var aboveSection)) chunksToPass.Add(aboveSection);
+                                    if (sectionY == 0 && _manager.TryGetLoadedChunk(new ChunkCoordinates(ChunkManager.GroundLayer, chunkX + dx, chunkZ + dz), out var ground)) chunksToPass.Add(ground);
+                                }
+                            }
+                            else
+                            {
+                                if (layer > ChunkManager.DeepLayer && _manager.TryGetLoadedChunk(new ChunkCoordinates(layer - 1, chunkX, chunkZ), out var below)) chunksToPass.Add(below);
+                                if (layer == ChunkManager.GroundLayer)
+                                {
+                                    for (int dx = -1; dx <= 1; dx++)
+                                    for (int dz = -1; dz <= 1; dz++)
+                                        if (_manager.TryGetLoadedChunk(new ChunkCoordinates(ChunkManager.SkyLayer, chunkX + dx, chunkZ + dz, 0), out var sky)) chunksToPass.Add(sky);
+                                }
+                            }
 
                             var faces = Mesher.GenerateMesh(chunksToPass,
                                 (worldX, worldZ) => _manager.BiomeAt(worldX, worldZ).Id,

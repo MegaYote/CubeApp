@@ -379,8 +379,7 @@ namespace Cubuild
             if (!Chunks.TryGetLoadedChunkAndDrop(x, y, z, out _)) return;   // chunk gone
             byte q = RailSag.Quantize(drop);
             if (!Chunks.TrySetRailDroop(x, y, z, q)) return;
-            Mesher.RequestImmediateRemesh(new ChunkCoordinates(
-                ChunkManager.LayerForWorldY(y), WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            Mesher.RequestImmediateRemesh(ChunkManager.GetChunkKeyForWorldPosition(x, y, z));
         }
 
         /// <summary>Breaks off every rail flagged by the last solve as hanging past the length cap.
@@ -401,7 +400,7 @@ namespace Cubuild
         /// we cannot see) from a fully-loaded one before enforcing the length cap.</summary>
         private bool ColumnLoaded(int x, int y, int z)
             => Chunks.TryGetLoadedChunk(
-                   new ChunkCoordinates(ChunkManager.LayerForWorldY(y), WorldToChunkCoord(x), WorldToChunkCoord(z)),
+                   ChunkManager.GetChunkKeyForWorldPosition(x, y, z),
                    out _);
 
         private void PruneRailSag()

@@ -33,7 +33,7 @@ namespace Cubuild.Renderer
         {
             double cx = (long)coord.X * ChunkManager.ChunkSize + ChunkManager.ChunkSize * 0.5;
             double cz = (long)coord.Z * ChunkManager.ChunkSize + ChunkManager.ChunkSize * 0.5;
-            double cy = ChunkManager.OriginYForLayer(coord.Layer) + ChunkManager.HeightForLayer(coord.Layer) * 0.5;
+            double cy = ChunkManager.OriginYForSection(coord.Layer, coord.SectionY) + ChunkManager.HeightForSection(coord.Layer) * 0.5;
             double dx = cx - cam.X;
             double dy = cy - cam.Y;
             double dz = cz - cam.Z;

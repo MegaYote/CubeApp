@@ -57,25 +57,31 @@ namespace Cubuild.World
 
         /// <summary>Prevents lazy island generation from overwriting an authoritative cached
         /// chunk snapshot when that chunk returns while the player is already high.</summary>
-        public void MarkChunkFilled(int chunkX, int chunkZ)
-            => _filled.TryAdd(new ChunkCoordinates(ChunkManager.SkyLayer, chunkX, chunkZ), 0);
+        public void MarkChunkFilled(int chunkX, int chunkZ, int sectionY)
+            => _filled.TryAdd(new ChunkCoordinates(ChunkManager.SkyLayer, chunkX, chunkZ, sectionY), 0);
+
+        public void MarkChunkFilled(int chunkX, int chunkZ) => MarkChunkFilled(chunkX, chunkZ, 0);
+
+        public bool IsChunkFilled(int chunkX, int chunkZ, int sectionY)
+            => _filled.ContainsKey(new ChunkCoordinates(ChunkManager.SkyLayer, chunkX, chunkZ, sectionY));
 
         /// <summary>Fills the stratosphere of a chunk (world HighMin..HighMax) with islands.
         /// One-shot per chunk, like DeepFillChunk. Cheap: only columns whose placement noise is
         /// above threshold build anything, and most are far below it.</summary>
-        public bool HighFillChunk(int chunkX, int chunkZ, Chunk chunk, int chunkSize, int chunkHeight)
+        public bool HighFillChunk(int chunkX, int chunkZ, int sectionY, Chunk chunk, int chunkSize, int chunkHeight)
         {
             if (!Enabled) return false;
-            var key = new ChunkCoordinates(ChunkManager.SkyLayer, chunkX, chunkZ);
+            var key = new ChunkCoordinates(ChunkManager.SkyLayer, chunkX, chunkZ, sectionY);
             if (!_filled.TryAdd(key, 0)) return false; // already filled once
 
             // Sky chunks live above the ground layer, so their own OriginY is the correct base
             // for the local-Y conversion (NOT the ground world origin).
-            const int originY = ChunkManager.SkyOriginY;
+            int originY = chunk.OriginY;
             bool wroteAnything = false;
-            for (int lx = 0; lx < chunkSize; lx++)
+            int halo = (int)Math.Ceiling(Size * 1.3f);
+            for (int lx = -halo; lx < chunkSize + halo; lx++)
             {
-                for (int lz = 0; lz < chunkSize; lz++)
+                for (int lz = -halo; lz < chunkSize + halo; lz++)
                 {
                     int wx = chunk.OriginX + lx;
                     int wz = chunk.OriginZ + lz;
@@ -103,6 +109,10 @@ namespace Cubuild.World
             if (wroteAnything) chunk.NeedsRemesh = true;
             return wroteAnything;
         }
+
+        public bool HighFillChunk(int chunkX, int chunkZ, Chunk chunk, int chunkSize, int chunkHeight)
+            => HighFillChunk(chunkX, chunkZ, (chunk.OriginY - ChunkManager.SkyOriginY) / ChunkManager.SkySectionHeight,
+                chunk, chunkSize, chunkHeight);
 
         // Draws one island disk centered on this column: a flat grassy top, a few dirt blocks,
         // then stone down to a tapered (rounded) underside. Underside hangs free - no connection
@@ -154,6 +164,8 @@ namespace Cubuild.World
                             double n = _detail.Noise3D(wx * 0.08, wy * 0.08, wz * 0.08);
                             if (n > 0.55 && depthFrac > 0.85 && dist > radius * 0.5) continue;
                         }
+                        int index = chunk.Index(nx, localY, nz);
+                        if (chunk.HasRuntimeEdits && chunk.IsTrackedCellChanged(index)) continue;
                         chunk[nx, localY, nz] = block;
                         wrote = true;
                     }

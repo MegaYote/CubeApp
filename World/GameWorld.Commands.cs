@@ -162,6 +162,7 @@ namespace Cubuild
                 int chunkZ = GameWorld.WorldToChunkCoord(z);
                 for (int layer = ChunkManager.DeepLayer; layer <= ChunkManager.SkyLayer; layer++)
                 {
+                    if (layer == ChunkManager.SkyLayer) continue;
                     var key = new ChunkCoordinates(layer, chunkX, chunkZ);
                     if (chunks.Add(key)) Chunks.GetOrCreateChunk(layer, chunkX, chunkZ);
                 }
@@ -179,8 +180,9 @@ namespace Cubuild
                 {
                     int chunkX = GameWorld.WorldToChunkCoord(x);
                     int chunkZ = GameWorld.WorldToChunkCoord(z);
-                    var key = new ChunkCoordinates(layer, chunkX, chunkZ);
-                    if (chunks.Add(key)) Chunks.GetOrCreateChunk(layer, chunkX, chunkZ);
+                    int sectionY = ChunkManager.SectionYForWorldY(layer, y);
+                    var key = new ChunkCoordinates(layer, chunkX, chunkZ, sectionY);
+                    if (chunks.Add(key)) Chunks.GetOrCreateChunk(layer, chunkX, chunkZ, sectionY);
                 }
             }
         }

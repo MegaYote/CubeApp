@@ -157,14 +157,17 @@ namespace Cubuild
             int playerChunkX = GameWorld.WorldToChunkCoord(World.PlayerPosition.X);
             int playerChunkZ = GameWorld.WorldToChunkCoord(World.PlayerPosition.Z);
             int playerLayer = ChunkManager.LayerForWorldY((int)Math.Floor(World.PlayerPosition.Y));
+            int playerSectionY = ChunkManager.SectionYForWorldY(playerLayer, (int)Math.Floor(World.PlayerPosition.Y));
             bool hasBlockTarget = pickResult.HasValue;
             var targetBlock = pickResult?.Remove ?? (0, 0, 0);
             int targetLayer = hasBlockTarget ? ChunkManager.LayerForWorldY(targetBlock.y) : playerLayer;
+            int targetSectionY = hasBlockTarget
+                ? ChunkManager.SectionYForWorldY(targetLayer, targetBlock.y) : playerSectionY;
             int targetChunkX = hasBlockTarget ? GameWorld.WorldToChunkCoord(targetBlock.x) : playerChunkX;
             int targetChunkZ = hasBlockTarget ? GameWorld.WorldToChunkCoord(targetBlock.z) : playerChunkZ;
             var chunkDiagnostics = showFps
-                ? gpuRenderer?.CaptureChunkDiagnostics(playerLayer, playerChunkX, playerChunkZ,
-                    targetLayer, targetChunkX, targetChunkZ, hasBlockTarget,
+                ? gpuRenderer?.CaptureChunkDiagnostics(playerLayer, playerChunkX, playerChunkZ, playerSectionY,
+                    targetLayer, targetChunkX, targetChunkZ, targetSectionY, hasBlockTarget,
                     ChunkRenderRadius, World.Mesher.PendingDirtyCount)
                 : null;
             string saplingText = string.Empty;

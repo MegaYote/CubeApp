@@ -65,8 +65,7 @@ namespace Cubuild
         {
             // Materialize the source even when its chunk was streamed out before the fuse elapsed.
             int sourceLayer = ChunkManager.LayerForWorldY(position.Y);
-            Chunks.GetOrCreateChunk(sourceLayer,
-                WorldToChunkCoord(position.X), WorldToChunkCoord(position.Z));
+            Chunks.GetOrCreateChunkForWorldPosition(position.X, position.Y, position.Z);
             if (!Chunks.TryGetLoadedBlock(position.X, position.Y, position.Z, out int sourceId)
                 || sourceId != _idBomb)
             {
@@ -119,8 +118,8 @@ namespace Cubuild
                         double dy = y + 0.5 - centerY;
                         double dz = z + 0.5 - centerZ;
                         if (dx * dx + dy * dy + dz * dz > BombBlastRadius * BombBlastRadius) continue;
-                        var chunk = new ChunkCoordinates(layer, WorldToChunkCoord(x), WorldToChunkCoord(z));
-                        if (preparedChunks.Add(chunk)) Chunks.GetOrCreateChunk(layer, chunk.X, chunk.Z);
+                        var chunk = ChunkManager.GetChunkKeyForWorldPosition(x, y, z);
+                        if (preparedChunks.Add(chunk)) Chunks.GetOrCreateChunk(chunk.Layer, chunk.X, chunk.Z, chunk.SectionY);
                     }
                 }
             }
@@ -309,7 +308,7 @@ namespace Cubuild
                 {
                     for (int x = minX; x <= maxX; x++)
                     {
-                        Chunks.GetOrCreateChunk(layer, WorldToChunkCoord(x), WorldToChunkCoord(z));
+                        Chunks.GetOrCreateChunkForWorldPosition(x, y, z);
                         if (Chunks.TryGetLoadedBlock(x, y, z, out int blockId)
                             && BlockRegistry.IsSolid(blockId)) return true;
                     }
@@ -326,7 +325,7 @@ namespace Cubuild
             for (int attempt = 0; attempt < 8 && IsWorldYInBounds(y); attempt++, y++)
             {
                 int layer = ChunkManager.LayerForWorldY(y);
-                Chunks.GetOrCreateChunk(layer, WorldToChunkCoord(x), WorldToChunkCoord(z));
+                Chunks.GetOrCreateChunkForWorldPosition(x, y, z);
                 if (!Chunks.TryGetLoadedBlock(x, y, z, out int blockId) || BlockRegistry.IsSolid(blockId))
                     continue;
                 if (!ApplyBlockEdit(x, y, z, _idBomb, 0)) return false;
@@ -366,10 +365,11 @@ namespace Cubuild
                         {
                             for (int cx = WorldToChunkCoord(minX); cx <= WorldToChunkCoord(maxX); cx++)
                             {
-                                var coords = new ChunkCoordinates(layer, cx, cz);
+                                var coords = ChunkManager.GetChunkKeyForWorldPosition(cx * ChunkManager.ChunkSize, y,
+                                    cz * ChunkManager.ChunkSize);
                                 _bombProjectileChunkPins.Add(coords);
                                 if (!Chunks.TryGetLoadedChunk(coords, out _))
-                                    Chunks.GetOrCreateChunk(layer, cx, cz);
+                                    Chunks.GetOrCreateChunk(layer, cx, cz, coords.SectionY);
                             }
                         }
                     }

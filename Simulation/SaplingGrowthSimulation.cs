@@ -1,13 +1,11 @@
 using System;
-using System.Linq;
 
 namespace Cubuild
 {
     /// <summary>
-    /// Saplings grow into a random tree type. Each sapling is scheduled for a future
-    /// tick; on that tick it has a chance to grow if light/space/ground are suitable.
-    /// The tree type is random among all existing types each time, so replanting can
-    /// eventually yield any variety.
+    /// Saplings grow into the tree style assigned to their planting biome, with the biome's
+    /// optional secondary style/chance honored. Each sapling is scheduled for a future tick
+    /// and grows only when light, space, and ground are suitable.
     /// </summary>
     public sealed class SaplingGrowthSimulation
     {
@@ -26,12 +24,9 @@ namespace Cubuild
         private readonly int _leavesId;
         private readonly int _redClayId;
         private readonly int _sandId;
-
-        // All tree types we can grow into — matches TerrainChunkProvider's switch.
-        private static readonly string[] TreeTypes = new[]
+        private static readonly string[] SupportedTreeTypes =
         {
-            "oak", "pine", "round", "tall", "dead", "willow", "gnarled"
-            // cypress/palm are stubbed/disabled, so omit for now; add back if desired
+            "oak", "pine", "round", "tall", "dead", "willow", "gnarled",
         };
 
         public SaplingGrowthSimulation(ChunkManager manager, BlockTickScheduler tickScheduler)
@@ -125,15 +120,8 @@ namespace Cubuild
                 return;
             }
 
-            bool grew = false;
-            foreach (var treeType in TreeTypes.OrderBy(_ => _rand.Next()))
-            {
-                if (TryGrowTree(x, y, z, treeType))
-                {
-                    grew = true;
-                    break;
-                }
-            }
+            string treeType = TreeTypeForBiome(_manager.BiomeAt(x, z));
+            bool grew = TryGrowTree(x, y, z, treeType);
             if (!grew)
             {
                 Schedule(x, y, z);
@@ -144,6 +132,36 @@ namespace Cubuild
             }
             // If it grew, the sapling block is already replaced by the tree's trunk/leaves
             // and no further scheduling is needed.
+        }
+
+        private string TreeTypeForBiome(BiomeDefinition biome)
+        {
+            string primary = NormalizeTreeType(biome.TreeType);
+            string secondary = NormalizeTreeType(biome.TreeTypeSecondary);
+            if (secondary != "oak" || string.Equals(biome.TreeTypeSecondary, "oak",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrWhiteSpace(biome.TreeTypeSecondary)
+                    && biome.TreeSecondaryChance > 0f
+                    && _rand.NextDouble() < Math.Clamp(biome.TreeSecondaryChance, 0f, 1f))
+                    return secondary;
+            }
+            return primary;
+        }
+
+        private static string NormalizeTreeType(string? treeType)
+        {
+            if (string.IsNullOrWhiteSpace(treeType)) return "oak";
+            return treeType.Trim().ToLowerInvariant() switch
+            {
+                "pine" => "pine",
+                "round" => "round",
+                "tall" => "tall",
+                "dead" => "dead",
+                "willow" => "willow",
+                "gnarled" => "gnarled",
+                _ => "oak",
+            };
         }
 
         private bool HasConservativeGrowthSpace(int x, int y, int z)
@@ -192,7 +210,7 @@ namespace Cubuild
         {
             // Actually test each tree type's full space check (without placing) — so F3 doesn't lie and say "ready" when every type would still be blocked
             // We do a dry-run of the same checks TryGrowTree does, but just the space part
-            foreach (var t in TreeTypes)
+            foreach (var t in SupportedTreeTypes)
             {
                 if (CanGrowTreeType(x, y, z, t)) return true;
             }

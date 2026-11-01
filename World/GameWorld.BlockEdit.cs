@@ -55,8 +55,7 @@ namespace Cubuild
                 OnSapTorchBlockChanged(x, doorPartnerY, z, BlockRegistry.AirId);
                 BlockTicks?.OnBlockChanged(x, doorPartnerY, z);
                 BlockEdited?.Invoke(x, doorPartnerY, z, 0, 0);
-                Mesher.RequestImmediateRemesh(new ChunkCoordinates(
-                    ChunkManager.LayerForWorldY(doorPartnerY), WorldToChunkCoord(x), WorldToChunkCoord(z)));
+                Mesher.RequestImmediateRemesh(ChunkManager.GetChunkKeyForWorldPosition(x, doorPartnerY, z));
             }
             // Survival: mining a block drops a physical item you have to collect - no teleporting
             // into the inventory. Leaves drop a sapling 1-in-10, otherwise nothing; gravel
@@ -143,8 +142,7 @@ namespace Cubuild
             // reach of a remaining log decompose (Minecraft-style).
             if (removedBlockId == _idLog) DecayLeavesNear(x, y, z);
             BlockTicks?.OnBlockChanged(x, y, z);
-            int rLayer = ChunkManager.LayerForWorldY(y);
-            var editedChunk = new ChunkCoordinates(rLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
+            var editedChunk = ChunkManager.GetChunkKeyForWorldPosition(x, y, z);
             Mesher.RequestImmediateRemesh(editedChunk);
             BlockEdited?.Invoke(x, y, z, 0, 0);
 
@@ -211,8 +209,7 @@ namespace Cubuild
             if (want == meta) return;
 
             if (!Chunks.TrySetBlockLoadedOnly(x, y, z, id, want)) return;
-            Mesher.RequestImmediateRemesh(new ChunkCoordinates(
-                ChunkManager.LayerForWorldY(y), WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            Mesher.RequestImmediateRemesh(ChunkManager.GetChunkKeyForWorldPosition(x, y, z));
             // fireEdited is false only on the network apply path, where re-broadcasting would
             // bounce the edit straight back to the peer that sent it.
             if (fireEdited) BlockEdited?.Invoke(x, y, z, id, want);
@@ -362,8 +359,7 @@ namespace Cubuild
                 SpawnItemDrop(dropId, 1, new Point3D(x + 0.5, y + 0.5, z + 0.5));
             }
             BlockTicks?.OnBlockChanged(x, y, z);
-            int rLayer = ChunkManager.LayerForWorldY(y);
-            var editedChunk = new ChunkCoordinates(rLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
+            var editedChunk = ChunkManager.GetChunkKeyForWorldPosition(x, y, z);
             Mesher.RequestImmediateRemesh(editedChunk);
             BlockEdited?.Invoke(x, y, z, 0, 0);
             BreakUnsupportedCross(x, y + 1, z);
@@ -595,7 +591,7 @@ var place = pickResult.Value.Place;
                     if (!Chunks.TrySetBlock(hit.x, hit.y, hit.z, sapTorchBlockId, burntMeta)) return false;
                     OnSapTorchBlockChanged(hit.x, hit.y, hit.z, sapTorchBlockId, _idBurntTorch);
                     BlockTicks?.OnBlockChanged(hit.x, hit.y, hit.z);
-                    Mesher.RequestImmediateRemesh(new ChunkCoordinates(ChunkManager.LayerForWorldY(hit.y), WorldToChunkCoord(hit.x), WorldToChunkCoord(hit.z)));
+                    Mesher.RequestImmediateRemesh(ChunkManager.GetChunkKeyForWorldPosition(hit.x, hit.y, hit.z));
                     BlockEdited?.Invoke(hit.x, hit.y, hit.z, sapTorchBlockId, burntMeta);
                     return true;
                 }
@@ -607,8 +603,7 @@ var place = pickResult.Value.Place;
             OnBombBlockChanged(place.x, place.y, place.z, blockToPlace, previousBlockId);
             if (!IsCreative) TryConsumeFromInventory(spendId, 1);
             BlockTicks?.OnBlockChanged(place.x, place.y, place.z);
-            int placeLayer = ChunkManager.LayerForWorldY(place.y);
-            var editedChunk = new ChunkCoordinates(placeLayer, WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));
+            var editedChunk = ChunkManager.GetChunkKeyForWorldPosition(place.x, place.y, place.z);
             Mesher.RequestImmediateRemesh(editedChunk);
             BlockEdited?.Invoke(place.x, place.y, place.z, blockToPlace, meta);
             // Freshly laid rail: resolve its own shape, and re-resolve any neighbour that was
@@ -643,8 +638,7 @@ var place = pickResult.Value.Place;
             OnSapTorchBlockChanged(x, y, z, blockId, oldId);
             OnBombBlockChanged(x, y, z, blockId, oldId);
             BlockTicks?.OnBlockChanged(x, y, z);
-            int ebLayer = ChunkManager.LayerForWorldY(y);
-            var editedChunk = new ChunkCoordinates(ebLayer, WorldToChunkCoord(x), WorldToChunkCoord(z));
+            var editedChunk = ChunkManager.GetChunkKeyForWorldPosition(x, y, z);
             Mesher.RequestImmediateRemesh(editedChunk);
             BlockEdited?.Invoke(x, y, z, blockId, meta);
             if (blockId == BlockRegistry.AirId)
@@ -674,8 +668,7 @@ var place = pickResult.Value.Place;
             if (WouldBlockIntersectMob(x, y, z, fullId, 0)) return false;
             if (!Chunks.TrySetBlock(x, y, z, fullId, 0)) return false;
             BlockTicks?.OnBlockChanged(x, y, z);
-            int msLayer = ChunkManager.LayerForWorldY(y);
-            Mesher.RequestImmediateRemesh(new ChunkCoordinates(msLayer, WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            Mesher.RequestImmediateRemesh(ChunkManager.GetChunkKeyForWorldPosition(x, y, z));
             BlockEdited?.Invoke(x, y, z, fullId, 0);
             return true;
         }
@@ -694,8 +687,7 @@ var place = pickResult.Value.Place;
             if (WouldBlockIntersectMob(x, y, z, fullId, 0)) return false;
             if (!Chunks.TrySetBlock(x, y, z, fullId, 0)) return false;
             BlockTicks?.OnBlockChanged(x, y, z);
-            int fsLayer = ChunkManager.LayerForWorldY(y);
-            Mesher.RequestImmediateRemesh(new ChunkCoordinates(fsLayer, WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            Mesher.RequestImmediateRemesh(ChunkManager.GetChunkKeyForWorldPosition(x, y, z));
             BlockEdited?.Invoke(x, y, z, fullId, 0);
             return true;
         }
@@ -717,8 +709,7 @@ var place = pickResult.Value.Place;
             Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId);
             OnSapTorchBlockChanged(x, y, z, BlockRegistry.AirId, id);
             BlockTicks?.OnBlockChanged(x, y, z);
-            int ucLayer = ChunkManager.LayerForWorldY(y);
-            Mesher.RequestImmediateRemesh(new ChunkCoordinates(ucLayer, WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            Mesher.RequestImmediateRemesh(ChunkManager.GetChunkKeyForWorldPosition(x, y, z));
             BlockEdited?.Invoke(x, y, z, 0, 0);
             // Cascade upward — if there's another cross block above, it also loses support.
             BreakUnsupportedCross(x, y + 1, z);
@@ -745,8 +736,7 @@ var place = pickResult.Value.Place;
             Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId);
             OnSapTorchBlockChanged(x, y, z, BlockRegistry.AirId, id);
             BlockTicks?.OnBlockChanged(x, y, z);
-            int layer = ChunkManager.LayerForWorldY(y);
-            Mesher.RequestImmediateRemesh(new ChunkCoordinates(layer, WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            Mesher.RequestImmediateRemesh(ChunkManager.GetChunkKeyForWorldPosition(x, y, z));
             BlockEdited?.Invoke(x, y, z, 0, 0);
         }
 
@@ -758,8 +748,7 @@ var place = pickResult.Value.Place;
             Chunks.TrySetBlock(x, y, z, BlockRegistry.AirId);
             OnSapTorchBlockChanged(x, y, z, BlockRegistry.AirId, id);
             BlockTicks?.OnBlockChanged(x, y, z);
-            int layer = ChunkManager.LayerForWorldY(y);
-            Mesher.RequestImmediateRemesh(new ChunkCoordinates(layer, WorldToChunkCoord(x), WorldToChunkCoord(z)));
+            Mesher.RequestImmediateRemesh(ChunkManager.GetChunkKeyForWorldPosition(x, y, z));
             BlockEdited?.Invoke(x, y, z, 0, 0);
         }
 
@@ -847,8 +836,7 @@ var place = pickResult.Value.Place;
             if (!IsCreative) TryConsumeFromInventory(spendId, 1);
             BlockTicks?.OnBlockChanged(place.x, place.y, place.z);
             BlockTicks?.OnBlockChanged(place.x, topY, place.z);
-            int layer = ChunkManager.LayerForWorldY(place.y);
-            var coord = new ChunkCoordinates(layer, WorldToChunkCoord(place.x), WorldToChunkCoord(place.z));
+            var coord = ChunkManager.GetChunkKeyForWorldPosition(place.x, place.y, place.z);
             Mesher.RequestImmediateRemesh(coord);
             // Both halves are announced so a host's clients build the same door.
             BlockEdited?.Invoke(place.x, place.y, place.z, doorBottomId, meta);
@@ -898,8 +886,7 @@ var place = pickResult.Value.Place;
 
             BlockTicks?.OnBlockChanged(x, bottomY, z);
             BlockTicks?.OnBlockChanged(x, topY, z);
-            int layer = ChunkManager.LayerForWorldY(bottomY);
-            var coord = new ChunkCoordinates(layer, WorldToChunkCoord(x), WorldToChunkCoord(z));
+            var coord = ChunkManager.GetChunkKeyForWorldPosition(x, bottomY, z);
             Mesher.RequestImmediateRemesh(coord);
             BlockEdited?.Invoke(x, bottomY, z, doorBottomId, toggled);
             BlockEdited?.Invoke(x, topY, z, doorTopId, toggled);

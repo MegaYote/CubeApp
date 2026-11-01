@@ -35,8 +35,8 @@ namespace Cubuild.Renderer
         Cubuild.CullingMode GetCullingMode();
         /// <summary>Returns a bounded diagnostic snapshot without exposing renderer internals.</summary>
         ChunkDiagnosticsSnapshot CaptureChunkDiagnostics(
-            int playerLayer, int playerChunkX, int playerChunkZ,
-            int targetLayer, int targetChunkX, int targetChunkZ, bool hasBlockTarget,
+            int playerLayer, int playerChunkX, int playerChunkZ, int playerSectionY,
+            int targetLayer, int targetChunkX, int targetChunkZ, int targetSectionY, bool hasBlockTarget,
             int renderRadius, int dirtyMeshQueueCount);
         void ToggleGpuCulling();
         void MeshChunkImmediate(Cubuild.ChunkCoordinates coords);

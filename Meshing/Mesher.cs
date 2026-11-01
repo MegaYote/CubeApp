@@ -117,7 +117,9 @@ namespace Cubuild
             foreach (var c in chunkList)
             {
                 int layer = ChunkManager.LayerForWorldY(c.OriginY);
-                var chunkCoord = new ChunkCoordinates(layer, FloorDiv(c.OriginX, ChunkManager.ChunkSize), FloorDiv(c.OriginZ, ChunkManager.ChunkSize));
+                int sectionY = layer == ChunkManager.SkyLayer
+                    ? (c.OriginY - ChunkManager.SkyOriginY) / ChunkManager.SkySectionHeight : 0;
+                var chunkCoord = new ChunkCoordinates(layer, FloorDiv(c.OriginX, ChunkManager.ChunkSize), FloorDiv(c.OriginZ, ChunkManager.ChunkSize), sectionY);
                 chunkLookup[chunkCoord] = c;
             }
 
@@ -128,6 +130,8 @@ namespace Cubuild
             int height = chunk.Height;
             int depth = chunk.Depth;
             int targetLayer = ChunkManager.LayerForWorldY(chunk.OriginY);
+            int targetSectionY = targetLayer == ChunkManager.SkyLayer
+                ? (chunk.OriginY - ChunkManager.SkyOriginY) / ChunkManager.SkySectionHeight : 0;
 
             // Flood-fill light levels (0..15) across the target chunk and its SAME-LAYER neighbours
             // so each face can be shaded by how much light reaches the empty block it's exposed to.
@@ -137,7 +141,10 @@ namespace Cubuild
             var lightingChunks = new Dictionary<ChunkCoordinates, Chunk>();
             foreach (var kv in chunkLookup)
             {
-                if (kv.Key.Layer == targetLayer) lightingChunks[kv.Key] = kv.Value;
+                if (kv.Key.Layer == targetLayer
+                    || targetLayer == ChunkManager.SkyLayer && targetSectionY == 0 && kv.Key.Layer == ChunkManager.GroundLayer
+                    || targetLayer == ChunkManager.GroundLayer && kv.Key.Layer == ChunkManager.SkyLayer && kv.Key.SectionY == 0)
+                    lightingChunks[kv.Key] = kv.Value;
             }
             var lighting = new ChunkLighting(lightingChunks, ChunkManager.ChunkSize, height);
 
@@ -147,13 +154,22 @@ namespace Cubuild
             byte[] raw = chunk.RawBlocks;
             int targetCX = FloorDiv(chunk.OriginX, ChunkManager.ChunkSize);
             int targetCZ = FloorDiv(chunk.OriginZ, ChunkManager.ChunkSize);
-            chunkLookup.TryGetValue(new ChunkCoordinates(targetLayer, targetCX + 1, targetCZ), out var neighborPosX);
-            chunkLookup.TryGetValue(new ChunkCoordinates(targetLayer, targetCX, targetCZ + 1), out var neighborPosZ);
+            chunkLookup.TryGetValue(new ChunkCoordinates(targetLayer, targetCX + 1, targetCZ, targetSectionY), out var neighborPosX);
+            chunkLookup.TryGetValue(new ChunkCoordinates(targetLayer, targetCX, targetCZ + 1, targetSectionY), out var neighborPosZ);
             // The layer ABOVE this chunk (same X/Z): its bottom row is the block directly above the
             // target's top row. Used for Y-axis occlusion at the layer seam (deep top vs ground
             // bottom at world -65/-64, ground top vs sky bottom at 383/384).
-            chunkLookup.TryGetValue(new ChunkCoordinates(targetLayer + 1, targetCX, targetCZ), out var neighborPosY);
+            int aboveLayer = targetLayer == ChunkManager.SkyLayer ? targetLayer : targetLayer + 1;
+            int aboveSection = targetLayer == ChunkManager.SkyLayer ? targetSectionY + 1 : 0;
+            chunkLookup.TryGetValue(new ChunkCoordinates(aboveLayer, targetCX, targetCZ, aboveSection), out var neighborPosY);
+            int belowLayer = targetLayer == ChunkManager.SkyLayer
+                ? (targetSectionY == 0 ? ChunkManager.GroundLayer : targetLayer)
+                : targetLayer - 1;
+            int belowSection = targetLayer == ChunkManager.SkyLayer && targetSectionY > 0 ? targetSectionY - 1 : 0;
+            if (targetLayer == ChunkManager.GroundLayer) belowLayer = ChunkManager.DeepLayer;
+            chunkLookup.TryGetValue(new ChunkCoordinates(belowLayer, targetCX, targetCZ, belowSection), out var neighborNegY);
             byte[]? rawPosY = neighborPosY?.RawBlocks;
+            byte[]? rawNegY = neighborNegY?.RawBlocks;
             byte[]? rawPosX = neighborPosX?.RawBlocks;
             byte[]? rawPosZ = neighborPosZ?.RawBlocks;
 
@@ -238,11 +254,12 @@ namespace Cubuild
                 bool[]? sliceHasContent = null;
                 if (d == 1) sliceHasContent = blockAtY;
 
-                for (int slice = 0; slice < dimD; slice++)
+                for (int slice = d == 1 ? -1 : 0; slice < dimD; slice++)
                 {
                     // Y-axis: skip both-air slices (fully safe - the Y axis never crosses into a
                     // neighbor chunk; the block above the world top is always air).
-                    if (sliceHasContent != null && !sliceHasContent[slice]
+                    if (sliceHasContent != null
+                        && !(slice < 0 ? sliceHasContent[0] : sliceHasContent[slice])
                         && (slice + 1 >= dimD || !sliceHasContent[slice + 1]))
                     {
                         continue;
@@ -288,13 +305,16 @@ namespace Cubuild
                         {
                             for (int jv = 0; jv < dimV; jv++)
                             {
-                                int baseIdx = (jv * depth + iu) * height + slice;
-                                int A = raw[baseIdx];
-                                int B = lastSlice
-                                    ? (rawPosY != null ? rawPosY[(jv * depth + iu) * aboveHeight + 0] : BlockRegistry.AirId)
-                                    : raw[baseIdx + 1];
+                                int baseIdx = (jv * depth + iu) * height;
+                                int A = slice < 0
+                                    ? (rawNegY != null ? rawNegY[(jv * depth + iu) * neighborNegY!.Height + neighborNegY.Height - 1] : BlockRegistry.AirId)
+                                    : raw[baseIdx + slice];
+                                int B = slice < 0 ? raw[baseIdx]
+                                    : lastSlice
+                                        ? (rawPosY != null ? rawPosY[(jv * depth + iu) * aboveHeight + 0] : BlockRegistry.AirId)
+                                        : raw[baseIdx + slice + 1];
                                 int cell = iu * dimV + jv;
-                                if (!HasDedicatedPass(A) && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetSkyLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu), lighting.GetBlockLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu), IsHillsGreenTint(A, chunk.OriginX + jv, chunk.OriginZ + iu));
+                                if (slice >= 0 && !HasDedicatedPass(A) && !BlockRegistry.IsCross(A) && !BlockRegistry.IsPartialShape(A) && RendersToward(A, B)) maskPos[cell] = Pack(A, true, lighting.GetSkyLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu), lighting.GetBlockLight(chunk.OriginX + jv, slice + 1, chunk.OriginZ + iu), IsHillsGreenTint(A, chunk.OriginX + jv, chunk.OriginZ + iu));
                                 if (!HasDedicatedPass(B) && !BlockRegistry.IsCross(B) && !BlockRegistry.IsPartialShape(B) && RendersToward(B, A)) maskNeg[cell] = Pack(B, false, lighting.GetSkyLight(chunk.OriginX + jv, slice, chunk.OriginZ + iu), lighting.GetBlockLight(chunk.OriginX + jv, slice, chunk.OriginZ + iu), IsHillsGreenTint(B, chunk.OriginX + jv, chunk.OriginZ + iu));
                             }
                         }
@@ -481,7 +501,9 @@ namespace Cubuild
             int chunkX = FloorDiv(worldX, ChunkManager.ChunkSize);
             int chunkZ = FloorDiv(worldZ, ChunkManager.ChunkSize);
             int layer = ChunkManager.LayerForWorldY(target.OriginY);
-            if (chunkLookup.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var neighbor))
+            int sectionY = layer == ChunkManager.SkyLayer
+                ? (target.OriginY - ChunkManager.SkyOriginY) / ChunkManager.SkySectionHeight : 0;
+            if (chunkLookup.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ, sectionY), out var neighbor))
             {
                 int nx = worldX - neighbor.OriginX;
                 int nz = worldZ - neighbor.OriginZ;
@@ -1239,7 +1261,8 @@ namespace Cubuild
             // terrain live in the ground layer; without this, lookups hit the deep layer and
             // neighbor sampling (fluid heights, occlusion) reads wrong blocks.
             int layer = ChunkManager.LayerForWorldY(wy);
-            lookup.TryGetValue(new ChunkCoordinates(layer, cx, cz), out var chunk);
+            int sectionY = ChunkManager.SectionYForWorldY(layer, wy);
+            lookup.TryGetValue(new ChunkCoordinates(layer, cx, cz, sectionY), out var chunk);
             return chunk;
         }
 

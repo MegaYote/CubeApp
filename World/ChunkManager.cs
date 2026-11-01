@@ -6,7 +6,7 @@ using Cubuild.World;
 namespace Cubuild
 {
     /// <summary>
-    /// Chunk storage + streaming for the whole world. The world is three vertically-stacked
+    /// Chunk storage + streaming for the whole world. The world has three vertically-stacked
     /// layers (three independent world generators):
     ///
     ///   Deep layer (0): OriginY=-256, Height=192, world -256..-65.
@@ -16,8 +16,10 @@ namespace Cubuild
     ///   Sky layer (2):    OriginY=384, Height=640, world 384..1023.
     ///     Empty air at generation; sky islands fill lazily when the player climbs high.
     ///
-    /// Layers share the (X, Z) column grid, so chunk keys carry the layer
-    /// (<see cref="ChunkCoordinates.Layer"/>). Block access by world Y routes to the correct layer.
+    /// Layers share the (X, Z) column grid, and chunk keys carry their layer
+    /// (<see cref="ChunkCoordinates.Layer"/>) plus an optional vertical section index
+    /// (<see cref="ChunkCoordinates.SectionY"/>). Deep and ground retain their current
+    /// full-height chunk behavior. Sky uses 16-high chunks keyed by section index.
     /// </summary>
     public sealed class ChunkManager
     {
@@ -31,6 +33,8 @@ namespace Cubuild
         public const int GroundHeight = 448;
         public const int SkyOriginY = 384;
         public const int SkyHeight = 640;
+        public const int SkySectionHeight = 16;
+        public const int SkySectionCount = SkyHeight / SkySectionHeight;
         // Back-compat aliases (most code means the ground layer when it says "the world").
         public const int WorldOriginY = GroundOriginY;
         public const int ChunkHeight = GroundHeight;
@@ -120,6 +124,56 @@ namespace Cubuild
             _ => GroundHeight,
         };
 
+        public static int SectionYForWorldY(int layer, int worldY)
+        {
+            if (layer != SkyLayer) return 0;
+            return FloorDiv(worldY - SkyOriginY, SkySectionHeight);
+        }
+
+        public static int HeightForSection(int layer) => layer == SkyLayer ? SkySectionHeight : HeightForLayer(layer);
+        public static int OriginYForSection(int layer, int sectionY)
+            => layer == SkyLayer ? SkySectionOriginY(sectionY) : OriginYForLayer(layer);
+
+        /// <summary>
+        /// Maps a world Y inside the sky layer's half-open vertical range to its zero-based
+        /// 16-block sky section. Returns false outside SkyOriginY..SkyOriginY+SkyHeight.
+        /// </summary>
+        public static bool TryGetSkySectionY(int worldY, out int sectionY)
+        {
+            if (worldY < SkyOriginY || worldY >= SkyOriginY + SkyHeight)
+            {
+                sectionY = 0;
+                return false;
+            }
+
+            sectionY = (worldY - SkyOriginY) / SkySectionHeight;
+            return true;
+        }
+
+        /// <summary>Returns the world Y origin of a valid zero-based sky section.</summary>
+        /// <exception cref="ArgumentOutOfRangeException">Section index is outside the sky layer.</exception>
+        public static int SkySectionOriginY(int sectionY)
+        {
+            if (sectionY < 0 || sectionY >= SkySectionCount)
+                throw new ArgumentOutOfRangeException(nameof(sectionY));
+
+            return SkyOriginY + sectionY * SkySectionHeight;
+        }
+
+        /// <summary>
+        /// Builds the chunk identity for an integer world position, using floor division for X/Z
+        /// and the correct sky section when worldY is in the sky layer. Out-of-range sky heights
+        /// retain an invalid section index so loaded-only lookups safely miss instead of aliasing.
+        /// Deep and ground always map to section zero.
+        /// </summary>
+        public static ChunkCoordinates GetChunkKeyForWorldPosition(int worldX, int worldY, int worldZ)
+        {
+            int layer = LayerForWorldY(worldY);
+            int sectionY = SectionYForWorldY(layer, worldY);
+
+            return new ChunkCoordinates(layer, FloorDiv(worldX, ChunkSize), FloorDiv(worldZ, ChunkSize), sectionY);
+        }
+
         /// <summary>Returns the immediately adjacent layer when the player is within the small
         /// transition band at either end of the current layer; otherwise returns -1.</summary>
         public static int AdjacentLayerNearBoundary(int layer, double worldY)
@@ -138,12 +192,24 @@ namespace Cubuild
         public Chunk GetOrCreateChunk(int chunkX, int chunkZ) => GetOrCreateChunk(GroundLayer, chunkX, chunkZ);
 
         public Chunk GetOrCreateChunk(int layer, int chunkX, int chunkZ)
+            => GetOrCreateChunk(layer, chunkX, chunkZ, 0);
+
+        public Chunk GetOrCreateChunkForWorldPosition(int worldX, int worldY, int worldZ)
         {
-            var key = new ChunkCoordinates(layer, chunkX, chunkZ);
+            var key = GetChunkKeyForWorldPosition(worldX, worldY, worldZ);
+            return GetOrCreateChunk(key.Layer, key.X, key.Z, key.SectionY);
+        }
+
+        public Chunk GetOrCreateChunk(int layer, int chunkX, int chunkZ, int sectionY)
+        {
+            if (layer < DeepLayer || layer > SkyLayer) throw new ArgumentOutOfRangeException(nameof(layer));
+            if (layer == SkyLayer && (sectionY < 0 || sectionY >= SkySectionCount)) throw new ArgumentOutOfRangeException(nameof(sectionY));
+            if (layer != SkyLayer && sectionY != 0) throw new ArgumentOutOfRangeException(nameof(sectionY));
+            var key = new ChunkCoordinates(layer, chunkX, chunkZ, sectionY);
             Chunk? candidate = null;
             var result = loadedChunks.GetOrAdd(key, _ =>
             {
-                var chunk = chunkProviders[layer].GenerateChunk(chunkX, chunkZ, ChunkSize, HeightForLayer(layer));
+                var chunk = chunkProviders[layer].GenerateChunk(chunkX, chunkZ, ChunkSize, HeightForSection(layer), sectionY);
                 chunk.NeedsRemesh = true;
                 candidate = chunk;
                 return chunk;
@@ -202,28 +268,28 @@ namespace Cubuild
                 // Sky islands are a lazy direct-array population whose timing depends on player
                 // altitude. Newly populated chunks are full/untrusted rather than pretending they
                 // share the empty, reproducible sky baseline.
-                if (layer == SkyLayer && chunkProviders[SkyLayer] is World.SkyChunkProvider skyProvider
-                    && skyProvider.Islands.AutoHighFill)
+                if (layer == SkyLayer && chunkProviders[SkyLayer] is World.SkyChunkProvider skyProvider)
                 {
                     if (restoredCachedChunk)
-                        skyProvider.Islands.MarkChunkFilled(chunkX, chunkZ);
-                    else if (skyProvider.Islands.HighFillChunk(chunkX, chunkZ, result, ChunkSize, HeightForLayer(layer)))
+                        skyProvider.Islands.MarkChunkFilled(chunkX, chunkZ, sectionY);
+                    else if (skyProvider.Islands.AutoHighFill
+                        && skyProvider.Islands.HighFillChunk(chunkX, chunkZ, sectionY, result, ChunkSize, HeightForSection(layer)))
                         MarkChunkUntrusted(result);
                 }
                 // A seam is meshed from the lower chunk's perspective. When either side changes
                 // residency, the other side must rebuild its border faces against the new state.
-                MarkVerticalNeighborsDirty(layer, chunkX, chunkZ);
+                MarkVerticalNeighborsDirty(layer, chunkX, chunkZ, sectionY);
                 // A newly loaded chunk can expose faces on adjacent, already-meshed chunks
                 // (border faces are culled against neighbors, and an absent neighbor is treated
                 // as air). Mark those neighbors dirty so their border faces get rebuilt now,
                 // instead of staying wrong until some unrelated edit/unload triggers a remesh.
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ), out var left))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ, sectionY), out var left))
                     left.NeedsRemesh = true;
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ), out var right))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ, sectionY), out var right))
                     right.NeedsRemesh = true;
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ - 1), out var back))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ - 1, sectionY), out var back))
                     back.NeedsRemesh = true;
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ + 1), out var front))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ + 1, sectionY), out var front))
                     front.NeedsRemesh = true;
                 WireDirty(result);
                 // Announce the new chunk. Handlers run on a gen worker, so they must be
@@ -234,16 +300,29 @@ namespace Cubuild
             return result;
         }
 
-        private void MarkVerticalNeighborDirty(int layer, int chunkX, int chunkZ)
+        private void MarkVerticalNeighborDirty(int layer, int chunkX, int chunkZ, int sectionY = 0)
         {
-            if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var neighbor))
+            if (layer == SkyLayer)
+            {
+                if (sectionY > 0 && loadedChunks.TryGetValue(new ChunkCoordinates(SkyLayer, chunkX, chunkZ, sectionY - 1), out var below))
+                    below.NeedsRemesh = true;
+                if (sectionY + 1 < SkySectionCount && loadedChunks.TryGetValue(new ChunkCoordinates(SkyLayer, chunkX, chunkZ, sectionY + 1), out var above))
+                    above.NeedsRemesh = true;
+                if (sectionY == 0) MarkVerticalNeighborDirty(GroundLayer, chunkX, chunkZ, 0);
+                return;
+            }
+            if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ, sectionY), out var neighbor))
                 neighbor.NeedsRemesh = true;
         }
 
-        private void MarkVerticalNeighborsDirty(int layer, int chunkX, int chunkZ)
+        private void MarkVerticalNeighborsDirty(int layer, int chunkX, int chunkZ, int sectionY = 0)
         {
-            if (layer > DeepLayer) MarkVerticalNeighborDirty(layer - 1, chunkX, chunkZ);
-            if (layer < SkyLayer) MarkVerticalNeighborDirty(layer + 1, chunkX, chunkZ);
+            if (layer == SkyLayer) MarkVerticalNeighborDirty(layer, chunkX, chunkZ, sectionY);
+            else
+            {
+                if (layer > DeepLayer) MarkVerticalNeighborDirty(layer - 1, chunkX, chunkZ);
+                if (layer < SkyLayer) MarkVerticalNeighborDirty(layer + 1, chunkX, chunkZ);
+            }
         }
 
         /// <summary>
@@ -383,8 +462,11 @@ namespace Cubuild
 
         // Stamps a saved full chunk's block+meta data over the (re)generated chunk on world load.
         public void ApplySavedChunk(int layer, int chunkX, int chunkZ, byte[] blocks, byte[] meta)
+            => ApplySavedChunk(layer, chunkX, chunkZ, 0, blocks, meta);
+
+        public void ApplySavedChunk(int layer, int chunkX, int chunkZ, int sectionY, byte[] blocks, byte[] meta)
         {
-            var chunk = GetOrCreateChunk(layer, chunkX, chunkZ);
+            var chunk = GetOrCreateChunk(layer, chunkX, chunkZ, sectionY);
             lock (chunk.MeshLock)
             {
                 if (blocks != null) Array.Copy(blocks, chunk.RawBlocks, Math.Min(blocks.Length, chunk.RawBlocks.Length));
@@ -392,12 +474,14 @@ namespace Cubuild
                 chunk.InvalidateLightGrid();
             }
             MarkChunkUntrusted(chunk);
+            if (layer == SkyLayer && chunkProviders[SkyLayer] is World.SkyChunkProvider skyProvider)
+                skyProvider.Islands.MarkChunkFilled(chunkX, chunkZ, sectionY);
             chunk.NeedsRemesh = true;
             // Saved block arrays can change either seam row, even though their individual edits
             // are not replayed through MarkDirty.
             if (layer == GroundLayer || layer == DeepLayer)
                 SyncDeepAccessIfLoaded(chunkX, chunkZ);
-            MarkVerticalNeighborsDirty(layer, chunkX, chunkZ);
+            MarkVerticalNeighborsDirty(layer, chunkX, chunkZ, sectionY);
         }
 
         public void ApplySavedChunk(int chunkX, int chunkZ, byte[] blocks, byte[] meta)
@@ -406,15 +490,16 @@ namespace Cubuild
         /// <summary>Recreates the current deterministic provider baseline, applies sparse final
         /// cell values, and seeds provenance so later edits can continue using deltas.</summary>
         public void ApplySavedDeltaChunk(int layer, int chunkX, int chunkZ, IReadOnlyList<SavedChunkDeltaCell> cells)
+            => ApplySavedDeltaChunk(layer, chunkX, chunkZ, 0, cells);
+
+        public void ApplySavedDeltaChunk(int layer, int chunkX, int chunkZ, int sectionY, IReadOnlyList<SavedChunkDeltaCell> cells)
         {
             if (layer < DeepLayer || layer > SkyLayer)
                 throw new InvalidDataException($"Sparse chunk delta has unsupported layer {layer}.");
-            if (layer == SkyLayer)
-                throw new InvalidDataException("Sparse sky-layer deltas are unsupported because sky-island fill depends on when the chunk is visited; the save must contain a full sky chunk.");
             // GetOrCreateChunk already generates the deterministic baseline and performs the
             // layer-seam initialization. Reuse that one chunk instead of generating a second
             // temporary baseline (which nearly doubles load-time generation and memory cost).
-            var chunk = GetOrCreateChunk(layer, chunkX, chunkZ);
+            var chunk = GetOrCreateChunk(layer, chunkX, chunkZ, sectionY);
             if (!chunk.HasTrustedDeltaBaseline)
                 throw new InvalidDataException("Sparse chunk delta does not match the generated chunk baseline; a full chunk snapshot is required.");
             lock (chunk.MeshLock)
@@ -423,12 +508,14 @@ namespace Cubuild
                 chunk.InvalidateLightGrid();
             }
             chunk.HasRuntimeEdits = true;
+            if (layer == SkyLayer && chunkProviders[SkyLayer] is World.SkyChunkProvider skyProvider)
+                skyProvider.Islands.MarkChunkFilled(chunkX, chunkZ, sectionY);
             chunk.SurfaceLodFaces = null;
             chunk.NeedsRemesh = true;
-            MarkModified(new ChunkCoordinates(layer, chunkX, chunkZ));
+            MarkModified(new ChunkCoordinates(layer, chunkX, chunkZ, sectionY));
             if (layer == GroundLayer || layer == DeepLayer)
                 SyncDeepAccessIfLoaded(chunkX, chunkZ);
-            MarkVerticalNeighborsDirty(layer, chunkX, chunkZ);
+            MarkVerticalNeighborsDirty(layer, chunkX, chunkZ, sectionY);
         }
 
         /// <summary>Captures a modified chunk from either loaded storage or its unload cache.</summary>
@@ -439,7 +526,11 @@ namespace Cubuild
             forceFull |= coords.Layer == SkyLayer;
             if (loadedChunks.TryGetValue(coords, out var loaded))
             {
-                savedChunk = CaptureChunkForSave(loaded, coords, forceFull);
+                // Network join snapshots may be captured from a background send task while the
+                // main-thread simulation is still editing blocks. Use the same lock as mesh
+                // capture so a section payload cannot mix pre/post-edit bytes.
+                lock (loaded.MeshLock)
+                    savedChunk = CaptureChunkForSave(loaded, coords, forceFull);
                 return true;
             }
 
@@ -463,13 +554,14 @@ namespace Cubuild
             // An old-generation world cannot advertise a delta baseline. Materialize the cached
             // patch against the exact in-process current provider and write it as a full snapshot.
             var materialized = chunkProviders[coords.Layer].GenerateChunk(
-                coords.X, coords.Z, ChunkSize, HeightForLayer(coords.Layer));
+                coords.X, coords.Z, ChunkSize, HeightForSection(coords.Layer), coords.SectionY);
             materialized.ApplyDeltaCells(cachedSnapshot.DeltaCells);
             savedChunk = new SavedChunk
             {
                 Layer = coords.Layer,
                 X = coords.X,
                 Z = coords.Z,
+                SectionY = coords.SectionY,
                 Blocks = (byte[])materialized.RawBlocks.Clone(),
                 Meta = (byte[])materialized.RawMeta.Clone(),
             };
@@ -485,6 +577,7 @@ namespace Cubuild
                     Layer = coords.Layer,
                     X = coords.X,
                     Z = coords.Z,
+                    SectionY = coords.SectionY,
                     IsDelta = true,
                     DeltaCells = cells,
                 };
@@ -494,6 +587,7 @@ namespace Cubuild
                 Layer = coords.Layer,
                 X = coords.X,
                 Z = coords.Z,
+                SectionY = coords.SectionY,
                 Blocks = (byte[])chunk.RawBlocks.Clone(),
                 Meta = (byte[])chunk.RawMeta.Clone(),
             };
@@ -504,6 +598,7 @@ namespace Cubuild
             Layer = source.Layer,
             X = source.X,
             Z = source.Z,
+            SectionY = source.SectionY,
             IsDelta = source.IsDelta,
             Blocks = (byte[])source.Blocks.Clone(),
             Meta = (byte[])source.Meta.Clone(),
@@ -516,10 +611,11 @@ namespace Cubuild
             int chunkX = FloorDiv(chunk.OriginX, ChunkSize);
             int chunkZ = FloorDiv(chunk.OriginZ, ChunkSize);
             int layer = LayerForWorldY(chunk.OriginY);
+            int sectionY = layer == SkyLayer ? (chunk.OriginY - SkyOriginY) / SkySectionHeight : 0;
             chunk.MarkDeltaBaselineUntrusted();
             chunk.HasRuntimeEdits = true;
             chunk.SurfaceLodFaces = null;
-            MarkModified(new ChunkCoordinates(layer, chunkX, chunkZ));
+            MarkModified(new ChunkCoordinates(layer, chunkX, chunkZ, sectionY));
         }
 
         private void MarkModified(ChunkCoordinates key)
@@ -542,7 +638,9 @@ namespace Cubuild
             int layer = LayerForWorldY(worldY);
             int chunkX = FloorDiv(worldX, ChunkSize);
             int chunkZ = FloorDiv(worldZ, ChunkSize);
-            var chunk = GetOrCreateChunk(layer, chunkX, chunkZ);
+            int sectionY = SectionYForWorldY(layer, worldY);
+            if (layer == SkyLayer && (sectionY < 0 || sectionY >= SkySectionCount)) return false;
+            var chunk = GetOrCreateChunk(layer, chunkX, chunkZ, sectionY);
             int localX = worldX - chunk.OriginX;
             int localZ = worldZ - chunk.OriginZ;
             int localY = chunk.WorldYToLocal(worldY);
@@ -566,7 +664,7 @@ namespace Cubuild
                 // completion. Invalidating before the writes let a worker accept a pre-edit mesh.
                 chunk.InvalidateLightGrid();
             }
-            MarkDirty(chunkX, chunkZ, localX, localY, localZ, layer, blockId, oldId);
+            MarkDirty(chunkX, chunkZ, localX, localY, localZ, layer, sectionY, blockId, oldId);
             if (IsNavigationRelevantBlockChange(oldId, oldMeta, blockId, finalMeta))
                 BlockChanged?.Invoke(worldX, worldY, worldZ);
             return true;
@@ -582,7 +680,8 @@ namespace Cubuild
             int layer = LayerForWorldY(worldY);
             int chunkX = FloorDiv(worldX, ChunkSize);
             int chunkZ = FloorDiv(worldZ, ChunkSize);
-            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk))
+            int sectionY = SectionYForWorldY(layer, worldY);
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ, sectionY), out var chunk))
             {
                 return false;
             }
@@ -608,7 +707,7 @@ namespace Cubuild
                 chunk.RecordTrackedMutation(index, (byte)oldId, oldMeta, (byte)blockId, finalMeta);
                 chunk.InvalidateLightGrid();
             }
-            MarkDirty(chunkX, chunkZ, localX, localY, localZ, layer, blockId, oldId);
+            MarkDirty(chunkX, chunkZ, localX, localY, localZ, layer, sectionY, blockId, oldId);
             if (IsNavigationRelevantBlockChange(oldId, oldMeta, blockId, finalMeta))
                 BlockChanged?.Invoke(worldX, worldY, worldZ);
             return true;
@@ -650,7 +749,8 @@ namespace Cubuild
             int layer = LayerForWorldY(worldY);
             int chunkX = FloorDiv(worldX, ChunkSize);
             int chunkZ = FloorDiv(worldZ, ChunkSize);
-            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk))
+            int sectionY = SectionYForWorldY(layer, worldY);
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ, sectionY), out var chunk))
                 return false;
 
             int localX = worldX - chunk.OriginX;
@@ -669,7 +769,8 @@ namespace Cubuild
             int layer = LayerForWorldY(worldY);
             int chunkX = FloorDiv(worldX, ChunkSize);
             int chunkZ = FloorDiv(worldZ, ChunkSize);
-            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk))
+            int sectionY = SectionYForWorldY(layer, worldY);
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ, sectionY), out var chunk))
                 return false;
 
             int localX = worldX - chunk.OriginX;
@@ -682,14 +783,14 @@ namespace Cubuild
             return true;
         }
 
-        private void MarkDirty(int chunkX, int chunkZ, int localX, int localY, int localZ, int layer, int blockId = 0, int oldId = 0)
+        private void MarkDirty(int chunkX, int chunkZ, int localX, int localY, int localZ, int layer, int sectionY, int blockId = 0, int oldId = 0)
         {
-            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk))
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ, sectionY), out var chunk))
             {
                 return;
             }
 
-            MarkModified(new ChunkCoordinates(layer, chunkX, chunkZ));
+            MarkModified(new ChunkCoordinates(layer, chunkX, chunkZ, sectionY));
 
             chunk.HasRuntimeEdits = true;
             chunk.SurfaceLodFaces = null;
@@ -699,10 +800,16 @@ namespace Cubuild
 
             // Only seam-row edits affect the vertically adjacent mesh; preserve the existing
             // horizontal-neighbor invalidation rules below.
-            if (localY == 0 && layer > DeepLayer)
-                MarkVerticalNeighborDirty(layer - 1, chunkX, chunkZ);
-            if (localY == chunk.Height - 1 && layer < SkyLayer)
-                MarkVerticalNeighborDirty(layer + 1, chunkX, chunkZ);
+            if (localY == 0)
+            {
+                if (layer == SkyLayer && sectionY > 0) MarkVerticalNeighborDirty(layer, chunkX, chunkZ, sectionY);
+                else if (layer > DeepLayer) MarkVerticalNeighborDirty(layer - 1, chunkX, chunkZ);
+            }
+            if (localY == chunk.Height - 1)
+            {
+                if (layer == SkyLayer && sectionY + 1 < SkySectionCount) MarkVerticalNeighborDirty(layer, chunkX, chunkZ, sectionY);
+                else if (layer < SkyLayer) MarkVerticalNeighborDirty(layer + 1, chunkX, chunkZ);
+            }
 
             // Deep seam sky is sampled from a fresh ground LightGrid only through an open bottom
             // cell. Recompute the source and mirrored geometry after edits; SyncDeepAccess writes
@@ -715,46 +822,48 @@ namespace Cubuild
             // lighting region, not just border faces. Always wake neighbours so their LightGrids
             // get re-baked with the new emission.
             bool isEmitter = BlockRegistry.LightEmissionOf(blockId) > 0 || BlockRegistry.LightEmissionOf(oldId) > 0;
+            if (isEmitter && layer == SkyLayer)
+                MarkVerticalNeighborDirty(layer, chunkX, chunkZ, sectionY);
 
             if (isEmitter || localX == 0)
             {
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ), out var left))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ, sectionY), out var left))
                     left.NeedsRemesh = true;
             }
             if (isEmitter || localX == ChunkSize - 1)
             {
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ), out var right))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ, sectionY), out var right))
                     right.NeedsRemesh = true;
             }
             if (isEmitter || localZ == 0)
             {
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ - 1), out var back))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ - 1, sectionY), out var back))
                     back.NeedsRemesh = true;
             }
             if (isEmitter || localZ == ChunkSize - 1)
             {
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ + 1), out var front))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ + 1, sectionY), out var front))
                     front.NeedsRemesh = true;
             }
 
             if (isEmitter || (localX == 0 && localZ == 0))
             {
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ - 1), out var diagNW))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ - 1, sectionY), out var diagNW))
                     diagNW.NeedsRemesh = true;
             }
             if (isEmitter || (localX == ChunkSize - 1 && localZ == 0))
             {
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ - 1), out var diagNE))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ - 1, sectionY), out var diagNE))
                     diagNE.NeedsRemesh = true;
             }
             if (isEmitter || (localX == 0 && localZ == ChunkSize - 1))
             {
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ + 1), out var diagSW))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX - 1, chunkZ + 1, sectionY), out var diagSW))
                     diagSW.NeedsRemesh = true;
             }
             if (isEmitter || (localX == ChunkSize - 1 && localZ == ChunkSize - 1))
             {
-                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ + 1), out var diagSE))
+                if (loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX + 1, chunkZ + 1, sectionY), out var diagSE))
                     diagSE.NeedsRemesh = true;
             }
         }
@@ -764,7 +873,8 @@ namespace Cubuild
             int layer = LayerForWorldY(worldY);
             int chunkX = FloorDiv(worldX, ChunkSize);
             int chunkZ = FloorDiv(worldZ, ChunkSize);
-            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk))
+            int sectionY = SectionYForWorldY(layer, worldY);
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ, sectionY), out var chunk))
             {
                 blockId = BlockRegistry.AirId;
                 return false;
@@ -788,7 +898,8 @@ namespace Cubuild
             int layer = LayerForWorldY(worldY);
             int chunkX = FloorDiv(worldX, ChunkSize);
             int chunkZ = FloorDiv(worldZ, ChunkSize);
-            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ), out var chunk))
+            int sectionY = SectionYForWorldY(layer, worldY);
+            if (!loadedChunks.TryGetValue(new ChunkCoordinates(layer, chunkX, chunkZ, sectionY), out var chunk))
             {
                 blockId = BlockRegistry.AirId;
                 meta = 0;
@@ -871,7 +982,8 @@ namespace Cubuild
             int layer = LayerForWorldY(y);
             int cx = FloorDiv(x, ChunkSize);
             int cz = FloorDiv(z, ChunkSize);
-            if (TryGetLoadedChunk(new ChunkCoordinates(layer, cx, cz), out var chunk) && chunk.LightGrid != null)
+            int sectionY = SectionYForWorldY(layer, y);
+            if (TryGetLoadedChunk(new ChunkCoordinates(layer, cx, cz, sectionY), out var chunk) && chunk.LightGrid != null)
             {
                 int localX = x - chunk.OriginX;
                 int localY = y - chunk.OriginY;
@@ -903,6 +1015,9 @@ namespace Cubuild
         public ICollection<Chunk> GetLoadedChunks() => loadedChunks.Values;
 
         public bool EnsureChunksAround(int centerChunkX, int centerChunkZ, int radius, int layer = GroundLayer)
+            => EnsureChunksAround(centerChunkX, centerChunkZ, radius, layer, 0);
+
+        public bool EnsureChunksAround(int centerChunkX, int centerChunkZ, int radius, int layer, int sectionY)
         {
             bool addedNewChunk = false;
             long radiusSq = (long)radius * radius; // circle, not square: skips the ~27% corner chunks
@@ -917,13 +1032,13 @@ namespace Cubuild
 
                     int chunkX = centerChunkX + dx;
                     int chunkZ = centerChunkZ + dz;
-                    var key = new ChunkCoordinates(layer, chunkX, chunkZ);
+                    var key = new ChunkCoordinates(layer, chunkX, chunkZ, sectionY);
                     if (!loadedChunks.ContainsKey(key))
                     {
                         addedNewChunk = true;
                     }
 
-                    GetOrCreateChunk(layer, chunkX, chunkZ);
+                    GetOrCreateChunk(layer, chunkX, chunkZ, sectionY);
                 }
             }
 
@@ -937,6 +1052,9 @@ namespace Cubuild
         /// <see cref="TryGenerateNext"/>.
         /// </summary>
         public void RequestChunksAround(int centerChunkX, int centerChunkZ, int radius, Point3D cameraPosition, int layer = GroundLayer)
+            => RequestChunksAround(centerChunkX, centerChunkZ, radius, cameraPosition, layer, 0);
+
+        public void RequestChunksAround(int centerChunkX, int centerChunkZ, int radius, Point3D cameraPosition, int layer, int sectionY)
         {
             long radiusSq = (long)radius * radius; // circle, not square: skips the ~27% corner chunks
             for (int dz = -radius; dz <= radius; dz++)
@@ -949,9 +1067,18 @@ namespace Cubuild
 
                     int chunkX = centerChunkX + dx;
                     int chunkZ = centerChunkZ + dz;
-                    RequestChunkIfNeeded(layer, chunkX, chunkZ, cameraPosition);
+                    RequestChunkIfNeeded(layer, chunkX, chunkZ, sectionY, cameraPosition);
                 }
             }
+        }
+
+        public void RequestSkySectionsAround(int centerChunkX, int centerChunkZ, int horizontalRadius,
+            int centerSectionY, int verticalRadius, Point3D cameraPosition)
+        {
+            int minSection = Math.Max(0, centerSectionY - verticalRadius);
+            int maxSection = Math.Min(SkySectionCount - 1, centerSectionY + verticalRadius);
+            for (int section = minSection; section <= maxSection; section++)
+                RequestChunksAround(centerChunkX, centerChunkZ, horizontalRadius, cameraPosition, SkyLayer, section);
         }
 
         /// <summary>Queues a bounded amount of support for an imminent or visible vertical layer
@@ -1047,11 +1174,11 @@ namespace Cubuild
             return boundaryBlock == BlockRegistry.AirId;
         }
 
-        private void RequestChunkIfNeeded(int layer, int chunkX, int chunkZ, Point3D cameraPosition)
+        private void RequestChunkIfNeeded(int layer, int chunkX, int chunkZ, int sectionY, Point3D cameraPosition)
         {
-            var key = new ChunkCoordinates(layer, chunkX, chunkZ);
+            var key = new ChunkCoordinates(layer, chunkX, chunkZ, sectionY);
             if (loadedChunks.ContainsKey(key)) return;
-            if (pendingGeneration.TryAdd(key, 0)) EnqueueChunk(layer, chunkX, chunkZ, cameraPosition);
+            if (pendingGeneration.TryAdd(key, 0)) EnqueueChunk(layer, chunkX, chunkZ, sectionY, cameraPosition);
         }
 
         /// <summary>
@@ -1065,16 +1192,20 @@ namespace Cubuild
                 return false;
             }
 
-            var key = new ChunkCoordinates(request.Layer, request.X, request.Z);
+            var key = new ChunkCoordinates(request.Layer, request.X, request.Z, request.SectionY);
             bool created = !loadedChunks.ContainsKey(key);
 
-            GetOrCreateChunk(request.Layer, request.X, request.Z);
+            GetOrCreateChunk(request.Layer, request.X, request.Z, request.SectionY);
             pendingGeneration.TryRemove(key, out _);
             return created;
         }
 
         public List<ChunkCoordinates> UnloadChunksOutside(int centerChunkX, int centerChunkZ, int radius,
             IReadOnlySet<ChunkCoordinates>? pinnedChunks = null)
+            => UnloadChunksOutside(centerChunkX, centerChunkZ, radius, -1, 0, int.MaxValue, pinnedChunks);
+
+        public List<ChunkCoordinates> UnloadChunksOutside(int centerChunkX, int centerChunkZ, int radius,
+            int activeLayer, int centerSectionY, int verticalRadius, IReadOnlySet<ChunkCoordinates>? pinnedChunks = null)
         {
             var removed = new List<ChunkCoordinates>();
             long radiusSq = (long)radius * radius; // circle, matching the load loops
@@ -1082,7 +1213,11 @@ namespace Cubuild
             {
                 long dx = key.X - (long)centerChunkX;
                 long dz = key.Z - (long)centerChunkZ;
-                if (dx * dx + dz * dz > radiusSq && !(pinnedChunks?.Contains(key) ?? false))
+                bool outsideHorizontal = dx * dx + dz * dz > radiusSq;
+                int verticalCenterSection = activeLayer == SkyLayer ? centerSectionY : 0;
+                bool outsideVertical = key.Layer == SkyLayer
+                    && Math.Abs((long)key.SectionY - verticalCenterSection) > verticalRadius;
+                if ((outsideHorizontal || outsideVertical) && !(pinnedChunks?.Contains(key) ?? false))
                 {
                     if (loadedChunks.TryRemove(key, out var removedChunk))
                     {
@@ -1101,17 +1236,17 @@ namespace Cubuild
                             }
                         }
 
-                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X - 1, key.Z), out var left))
+                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X - 1, key.Z, key.SectionY), out var left))
                             left.NeedsRemesh = true;
-                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X + 1, key.Z), out var right))
+                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X + 1, key.Z, key.SectionY), out var right))
                             right.NeedsRemesh = true;
-                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X, key.Z - 1), out var back))
+                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X, key.Z - 1, key.SectionY), out var back))
                             back.NeedsRemesh = true;
-                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X, key.Z + 1), out var front))
+                        if (loadedChunks.TryGetValue(new ChunkCoordinates(key.Layer, key.X, key.Z + 1, key.SectionY), out var front))
                             front.NeedsRemesh = true;
                         if (key.Layer == GroundLayer)
                             SyncDeepAccessIfLoaded(key.X, key.Z); // no loaded source => clear deep sky access
-                        MarkVerticalNeighborsDirty(key.Layer, key.X, key.Z);
+                        MarkVerticalNeighborsDirty(key.Layer, key.X, key.Z, key.SectionY);
                     }
                 }
             }
@@ -1123,11 +1258,15 @@ namespace Cubuild
             => EnqueueChunk(GroundLayer, chunkX, chunkZ, cameraPosition);
 
         public void EnqueueChunk(int layer, int chunkX, int chunkZ, Point3D cameraPosition)
+            => EnqueueChunk(layer, chunkX, chunkZ, 0, cameraPosition);
+
+        public void EnqueueChunk(int layer, int chunkX, int chunkZ, int sectionY, Point3D cameraPosition)
         {
-            double priority = ComputeDistancePriority(chunkX, chunkZ, cameraPosition);
+            double priority = ComputeDistancePriority(chunkX, chunkZ, cameraPosition)
+                + (layer == SkyLayer ? Math.Abs(OriginYForSection(layer, sectionY) + SkySectionHeight / 2.0 - cameraPosition.Y) * 0.25 : 0.0);
             lock (queueLock)
             {
-                queue.Enqueue(new ChunkRequest(layer, chunkX, chunkZ), priority);
+                queue.Enqueue(new ChunkRequest(layer, chunkX, chunkZ, sectionY), priority);
             }
         }
 

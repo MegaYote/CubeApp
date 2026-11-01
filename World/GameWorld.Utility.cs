@@ -6,6 +6,8 @@ namespace Cubuild
 {
     public sealed partial class GameWorld : IDisposable
     {
+        private readonly Queue<ChunkCoordinates> _highFillQueue = new();
+        private readonly HashSet<ChunkCoordinates> _highFillQueued = new();
         private Point3D? FindSafeSpawnPosition()
         {
             int baseX = (int)Math.Floor(LocalPlayer.Position.X);
@@ -78,14 +80,33 @@ namespace Cubuild
 
             foreach (var ch in Chunks.GetLoadedChunks())
             {
-                if (ch.OriginY != ChunkManager.SkyOriginY) continue; // only sky-layer chunks
+                if (ch.OriginY < ChunkManager.SkyOriginY || ch.OriginY >= ChunkManager.SkyOriginY + ChunkManager.SkyHeight) continue;
                 int dx = ch.OriginX / ChunkManager.ChunkSize - cx;
                 int dz = ch.OriginZ / ChunkManager.ChunkSize - cz;
                 if (dx * dx + dz * dz > 64) continue; // within ~8 chunks of the player
-                int layer = ChunkManager.SkyLayer;
+                int sectionY = (ch.OriginY - ChunkManager.SkyOriginY) / ChunkManager.SkySectionHeight;
                 int chunkX = ch.OriginX / ChunkManager.ChunkSize;
                 int chunkZ = ch.OriginZ / ChunkManager.ChunkSize;
-                bool filled = SkyChunkProvider.Islands.HighFillChunk(chunkX, chunkZ, ch, 16, ChunkManager.SkyHeight);
+                if (!SkyChunkProvider.Islands.IsChunkFilled(chunkX, chunkZ, sectionY))
+                {
+                    var key = new ChunkCoordinates(ChunkManager.SkyLayer, chunkX, chunkZ, sectionY);
+                    if (_highFillQueued.Add(key)) _highFillQueue.Enqueue(key);
+                }
+            }
+
+            // Existing resident sections are populated incrementally so entering the sky never
+            // performs a full-height or render-radius island sculpt on the main thread.
+            int budget = 2;
+            while (budget-- > 0 && _highFillQueue.Count > 0)
+            {
+                var key = _highFillQueue.Dequeue();
+                _highFillQueued.Remove(key);
+                if (!Chunks.TryGetLoadedChunk(key, out var ch)) continue;
+                int dx = key.X - cx;
+                int dz = key.Z - cz;
+                if (dx * dx + dz * dz > 64) continue;
+                bool filled = SkyChunkProvider.Islands.HighFillChunk(key.X, key.Z, key.SectionY,
+                    ch, ChunkManager.ChunkSize, ChunkManager.SkySectionHeight);
                 if (filled)
                 {
                     // Island filling writes raw chunk storage and is altitude-triggered, not part
@@ -95,7 +116,7 @@ namespace Cubuild
                 if (filled && ch.NeedsRemesh)
                 {
                     ch.IsMeshingQueued = false;
-                    Mesher?.RequestImmediateRemesh(new ChunkCoordinates(layer, chunkX, chunkZ));
+                    Mesher?.RequestImmediateRemesh(key);
                 }
             }
         }

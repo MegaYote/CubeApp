@@ -143,7 +143,9 @@ namespace Cubuild
                             int chunkX = ch.OriginX / ChunkManager.ChunkSize;
                             int chunkZ = ch.OriginZ / ChunkManager.ChunkSize;
                             int layer = ChunkManager.LayerForWorldY(ch.OriginY);
-                            var coords = new ChunkCoordinates(layer, chunkX, chunkZ);
+                            int sectionY = layer == ChunkManager.SkyLayer
+                                ? (ch.OriginY - ChunkManager.SkyOriginY) / ChunkManager.SkySectionHeight : 0;
+                            var coords = new ChunkCoordinates(layer, chunkX, chunkZ, sectionY);
                             System.Collections.Generic.List<MeshFace> faces;
                             System.Collections.Generic.IReadOnlyList<MeshFace>? surfaceLodFaces;
                             int meshVersion;

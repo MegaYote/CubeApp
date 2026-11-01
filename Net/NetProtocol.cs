@@ -21,7 +21,8 @@ namespace Cubuild.Net
         Welcome = 10,       // clientId int, world seed int, world name string
         Snapshot = 11,      // players[] + edits[] + authoritative bomb projectiles[]
         Pong = 12,          // client time long (echo)
-        ChunkData = 13,     // chunkX int, chunkZ int, blockCount int, blocks bytes, meta bytes
+        ChunkData = 13,     // layer int, chunkX int, chunkZ int, sectionY int, blocks bytes, meta bytes
+        ProtocolError = 14, // reason string; host closes incompatible clients explicitly
     }
 
     /// <summary>Writer for NetMsg bodies (little-endian).</summary>
@@ -324,9 +325,14 @@ namespace Cubuild.Net
         /// Used when opening a singleplayer world to multiplayer so joining clients get the host's
         /// edits, not just the seed terrain.</summary>
         public static byte[] SerializeChunkData(int chunkX, int chunkZ, byte[] blocks, byte[] meta)
+            => SerializeChunkData(ChunkManager.GroundLayer, chunkX, chunkZ, 0, blocks, meta);
+
+        public static byte[] SerializeChunkData(int layer, int chunkX, int chunkZ, int sectionY, byte[] blocks, byte[] meta)
         {
             var w = new NetWriter();
+            w.WriteInt(layer);
             w.WriteInt(chunkX); w.WriteInt(chunkZ);
+            w.WriteInt(sectionY);
             w.WriteBytes(blocks);
             w.WriteBytes(meta);
             return w.ToFrame(NetMsgType.ChunkData);
@@ -334,10 +340,29 @@ namespace Cubuild.Net
 
         public static bool TryDeserializeChunkData(byte[] body, out int chunkX, out int chunkZ, out byte[] blocks, out byte[] meta)
         {
-            chunkX = 0; chunkZ = 0; blocks = Array.Empty<byte>(); meta = Array.Empty<byte>();
+            bool ok = TryDeserializeChunkData(body, out _, out chunkX, out chunkZ, out _, out blocks, out meta);
+            return ok;
+        }
+
+        public static bool TryDeserializeChunkData(byte[] body, out int layer, out int chunkX, out int chunkZ,
+            out int sectionY, out byte[] blocks, out byte[] meta)
+        {
+            layer = 0; chunkX = 0; chunkZ = 0; sectionY = 0; blocks = Array.Empty<byte>(); meta = Array.Empty<byte>();
             var r = new NetReader(body);
-            if (!r.TryReadInt(out chunkX) || !r.TryReadInt(out chunkZ)) return false;
+            if (!r.TryReadInt(out layer) || !r.TryReadInt(out chunkX) || !r.TryReadInt(out chunkZ)
+                || !r.TryReadInt(out sectionY)) return false;
+            if (layer < ChunkManager.DeepLayer || layer > ChunkManager.SkyLayer
+                || (layer == ChunkManager.SkyLayer && (sectionY < 0 || sectionY >= ChunkManager.SkySectionCount))
+                || (layer != ChunkManager.SkyLayer && sectionY != 0)) return false;
             if (!r.TryReadBytes(out blocks) || !r.TryReadBytes(out meta)) return false;
+            if (blocks.Length != meta.Length) return false;
+            int expectedLength = layer switch
+            {
+                ChunkManager.DeepLayer => ChunkManager.ChunkSize * ChunkManager.ChunkSize * ChunkManager.DeepHeight,
+                ChunkManager.GroundLayer => ChunkManager.ChunkSize * ChunkManager.ChunkSize * ChunkManager.GroundHeight,
+                _ => ChunkManager.ChunkSize * ChunkManager.ChunkSize * ChunkManager.SkySectionHeight,
+            };
+            if (blocks.Length != expectedLength) return false;
             return true;
         }
 

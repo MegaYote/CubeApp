@@ -1162,8 +1162,8 @@ namespace Cubuild
         // The chunk a world position lives in (layer from Y, column from X/Z).
         private static ChunkCoordinates ChunkOf(Point3D pos)
         {
-            int layer = ChunkManager.LayerForWorldY((int)Math.Floor(pos.Y));
-            return new ChunkCoordinates(layer, GameWorld.WorldToChunkCoord(pos.X), GameWorld.WorldToChunkCoord(pos.Z));
+            return ChunkManager.GetChunkKeyForWorldPosition((int)Math.Floor(pos.X),
+                (int)Math.Floor(pos.Y), (int)Math.Floor(pos.Z));
         }
 
         // Snapshots a mob into the detached pool for its chunk (bounded so roaming a large world

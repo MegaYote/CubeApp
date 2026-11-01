@@ -65,8 +65,7 @@ namespace Cubuild
                 return;
             }
 
-            var key = new ChunkCoordinates(ChunkManager.LayerForWorldY(y),
-                (int)Math.Floor(x / (double)ChunkManager.ChunkSize), (int)Math.Floor(z / (double)ChunkManager.ChunkSize));
+            var key = ChunkManager.GetChunkKeyForWorldPosition(x, y, z);
             if (!_pending.TryGetValue(key, out var bucket))
             {
                 bucket = new Dictionary<(int, int, int), int>();
@@ -137,8 +136,7 @@ namespace Cubuild
             {
                 _queue.Dequeue();
 
-                var key = new ChunkCoordinates(ChunkManager.LayerForWorldY(item.y),
-                    (int)Math.Floor(item.x / (double)ChunkManager.ChunkSize), (int)Math.Floor(item.z / (double)ChunkManager.ChunkSize));
+                var key = ChunkManager.GetChunkKeyForWorldPosition(item.x, item.y, item.z);
                 if (!_pending.TryGetValue(key, out var bucket) || !bucket.Remove((item.x, item.y, item.z)))
                 {
                     continue; // superseded by a later re-schedule; nothing to tick

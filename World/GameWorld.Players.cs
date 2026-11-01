@@ -30,8 +30,19 @@ namespace Cubuild
         // lifecycle
         // ------------------------------------------------------------------
 
-        public void EnsureVisibleChunks() => Chunks.EnsureChunksAround(
-            WorldToChunkCoord(LocalPlayer.Position.X), WorldToChunkCoord(LocalPlayer.Position.Z), SpawnSyncRadius);
+        public void EnsureVisibleChunks()
+        {
+            int layer = ChunkManager.LayerForWorldY((int)Math.Floor(LocalPlayer.Position.Y));
+            int cx = WorldToChunkCoord(LocalPlayer.Position.X);
+            int cz = WorldToChunkCoord(LocalPlayer.Position.Z);
+            if (layer == ChunkManager.SkyLayer)
+            {
+                int section = ChunkManager.SectionYForWorldY(layer, (int)Math.Floor(LocalPlayer.Position.Y));
+                for (int sy = Math.Max(0, section - 1); sy <= Math.Min(ChunkManager.SkySectionCount - 1, section + 1); sy++)
+                    Chunks.EnsureChunksAround(cx, cz, SpawnSyncRadius, layer, sy);
+            }
+            else Chunks.EnsureChunksAround(cx, cz, SpawnSyncRadius, layer);
+        }
 
         public void PlaceCameraAtSafeSpawn()
         {

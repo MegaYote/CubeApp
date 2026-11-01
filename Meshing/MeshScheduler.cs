@@ -60,11 +60,13 @@ namespace Cubuild
             int chunkX = chunk.OriginX / ChunkManager.ChunkSize;
             int chunkZ = chunk.OriginZ / ChunkManager.ChunkSize;
             int layer = ChunkManager.LayerForWorldY(chunk.OriginY);
+            int sectionY = layer == ChunkManager.SkyLayer
+                ? (chunk.OriginY - ChunkManager.SkyOriginY) / ChunkManager.SkySectionHeight : 0;
             // Raise the flag HERE, not only inside Update(). This is the scheduler's own
             // "pending work" signal and MainLoop pumps the queue off it, so anything that
             // dirties a chunk must set it - otherwise the work sits until something unrelated
             // happens to move the player past the pump threshold.
-            MarkDirty(new ChunkCoordinates(layer, chunkX, chunkZ));
+            MarkDirty(new ChunkCoordinates(layer, chunkX, chunkZ, sectionY));
         }
 
         public int Update()
@@ -146,14 +148,28 @@ namespace Cubuild
             int cx = coords.X;
             int cz = coords.Z;
             int layer = coords.Layer;
-            EnqueueIfDirty(new ChunkCoordinates(layer, cx - 1, cz));
-            EnqueueIfDirty(new ChunkCoordinates(layer, cx + 1, cz));
-            EnqueueIfDirty(new ChunkCoordinates(layer, cx, cz - 1));
-            EnqueueIfDirty(new ChunkCoordinates(layer, cx, cz + 1));
-            EnqueueIfDirty(new ChunkCoordinates(layer, cx - 1, cz - 1));
-            EnqueueIfDirty(new ChunkCoordinates(layer, cx + 1, cz - 1));
-            EnqueueIfDirty(new ChunkCoordinates(layer, cx - 1, cz + 1));
-            EnqueueIfDirty(new ChunkCoordinates(layer, cx + 1, cz + 1));
+            int sectionY = coords.SectionY;
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx - 1, cz, sectionY));
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx + 1, cz, sectionY));
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx, cz - 1, sectionY));
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx, cz + 1, sectionY));
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx - 1, cz - 1, sectionY));
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx + 1, cz - 1, sectionY));
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx - 1, cz + 1, sectionY));
+            EnqueueIfDirty(new ChunkCoordinates(layer, cx + 1, cz + 1, sectionY));
+            if (layer == ChunkManager.SkyLayer)
+            {
+                if (sectionY > 0) EnqueueIfDirty(new ChunkCoordinates(layer, cx, cz, sectionY - 1));
+                if (sectionY + 1 < ChunkManager.SkySectionCount) EnqueueIfDirty(new ChunkCoordinates(layer, cx, cz, sectionY + 1));
+                if (sectionY == 0) EnqueueIfDirty(new ChunkCoordinates(ChunkManager.GroundLayer, cx, cz));
+            }
+            else if (layer == ChunkManager.GroundLayer)
+            {
+                EnqueueIfDirty(new ChunkCoordinates(ChunkManager.DeepLayer, cx, cz));
+                EnqueueIfDirty(new ChunkCoordinates(ChunkManager.SkyLayer, cx, cz, 0));
+            }
+            else if (layer == ChunkManager.DeepLayer)
+                EnqueueIfDirty(new ChunkCoordinates(ChunkManager.GroundLayer, cx, cz));
         }
 
         // Enqueues a neighbour for an immediate remesh if it is loaded AND was flagged dirty by the

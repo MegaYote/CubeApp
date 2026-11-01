@@ -321,19 +321,19 @@ namespace Cubuild
         /// </summary>
         public void RequestNeighborRemesh(int x, int y, int z, MeshScheduler meshScheduler)
         {
-            var editedChunk = new ChunkCoordinates(WorldToChunkCoord(x), WorldToChunkCoord(z));
+            var editedChunk = ChunkManager.GetChunkKeyForWorldPosition(x, y, z);
             meshScheduler.RequestImmediateRemesh(editedChunk);
 
             int localX = x - (editedChunk.X * ChunkManager.ChunkSize);
             int localZ = z - (editedChunk.Z * ChunkManager.ChunkSize);
             if (localX == 0)
-                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X - 1, editedChunk.Z));
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.Layer, editedChunk.X - 1, editedChunk.Z, editedChunk.SectionY));
             if (localX == ChunkManager.ChunkSize - 1)
-                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X + 1, editedChunk.Z));
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.Layer, editedChunk.X + 1, editedChunk.Z, editedChunk.SectionY));
             if (localZ == 0)
-                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X, editedChunk.Z - 1));
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.Layer, editedChunk.X, editedChunk.Z - 1, editedChunk.SectionY));
             if (localZ == ChunkManager.ChunkSize - 1)
-                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.X, editedChunk.Z + 1));
+                meshScheduler.RequestImmediateRemesh(new ChunkCoordinates(editedChunk.Layer, editedChunk.X, editedChunk.Z + 1, editedChunk.SectionY));
         }
 
         private static int WorldToChunkCoord(double value)

@@ -132,17 +132,50 @@ namespace Cubuild.Renderer
                 int cz = (int)Math.Floor(bz / (double)ChunkManager.ChunkSize);
 
                 var region = new Dictionary<ChunkCoordinates, Chunk>();
+                int sectionY = ChunkManager.SectionYForWorldY(layer, by);
                 for (int dx = -1; dx <= 1; dx++)
                 {
                     for (int dz = -1; dz <= 1; dz++)
                     {
-                        var key = new ChunkCoordinates(layer, cx + dx, cz + dz);
+                        var key = new ChunkCoordinates(layer, cx + dx, cz + dz, sectionY);
+                        if (_chunkManager.TryGetLoadedChunk(key, out var c)) region[key] = c;
+                    }
+                }
+                if (layer == ChunkManager.SkyLayer)
+                {
+                    foreach (int adjacent in new[] { sectionY - 1, sectionY + 1 })
+                    {
+                        if (adjacent < 0 || adjacent >= ChunkManager.SkySectionCount) continue;
+                        for (int dx = -1; dx <= 1; dx++)
+                        for (int dz = -1; dz <= 1; dz++)
+                        {
+                            var key = new ChunkCoordinates(layer, cx + dx, cz + dz, adjacent);
+                            if (_chunkManager.TryGetLoadedChunk(key, out var c)) region[key] = c;
+                        }
+                    }
+                    if (sectionY == 0)
+                    {
+                        for (int dx = -1; dx <= 1; dx++)
+                        for (int dz = -1; dz <= 1; dz++)
+                        {
+                            var key = new ChunkCoordinates(ChunkManager.GroundLayer, cx + dx, cz + dz);
+                            if (_chunkManager.TryGetLoadedChunk(key, out var c)) region[key] = c;
+                        }
+                    }
+                }
+                else if (layer == ChunkManager.GroundLayer)
+                {
+                    for (int dx = -1; dx <= 1; dx++)
+                    for (int dz = -1; dz <= 1; dz++)
+                    {
+                        var key = new ChunkCoordinates(ChunkManager.SkyLayer, cx + dx, cz + dz, 0);
                         if (_chunkManager.TryGetLoadedChunk(key, out var c)) region[key] = c;
                     }
                 }
                 if (region.Count == 0) return;
 
-                var lighting = new ChunkLighting(region, ChunkManager.ChunkSize, ChunkManager.HeightForLayer(layer));
+                var lighting = new ChunkLighting(region, ChunkManager.ChunkSize,
+                    layer == ChunkManager.SkyLayer ? ChunkManager.SkySectionHeight : ChunkManager.HeightForLayer(layer));
                 (int dx, int dy, int dz)[] dirs =
                 {
                     (-1,0,0), (1,0,0), (0,-1,0), (0,1,0), (0,0,-1), (0,0,1)
@@ -198,7 +231,8 @@ namespace Cubuild.Renderer
             int layer = ChunkManager.LayerForWorldY((int)Math.Floor(y));
             int cx = (int)Math.Floor(x / (double)ChunkManager.ChunkSize);
             int cz = (int)Math.Floor(z / (double)ChunkManager.ChunkSize);
-            if (!_chunkManager.TryGetLoadedChunk(new ChunkCoordinates(layer, cx, cz), out var chunk) || chunk.LightGrid == null)
+            int sectionY = ChunkManager.SectionYForWorldY(layer, (int)Math.Floor(y));
+            if (!_chunkManager.TryGetLoadedChunk(new ChunkCoordinates(layer, cx, cz, sectionY), out var chunk) || chunk.LightGrid == null)
             {
                 return _nightDim;
             }

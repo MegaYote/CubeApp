@@ -58,7 +58,7 @@ namespace Cubuild
             _tickScheduler = tickScheduler ?? throw new ArgumentNullException(nameof(tickScheduler));
             _meshScheduler = meshScheduler ?? throw new ArgumentNullException(nameof(meshScheduler));
             _waterId = BlockRegistry.GetId("water");
-            _worldTopY = ChunkManager.WorldOriginY + ChunkManager.ChunkHeight;
+            _worldTopY = ChunkManager.SkyOriginY + ChunkManager.SkyHeight;
         }
 
         /// <summary>Read-only view of the blocks currently falling or waiting for their landing
@@ -210,8 +210,7 @@ namespace Cubuild
                         _tickScheduler.OnBlockChanged(floorX, finalY, floorZ);
 
                         // Request a PRIORITY remesh and keep this cube rendered until it lands.
-                        int gLayer = ChunkManager.LayerForWorldY(finalY);
-                        var coords = new ChunkCoordinates(gLayer, GameWorld.WorldToChunkCoord(floorX), GameWorld.WorldToChunkCoord(floorZ));
+                        var coords = ChunkManager.GetChunkKeyForWorldPosition(floorX, finalY, floorZ);
                         int before = 0;
                         if (_manager.TryGetLoadedChunk(coords, out var chunk)) before = chunk.MeshVersion;
                         _meshScheduler.RequestImmediateRemesh(coords);
