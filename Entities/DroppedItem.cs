@@ -23,5 +23,14 @@ namespace Cubuild
         /// <summary>When &gt; 0, the drop is magnetized toward the player for pickup (seconds
         /// remaining). During this flight it ignores gravity and homes to the player.</summary>
         public float FlyTime;
+
+        // Transient cooperative-trade proxy. Ordinary drops leave these null/zero and retain
+        // their existing public pickup behavior. The authoritative item remains in the sender's
+        // saved Steve inventory until the reserved recipient accepts this proxy.
+        internal SteveMob? TradeSender;
+        internal SteveMob? TradeRecipient;
+        internal int TradeEscrowCount;
+        internal bool IsTradeParcel => TradeSender != null && TradeRecipient != null
+            && TradeEscrowCount > 0;
     }
 }

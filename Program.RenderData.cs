@@ -133,6 +133,7 @@ namespace Cubuild
                     ShowDebug = showFps, NoclipMode = false, CreativeFlightMode = false, Menu = menu, Fps = lastFps,
                     WorldName = string.Empty,
                     UpdateMs = lastUpdateMs, MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
+                    MobDiagnostics = string.Empty,
                     SelectedBlockText = "Selected: -",
                     SelectedSlot = 0, WorldSeed = 0,
                     Hotbar = Array.Empty<int>(),
@@ -239,6 +240,9 @@ namespace Cubuild
                 ChunkDiagnostics = chunkDiagnostics, Menu = menu, Fps = lastFps, UpdateMs = lastUpdateMs,
                 MeshMs = lastMeshMs, UploadMs = lastUploadMs, RenderMs = lastRenderMs,
                 EntityMs = World.LastEntityMs, EntityCount = World.Entities.MobCount,
+                MobDiagnostics = showFps
+                    ? $"Mob AI {World.Entities.MobUpdateMs:0.0} ms | separation {World.Entities.SeparationMs:0.0} ms | hostiles {World.Entities.HostileCountLastUpdate} targets {World.Entities.HostileTargetCandidatesLastUpdate} | pairs {World.Entities.SeparationPairCandidatesLastUpdate}/{World.Entities.SeparationOverlapsLastUpdate} | A* {World.Entities.NavigationSearchesLastUpdate}"
+                    : string.Empty,
                 FacingText = $"{GetCompassDirection(World.PlayerYaw)} ({GameWorld.NormalizeYaw(World.PlayerYaw):0.0} deg)",
                 // Item 0 is air, so an empty hotbar slot would otherwise read "Selected: air".
                 // Matches the "Selected: -" fallback used above.

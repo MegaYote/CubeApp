@@ -80,6 +80,9 @@ namespace Cubuild
         /// rail track for rails that come back with a loaded world.</summary>
         public Action<Chunk>? ChunkLoaded;
 
+        /// <summary>Fired after a loaded world cell is changed through either block setter.</summary>
+        public event Action<int, int, int>? BlockChanged;
+
         public ChunkManager(IChunkProvider? deepProvider = null, IChunkProvider? groundProvider = null, IChunkProvider? skyProvider = null)
         {
             chunkProviders[DeepLayer] = deepProvider ?? new DeepChunkProvider();
@@ -564,6 +567,8 @@ namespace Cubuild
                 chunk.InvalidateLightGrid();
             }
             MarkDirty(chunkX, chunkZ, localX, localY, localZ, layer, blockId, oldId);
+            if (IsNavigationRelevantBlockChange(oldId, oldMeta, blockId, finalMeta))
+                BlockChanged?.Invoke(worldX, worldY, worldZ);
             return true;
         }
 
@@ -604,7 +609,37 @@ namespace Cubuild
                 chunk.InvalidateLightGrid();
             }
             MarkDirty(chunkX, chunkZ, localX, localY, localZ, layer, blockId, oldId);
+            if (IsNavigationRelevantBlockChange(oldId, oldMeta, blockId, finalMeta))
+                BlockChanged?.Invoke(worldX, worldY, worldZ);
             return true;
+        }
+
+        private static bool IsNavigationRelevantBlockChange(int oldId, byte oldMeta, int newId, byte newMeta)
+        {
+            if (oldId == newId && oldMeta == newMeta) return false;
+
+            bool oldSolid = BlockRegistry.IsSolid(oldId);
+            bool newSolid = BlockRegistry.IsSolid(newId);
+            if (oldSolid != newSolid) return true;
+
+            // Rails are not solid cubes, but their metadata changes the track route/surface.
+            // Keep those changes visible to navigation while ignoring fluid-level metadata.
+            if (BlockRegistry.IsRail(oldId) || BlockRegistry.IsRail(newId)) return true;
+
+            // Non-solid changes (including water/lava flow levels) cannot change Steve's
+            // collision path. Likewise, ordinary solid-to-solid material swaps retain the
+            // same full-cube collision and need no route scan.
+            if (!oldSolid) return false;
+            if (!BlockRegistry.IsPartialShape(oldId) && !BlockRegistry.IsPartialShape(newId)) return false;
+
+            // Slab, stair and door metadata can change their actual collision bounds. Compare
+            // those bounds rather than invalidating for irrelevant metadata bits/material swaps.
+            var oldBounds = GameWorld.GetBlockCollisionBoxes(oldId, oldMeta);
+            var newBounds = GameWorld.GetBlockCollisionBoxes(newId, newMeta);
+            if (oldBounds.Length != newBounds.Length) return true;
+            for (int i = 0; i < oldBounds.Length; i++)
+                if (oldBounds[i] != newBounds[i]) return true;
+            return false;
         }
 
         /// <summary>Reads the rail-droop byte at a loaded cell. False when the chunk isn't loaded

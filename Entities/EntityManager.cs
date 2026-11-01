@@ -15,6 +15,13 @@ namespace Cubuild
         private readonly List<MobRenderData> _mobRenderData = new();
         private readonly Dictionary<string, MobModel> _loadedModels = new();
         private readonly Random _rand = new();
+        private readonly System.Diagnostics.Stopwatch _mobUpdateWatch = new();
+        private readonly System.Diagnostics.Stopwatch _separationWatch = new();
+        private readonly List<MobEntity> _steveTargets = new();
+        private readonly List<MobEntity> _separationMobs = new();
+        private readonly Dictionary<long, List<int>> _separationBuckets = new();
+        private readonly List<List<int>> _activeSeparationBuckets = new();
+        private readonly List<List<int>> _separationBucketPool = new();
 
         // Natural spawning + despawning. Each category from spawns.json gets its own spawner
         // (caps, biome-filtered table, light gate, cadence). Set to null to disable.
@@ -24,6 +31,13 @@ namespace Cubuild
         private readonly Dictionary<string, SpawnCategory> _typeCategory = new(StringComparer.OrdinalIgnoreCase);
         private readonly System.Diagnostics.Stopwatch _entityWatch = new();
         public float LastUpdateMs { get; private set; }
+        public float MobUpdateMs { get; private set; }
+        public float SeparationMs { get; private set; }
+        public int HostileCountLastUpdate { get; private set; }
+        public int HostileTargetCandidatesLastUpdate { get; private set; }
+        public int SeparationPairCandidatesLastUpdate { get; private set; }
+        public int SeparationOverlapsLastUpdate { get; private set; }
+        public int NavigationSearchesLastUpdate { get; private set; }
         public int MobCount => _mobs.Count;
         /// <summary>
         /// The live entity list, read-only. Lets gameplay code locate a specific entity by
@@ -75,6 +89,7 @@ namespace Cubuild
         public EntityManager(ChunkManager chunkManager, Func<int, int, BiomeDefinition>? biomeAt = null)
         {
             _chunkManager = chunkManager ?? throw new ArgumentNullException(nameof(chunkManager));
+            _chunkManager.BlockChanged += OnBlockChanged;
 
             // Build spawners from spawns.json (embedded resource or loose file). If the data file
             // is missing or malformed, fall back to a sensible hardcoded table so the game boots.
@@ -341,6 +356,17 @@ namespace Cubuild
             // for chunks the player just returned to.
             SyncDetachedMobs(playerPosition);
 
+            // Hostile target selection needs only living Steves, not a scan of every entity for
+            // every zombie. Reuse this list to keep the per-frame broad phase allocation-free.
+            _steveTargets.Clear();
+            foreach (var candidate in _mobs)
+                if (candidate is SteveMob steve && !steve.IsDead && !steve.Removed)
+                    _steveTargets.Add(steve);
+            HostileCountLastUpdate = 0;
+            HostileTargetCandidatesLastUpdate = 0;
+            NavigationSearchesLastUpdate = 0;
+            _mobUpdateWatch.Restart();
+
             // Update all mobs. Every mob derives from MobEntity (Duck, Coyote, SteveMob, generic
             // registry mobs all share one universal AI/physics implementation).
             for (int i = _mobs.Count - 1; i >= 0; i--)
@@ -356,6 +382,7 @@ namespace Cubuild
                     // player is not a target: zombies lose interest and wander off until respawn.
                     if (mobEntity.Hostile)
                     {
+                        HostileCountLastUpdate++;
                         IMobRenderable? steveTarget = null;
                         // Chase the player's BODY CENTER, not the eye. LocalPlayer.Position is the
                         // eye (EyeHeight above the feet); the mob's own Position is its feet. With
@@ -363,31 +390,25 @@ namespace Cubuild
                         // ground, so dy² > AttackRange² and the zombie never landed a hit.
                         Point3D target = new(PlayerBodyCenter.X, PlayerBodyCenter.Y, PlayerBodyCenter.Z);
                         double bestSq = playerAlive ? DistSq(mobEntity.Position, playerPosition) : double.MaxValue;
-                        for (int h = 0; h < _mobs.Count; h++)
+                        for (int h = 0; h < _steveTargets.Count; h++)
                         {
-                            if (h == i) continue;
-                            var other = _mobs[h];
+                            var other = _steveTargets[h];
+                            HostileTargetCandidatesLastUpdate++;
                             if (other.IsDead) continue;
-                            if (other is SteveMob)
-                            {
-                                double d = DistSq(mobEntity.Position, other.Position);
-                                if (d < bestSq) { bestSq = d; steveTarget = other; target = other.Position; }
-                            }
+                            double d = DistSq(mobEntity.Position, other.Position);
+                            if (d < bestSq) { bestSq = d; steveTarget = other; target = other.Position; }
                         }
 
                         if (!playerAlive && steveTarget == null)
                         {
                             // No living target: drop the chase (also clears the A* route).
-                            mobEntity.OnAttack = null;
+                            mobEntity.SetHostileAttackTarget(null, null);
                             mobEntity.SetChaseTarget(null);
                         }
                         else
                         {
-                            var capturedSteve = steveTarget;
-                            var capturedMob = mobEntity;
-                            mobEntity.OnAttack = capturedSteve is MobEntity steve
-                                ? () => steve.Damage(capturedMob.AttackDamage, capturedMob.Position.X, capturedMob.Position.Z, true)
-                                : () => PlayerDamageCallback?.Invoke(capturedMob.AttackDamage, DeathCause.Mob);
+                            mobEntity.SetHostileAttackTarget(steveTarget as MobEntity,
+                                steveTarget == null ? PlayerDamageCallback : null);
                             mobEntity.SetChaseTarget(target);
                         }
                     }
@@ -395,11 +416,12 @@ namespace Cubuild
                     {
                         // Do not clear generic path goals here. Non-hostile subclasses (Steve's
                         // shelter prototype) own their route independently of zombie chase state.
-                        mobEntity.OnAttack = null;
+                        mobEntity.SetHostileAttackTarget(null, null);
                     }
 
                     if (mobEntity != LocallyDrivenMob)
                         mobEntity.Update(deltaSeconds, _chunkManager);
+                    NavigationSearchesLastUpdate += mobEntity.NavigationSearchesThisUpdate;
 
                     // Stuck-in-block recovery: a block dropped or placed onto the hitbox shoves the
                     // mob sideways, and crushes it when there is nowhere to go. Vehicles are exempt -
@@ -430,16 +452,18 @@ namespace Cubuild
                 }
             }
 
+            MobUpdateMs = (float)_mobUpdateWatch.Elapsed.TotalMilliseconds;
+
             // Rigid train coupling: place every towed cart behind its leader, head-of-train first
             // so a whole chain resolves in one pass. Runs before the shove passes below so they see
             // the trains' settled positions.
             ResolveTrainLinks(deltaSeconds);
 
-            LastUpdateMs = (float)_entityWatch.Elapsed.TotalMilliseconds;
-
             // Push mobs apart so they don't clump. Same algorithm as MC 1.12: inverse-distance
             // horizontal repulsion applied to both entities.
+            _separationWatch.Restart();
             PushMobsApart(deltaSeconds);
+            SeparationMs = (float)_separationWatch.Elapsed.TotalMilliseconds;
 
             // Carts shove each other separately (see PushCartsApart for why they cannot ride the
             // generic pass above).
@@ -476,6 +500,16 @@ namespace Cubuild
             {
                 _mobRenderData.Add(Cubuild.MobRenderData.FromMob(mob));
             }
+            LastUpdateMs = (float)_entityWatch.Elapsed.TotalMilliseconds;
+        }
+
+        private void OnBlockChanged(int x, int y, int z)
+        {
+            foreach (var mob in _mobs)
+            {
+                if (mob is SteveMob steve && !steve.Removed && !steve.IsDead)
+                    steve.NotifyTerrainBlockChanged(x, y, z);
+            }
         }
 
         /// <summary>Collects mining targets from all zombies actively breaking blocks.</summary>
@@ -503,36 +537,82 @@ namespace Cubuild
         /// </summary>
         private void PushMobsApart(float dt)
         {
-            int count = _mobs.Count;
-            if (count == 0) return;
+            const double cellSize = 2.0;
+            SeparationPairCandidatesLastUpdate = 0;
+            SeparationOverlapsLastUpdate = 0;
             double dtScale = dt * 60.0; // normalize to 60fps tick equivalent
 
-            for (int i = 0; i < count; i++)
+            foreach (var bucket in _activeSeparationBuckets)
             {
-                if (_mobs[i] is not MobEntity a || a.IsDead || !a.ParticipatesInSeparation) continue;
-                double ax = a.Position.X, ay = a.Position.Y, az = a.Position.Z;
-
-                for (int j = i + 1; j < count; j++)
+                bucket.Clear();
+                _separationBucketPool.Add(bucket);
+            }
+            _activeSeparationBuckets.Clear();
+            _separationBuckets.Clear();
+            _separationMobs.Clear();
+            double maxWidth = 0;
+            foreach (var renderable in _mobs)
+            {
+                if (renderable is not MobEntity mob || mob.IsDead || !mob.ParticipatesInSeparation) continue;
+                int index = _separationMobs.Count;
+                _separationMobs.Add(mob);
+                maxWidth = Math.Max(maxWidth, mob.Width);
+                int cellX = (int)Math.Floor(mob.Position.X / cellSize);
+                int cellZ = (int)Math.Floor(mob.Position.Z / cellSize);
+                long key = ((long)cellX << 32) | (uint)cellZ;
+                if (!_separationBuckets.TryGetValue(key, out var bucket))
                 {
-                    if (_mobs[j] is not MobEntity b || b.IsDead || !b.ParticipatesInSeparation) continue;
-                    double dx = ax - b.Position.X, dz = az - b.Position.Z;
-                    double dy = ay - b.Position.Y;
-                    double distXZSq = dx * dx + dz * dz;
-                    double minDistXZ = (a.Width * 0.5 + b.Width * 0.5);
-                    double minDistXZSq = minDistXZ * minDistXZ;
+                    bucket = _separationBucketPool.Count > 0
+                        ? _separationBucketPool[^1]
+                        : new List<int>(4);
+                    if (_separationBucketPool.Count > 0)
+                        _separationBucketPool.RemoveAt(_separationBucketPool.Count - 1);
+                    _separationBuckets.Add(key, bucket);
+                    _activeSeparationBuckets.Add(bucket);
+                }
+                bucket.Add(index);
+            }
 
-                    if (distXZSq < minDistXZSq && distXZSq > 0.0001)
+            for (int i = 0; i < _separationMobs.Count; i++)
+            {
+                MobEntity a = _separationMobs[i];
+                double ax = a.Position.X, ay = a.Position.Y, az = a.Position.Z;
+                int cellX = (int)Math.Floor(ax / cellSize);
+                int cellZ = (int)Math.Floor(az / cellSize);
+                int neighborRadius = Math.Max(1,
+                    (int)Math.Ceiling((a.Width * 0.5 + maxWidth * 0.5) / cellSize));
+
+                for (int offsetX = -neighborRadius; offsetX <= neighborRadius; offsetX++)
+                {
+                    for (int offsetZ = -neighborRadius; offsetZ <= neighborRadius; offsetZ++)
                     {
-                        // Only push when vertically overlapping too — mobs at different Y levels
-                        // (e.g. one on a platform above) shouldn't repel each other.
-                        double minDistY = (a.Height * 0.5 + b.Height * 0.5);
-                        if (Math.Abs(dy) >= minDistY) continue;
+                        long key = ((long)(cellX + offsetX) << 32) | (uint)(cellZ + offsetZ);
+                        if (!_separationBuckets.TryGetValue(key, out var bucket)) continue;
+                        foreach (int j in bucket)
+                        {
+                            if (j <= i) continue;
+                            SeparationPairCandidatesLastUpdate++;
+                            MobEntity b = _separationMobs[j];
+                            double dx = ax - b.Position.X, dz = az - b.Position.Z;
+                            double dy = ay - b.Position.Y;
+                            double distXZSq = dx * dx + dz * dz;
+                            double minDistXZ = (a.Width * 0.5 + b.Width * 0.5);
+                            double minDistXZSq = minDistXZ * minDistXZ;
 
-                        double dist = Math.Sqrt(distXZSq);
-                        double invDist = 1.0 / dist;
-                        double push = 3.0 * Math.Min(1.0, invDist) * dtScale;
-                        a.AddVelocity(dx * invDist * push, 0, dz * invDist * push);
-                        b.AddVelocity(-dx * invDist * push, 0, -dz * invDist * push);
+                            if (distXZSq < minDistXZSq && distXZSq > 0.0001)
+                            {
+                                // Preserve the existing exact horizontal and vertical contact tests.
+                                double minDistY = (a.Height * 0.5 + b.Height * 0.5);
+                                if (Math.Abs(dy) >= minDistY) continue;
+
+                                double dist = Math.Sqrt(distXZSq);
+                                double invDist = 1.0 / dist;
+                                double push = 3.0 * Math.Min(1.0, invDist) * dtScale;
+                                a.AddVelocity(dx * invDist * push, 0, dz * invDist * push);
+                                b.AddVelocity(-dx * invDist * push, 0, -dz * invDist * push);
+                                SeparationOverlapsLastUpdate++;
+                            }
+                        }
                     }
                 }
 
@@ -1058,6 +1138,10 @@ namespace Cubuild
                 SteveExplorationRing = mob is SteveMob er ? er.ShelterExplorationRing : 0,
                 SteveExplorationSector = mob is SteveMob es ? es.ShelterExplorationSector : 0,
                 StevePlannerStatePresent = mob is SteveMob,
+                SteveHasHomeRefuge = mob is SteveMob hm && hm.SteveHasHomeRefuge,
+                SteveHomeRefugeX = mob is SteveMob hmx ? hmx.SteveHomeRefugeX : 0,
+                SteveHomeRefugeY = mob is SteveMob hmy ? hmy.SteveHomeRefugeY : 0,
+                SteveHomeRefugeZ = mob is SteveMob hmz ? hmz.SteveHomeRefugeZ : 0,
             };
         }
 
@@ -1194,6 +1278,8 @@ namespace Cubuild
                         m.SteveExplorationTargetY, m.SteveExplorationTargetZ,
                         m.SteveExplorationOriginX, m.SteveExplorationOriginZ,
                         m.SteveExplorationRing, m.SteveExplorationSector);
+                mob.RestoreSteveHomeRefuge(m.SteveHasHomeRefuge,
+                    m.SteveHomeRefugeX, m.SteveHomeRefugeY, m.SteveHomeRefugeZ);
                 _mobs.Add(mob);
             }
             else if (m.Type == "cart")
@@ -1237,7 +1323,10 @@ namespace Cubuild
             }
         }
 
-        public void Dispose() { }
+        public void Dispose()
+        {
+            _chunkManager.BlockChanged -= OnBlockChanged;
+        }
     }
 
     /// <summary>

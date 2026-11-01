@@ -3,7 +3,7 @@ using System;
 namespace Cubuild
 {
     /// <summary>The deliberately small action vocabulary shared by autonomous mob tasks.</summary>
-    public enum AgentTaskKind { Navigate, Mine, Place, Hold, BreakObstacle, Craft, Pickup, Deliver }
+    public enum AgentTaskKind { Navigate, Mine, Place, Hold, BreakObstacle, Craft, Pickup, Deliver, PlantSapling }
 
     /// <summary>One immutable step in a short, transient agent task sequence.</summary>
     public readonly struct AgentTask : IEquatable<AgentTask>
@@ -55,6 +55,10 @@ namespace Cubuild
 
         public static AgentTask Deliver(int itemId)
             => new(AgentTaskKind.Deliver, 0, 0, 0, itemId, 0, 0, 0f);
+
+        public static AgentTask PlantSapling(int x, int y, int z, int itemId)
+            => new(AgentTaskKind.PlantSapling, x, y, z, itemId,
+                BlockRegistry.GetId("sapling"), 0, 0.4f);
 
         public bool Equals(AgentTask other)
             => Kind == other.Kind && X == other.X && Y == other.Y && Z == other.Z

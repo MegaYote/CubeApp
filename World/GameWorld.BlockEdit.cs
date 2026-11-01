@@ -1231,6 +1231,9 @@ var place = pickResult.Value.Place;
             if (IsSteveConstructionCellProtected(x, y, z)
                 || !CanSteveReachBlock(steve, x, y, z)) return false;
             if (!ApplyBlockEdit(x, y, z, BlockRegistry.AirId, 0)) return false;
+            // Steve's private-inventory harvest still removes a real trunk block. Apply the same
+            // canopy-decay rule as player and emergency log breaks after the authoritative edit.
+            if (blockId == _idLog) DecayLeavesNear(x, y, z);
             gathered = outputCount;
             return true;
         }
@@ -1326,6 +1329,86 @@ var place = pickResult.Value.Place;
                 || WouldBlockIntersectMob(x, y, z, blockId, 0)) return false;
             if (!CanStevePlaceCell(steve, x, y, z)) return false;
             return ApplyBlockEdit(x, y, z, blockId, 0);
+        }
+
+        /// <summary>Validates a deliberately conservative, fully-loaded tree-sized planting
+        /// site. Steves only plant genuine sapling items on natural ground and never reserve a
+        /// future tree volume that overlaps a committed shelter cell.</summary>
+        internal bool IsValidSaplingPlantSite(SteveMob steve, int x, int y, int z)
+        {
+            int saplingId = BlockRegistry.GetId("sapling");
+            if (!IsAuthoritative || steve == null || steve.IsDead || steve.Removed
+                || saplingId <= 0 || !Chunks.TryGetLoadedBlock(x, y, z, out int current)
+                || current != BlockRegistry.AirId
+                || !Chunks.TryGetLoadedBlock(x, y - 1, z, out int support)
+                || (support != BlockRegistry.GetId("grass")
+                    && support != BlockRegistry.GetId("dirt")
+                    && support != BlockRegistry.GetId("redclay")
+                    && support != BlockRegistry.GetId("sand"))
+                || BlockRegistry.IsGravity(support) || BlockRegistry.IsCross(support)
+                || BlockTicks.IsCellOccupiedByFalling(x, y, z)
+                // Use a full-cell occupancy probe rather than the sapling's narrow cross-shaped
+                // visual collision, so the player or any Steve cannot be planted through.
+                || WouldBlockIntersectPlayer(LocalPlayer, x, y, z, BlockRegistry.GetId("dirt"), 0)
+                || WouldBlockIntersectMob(x, y, z, BlockRegistry.GetId("dirt"), 0)) return false;
+
+            // Keep the full eventual tree footprint clear of the player and other living mobs;
+            // the planting Steve itself is the only entity allowed to approach its own site.
+            double playerFeetY = LocalPlayer.Position.Y - EyeHeight;
+            if (LocalPlayer.Position.X + PlayerRadius > x - 4
+                && LocalPlayer.Position.X - PlayerRadius < x + 5
+                && LocalPlayer.Position.Z + PlayerRadius > z - 4
+                && LocalPlayer.Position.Z - PlayerRadius < z + 5
+                && playerFeetY + PlayerHeight > y && playerFeetY < y + 14) return false;
+            foreach (var renderable in Entities.Mobs)
+            {
+                if (renderable is not MobEntity other || ReferenceEquals(other, steve)
+                    || other.IsDead || other.Removed) continue;
+                double radius = other.Width * 0.5;
+                if (other.Position.X + radius > x - 4 && other.Position.X - radius < x + 5
+                    && other.Position.Z + radius > z - 4 && other.Position.Z - radius < z + 5
+                    && other.Position.Y + other.Height > y && other.Position.Y < y + 14)
+                    return false;
+            }
+
+            // Check the committed plans once against the complete planting/tree volume instead
+            // of rescanning every Steve's plan cells for each of the 1,053 clearance voxels.
+            if (IsSteveConstructionAreaProtected(x - 4, y, z - 4, x + 4, y + 13, z + 4))
+                return false;
+
+            // Supported species reach 12 trunk blocks with a 3-block canopy radius. Leave a
+            // full extra block in every direction and require it loaded; unknown space is not air.
+            for (int dy = 1; dy <= 13; dy++)
+            for (int dz = -4; dz <= 4; dz++)
+            for (int dx = -4; dx <= 4; dx++)
+            {
+                int wx = x + dx, wy = y + dy, wz = z + dz;
+                if (!Chunks.TryGetLoadedBlock(wx, wy, wz, out int block)
+                    || block != BlockRegistry.AirId) return false;
+            }
+            return true;
+        }
+
+        /// <summary>Authoritatively plants one genuine sapling item. The caller consumes its
+        /// private item only after this placement succeeds.</summary>
+        internal bool TryPlantSaplingForSteve(SteveMob steve, int x, int y, int z, int itemId)
+        {
+            int saplingId = BlockRegistry.GetId("sapling");
+            if (itemId != saplingId || ItemRegistry.ResolveBlockId(itemId) != saplingId
+                || steve == null || steve.ShelterInventoryCount(itemId) <= 0
+                || !IsValidSaplingPlantSite(steve, x, y, z)) return false;
+            return TryPlaceBlockForSteve(steve, x, y, z, saplingId, itemId);
+        }
+
+        private bool IsSteveConstructionAreaProtected(int minX, int minY, int minZ,
+            int maxX, int maxY, int maxZ)
+        {
+            if (Entities == null) return false;
+            foreach (var renderable in Entities.Mobs)
+                if (renderable is SteveMob steve && !steve.Removed
+                    && steve.HasCommittedShelterOverlap(minX, minY, minZ, maxX, maxY, maxZ))
+                    return true;
+            return false;
         }
 
         public PickBlockResult? TryPickBlock(Point3D origin, Point3D direction, out double hitDistance)

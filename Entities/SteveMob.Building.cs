@@ -27,6 +27,13 @@ namespace Cubuild
         private float _pickupDropTargetValidationTimer;
         private DroppedItem? _ignoredPickupDrop;
         private float _ignoredPickupDropTimer;
+        private int _tradeEscrowItemId, _tradeEscrowCount;
+        private GameWorld? _tradeParcelWorld;
+        private DroppedItem? _tradeParcelDrop;
+        private DroppedItem? _incomingTradeParcel;
+        private float _saplingPlantCooldown;
+        private bool _saplingPlantTaskActive;
+        private int _saplingPlantX, _saplingPlantY, _saplingPlantZ;
         private int _buildStandX, _buildStandY, _buildStandZ;
         private float _ignoredSiteTimer, _ignoredGatherTimer;
         private float _toolUpgradeRetryTimer;
@@ -39,7 +46,7 @@ namespace Cubuild
         private ShelterTemplate? _taskActionTemplate;
         private int _taskActionItemId, _taskActionBlockId;
         private const int ProceduralBlueprintIndex = 27;
-        private const int ProceduralPlanGeneratorVersion = 1;
+        private const int ProceduralPlanGeneratorVersion = 2;
         private ShelterTemplate? _proceduralPlan;
         private ShelterTemplate? _proceduralShell;
         private int _proceduralPlanGeneratorVersion;
@@ -265,7 +272,8 @@ namespace Cubuild
             int porchDepth = NextTemplateChoice(ref state, 3) == 0 ? 0 : 1 + NextTemplateChoice(ref state, 2);
             if (depth + porchDepth > 5) porchDepth = 5 - depth;
             int size = Math.Max(width, depth + porchDepth);
-            int wallHeight = width == 4 && depth == 4 ? 1 : 1 + NextTemplateChoice(ref state, 2);
+            // New procedural plans must always leave the full two-block Steve body clear inside.
+            int wallHeight = 2;
             int roofProfile = NextTemplateChoice(ref state, 3); // flat, raised ridge, or flat with vent
             int roofAxis = NextTemplateChoice(ref state, 2);
             int materialChoice = NextTemplateChoice(ref state, 5);
@@ -356,9 +364,14 @@ namespace Cubuild
                 for (int z = 0; z < 3; z++)
                     for (int x = 0; x < 3; x++)
                     {
-                        if ((x == 0 || x == 2 || z == 0 || z == 2) && !(x == 1 && z == 2))
+                        bool isPerimeter = x == 0 || x == 2 || z == 0 || z == 2;
+                        bool doorway = x == 1 && z == 2;
+                        if (isPerimeter && !doorway)
+                        {
                             cells.Add(new BlueprintCell(x, 0, z));
-                        cells.Add(new BlueprintCell(x, x == 1 && z == 2 ? 2 : 1, z));
+                            cells.Add(new BlueprintCell(x, 1, z));
+                        }
+                        cells.Add(new BlueprintCell(x, 2, z));
                     }
                 size = 3;
             }
@@ -510,10 +523,89 @@ namespace Cubuild
 
         public int ShelterInventoryCount(int itemId)
         {
+            int total = ShelterInventoryCountRaw(itemId);
+            if (itemId == _tradeEscrowItemId) total = Math.Max(0, total - _tradeEscrowCount);
+            return total;
+        }
+
+        private int ShelterInventoryCountRaw(int itemId)
+        {
             int total = 0;
             foreach (var slot in _shelterInventory)
                 if (slot.ItemId == itemId) total += slot.Count;
             return total;
+        }
+
+        internal bool HasIncomingTradeParcel => _incomingTradeParcel?.IsTradeParcel == true;
+
+        internal bool TryReserveTradeParcel(int itemId, int count)
+        {
+            if (itemId <= 0 || count <= 0 || _tradeParcelDrop != null
+                || _tradeEscrowCount > 0 || ShelterInventoryCount(itemId) < count) return false;
+            _tradeEscrowItemId = itemId;
+            _tradeEscrowCount = count;
+            return true;
+        }
+
+        internal void RegisterTradeParcel(GameWorld world, DroppedItem drop)
+        {
+            _tradeParcelWorld = world;
+            _tradeParcelDrop = drop;
+        }
+
+        internal void RegisterIncomingTradeParcel(DroppedItem drop) => _incomingTradeParcel = drop;
+
+        internal void ClearIncomingTradeParcel(DroppedItem drop)
+        {
+            if (ReferenceEquals(_incomingTradeParcel, drop)) _incomingTradeParcel = null;
+        }
+
+        internal bool TryCommitTradeParcel(SteveMob recipient, DroppedItem drop)
+        {
+            if (!ReferenceEquals(_tradeParcelDrop, drop)
+                || !ReferenceEquals(drop.TradeSender, this)
+                || !ReferenceEquals(drop.TradeRecipient, recipient)
+                || !IsCurrentTradeParcel(recipient, drop.ItemId, drop.Count)
+                || drop.ItemId != _tradeEscrowItemId
+                || drop.Count != _tradeEscrowCount || _tradeEscrowCount <= 0
+                || recipient.GetShelterItemCapacity(_tradeEscrowItemId) < _tradeEscrowCount
+                || ShelterInventoryCountRaw(_tradeEscrowItemId) < _tradeEscrowCount)
+                return false;
+
+            int itemId = _tradeEscrowItemId, count = _tradeEscrowCount;
+            if (!recipient.TryAddShelterItem(itemId, count)) return false;
+            if (!TryConsumeShelterItemRaw(itemId, count))
+            {
+                recipient.TryConsumeShelterItemRaw(itemId, count);
+                return false;
+            }
+
+            _tradeEscrowItemId = _tradeEscrowCount = 0;
+            _tradeParcelDrop = null;
+            _tradeParcelWorld = null;
+            _cooperativeTransferComplete = true;
+            recipient.ClearIncomingTradeParcel(drop);
+            return true;
+        }
+
+        internal void CancelTradeParcel(DroppedItem? expected = null)
+        {
+            var drop = _tradeParcelDrop;
+            if (drop == null || (expected != null && !ReferenceEquals(expected, drop))) return;
+            var world = _tradeParcelWorld;
+            var recipient = drop.TradeRecipient;
+            _tradeParcelDrop = null;
+            _tradeParcelWorld = null;
+            _tradeEscrowItemId = _tradeEscrowCount = 0;
+            recipient?.ClearIncomingTradeParcel(drop);
+            if (world != null) world.RemoveTradeParcelProxy(drop);
+            else
+            {
+                drop.TradeSender = null;
+                drop.TradeRecipient = null;
+                drop.TradeEscrowCount = 0;
+            }
+            InvalidateUsefulShelterDropDemandCache();
         }
 
         private int ShelterItemCapacity(int itemId)
@@ -570,6 +662,12 @@ namespace Cubuild
         private bool TryConsumeShelterItem(int itemId, int count)
         {
             if (ShelterInventoryCount(itemId) < count) return false;
+            return TryConsumeShelterItemRaw(itemId, count);
+        }
+
+        private bool TryConsumeShelterItemRaw(int itemId, int count)
+        {
+            if (ShelterInventoryCountRaw(itemId) < count) return false;
             int remaining = count;
             for (int i = 0; i < _shelterInventory.Length && remaining > 0; i++)
             {
@@ -604,6 +702,7 @@ namespace Cubuild
         {
             if (!world.IsAuthoritative || IsDead || Removed) return;
             TickStevePlanningCaches(dt);
+            _saplingPlantCooldown = Math.Max(0f, _saplingPlantCooldown - dt);
             _planRetryTimer = Math.Max(0f, _planRetryTimer - dt);
             _plannerDecisionTimer = Math.Max(0f, _plannerDecisionTimer - dt);
             _plannerScanTimer = Math.Max(0f, _plannerScanTimer - dt);
@@ -630,10 +729,27 @@ namespace Cubuild
             if (HasActiveThreat)
             {
                 if (_cooperativeLeader != null) LeaveCooperativeWork(1.25f);
+                _saplingPlantTaskActive = false;
                 SetWorkMode(WorkMode.Waiting);
                 _plannerDecisionTimer = 0f;
                 PrepareSteveThreatResponse(world);
                 return;
+            }
+            if (PrepareStevePriorityMotive(world, dt))
+            {
+                if (_saplingPlantTaskActive)
+                {
+                    _saplingPlantTaskActive = false;
+                    _saplingPlantCooldown = Math.Max(_saplingPlantCooldown, 3f);
+                }
+                return;
+            }
+            if (HasIncomingTradeParcel)
+            {
+                // A receiver can temporarily stop helping another peer, but urgent motives above
+                // still win. The coordinator sees this transient claim and will not reassign it.
+                if (_cooperativeLeader != null) LeaveCooperativeWork(1.25f);
+                if (TryPrepareReservedTradePickup(world)) return;
             }
             // The coordinator refreshes this agent's temporary Navigate+Place plan after all
             // personal planners have prepared. Preserve it through the movement/action phase;
@@ -716,6 +832,7 @@ namespace Cubuild
                 int nextCell = FindNextUnplacedCell(template);
                 if (nextCell < 0)
                 {
+                    TryCaptureHomeRefuge(world, template);
                     CompleteShelterProject();
                     _planRetryTimer = 3f;
                     return;
@@ -772,6 +889,7 @@ namespace Cubuild
                     if (selectedGoal != _plannerGoal)
                     {
                         _plannerGoal = selectedGoal;
+                        InvalidateUsefulShelterDropDemandCache();
                         if (selectedGoal != ShelterGoal.ExploreForBuildSite) _explorationTaskInstalled = false;
                     }
                     _plannerDecisionTimer = 1.25f;
@@ -804,7 +922,7 @@ namespace Cubuild
                     }
                     PrepareShelterTasks();
                 }
-                else PrepareExploration(world);
+                else if (!TryPrepareSaplingPlanting(world)) PrepareExploration(world);
 
                 if (_plannerScanTimer <= 0f) _plannerScanTimer = 2.5f;
                 return;
@@ -833,6 +951,7 @@ namespace Cubuild
                     canExplore: true);
                 if (_plannerGoal != previousGoal && _plannerGoal != ShelterGoal.ExploreForBuildSite)
                     _explorationTaskInstalled = false;
+                if (_plannerGoal != previousGoal) InvalidateUsefulShelterDropDemandCache();
                 _plannerDecisionTimer = 1.25f;
             }
             if (_plannerGoal == ShelterGoal.GatherProjectMaterials && _hasGatherTarget
@@ -850,7 +969,7 @@ namespace Cubuild
                 }
                 PrepareShelterTasks();
             }
-            else PrepareExploration(world);
+            else if (!TryPrepareSaplingPlanting(world)) PrepareExploration(world);
             if (_plannerScanTimer <= 0f) _plannerScanTimer = 2.5f;
         }
 
@@ -879,6 +998,27 @@ namespace Cubuild
                 FinishSteveThreatResponse(world);
                 return;
             }
+            if (HasPriorityMotive)
+            {
+                _taskActionWorld = world;
+                try { _taskExecutor.Tick(dt, this, ExecuteCurrentTaskAction); }
+                finally { _taskActionWorld = null; }
+                if (_priorityMotive == PriorityMotive.Refuge && _taskExecutor.Failed)
+                {
+                    HandleRefugeRouteFailure(world);
+                    return;
+                }
+                if (_taskExecutor.Failed && _pickupDropTarget != null)
+                {
+                    _ignoredPickupDrop = _pickupDropTarget;
+                    _ignoredPickupDropTimer = 4f;
+                    _pickupDropTarget = null;
+                    _pickupDropTargetValidationTimer = 0f;
+                    _pickupDropScanTimer = Math.Max(_pickupDropScanTimer, 0.75f);
+                    _taskExecutor.SetPlan();
+                }
+                return;
+            }
             if (_blueprintIndex < 0) return;
             if (!TryResolveTemplate(_blueprintIndex, out var template, out int itemId, out int blockId)) return;
             _taskActionWorld = world;
@@ -899,6 +1039,16 @@ namespace Cubuild
             // coordinator. Never feed their task failure into the helper's solo planner.
             if (_cooperativeLeader != null) return;
             if (!_taskExecutor.Failed) return;
+
+            if (_saplingPlantTaskActive)
+            {
+                _saplingPlantTaskActive = false;
+                _saplingPlantCooldown = Math.Max(_saplingPlantCooldown, 8f);
+                InvalidateUsefulShelterDropDemandCache();
+                _taskExecutor.SetPlan();
+                PrepareShelterTasks();
+                return;
+            }
 
             // A stale/claimed physical drop is a failed supporting subtask, not a failed gather
             // target or construction project.
@@ -1058,6 +1208,7 @@ namespace Cubuild
             {
                 var drop = drops[i];
                 if (drop.Count > 0 && drop.Age > GameWorld.ItemDropPickupDelay && drop.FlyTime <= 0f
+                    && (!drop.IsTradeParcel || ReferenceEquals(drop.TradeRecipient, this))
                     && !world.IsDropInLocalPlayerPickupRange(drop)
                     && !IsIgnoredPickupDrop(drop))
                 {
@@ -1075,10 +1226,13 @@ namespace Cubuild
             {
                 var drop = drops[i];
                 if (drop.Count <= 0 || drop.Age <= GameWorld.ItemDropPickupDelay || drop.FlyTime > 0f
+                    || (drop.IsTradeParcel && !ReferenceEquals(drop.TradeRecipient, this))
                     || world.IsDropInLocalPlayerPickupRange(drop) || IsIgnoredPickupDrop(drop)) continue;
 
-                int usefulCount = demandByItem.TryGetValue(drop.ItemId, out int demand)
-                    ? Math.Min(demand, GetShelterItemCapacity(drop.ItemId)) : 0;
+                int usefulCount = drop.IsTradeParcel
+                    ? Math.Min(drop.Count, GetShelterItemCapacity(drop.ItemId))
+                    : demandByItem.TryGetValue(drop.ItemId, out int demand)
+                        ? Math.Min(demand, GetShelterItemCapacity(drop.ItemId)) : 0;
                 if (usefulCount <= 0) continue;
 
                 bool alreadyInRange = GameWorld.IsItemDropInPickupRange(drop, Position);
@@ -1133,13 +1287,135 @@ namespace Cubuild
                 if (!stillPresent) return false;
             }
             return drop.Count > 0 && drop.Age > GameWorld.ItemDropPickupDelay
-                && drop.FlyTime <= 0f && !world.IsDropInLocalPlayerPickupRange(drop)
-                && GetUsefulShelterDropDemand(world, drop.ItemId) > 0
+                && drop.FlyTime <= 0f
+                && (!drop.IsTradeParcel || ReferenceEquals(drop.TradeRecipient, this))
+                && !world.IsDropInLocalPlayerPickupRange(drop)
+                && (drop.IsTradeParcel || IsSeekingPersimmonDrop(drop.ItemId)
+                    || GetUsefulShelterDropDemand(world, drop.ItemId) > 0)
                 && GetShelterItemCapacity(drop.ItemId) > 0;
+        }
+
+        private bool TryPrepareReservedTradePickup(GameWorld world)
+        {
+            var drop = _incomingTradeParcel;
+            bool present = false;
+            if (drop != null)
+                foreach (var candidate in world.DroppedItems)
+                    if (ReferenceEquals(candidate, drop)) { present = true; break; }
+            if (!world.IsAuthoritative || drop == null || !drop.IsTradeParcel
+                || !ReferenceEquals(drop.TradeRecipient, this)
+                || drop.Age <= GameWorld.ItemDropPickupDelay || drop.FlyTime > 0f
+                || !present
+                || !TryGetCooperativeMaterialNeed(out int neededItem, out int deficit)
+                || neededItem != drop.ItemId || deficit < drop.Count
+                || GetShelterItemCapacity(drop.ItemId) < drop.Count) return false;
+
+            if (_pickupDropTarget != null && ReferenceEquals(_pickupDropTarget, drop)
+                && IsActiveUsefulDropTarget(world, drop))
+            {
+                PrepareShelterTasks();
+                return true;
+            }
+
+            bool alreadyInRange = GameWorld.IsItemDropInPickupRange(drop, Position);
+            int standX = 0, standY = 0, standZ = 0;
+            if (!alreadyInRange && !TryFindDropPickupStand(world, drop,
+                out standX, out standY, out standZ)) return false;
+            _pickupDropTarget = drop;
+            _pickupDropTargetValidationTimer = StevePlanningCacheSeconds;
+            if (alreadyInRange) _taskExecutor.SetPlan(AgentTask.Pickup(drop));
+            else _taskExecutor.SetPlan(AgentTask.Navigate(standX, standY, standZ),
+                AgentTask.Pickup(drop));
+            PrepareShelterTasks();
+            return true;
         }
 
         private bool IsIgnoredPickupDrop(DroppedItem drop)
             => _ignoredPickupDropTimer > 0f && ReferenceEquals(drop, _ignoredPickupDrop);
+
+        private bool TryPrepareSaplingPlanting(GameWorld world)
+        {
+            if (!world.IsAuthoritative || _plannerGoal != ShelterGoal.ExploreForBuildSite
+                || _saplingPlantCooldown > 0f) return false;
+            if (_saplingPlantTaskActive)
+            {
+                PrepareShelterTasks();
+                return true;
+            }
+            int saplingId = BlockRegistry.GetId("sapling");
+            if (saplingId <= 0 || ShelterInventoryCount(saplingId) <= 0) return false;
+
+            if (!TryFindSaplingPlantSite(world, out int x, out int y, out int z,
+                out int standX, out int standY, out int standZ))
+            {
+                _saplingPlantCooldown = 6f;
+                InvalidateUsefulShelterDropDemandCache();
+                return false;
+            }
+
+            _saplingPlantX = x; _saplingPlantY = y; _saplingPlantZ = z;
+            _saplingPlantTaskActive = true;
+            _taskExecutor.SetPlan(AgentTask.Navigate(standX, standY, standZ),
+                AgentTask.PlantSapling(x, y, z, saplingId));
+            PrepareShelterTasks();
+            return true;
+        }
+
+        private bool TryFindSaplingPlantSite(GameWorld world, out int targetX, out int targetY,
+            out int targetZ, out int standX, out int standY, out int standZ)
+        {
+            targetX = targetY = targetZ = standX = standY = standZ = 0;
+            int originX = (int)Math.Floor(Position.X);
+            int originY = (int)Math.Floor(Position.Y);
+            int originZ = (int)Math.Floor(Position.Z);
+            for (int ring = 0; ring <= 6; ring++)
+            for (int dy = -2; dy <= 2; dy++)
+            for (int dz = -ring; dz <= ring; dz++)
+            for (int dx = -ring; dx <= ring; dx++)
+            {
+                if (ring > 0 && Math.Max(Math.Abs(dx), Math.Abs(dz)) != ring) continue;
+                int x = originX + dx, y = originY + dy, z = originZ + dz;
+                if (!world.IsValidSaplingPlantSite(this, x, y, z)) continue;
+
+                bool foundStand = false;
+                double bestDistance = double.PositiveInfinity;
+                for (int oz = -1; oz <= 1; oz++)
+                for (int ox = -1; ox <= 1; ox++)
+                {
+                    if (ox == 0 && oz == 0) continue;
+                    int sx = x + ox, sz = z + oz, sy = y;
+                    if (!IsWalkableStand(world, sx, sy, sz)
+                        || StandIsCrowded(world, sx, sy, sz)
+                        || !world.CanStevePlaceCellFromStand(this, x, y, z, sx, sy, sz)) continue;
+                    double px = sx + 0.5 - Position.X;
+                    double py = sy - Position.Y;
+                    double pz = sz + 0.5 - Position.Z;
+                    double distance = px * px + py * py + pz * pz;
+                    if (distance >= bestDistance) continue;
+                    bestDistance = distance;
+                    standX = sx; standY = sy; standZ = sz;
+                    foundStand = true;
+                }
+                if (!foundStand) continue;
+                targetX = x; targetY = y; targetZ = z;
+                return true;
+            }
+            return false;
+        }
+
+        private bool ExecuteSaplingPlant(GameWorld world, AgentTask task)
+        {
+            if (!_saplingPlantTaskActive || task.Kind != AgentTaskKind.PlantSapling
+                || task.X != _saplingPlantX || task.Y != _saplingPlantY || task.Z != _saplingPlantZ
+                || task.ItemId != BlockRegistry.GetId("sapling")
+                || ShelterInventoryCount(task.ItemId) <= 0
+                || !world.TryPlantSaplingForSteve(this, task.X, task.Y, task.Z, task.ItemId)
+                || !ConsumeShelterItem(task.ItemId, 1)) return false;
+            _saplingPlantTaskActive = false;
+            _saplingPlantCooldown = 60f;
+            InvalidateUsefulShelterDropDemandCache();
+            return true;
+        }
 
         private bool TryFindDropPickupStand(GameWorld world, DroppedItem drop,
             out int standX, out int standY, out int standZ)
@@ -1171,9 +1447,19 @@ namespace Cubuild
 
         private bool ExecuteCurrentTaskAction(AgentTask task)
         {
-            if (_taskActionWorld == null || _taskActionTemplate == null) return false;
+            if (_taskActionWorld == null) return false;
+            if (task.Kind == AgentTaskKind.PlantSapling)
+                return ExecuteSaplingPlant(_taskActionWorld, task);
+            if (task.Kind == AgentTaskKind.Pickup && _pickupDropTarget != null
+                && ReferenceEquals(task.Drop, _pickupDropTarget)
+                && IsSeekingPersimmonDrop(task.ItemId))
+                return _taskActionWorld.TryPickupDropForSteve(this, task.Drop!, out _);
+            if (task.Kind == AgentTaskKind.Pickup && task.Drop?.IsTradeParcel == true
+                && ReferenceEquals(task.Drop.TradeRecipient, this))
+                return _taskActionWorld.TryPickupDropForSteve(this, task.Drop, out _);
             if (_cooperativeLeader != null)
                 return TryExecuteCooperativeTask(_taskActionWorld, task);
+            if (_taskActionTemplate == null) return false;
             return ExecuteShelterAction(_taskActionWorld, _taskActionTemplate,
                 _taskActionItemId, _taskActionBlockId, task);
         }
@@ -1854,6 +2140,22 @@ namespace Cubuild
                 RotateCell(cell, template.Size, _rotation, out int rx, out int rz);
                 if (_anchorX + rx == x && _anchorY + cell.Y == y && _anchorZ + rz == z)
                     return true;
+            }
+            return false;
+        }
+
+        internal bool HasCommittedShelterOverlap(int minX, int minY, int minZ,
+            int maxX, int maxY, int maxZ)
+        {
+            if (!_hasShelterSite || _blueprintIndex < 0
+                || !TryResolveTemplate(_blueprintIndex, out var template, out _, out _)) return false;
+            for (int i = 0; i < template.Cells.Length; i++)
+            {
+                var cell = template.Cells[i];
+                RotateCell(cell, template.Size, _rotation, out int rx, out int rz);
+                int x = _anchorX + rx, y = _anchorY + cell.Y, z = _anchorZ + rz;
+                if (x >= minX && x <= maxX && y >= minY && y <= maxY
+                    && z >= minZ && z <= maxZ) return true;
             }
             return false;
         }

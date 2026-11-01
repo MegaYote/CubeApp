@@ -50,6 +50,10 @@ namespace Cubuild
         /// in a neighbour that is not loaded yet.</summary>
         private const int RailMaxUnsupportedRun = 8;
 
+        /// <summary>Maximum number of raw chunk cells inspected for saplings in one simulation
+        /// update. A deep 640-high chunk is spread over multiple frames instead of scanned at once.</summary>
+        private const int SaplingChunkScanCellBudget = 4096;
+
         /// <summary>Spring the eased value toward its target. Underdamped on purpose: a little
         /// overshoot is the "slight physics" - the track drops, bounces, and settles.</summary>
         private const double RailSagStiffness = 55.0;
@@ -74,6 +78,11 @@ namespace Cubuild
         // Chunks that just loaded with rails in them; scanned on the main thread (the load itself
         // happens on a gen worker, so all we do there is enqueue the chunk).
         private readonly ConcurrentQueue<Chunk> _railSagPendingChunks = new();
+        // Loaded chunks are scanned on the simulation thread so saved saplings get a fresh
+        // transient growth tick after their runtime scheduler state is reconstructed.
+        private readonly ConcurrentQueue<Chunk> _saplingPendingChunks = new();
+        private Chunk? _saplingScanChunk;
+        private int _saplingScanCursor;
         // Generated cliff springs are activated only after the chunk and any save overlay are
         // published. The callback runs on a gen worker, so it enqueues chunks for the sim thread.
         private readonly ConcurrentQueue<Chunk> _worldgenFluidPendingChunks = new();
@@ -87,6 +96,7 @@ namespace Cubuild
         private void OnChunkLoadedForRailSag(Chunk chunk)
         {
             _railSagPendingChunks.Enqueue(chunk);
+            _saplingPendingChunks.Enqueue(chunk);
             if (chunk.WorldgenFluidSources.Count > 0)
                 _worldgenFluidPendingChunks.Enqueue(chunk);
         }
@@ -155,6 +165,7 @@ namespace Cubuild
         private void UpdateRailSag(float deltaSeconds)
         {
             WakeWorldgenFluidSources();
+            ProcessPendingSaplingChunkScans();
 
             // 1. Any chunk that just streamed in with rails: seed a solve for its rail cells.
             while (_railSagPendingChunks.TryDequeue(out var chunk))
@@ -198,6 +209,39 @@ namespace Cubuild
             {
                 _railSagPruneTimer = 0f;
                 PruneRailSag();
+            }
+        }
+
+        private void ProcessPendingSaplingChunkScans()
+        {
+            int remaining = SaplingChunkScanCellBudget;
+            int saplingId = BlockRegistry.GetId("sapling");
+            while (remaining > 0)
+            {
+                if (_saplingScanChunk == null)
+                {
+                    if (!_saplingPendingChunks.TryDequeue(out _saplingScanChunk)) break;
+                    _saplingScanCursor = 0;
+                }
+
+                var chunk = _saplingScanChunk;
+                var blocks = chunk.RawBlocks;
+                int count = Math.Min(remaining, blocks.Length - _saplingScanCursor);
+                int scanEnd = _saplingScanCursor + count;
+                for (; _saplingScanCursor < scanEnd; _saplingScanCursor++)
+                {
+                    if (blocks[_saplingScanCursor] != saplingId) continue;
+                    int ly = _saplingScanCursor % chunk.Height;
+                    int xz = _saplingScanCursor / chunk.Height;
+                    int lz = xz % chunk.Depth;
+                    int lx = xz / chunk.Depth;
+                    BlockTicks.OnBlockChanged(chunk.OriginX + lx,
+                        chunk.OriginY + ly, chunk.OriginZ + lz);
+                }
+                remaining -= count;
+                if (_saplingScanCursor < blocks.Length) break;
+                _saplingScanChunk = null;
+                _saplingScanCursor = 0;
             }
         }
 

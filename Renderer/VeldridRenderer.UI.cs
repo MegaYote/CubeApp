@@ -2038,6 +2038,7 @@ namespace Cubuild.Renderer
                 Line($"XYZ: {_hud.PlayerX:0.000} / {_hud.PlayerY:0.000} / {_hud.PlayerZ:0.000}");
                 Line($"Block: {(int)Math.Floor(_hud.PlayerX)} / {(int)Math.Floor(_hud.PlayerY)} / {(int)Math.Floor(_hud.PlayerZ)} | Chunk: L{Cubuild.ChunkManager.LayerForWorldY((int)Math.Floor(_hud.PlayerY))} {_hud.PlayerChunkX},{_hud.PlayerChunkZ}");
                 Line($"Update {_hud.UpdateMs:0.0} | Mesh {_hud.MeshMs:0.0} | Upload {_hud.UploadMs:0.0} | Render {_hud.RenderMs:0.0} ms | Entity {_hud.EntityMs:0.0} ms ({_hud.EntityCount})");
+                if (!string.IsNullOrEmpty(_hud.MobDiagnostics)) Line(_hud.MobDiagnostics);
                 Line($"Facing: {_hud.FacingText}");
                 if (!string.IsNullOrEmpty(_hud.SaplingGrowthText)) Line(_hud.SaplingGrowthText);
                 if (_hud.SteveAIDiagnostics != null)

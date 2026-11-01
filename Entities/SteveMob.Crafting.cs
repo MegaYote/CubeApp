@@ -567,6 +567,18 @@ namespace Cubuild
             }
 
             AddActiveToolRecipeDropDemand(world, demands);
+
+            int saplingId = BlockRegistry.GetId("sapling");
+            bool urgentProjectWork = (_hasGatherTarget
+                    && ShelterInventoryCount(_projectMaterialItemId) < _projectRequiredCount)
+                || (_hasShelterSite && !_siteBlocked
+                    && ShelterInventoryCount(_projectMaterialItemId) > 0);
+            if (_plannerGoal == ShelterGoal.ExploreForBuildSite && !urgentProjectWork
+                && _workMode is not (WorkMode.Build or WorkMode.Gather or WorkMode.ToolUp)
+                && _pickupDropTarget == null && _saplingPlantCooldown <= 0f
+                && saplingId > 0 && ShelterInventoryCount(saplingId) <= 0
+                && GetShelterItemCapacity(saplingId) > 0)
+                AddDropDemand(demands, saplingId, 1);
         }
 
         private void AddActiveToolRecipeDropDemand(GameWorld world, Dictionary<int, int> demands)

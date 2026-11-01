@@ -58,6 +58,9 @@ namespace Cubuild
         public int SteveExplorationRing, SteveExplorationSector;
         /// <summary>Runtime marker distinguishing v17+ state from v1-v16 defaults.</summary>
         public bool StevePlannerStatePresent;
+        /// <summary>v19: last verified stand inside Steve's completed shelter.</summary>
+        public bool SteveHasHomeRefuge;
+        public int SteveHomeRefugeX, SteveHomeRefugeY, SteveHomeRefugeZ;
     }
 
     /// <summary>World-time burnout schedule for one sap torch (v11).</summary>
@@ -92,7 +95,7 @@ namespace Cubuild
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 18;
+        public const int Version = 19;
         /// <summary>Binary version read from disk; new/in-memory saves use the current version.</summary>
         public int FileVersion = Version;
 
@@ -318,6 +321,19 @@ namespace Cubuild
                         w.Write(mob.StevePlanCells[cell * 3 + 1]);
                         w.Write(mob.StevePlanCells[cell * 3 + 2]);
                     }
+                }
+                // v19: append the refuge extension after every v18 Steve plan payload. This
+                // leaves all historical layouts and the v16-v18 construction payload unchanged.
+                w.Write(steveCount);
+                for (int i = 0; i < Mobs.Count; i++)
+                {
+                    var mob = Mobs[i];
+                    if (!string.Equals(mob.Type, "steve", StringComparison.Ordinal)) continue;
+                    w.Write(i);
+                    w.Write(mob.SteveHasHomeRefuge);
+                    w.Write(mob.SteveHomeRefugeX);
+                    w.Write(mob.SteveHomeRefugeY);
+                    w.Write(mob.SteveHomeRefugeZ);
                 }
                 w.Flush();
             }
@@ -568,6 +584,24 @@ namespace Cubuild
                                 mob.StevePlanCells[cell * 3 + 2] = reader.ReadInt32();
                             }
                         }
+                    }
+                }
+                if (version >= 19)
+                {
+                    int refugeCount = reader.ReadInt32();
+                    if (refugeCount < 0 || refugeCount > save.Mobs.Count)
+                        throw new InvalidDataException("Invalid saved Steve refuge count.");
+                    for (int stateIndex = 0; stateIndex < refugeCount; stateIndex++)
+                    {
+                        int mobIndex = reader.ReadInt32();
+                        if (mobIndex < 0 || mobIndex >= save.Mobs.Count
+                            || !string.Equals(save.Mobs[mobIndex].Type, "steve", StringComparison.Ordinal))
+                            throw new InvalidDataException("Steve refuge refers to a non-Steve mob.");
+                        var mob = save.Mobs[mobIndex];
+                        mob.SteveHasHomeRefuge = reader.ReadBoolean();
+                        mob.SteveHomeRefugeX = reader.ReadInt32();
+                        mob.SteveHomeRefugeY = reader.ReadInt32();
+                        mob.SteveHomeRefugeZ = reader.ReadInt32();
                     }
                 }
                 return save;

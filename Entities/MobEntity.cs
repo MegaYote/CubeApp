@@ -96,6 +96,7 @@ namespace Cubuild
         private double _pathGoalX, _pathGoalY, _pathGoalZ;
         private double _pathMaxDistance = 64.0;
         private int _pathRecalcCooldown;
+        private float _terrainPathRetryCooldown;
         private bool _pathGoalActive;
         private NavigationStatus _navigationStatus;
         private bool _pathIsPartial;
@@ -120,7 +121,28 @@ namespace Cubuild
         protected virtual bool UsesExternalPathGoal => false;
         protected virtual bool CanBreakBlocksForPathfinding => Hostile;
         protected virtual bool SupportsEmergencyBreakNavigation => false;
+        protected virtual float NavigationStepJumpSpeed => 7.42f;
+        protected virtual bool UpdateWaterNavigation(float dt, ChunkManager manager) => false;
         public EmergencyBreakTarget? NavigationBreakTarget => _emergencyBreakTarget;
+
+        /// <summary>True when the mob's torso is in a loaded water block.</summary>
+        protected bool IsBodySubmerged(ChunkManager manager) => InWater(manager);
+
+        /// <summary>True when the feet occupy a loaded water block.</summary>
+        protected bool AreFeetInWater(ChunkManager manager)
+            => IsWaterAt(manager, Position.X, Position.Y + 0.15, Position.Z);
+
+        /// <summary>Submit explicit upward swim intent for this navigation tick. This never
+        /// changes grounded state and has no effect outside water.</summary>
+        protected void SetWaterNavigationIntent(double targetX, double targetZ, float forward)
+        {
+            double dx = targetX - Position.X, dz = targetZ - Position.Z;
+            if (dx * dx + dz * dz > 0.01) _targetYaw = (float)Math.Atan2(dx, dz);
+            _desiredMoveForward = Math.Clamp(forward, 0f, 1f);
+            _desiredSpeedScale = 1.0f;
+            _idleTimer = 0f;
+            _ctrlSwimUp = true;
+        }
 
         /// <summary>
         /// Supplies the current night-dim level (0..11) so environmental behaviors (zombie
@@ -162,6 +184,39 @@ namespace Cubuild
         /// <summary>Fired when this mob lands a melee hit on its target (wired to the EntityManager
         /// to damage a Steve NPC or mark the player as hit).</summary>
         public Action? OnAttack { get; set; }
+
+        private MobEntity? _hostileSteveTarget;
+        private Action<int, DeathCause>? _hostilePlayerDamageCallback;
+        private Action? _hostileAttackHandler;
+        internal int NavigationSearchesThisUpdate { get; private set; }
+
+        /// <summary>Updates the current hostile attack target without allocating a capturing
+        /// callback every frame.</summary>
+        internal void SetHostileAttackTarget(MobEntity? steveTarget,
+            Action<int, DeathCause>? playerDamageCallback)
+        {
+            if (ReferenceEquals(_hostileSteveTarget, steveTarget)
+                && _hostilePlayerDamageCallback == playerDamageCallback) return;
+
+            _hostileSteveTarget = steveTarget;
+            _hostilePlayerDamageCallback = playerDamageCallback;
+            if (steveTarget == null && playerDamageCallback == null)
+            {
+                OnAttack = null;
+                return;
+            }
+
+            _hostileAttackHandler ??= HandleHostileAttack;
+            OnAttack = _hostileAttackHandler;
+        }
+
+        private void HandleHostileAttack()
+        {
+            if (_hostileSteveTarget is { IsDead: false } steve)
+                steve.Damage(AttackDamage, Position.X, Position.Z, true);
+            else if (_hostileSteveTarget == null)
+                _hostilePlayerDamageCallback?.Invoke(AttackDamage, DeathCause.Mob);
+        }
 
         // Restores saved state after spawning (world load).
         public void RestoreState(Point3D position, float yaw, int health, int vehicleMeleeHitCount = 0)
@@ -254,6 +309,7 @@ namespace Cubuild
         private bool _pendingJump;
         private float _pendingJumpSpeed;
         private bool _navigationRecoveryJump;
+        private bool _ctrlSwimUp;
 
         // Block-breaking: when a zombie is blocked by a breakable wall it starts mining it.
         private int _miningBlockX, _miningBlockY, _miningBlockZ;
@@ -306,6 +362,8 @@ namespace Cubuild
         /// </summary>
         public virtual void Update(float dt, ChunkManager manager)
         {
+            NavigationSearchesThisUpdate = 0;
+            _terrainPathRetryCooldown = Math.Max(0f, _terrainPathRetryCooldown - dt);
             _prevOnGround = OnGround;
             OnGround = false;
             _invulnerableTimer = Math.Max(0f, _invulnerableTimer - dt);
@@ -497,6 +555,76 @@ namespace Cubuild
             _pathIsPartial = false;
         }
 
+        /// <summary>Invalidate Steve's route when a changed cell intersects its next few
+        /// waypoints. Called by EntityManager from ChunkManager's post-mutation notification.</summary>
+        internal void NotifyTerrainBlockChanged(int x, int y, int z)
+        {
+            if (this is not SteveMob || !_pathGoalActive || _path == null
+                || _path.IsDone || _terrainPathRetryCooldown > 0f
+                || !IsChangedCellOnRemainingRoute(x, y, z)) return;
+
+            RetryNavigationGoal();
+            // Coalesce bursts (notably a gravity column landing) and avoid route churn.
+            _terrainPathRetryCooldown = 0.45f;
+        }
+
+        private bool IsChangedCellOnRemainingRoute(int x, int y, int z)
+        {
+            const int lookAhead = 8;
+            var points = _path!.GetPoints();
+            int first = _path.CurrentIndex;
+            int last = Math.Min(points.Length, first + lookAhead);
+            for (int i = first; i < last; i++)
+            {
+                var point = points[i];
+                double minX = point.X + 0.5 - Width * 0.5;
+                double maxX = point.X + 0.5 + Width * 0.5;
+                double minZ = point.Z + 0.5 - Width * 0.5;
+                double maxZ = point.Z + 0.5 + Width * 0.5;
+                bool overlapsFootprint = x + 1.0 > minX && x < maxX
+                    && z + 1.0 > minZ && z < maxZ;
+                if (overlapsFootprint && (y == point.Y - 1
+                    || (y >= point.Y && y < point.Y + Height))) return true;
+            }
+
+            // CanTraverse also rejects diagonals when either orthogonal side column is
+            // obstructed. Those swept volumes can lie entirely between waypoint footprints.
+            // Match its inclusive minY..maxY step range and full body clearance; the same
+            // range catches emergency-break blockers checked on those side columns.
+            int bodyCells = Math.Max(1, (int)Math.Ceiling(Height));
+            for (int i = first; i < last; i++)
+            {
+                PathPoint from = i > first
+                    ? points[i - 1]
+                    : new PathPoint((int)Math.Floor(Position.X), (int)Math.Floor(Position.Y),
+                        (int)Math.Floor(Position.Z));
+                PathPoint to = points[i];
+                int dx = to.X - from.X;
+                int dz = to.Z - from.Z;
+                if (dx == 0 || dz == 0) continue;
+
+                int minY = Math.Min(from.Y, to.Y);
+                int maxY = Math.Max(from.Y, to.Y);
+                if (ChangedCellOverlapsPathColumn(x, y, z, from.X + dx, from.Z,
+                        minY, maxY, bodyCells)
+                    || ChangedCellOverlapsPathColumn(x, y, z, from.X, from.Z + dz,
+                        minY, maxY, bodyCells)) return true;
+            }
+            return false;
+        }
+
+        private bool ChangedCellOverlapsPathColumn(int x, int y, int z, int columnX, int columnZ,
+            int minFeetY, int maxFeetY, int bodyCells)
+        {
+            double minX = columnX + 0.5 - Width * 0.5;
+            double maxX = columnX + 0.5 + Width * 0.5;
+            double minZ = columnZ + 0.5 - Width * 0.5;
+            double maxZ = columnZ + 0.5 + Width * 0.5;
+            return x + 1.0 > minX && x < maxX
+                && z + 1.0 > minZ && z < maxZ
+                && y >= minFeetY && y < maxFeetY + bodyCells;
+        }
+
         /// <summary>One bounded jump attempt used by an external task's stuck-route watchdog.</summary>
         internal bool TryJumpForNavigationRecovery()
         {
@@ -570,6 +698,7 @@ namespace Cubuild
                     }
                     return;
                 }
+                NavigationSearchesThisUpdate++;
                 _path = FindNavigationPath(manager);
                 if (_path == null)
                 {
@@ -631,6 +760,7 @@ namespace Cubuild
                 double fdz = _pathGoalZ - (final.Z + 0.5);
                 if (fdx * fdx + fdy * fdy + fdz * fdz > 9.0)
                 {
+                    NavigationSearchesThisUpdate++;
                     var fresh = FindNavigationPath(manager);
                     if (fresh != null)
                     {
@@ -727,6 +857,7 @@ namespace Cubuild
                 canBreakBlock: this is SteveMob
                     ? id => !SteveMob.IsSafeSteveBuildBlock(id)
                     : null));
+            NavigationSearchesThisUpdate++;
             var emergency = _emergencyPathFinder.FindPath(Position.X, Position.Y, Position.Z,
                 _pathGoalX, _pathGoalY, _pathGoalZ, (float)_pathMaxDistance);
             if (PathReachesGoal(emergency) && emergency!.EmergencyBreakTarget.HasValue)
@@ -802,7 +933,7 @@ namespace Cubuild
 
         private void UpdateBrain(float dt, ChunkManager manager)
         {
-            _ctrlForward = 0f; _ctrlStrafe = 0f; _ctrlJump = false;
+            _ctrlForward = 0f; _ctrlStrafe = 0f; _ctrlJump = false; _ctrlSwimUp = false;
             if (_dead) { UpdateDead(dt); return; }
 
             // Tick block-breaking progress and hurt flash — must run regardless of AI branch.
@@ -834,10 +965,14 @@ namespace Cubuild
             _afterMoveRestTimer = Math.Max(0f, _afterMoveRestTimer - dt);
             _panicTimer = Math.Max(0f, _panicTimer - dt);
             _panicRetargetTimer = Math.Max(0f, _panicRetargetTimer - dt);
-            if (UsesExternalPathGoal && _pathGoalActive && _panicTimer <= 0f)
+            if (UsesExternalPathGoal)
             {
-                UpdateExternalPathGoal(dt, manager);
-                return;
+                bool waterNavigation = UpdateWaterNavigation(dt, manager);
+                if (waterNavigation || (_pathGoalActive && _panicTimer <= 0f))
+                {
+                    UpdateExternalPathGoal(dt, manager, waterNavigation);
+                    return;
+                }
             }
             // _walkPhase advances in ApplyMoveControls (once per frame, all AI branches).
             if (HasFlap) _flapPhase += dt * (grounded ? (4.5f + _walkAmount * 4.0f) : 18.0f);
@@ -916,7 +1051,7 @@ namespace Cubuild
             }
             else if (_idleTimer <= 0f && needsStepJump && _hopCooldown <= 0f)
             {
-                _ctrlJump = true; _pendingJump = true; _pendingJumpSpeed = 7.42f; _hopCooldown = 0.26f;
+                _ctrlJump = true; _pendingJump = true; _pendingJumpSpeed = NavigationStepJumpSpeed; _hopCooldown = 0.26f;
             }
 
             _currentMoveForward = Lerp(_currentMoveForward, _idleTimer > 0f ? 0f : _desiredMoveForward, 1f - (float)Math.Exp(-dt * 4.6));
@@ -934,13 +1069,16 @@ namespace Cubuild
 
         /// <summary>Steers subclasses with an explicit navigation goal using the shared A* route.
         /// Steve's bounded construction behavior uses this instead of the random wander brain.</summary>
-        private void UpdateExternalPathGoal(float dt, ChunkManager manager)
+        private void UpdateExternalPathGoal(float dt, ChunkManager manager, bool waterNavigation)
         {
-            _desiredMoveForward = 0f;
-            _desiredSpeedScale = 0.98f;
-            bool arrived = IsAtPathGoal();
-            if (!arrived) UpdatePath(dt, manager);
-            else _path = null;
+            if (!waterNavigation)
+            {
+                _desiredMoveForward = 0f;
+                _desiredSpeedScale = 0.98f;
+            }
+            bool arrived = !waterNavigation && IsAtPathGoal();
+            if (!waterNavigation && !arrived) UpdatePath(dt, manager);
+            else if (arrived) _path = null;
 
             float moveIntent = arrived ? 0f : _desiredMoveForward;
             _currentMoveForward = Lerp(_currentMoveForward, moveIntent, 1f - (float)Math.Exp(-dt * 5.0));
@@ -952,20 +1090,60 @@ namespace Cubuild
             _ctrlForward = _currentMoveForward * turnSlow;
             _ctrlStrafe = _currentMoveForward > 0.04f ? Clamp(yawError * 0.14f, -0.18f, 0.18f) : 0f;
 
-            if ((_prevOnGround || OnGround) && _hopCooldown <= 0f && NeedsStepJump(manager, 0.6))
+            if (!waterNavigation && (_prevOnGround || OnGround) && _hopCooldown <= 0f && NeedsStepJump(manager, 0.6))
             {
                 _ctrlJump = true;
                 _pendingJump = true;
-                _pendingJumpSpeed = 7.42f;
+                _pendingJumpSpeed = NavigationStepJumpSpeed;
                 _hopCooldown = 0.26f;
             }
-            if (_navigationRecoveryJump && (_prevOnGround || OnGround))
+            if (!waterNavigation && _navigationRecoveryJump && (_prevOnGround || OnGround))
             {
-                _ctrlJump = true;
-                _pendingJump = true;
-                _pendingJumpSpeed = 7.42f;
                 _navigationRecoveryJump = false;
+                if (HasClearNavigationRecoveryJumpArc(manager))
+                {
+                    _ctrlJump = true;
+                    _pendingJump = true;
+                    _pendingJumpSpeed = NavigationStepJumpSpeed;
+                }
             }
+        }
+
+        private bool HasClearNavigationRecoveryJumpArc(ChunkManager manager)
+        {
+            double jumpSpeed = NavigationStepJumpSpeed;
+            const int samples = 64;
+            double gravity = Math.Max(0.01, Gravity);
+            double flightTime = 2.0 * jumpSpeed / gravity;
+            double forwardDistance = 0.6 + Width * 0.5 + 0.2;
+            double jumpRise = jumpSpeed * jumpSpeed / (2.0 * gravity);
+            double clearedStepHeight = Math.Min(1.0, jumpRise);
+            double dirX = Math.Sin(Yaw), dirZ = Math.Cos(Yaw);
+
+            // Collision resolution stops horizontal motion against a one-block step while the
+            // grounded jump rises. Model that: rise in place until the feet clear the step, then
+            // sweep forward at the apex and descend to a one-block-high landing. Moving forward
+            // from t=0 would falsely reject every step by intersecting its vertical face.
+            for (int i = 0; i <= samples; i++)
+            {
+                double progress = (double)i / samples;
+                double elapsed = flightTime * progress;
+                double rise = jumpSpeed * elapsed - 0.5 * gravity * elapsed * elapsed;
+                if (IntersectsSolid(manager, Position.X, Position.Y + Math.Max(0.0, rise),
+                    Position.Z)) return false;
+            }
+
+            double apexY = Position.Y + jumpRise;
+            double landingY = Position.Y + clearedStepHeight;
+            for (int i = 0; i <= samples; i++)
+            {
+                double progress = (double)i / samples;
+                double x = Position.X + dirX * forwardDistance * progress;
+                double z = Position.Z + dirZ * forwardDistance * progress;
+                double y = apexY + (landingY - apexY) * progress;
+                if (IntersectsSolid(manager, x, y, z)) return false;
+            }
+            return true;
         }
 
         private void UpdateDead(float dt)
@@ -1088,7 +1266,7 @@ namespace Cubuild
             if ((_prevOnGround || OnGround) && _hopCooldown <= 0f && NeedsStepJump(manager, 0.6))
             {
                 _ctrlJump = true; _pendingJump = true;
-                _pendingJumpSpeed = 7.42f; _hopCooldown = 0.26f;
+                _pendingJumpSpeed = NavigationStepJumpSpeed; _hopCooldown = 0.26f;
             }
 
             // Break blocks when stuck. Simple tick counter: if the zombie hasn't moved for ~15 ticks,
@@ -1242,7 +1420,9 @@ namespace Cubuild
             // swimmers: they ride high, barely any struggle, and cruise across the water.
             bool feetInWater = IsWaterAt(manager, Position.X, Position.Y + 0.15, Position.Z);
             bool bodyInWater = InWater(manager);
-            if (feetInWater || bodyInWater)
+            bool shallowSteveWading = this is SteveMob steve && feetInWater && !bodyInWater
+                && steve.IsWadingOnSafeGround(manager);
+            if ((feetInWater || bodyInWater) && !shallowSteveWading)
             {
                 bool duck = HasFlap;
                 double waterDrag = Math.Pow(duck ? 0.90 : 0.82, dt * 60);
@@ -1254,6 +1434,8 @@ namespace Cubuild
                 {
                     _velY += (duck ? 9.0 : 7.0) * dt;
                 }
+                if (_ctrlSwimUp && bodyInWater)
+                    _velY += 8.0 * dt;
                 // Ride until the TORSO clears the surface, then flatten - the mob sits ON the
                 // water instead of bobbing just below the surface.
                 if (!bodyInWater && _velY > 0)
@@ -1546,11 +1728,42 @@ namespace Cubuild
 
         private bool NeedsStepJump(ChunkManager manager, double distance)
         {
-            double dirX = Math.Sin(Yaw), dirZ = Math.Cos(Yaw);
-            int probeX = (int)Math.Floor(Position.X + dirX * distance);
-            int probeZ = (int)Math.Floor(Position.Z + dirZ * distance);
-            int baseY = (int)Math.Floor(Position.Y + 0.05);
-            return IsSolid(manager, probeX, baseY, probeZ) && !IsSolid(manager, probeX, baseY + 1, probeZ) && !IsSolid(manager, probeX, baseY + 2, probeZ);
+            // Probe the direction the controls will actually move this frame, not just the
+            // body's turn-lagged yaw. On a diagonal approach, body yaw can lag enough that a
+            // one-block ledge is outside the narrow probe while the strafe component walks into it.
+            double sinYaw = Math.Sin(Yaw), cosYaw = Math.Cos(Yaw);
+            double dirX = sinYaw * _ctrlForward + cosYaw * _ctrlStrafe;
+            double dirZ = cosYaw * _ctrlForward - sinYaw * _ctrlStrafe;
+            double directionLength = Math.Sqrt(dirX * dirX + dirZ * dirZ);
+            if (directionLength < 0.04)
+            {
+                // Keep recovery/legacy calls useful when controls are momentarily neutral.
+                dirX = Math.Sin(Yaw);
+                dirZ = Math.Cos(Yaw);
+                directionLength = 1.0;
+            }
+            dirX /= directionLength;
+            dirZ /= directionLength;
+            double probeX = Position.X + dirX * distance;
+            double probeZ = Position.Z + dirZ * distance;
+            if (!IntersectsSolid(manager, probeX, Position.Y, probeZ)) return false;
+
+            // A jump is useful only if the whole mob-sized AABB can clear the one-block
+            // obstacle and the space immediately beyond it. This includes headroom: leaves
+            // remain solid, so a canopy in the landing volume prevents repeated jump attempts.
+            double landingY = Position.Y + 1.0;
+            if (IntersectsSolid(manager, probeX, landingY, probeZ)) return false;
+            double beyondX = probeX + dirX * (Width * 0.5 + 0.2);
+            double beyondZ = probeZ + dirZ * (Width * 0.5 + 0.2);
+            if (IntersectsSolid(manager, beyondX, landingY, beyondZ)) return false;
+
+            // Also check the apex, where an otherwise clear landing can still put Steve's
+            // head into an overhead leaf block during the jump arc.
+            double jumpSpeed = NavigationStepJumpSpeed;
+            double jumpRise = jumpSpeed * jumpSpeed / (2.0 * Math.Max(0.01, Gravity));
+            double apexY = Position.Y + jumpRise;
+            return !IntersectsSolid(manager, probeX, apexY, probeZ)
+                && !IntersectsSolid(manager, beyondX, apexY, beyondZ);
         }
 
         private bool DangerousDropAhead(ChunkManager manager, double distance)

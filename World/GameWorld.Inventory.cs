@@ -89,7 +89,7 @@ namespace Cubuild
         /// <summary>True for a drop in the player's current pickup volume or already magnetized.</summary>
         internal bool IsDropInLocalPlayerPickupRange(DroppedItem drop)
         {
-            if (drop == null || IsCreative) return false;
+            if (drop == null || IsCreative || drop.IsTradeParcel) return false;
             if (drop.FlyTime > 0f) return true;
             var playerFeet = new Point3D(LocalPlayer.Position.X,
                 LocalPlayer.Position.Y - EyeHeight, LocalPlayer.Position.Z);
@@ -107,7 +107,9 @@ namespace Cubuild
             foreach (var drop in _droppedItems)
             {
                 if (drop.ItemId != itemId || drop.Count <= 0 || drop.Age <= ItemDropPickupDelay
-                    || drop.FlyTime > 0f || IsDropInLocalPlayerPickupRange(drop)) continue;
+                    || drop.FlyTime > 0f || (drop.IsTradeParcel
+                        && !ReferenceEquals(drop.TradeRecipient, steve))
+                    || IsDropInLocalPlayerPickupRange(drop)) continue;
                 if (IsItemDropInPickupRange(drop, steve.Position)) return true;
 
                 int centerX = (int)Math.Floor(drop.Position.X);
@@ -138,10 +140,31 @@ namespace Cubuild
             pickedUp = 0;
             if (!IsAuthoritative || steve == null || steve.IsDead || steve.Removed || drop == null
                 || drop.Count <= 0 || drop.Age <= ItemDropPickupDelay || drop.FlyTime > 0f
-                || !_droppedItems.Contains(drop) || IsDropInLocalPlayerPickupRange(drop)
+                || !_droppedItems.Contains(drop)
                 || !IsItemDropInPickupRange(drop, steve.Position)) return false;
 
-            int usefulDemand = steve.GetUsefulShelterDropDemand(this, drop.ItemId);
+            if (drop.IsTradeParcel)
+            {
+                var sender = drop.TradeSender;
+                if (!ReferenceEquals(drop.TradeRecipient, steve) || sender == null
+                    || drop.Count != drop.TradeEscrowCount
+                    || !steve.TryGetCooperativeMaterialNeed(out int neededItem, out int deficit)
+                    || neededItem != drop.ItemId || deficit < drop.Count
+                    || steve.GetShelterItemCapacity(drop.ItemId) < drop.Count
+                    || !sender.TryCommitTradeParcel(steve, drop)) return false;
+
+                pickedUp = drop.Count;
+                _droppedItems.Remove(drop);
+                drop.TradeSender = null;
+                drop.TradeRecipient = null;
+                drop.TradeEscrowCount = 0;
+                return true;
+            }
+
+            if (IsDropInLocalPlayerPickupRange(drop)) return false;
+
+            int usefulDemand = steve.IsSeekingPersimmonDrop(drop.ItemId)
+                ? drop.Count : steve.GetUsefulShelterDropDemand(this, drop.ItemId);
             int capacity = steve.GetShelterItemCapacity(drop.ItemId);
             int amount = Math.Min(drop.Count, Math.Min(usefulDemand, capacity));
             if (amount <= 0 || !steve.AddShelterItem(drop.ItemId, amount)) return false;
@@ -156,9 +179,32 @@ namespace Cubuild
         /// <paramref name="throwVelocity"/> is given the drop flies that way (thrown items);
         /// otherwise it gets a small random kick.</summary>
         public void SpawnItemDrop(int itemId, int count, Point3D worldPos, Point3D? throwVelocity = null)
+            => SpawnItemDropCore(itemId, count, worldPos, throwVelocity, null, null, 0);
+
+        /// <summary>Creates one bounded physical proxy for an authoritative cooperative trade.
+        /// The sender's inventory is reserved, not debited, until recipient pickup succeeds.</summary>
+        internal bool TrySpawnTradeParcel(SteveMob sender, SteveMob recipient, int itemId,
+            int count, Point3D worldPos, Point3D throwVelocity, out DroppedItem? parcel)
+        {
+            parcel = null;
+            int cap = Math.Min(MaxStackSize, ItemRegistry.StackSizeOf(itemId));
+            if (!IsAuthoritative || sender == null || recipient == null
+                || ReferenceEquals(sender, recipient) || itemId <= 0 || count <= 0
+                || count > cap || recipient.HasIncomingTradeParcel
+                || !sender.TryReserveTradeParcel(itemId, count)) return false;
+
+            SpawnItemDropCore(itemId, count, worldPos, throwVelocity, sender, recipient, count);
+            parcel = _droppedItems[_droppedItems.Count - 1];
+            sender.RegisterTradeParcel(this, parcel);
+            recipient.RegisterIncomingTradeParcel(parcel);
+            return true;
+        }
+
+        private void SpawnItemDropCore(int itemId, int count, Point3D worldPos,
+            Point3D? throwVelocity, SteveMob? sender, SteveMob? recipient, int escrowCount)
         {
             if (itemId <= 0 || count <= 0) return;
-            if (_droppedItems.Count > 256) _droppedItems.RemoveAt(0); // hard cap
+            if (_droppedItems.Count > 256) RemoveDroppedItemAt(0); // hard cap
             var rand = _regenRandom;
             Point3D vel;
             if (throwVelocity.HasValue)
@@ -179,6 +225,9 @@ namespace Cubuild
                 Position = worldPos,
                 Velocity = vel,
                 Age = 0f,
+                TradeSender = sender,
+                TradeRecipient = recipient,
+                TradeEscrowCount = escrowCount,
             };
             // Random tumble: a random axis and a decent spin rate so it reads physical.
             drop.SpinAxisX = (float)(rand.NextDouble() * 2.0 - 1.0);
@@ -197,6 +246,23 @@ namespace Cubuild
             }
             drop.SpinSpeed = 5f + (float)rand.NextDouble() * 6f; // 5..11 rad/s
             _droppedItems.Add(drop);
+        }
+
+        internal void RemoveTradeParcelProxy(DroppedItem drop)
+        {
+            if (drop == null) return;
+            int index = _droppedItems.IndexOf(drop);
+            if (index >= 0) _droppedItems.RemoveAt(index);
+            drop.TradeSender = null;
+            drop.TradeRecipient = null;
+            drop.TradeEscrowCount = 0;
+        }
+
+        private void RemoveDroppedItemAt(int index)
+        {
+            var drop = _droppedItems[index];
+            _droppedItems.RemoveAt(index);
+            if (drop.IsTradeParcel) drop.TradeSender!.CancelTradeParcel(drop);
         }
 
         /// <summary>Adds items to the inventory (e.g. a mined block or collected drop), stacking up to

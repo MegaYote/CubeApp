@@ -18,6 +18,28 @@ namespace Cubuild
         {
             if (!world.IsAuthoritative) return;
 
+            // A removed/dead sender is absent from the live Steve list below, so validate parcel
+            // ownership independently and release its still-owned escrow immediately.
+            for (int i = world.DroppedItems.Count - 1; i >= 0; i--)
+            {
+                var parcel = world.DroppedItems[i];
+                if (!parcel.IsTradeParcel) continue;
+                var sender = parcel.TradeSender;
+                var recipient = parcel.TradeRecipient;
+                bool invalid = sender == null || recipient == null
+                    || !sender.IsCurrentTradeParcel(recipient, parcel.ItemId, parcel.Count)
+                    || !recipient.TryGetCooperativeMaterialNeed(out int neededItem, out int deficit)
+                    || neededItem != parcel.ItemId || deficit < parcel.Count
+                    || recipient.GetShelterItemCapacity(parcel.ItemId) < parcel.Count;
+                if (!invalid) continue;
+                if (sender != null) sender.CancelTradeParcel(parcel);
+                else
+                {
+                    recipient?.ClearIncomingTradeParcel(parcel);
+                    world.RemoveTradeParcelProxy(parcel);
+                }
+            }
+
             _steves.Clear();
             foreach (var renderable in mobs)
                 if (renderable is SteveMob steve && !steve.IsDead && !steve.Removed)
@@ -35,8 +57,19 @@ namespace Cubuild
             // independent of the subsequent new-volunteer decisions.
             foreach (var helper in _steves)
             {
+                if (helper.HasIncomingTradeParcel) continue;
                 if (!helper.HasCooperativeAssignment) continue;
                 var leader = helper.CooperativeLeader;
+                if (helper.HasPriorityMotive)
+                {
+                    if (leader != null && helper.CooperativeAssignmentKind == SteveCooperativeKind.BuildCell)
+                        leader.TryClaimCooperativeCell(helper.CooperativeCellIndex);
+                    else if (leader != null
+                        && helper.CooperativeGatherTargetNeedsClaim)
+                        _gatherTargetClaims.Add((helper.CooperativeTargetX,
+                            helper.CooperativeTargetY, helper.CooperativeTargetZ));
+                    continue;
+                }
                 if (leader == null || !_steves.Contains(leader)
                     || !helper.RefreshCooperativeAssignment(world, LeaveDistance)
                     || (helper.CooperativeAssignmentKind == SteveCooperativeKind.BuildCell
@@ -55,6 +88,7 @@ namespace Cubuild
             // independently so multiple helpers can contribute distinct work.
             foreach (var helper in _steves)
             {
+                if (helper.HasPriorityMotive || helper.HasIncomingTradeParcel) continue;
                 if (helper.HasCooperativeAssignment || helper.CooperativeCooldown > 0f
                     || helper.CooperativeDecisionCooldown > 0f) continue;
                 helper.SetCooperativeDecisionCooldown(DecisionInterval);
@@ -147,7 +181,8 @@ namespace Cubuild
         {
             distance = double.PositiveInfinity;
             stableWillingness = 1.0;
-            if (ReferenceEquals(helper, leader) || leader.IsDead || leader.Removed) return false;
+            if (ReferenceEquals(helper, leader) || leader.IsDead || leader.Removed
+                || leader.HasIncomingTradeParcel) return false;
             double dx = helper.Position.X - leader.Position.X;
             double dy = helper.Position.Y - leader.Position.Y;
             double dz = helper.Position.Z - leader.Position.Z;
@@ -238,6 +273,7 @@ namespace Cubuild
                 || _siteBlocked || _plannerGoal != ShelterGoal.ExploreForBuildSite
                 || _workMode is WorkMode.Build or WorkMode.Gather or WorkMode.ToolUp
                 || _hasGatherTarget || _hasToolGatherTarget || _pickupDropTarget != null
+                || _saplingPlantTaskActive
                 || _projectMaterialItemId <= 0
                 || ShelterInventoryCount(_projectMaterialItemId) <= 0)
                 return false;
@@ -250,7 +286,8 @@ namespace Cubuild
                 && !HasActiveThreat
                 && _plannerGoal == ShelterGoal.ExploreForBuildSite
                 && _workMode is not (WorkMode.Build or WorkMode.Gather or WorkMode.ToolUp)
-                && !_hasGatherTarget && !_hasToolGatherTarget && _pickupDropTarget == null;
+                && !_hasGatherTarget && !_hasToolGatherTarget && _pickupDropTarget == null
+                && !_saplingPlantTaskActive;
         }
 
         internal bool TryGetCooperativeMaterialNeed(out int itemId, out int deficit)
@@ -430,6 +467,29 @@ namespace Cubuild
                 double gatherDz = Position.Z - leader.Position.Z;
                 if (gatherDx * gatherDx + gatherDy * gatherDy + gatherDz * gatherDz
                     > maxDistance * maxDistance) return false;
+                if (_tradeParcelDrop != null)
+                {
+                    bool parcelStillPresent = false;
+                    foreach (var candidate in world.DroppedItems)
+                        if (ReferenceEquals(candidate, _tradeParcelDrop))
+                        {
+                            parcelStillPresent = true;
+                            break;
+                        }
+                    if (parcelStillPresent && _tradeParcelDrop.IsTradeParcel
+                        && ReferenceEquals(_tradeParcelDrop.TradeRecipient, leader)
+                        && _tradeParcelDrop.ItemId == _cooperativeItemId
+                        && leader.TryGetCooperativeMaterialNeed(out int pendingItem, out int pendingDeficit)
+                        && pendingItem == _cooperativeItemId
+                        && pendingDeficit >= _tradeParcelDrop.Count
+                        && leader.GetShelterItemCapacity(_cooperativeItemId) >= _tradeParcelDrop.Count)
+                    {
+                        _taskExecutor.SetPlan();
+                        _taskExecutor.Prepare(this);
+                        return true;
+                    }
+                    CancelTradeParcel();
+                }
                 if (!_cooperativeGatheringComplete)
                 {
                     var target = new GatherTarget(_cooperativeX, _cooperativeY, _cooperativeZ,
@@ -493,6 +553,14 @@ namespace Cubuild
             return true;
         }
 
+        internal bool IsCurrentTradeParcel(SteveMob recipient, int itemId, int count)
+            => !IsDead && !Removed && ReferenceEquals(_cooperativeLeader, recipient)
+                && _cooperativeKind == SteveCooperativeKind.GatherMaterial
+                && _cooperativeGatheringComplete && !_cooperativeTransferComplete
+                && _cooperativeItemId == itemId && _tradeEscrowItemId == itemId
+                && _tradeEscrowCount == count && ReferenceEquals(_tradeParcelDrop?.TradeRecipient, recipient)
+                && recipient.ShelterProjectSeed == _cooperativeProjectSeed;
+
         private const double CooperativeTransferRange = 3.5;
         private const double CooperativeLeaveRange = 20.0;
 
@@ -540,6 +608,7 @@ namespace Cubuild
         internal void LeaveCooperativeWork(float cooldown)
         {
             if (_cooperativeLeader == null) return;
+            CancelTradeParcel();
             _cooperativeLeader = null;
             _cooperativeKind = SteveCooperativeKind.None;
             _cooperativeProjectSeed = 0;
@@ -624,18 +693,18 @@ namespace Cubuild
             if (dx * dx + dy * dy + dz * dz > CooperativeTransferRange * CooperativeTransferRange)
                 return false;
 
-            int carried = ShelterInventoryCount(itemId);
-            int transferCount = Math.Min(deficit,
-                Math.Min(leader.GetShelterItemCapacity(itemId), carried));
-            if (transferCount <= 0 || !ConsumeShelterItem(itemId, transferCount)) return false;
-            if (!leader.AddShelterItem(itemId, transferCount))
-            {
-                // Same-thread capacity checks make this a defensive rollback, not a normal path.
-                AddShelterItem(itemId, transferCount);
-                return false;
-            }
-            _cooperativeTransferComplete = true;
-            return true;
+            int stackCap = Math.Min(GameWorld.MaxStackSize, ItemRegistry.StackSizeOf(itemId));
+            int transferCount = Math.Min(stackCap, Math.Min(deficit,
+                Math.Min(leader.GetShelterItemCapacity(itemId), ShelterInventoryCount(itemId))));
+            if (transferCount <= 0) return false;
+
+            // This single bounded physical stack is a proxy. The saved sender inventory remains
+            // authoritative until the recipient's range/capacity-checked pickup commits it.
+            var dropPosition = new Point3D(leader.Position.X + 0.45,
+                leader.Position.Y + 0.75, leader.Position.Z + 0.45);
+            var toss = new Point3D(0.15, 1.15, 0.15);
+            return world.TrySpawnTradeParcel(this, leader, itemId, transferCount,
+                dropPosition, toss, out _);
         }
 
         private void MarkCooperativeCellPlaced(int projectSeed, int cellIndex)

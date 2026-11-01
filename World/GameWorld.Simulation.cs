@@ -22,13 +22,13 @@ namespace Cubuild
                 d.Age += dt;
                 if (d.Age > ItemDropDespawnTime)
                 {
-                    _droppedItems.RemoveAt(i);
+                    RemoveDroppedItemAt(i);
                     continue;
                 }
 
                 // Magnet phase: flying toward the player. Ignores gravity, homes in fast, and
                 // gets collected on arrival - the classic "item flies to you" pickup.
-                if (d.FlyTime > 0f)
+                if (d.FlyTime > 0f && !d.IsTradeParcel)
                 {
                     d.FlyTime -= dt;
                     double feetX = LocalPlayer.Position.X;
@@ -45,7 +45,7 @@ namespace Cubuild
                         // instead of silently eating it; the drop keeps flying and retries as
                         // slots free up, and despawns normally if the player walks away.
                         int added = CollectItem(d.ItemId, d.Count);
-                        if (added >= d.Count) _droppedItems.RemoveAt(i);
+                        if (added >= d.Count) RemoveDroppedItemAt(i);
                         else if (added > 0) d.Count -= added;
                         continue;
                     }
@@ -58,7 +58,7 @@ namespace Cubuild
 
                 // Pickup trigger: within reach of the player, after the grace period. Instead of
                 // vanishing instantly, the drop starts flying to the player.
-                if (d.Age > ItemDropPickupDelay && !IsCreative)
+                if (d.Age > ItemDropPickupDelay && !IsCreative && !d.IsTradeParcel)
                 {
                     double feetX = LocalPlayer.Position.X;
                     double feetY = LocalPlayer.Position.Y - EyeHeight;
@@ -153,7 +153,7 @@ namespace Cubuild
 
                 else if (d.Position.Y < ChunkManager.GroundOriginY - 10)
                 {
-                    _droppedItems.RemoveAt(i); // fell out of the world
+                    RemoveDroppedItemAt(i); // fell out of the world
                 }
             }
         }

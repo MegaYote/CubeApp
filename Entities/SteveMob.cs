@@ -24,5 +24,9 @@ namespace Cubuild
         protected override bool UsesExternalPathGoal => true;
 
         protected override bool SupportsEmergencyBreakNavigation => true;
+
+        // Match the player's upward impulse so a full one-block step is actually reachable;
+        // the previous mob default peaked just below one block and the clearance probe rejected it.
+        protected override float NavigationStepJumpSpeed => GameWorld.JumpVelocity;
     }
 }

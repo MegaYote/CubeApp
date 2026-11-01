@@ -270,6 +270,10 @@ namespace Cubuild
                     || a.SteveExplorationOriginZ != b.SteveExplorationOriginZ
                     || a.SteveExplorationRing != b.SteveExplorationRing
                     || a.SteveExplorationSector != b.SteveExplorationSector
+                    || a.SteveHasHomeRefuge != b.SteveHasHomeRefuge
+                    || a.SteveHomeRefugeX != b.SteveHomeRefugeX
+                    || a.SteveHomeRefugeY != b.SteveHomeRefugeY
+                    || a.SteveHomeRefugeZ != b.SteveHomeRefugeZ
                     || a.StevePlannerStatePresent != b.StevePlannerStatePresent
                     || a.SteveInventory.Length != b.SteveInventory.Length) return false;
                 for (int slot = 0; slot < a.CargoSlots.Length; slot++)

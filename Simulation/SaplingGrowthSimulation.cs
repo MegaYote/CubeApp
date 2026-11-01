@@ -116,11 +116,15 @@ namespace Cubuild
                 _growthData[key] = (g.startTick, g.attempts + 1, g.startMs);
             }
 
-            // 5-second force grow: ignore light/ground/space, just grow no matter what as requested
+            // Tree growth is conservative: every possible species footprint must be loaded and
+            // clear before any generator writes a block. A blocked sapling waits; it never uses
+            // the former tiny-oak fallback that could overwrite a player/Steve structure.
+            if (!HasConservativeGrowthSpace(x, y, z))
+            {
+                Schedule(x, y, z);
+                return;
+            }
 
-            // Always try to grow - no more 1-in-3 coin flip that made it feel stuck at 100%
-            // Try all tree types in random order until one fits — so a tight spot can still grow a small oak instead of failing on a big tall pick
-            // For 5-second force grow, if nothing fits, just force a tiny oak anyway
             bool grew = false;
             foreach (var treeType in TreeTypes.OrderBy(_ => _rand.Next()))
             {
@@ -132,12 +136,6 @@ namespace Cubuild
             }
             if (!grew)
             {
-                // Force a tiny oak even if blocked — no matter what means no matter what
-                TryForceTinyOak(x, y, z);
-                grew = true;
-            }
-            if (!grew)
-            {
                 Schedule(x, y, z);
             }
             else
@@ -146,6 +144,21 @@ namespace Cubuild
             }
             // If it grew, the sapling block is already replaced by the tree's trunk/leaves
             // and no further scheduling is needed.
+        }
+
+        private bool HasConservativeGrowthSpace(int x, int y, int z)
+        {
+            if (!_manager.TryGetLoadedBlock(x, y - 1, z, out int support)
+                || !BlockRegistry.IsSolid(support) || BlockRegistry.IsGravity(support)
+                || BlockRegistry.IsCross(support)) return false;
+            // The tallest supported species reaches y+12; one extra block and a radius of four
+            // protect against canopy variation. Unknown chunks are not empty space.
+            for (int yy = y + 1; yy <= y + 13; yy++)
+            for (int dx = -4; dx <= 4; dx++)
+            for (int dz = -4; dz <= 4; dz++)
+                if (!_manager.TryGetLoadedBlock(x + dx, yy, z + dz, out int block)
+                    || (block != BlockRegistry.AirId && block != _leavesId)) return false;
+            return true;
         }
 
         private bool IsSkyLit(int x, int y, int z)
@@ -169,7 +182,7 @@ namespace Cubuild
                 {
                     int wx = x + dx, wz = z + dz;
                     if (!_manager.TryGetLoadedBlock(wx, yy, wz, out var b)) continue; // chunk not loaded -> treat as air
-                    if (b != 0 && b != _leavesId) return false;
+                    if (b != 0 && b != _leavesId && !(wx == x && yy == y && b == _saplingId)) return false;
                 }
             }
             return true;
@@ -210,7 +223,7 @@ namespace Cubuild
                 {
                     int wx = x + dx, wz = z + dz;
                     if (!_manager.TryGetLoadedBlock(wx, yy, wz, out var b)) continue;
-                    if (b != 0 && b != _leavesId) return false;
+                    if (b != 0 && b != _leavesId && !(wx == x && yy == y && b == _saplingId)) return false;
                 }
             }
             return true;
@@ -260,7 +273,7 @@ namespace Cubuild
                 {
                     int wx = x + dx, wz = z + dz;
                     if (!_manager.TryGetLoadedBlock(wx, yy, wz, out var b)) continue; // chunk not loaded -> treat as air
-                    if (b != 0 && b != _leavesId) return false; // blocked
+                    if (b != 0 && b != _leavesId && !(wx == x && yy == y && b == _saplingId)) return false; // blocked
                 }
             }
 
@@ -311,7 +324,7 @@ namespace Cubuild
                 {
                     int wx = x + dx, wz = z + dz;
                     if (!_manager.TryGetLoadedBlock(wx, yy, wz, out var b)) continue; // chunk not loaded -> treat as air
-                    if (b != 0 && b != _leavesId) return false;
+                    if (b != 0 && b != _leavesId && !(wx == x && yy == y && b == _saplingId)) return false;
                 }
             }
             if (!_manager.TryGetLoadedBlock(x, y - 1, z, out var ground) || !BlockRegistry.IsSolid(ground)) return false;
@@ -348,7 +361,7 @@ namespace Cubuild
                 {
                     int wx = x + dx, wz = z + dz;
                     if (!_manager.TryGetLoadedBlock(wx, yy, wz, out var b)) continue; // chunk not loaded -> treat as air
-                    if (b != 0 && b != _leavesId) return false;
+                    if (b != 0 && b != _leavesId && !(wx == x && yy == y && b == _saplingId)) return false;
                 }
             }
             if (!_manager.TryGetLoadedBlock(x, y - 1, z, out var ground) || !BlockRegistry.IsSolid(ground)) return false;
@@ -383,7 +396,7 @@ namespace Cubuild
                 {
                     int wx = x + dx, wz = z + dz;
                     if (!_manager.TryGetLoadedBlock(wx, yy, wz, out var b)) continue; // chunk not loaded -> treat as air
-                    if (b != 0 && b != _leavesId) return false;
+                    if (b != 0 && b != _leavesId && !(wx == x && yy == y && b == _saplingId)) return false;
                 }
             }
             if (!_manager.TryGetLoadedBlock(x, y - 1, z, out var ground) || !BlockRegistry.IsSolid(ground)) return false;
@@ -411,7 +424,7 @@ namespace Cubuild
                 {
                     int wx = x + dx, wz = z + dz;
                     if (!_manager.TryGetLoadedBlock(wx, yy, wz, out var b)) continue; // chunk not loaded -> treat as air
-                    if (b != 0 && b != _leavesId) return false;
+                    if (b != 0 && b != _leavesId && !(wx == x && yy == y && b == _saplingId)) return false;
                 }
             }
             if (!_manager.TryGetLoadedBlock(x, y - 1, z, out var ground) || !BlockRegistry.IsSolid(ground)) return false;
@@ -452,7 +465,7 @@ namespace Cubuild
                 {
                     int wx = x + dx, wz = z + dz;
                     if (!_manager.TryGetLoadedBlock(wx, yy, wz, out var b)) continue; // chunk not loaded -> treat as air
-                    if (b != 0 && b != _leavesId) return false;
+                    if (b != 0 && b != _leavesId && !(wx == x && yy == y && b == _saplingId)) return false;
                 }
             }
             if (!_manager.TryGetLoadedBlock(x, y - 1, z, out var ground) || !BlockRegistry.IsSolid(ground)) return false;
@@ -480,24 +493,6 @@ namespace Cubuild
             return true;
         }
 
-        private bool TryForceTinyOak(int x, int y, int z)
-        {
-            // Emergency 5-second oak that just *goes* — no space checks, just plops wood where it can
-            for (int i = 0; i < 4; i++)
-            {
-                _manager.TrySetBlockLoadedOnly(x, y + i, z, _woodId, 0);
-            }
-            int topY = y + 4;
-            for (int dx = -1; dx <= 1; dx++)
-            for (int dz = -1; dz <= 1; dz++)
-            {
-                if (Math.Abs(dx) == 1 && Math.Abs(dz) == 1) continue;
-                _manager.TrySetBlockLoadedOnly(x + dx, topY, z + dz, _leavesId, 0);
-            }
-            _manager.TrySetBlockLoadedOnly(x, topY + 1, z, _leavesId, 0);
-            return true;
-        }
-
         private bool TryGeneratePine(int x, int y, int z, Random rand)
         {
             int trunkHeight = rand.Next(5) + 8; // 8..12
@@ -511,7 +506,7 @@ namespace Cubuild
                 {
                     int wx = x + dx, wz = z + dz;
                     if (!_manager.TryGetLoadedBlock(wx, yy, wz, out var b)) continue; // chunk not loaded -> treat as air
-                    if (b != 0 && b != _leavesId) return false;
+                    if (b != 0 && b != _leavesId && !(wx == x && yy == y && b == _saplingId)) return false;
                 }
             }
             if (!_manager.TryGetLoadedBlock(x, y - 1, z, out var ground) || !BlockRegistry.IsSolid(ground)) return false;

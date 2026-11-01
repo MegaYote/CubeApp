@@ -82,6 +82,7 @@ namespace Cubuild.Renderer
         public float RenderMs;
         public float EntityMs;     // time spent in entity/mob AI updates
         public int EntityCount;    // number of active mobs
+        public string MobDiagnostics;
         public string FacingText;
         public string SelectedBlockText;
         public string RenderDistanceText;
@@ -235,6 +236,7 @@ namespace Cubuild.Renderer
             RenderMs = 0f,
             EntityMs = 0f,
             EntityCount = 0,
+            MobDiagnostics = string.Empty,
             FacingText = string.Empty,
             SelectedBlockText = string.Empty,
             RenderDistanceText = string.Empty,
