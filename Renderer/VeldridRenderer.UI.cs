@@ -1510,6 +1510,7 @@ namespace Cubuild.Renderer
 
         private void DrawCustomBlocksScreen(MenuState m, Vector2 size, ImGuiWindowFlags windowFlags)
         {
+            EnsureIconAtlasesCurrent();
             float winW = Math.Max(280f, Math.Min(600f, size.X - 24f));
             float winH = Math.Max(200f, Math.Min(600f, size.Y - 24f));
             ImGui.SetNextWindowPos(new Vector2((size.X - winW) / 2f, (size.Y - winH) / 2f), ImGuiCond.Always);
@@ -1526,6 +1527,24 @@ namespace Cubuild.Renderer
             for (int i = 0; i < records.Count; i++)
             {
                 ImGui.PushID(i);
+                int blockId = BlockRegistry.StockCount + i;
+                bool hasIcon = blockId >= 0 && blockId < BlockRegistry.Count
+                    && _blockIconUv != null && blockId < _blockIconUv.Length
+                    && _iconImGuiId != IntPtr.Zero;
+                if (hasIcon)
+                {
+                    var uv = _blockIconUv[blockId];
+                    if (ImGui.ImageButton("##customblockicon", _iconImGuiId, new Vector2(48, 48),
+                            new Vector2(uv.X, uv.Y), new Vector2(uv.X + uv.Z, uv.Y + uv.W),
+                            Vector4.Zero, Vector4.One))
+                    {
+                        BeginCustomBlockEdit();
+                        _customBlockBuffersInitialized = false;
+                        m.EditCustomBlockClicked = true;
+                        m.CustomBlockEditIndex = i;
+                    }
+                    ImGui.SameLine();
+                }
                 ImGui.Text($"{i + 1}. {records[i].DisplayName}");
                 ImGui.SameLine();
                 if (ImGui.SmallButton("Edit")) { BeginCustomBlockEdit(); _customBlockBuffersInitialized = false; m.EditCustomBlockClicked = true; m.CustomBlockEditIndex = i; }
