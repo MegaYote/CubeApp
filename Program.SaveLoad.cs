@@ -675,7 +675,40 @@ namespace Cubuild
             RefreshSavedWorlds();
         }
 
-        private static string SavesFolder => System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "saves");
+        private static bool _legacySavesMigrated;
+        private static string SavesFolder
+        {
+            get
+            {
+                string stable = System.IO.Path.Combine(CustomBlockStore.DataDirectory, "saves");
+                if (!_legacySavesMigrated)
+                {
+                    _legacySavesMigrated = true;
+                    var legacyFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    string? processDirectory = System.IO.Path.GetDirectoryName(Environment.ProcessPath);
+                    if (!string.IsNullOrWhiteSpace(processDirectory))
+                        legacyFolders.Add(System.IO.Path.Combine(processDirectory, "saves"));
+                    legacyFolders.Add(System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "saves"));
+                    foreach (string legacy in legacyFolders)
+                    {
+                        if (string.Equals(legacy, stable, StringComparison.OrdinalIgnoreCase)
+                            || !System.IO.Directory.Exists(legacy)) continue;
+                        try
+                        {
+                            System.IO.Directory.CreateDirectory(stable);
+                            foreach (string file in System.IO.Directory.GetFiles(legacy, "*.cubuild"))
+                            {
+                                string destination = System.IO.Path.Combine(stable, System.IO.Path.GetFileName(file));
+                                if (!System.IO.File.Exists(destination))
+                                    System.IO.File.Copy(file, destination, false);
+                            }
+                        }
+                        catch (System.IO.IOException) { }
+                    }
+                }
+                return stable;
+            }
+        }
 
         private static string GetWorldSavePath(string saveName)
             => Path.Combine(SavesFolder, SanitizeFileName(saveName) + ".cubuild");

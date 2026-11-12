@@ -1,6 +1,6 @@
 # Cubuild Playtest Build
 
-Thanks for testing! This is a self-contained Windows x64 build. Extract the zip first, keep the whole folder together, and run **Cubuild.exe**. Do not copy only the executable or run it from inside the zip.
+Thanks for testing! This is a single self-contained Windows x64 executable. Run **Cubuild.exe**; no installer, DLLs, or extra folders are required. On launch it unpacks its bundled runtime/content to a temporary folder automatically.
 
 Windows SmartScreen may warn that the app is unsigned; choose “More info” → “Run anyway” if you trust the sender.
 
@@ -41,10 +41,11 @@ Chat and chat commands are therefore unavailable. Multiplayer and Survival are a
 
 ## Where data is stored
 
-- World saves: the `saves` folder next to `Cubuild.exe`.
+- World saves: `%LOCALAPPDATA%\Cubuild\saves`
+  Existing worlds from an older build's `saves` folder are copied there automatically on first run.
 - Custom block definitions and textures:
   `%LOCALAPPDATA%\Cubuild\CustomContent\custom_blocks.json`
-- Error logs: `app_error.log` and `save_error.log` next to the executable or current working directory.
+- Error logs: `app_error.log` and `save_error.log` next to the executable or in the current working directory.
 
 World saves use the v24 format. Loading a world automatically imports any custom blocks embedded in that save that are not installed yet. Share a world by sending its `.cubuild` file; the custom block definitions travel inside it.
 

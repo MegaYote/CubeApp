@@ -10,10 +10,14 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- Self-contained with all DLLs and native libraries -->
     <SelfContained>true</SelfContained>
-    <PublishSingleFile>false</PublishSingleFile>
+    <PublishSingleFile>true</PublishSingleFile>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <!-- Include native libraries -->
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Bundle content files (mob models/textures) into the executable and extract them at
+         runtime, so the public download is a single exe. -->
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <!-- Copy content files to output for runtime loading -->
     <CopyOutputDirectoryItemsToPublishDirectoryStyle>PreserveNewest</CopyOutputDirectoryItemsToPublishDirectoryStyle>
   </PropertyGroup>

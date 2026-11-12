@@ -76,6 +76,9 @@ namespace Cubuild
             get
             {
                 string path = Path.Combine(DataDirectory, "CustomContent", "custom_blocks.json");
+                string? processDirectory = Path.GetDirectoryName(Environment.ProcessPath);
+                if (!string.IsNullOrWhiteSpace(processDirectory))
+                    MigrateFileIfMissing(Path.Combine(processDirectory, "CustomContent", "custom_blocks.json"), path);
                 MigrateFileIfMissing(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "CustomContent", "custom_blocks.json"), path);
                 return path;
             }
