@@ -1114,6 +1114,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             LoadPlayerResources();
             LoadMobResources();
             CreatePipeline();
+            RefreshMobTextureSets();
             CreateCullComputePipeline();
 
             // Resolution scale: create the offscreen target only when the player lowers the scale
@@ -1271,6 +1272,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             _playerTexture?.Dispose();
             foreach (var kvp in _modelMobs)
             {
+                kvp.Value.TextureSet?.Dispose();
                 kvp.Value.Model?.Dispose();
                 kvp.Value.VertexBuffer?.Dispose();
                 kvp.Value.IndexBuffer?.Dispose();

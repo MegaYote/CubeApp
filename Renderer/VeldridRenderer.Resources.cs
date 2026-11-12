@@ -350,7 +350,7 @@ namespace Cubuild.Renderer
                     _modelMobs[key] = new MobModelEntry
                     {
                         Model = model,
-                        TextureSet = model.TextureSet,
+                        TextureSet = null, // built after the pipeline's 4-slot texture layout exists
                     };
                 }
                 catch
@@ -423,6 +423,28 @@ namespace Cubuild.Renderer
             if (_textureLayout != null && _playerView != null && _playerSampler != null && _atlasSampler != null)
                 _playerTextureSet = _gd.ResourceFactory.CreateResourceSet(new ResourceSetDescription(
                     _textureLayout, _playerView, _playerSampler, _customAtlasView, _atlasSampler));
+            RefreshMobTextureSets();
+        }
+
+        /// <summary>
+        /// Mob models have their own texture view/sampler. They must be bound with the renderer's
+        /// four-slot texture layout (stock atlas + custom atlas), not MobModel's private two-slot
+        /// layout, or every mob draw throws a ResourceSet/pipeline mismatch. Rebuild their sets
+        /// after the pipeline layout exists and whenever the custom atlas is recreated.
+        /// </summary>
+        private void RefreshMobTextureSets()
+        {
+            if (_gd == null || _textureLayout == null || _customAtlasView == null || _atlasSampler == null) return;
+            foreach (var entry in _modelMobs.Values)
+            {
+                entry.TextureSet?.Dispose();
+                entry.TextureSet = null;
+                TextureView? view = entry.Model?.TextureView;
+                Sampler? sampler = entry.Model?.TextureSampler;
+                if (view == null || sampler == null) continue;
+                entry.TextureSet = _gd.ResourceFactory.CreateResourceSet(new ResourceSetDescription(
+                    _textureLayout, view, sampler, _customAtlasView, _atlasSampler));
+            }
         }
 
         /// <summary>

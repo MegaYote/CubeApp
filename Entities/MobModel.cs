@@ -1320,6 +1320,7 @@ namespace Cubuild
         }
 
         public TextureView? TextureView => _textureView;
+        public Sampler? TextureSampler => _sampler;
 
         public ResourceSet? TextureSet =>
             _textureView != null && _sampler != null
