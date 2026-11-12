@@ -1510,7 +1510,6 @@ namespace Cubuild.Renderer
 
         private void DrawCustomBlocksScreen(MenuState m, Vector2 size, ImGuiWindowFlags windowFlags)
         {
-            EnsureIconAtlasesCurrent();
             float winW = Math.Max(280f, Math.Min(600f, size.X - 24f));
             float winH = Math.Max(200f, Math.Min(600f, size.Y - 24f));
             ImGui.SetNextWindowPos(new Vector2((size.X - winW) / 2f, (size.Y - winH) / 2f), ImGuiCond.Always);
