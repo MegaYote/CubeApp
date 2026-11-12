@@ -48,6 +48,21 @@ namespace Cubuild.Renderer
             return "Stone & Dirt";
         }
 
+        // Hide a few entries from the creative palette only. The items/blocks still exist,
+        // can load from saves, and remain usable by worlds that already contain them.
+        private static bool IsCreativeHiddenBlock(int id)
+            => string.Equals(BlockRegistry.GetById(id).Id, "ceramic", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsCreativeHiddenItem(int id)
+        {
+            var item = ItemRegistry.Get(id);
+            string itemId = item.Id ?? "";
+            if (string.Equals(itemId, "boat", StringComparison.OrdinalIgnoreCase)) return true;
+            if (itemId.Contains("spear", StringComparison.OrdinalIgnoreCase)) return true;
+            string tool = (item.ToolType ?? "").Trim().ToLowerInvariant();
+            return tool is "pickaxe" or "shovel" or "axe";
+        }
+
         private void DrawInventoryWindow(Vector2 displaySize)
         {
             if (_iconImGuiId == IntPtr.Zero || _blockIconUv == null) return;
@@ -210,7 +225,7 @@ namespace Cubuild.Renderer
                 // together instead of being scattered through declaration order.
                 var blockIds = new List<int>();
                 for (int id = 1; id < BlockRegistry.Count; id++)
-                    if (BlockRegistry.IsInInventory(id)) blockIds.Add(id);
+                    if (BlockRegistry.IsInInventory(id) && !IsCreativeHiddenBlock(id)) blockIds.Add(id);
                 blockIds.Sort((a, b) =>
                 {
                     int ra = CategoryRank(PaletteCategory(a)), rb = CategoryRank(PaletteCategory(b));
@@ -257,6 +272,7 @@ namespace Cubuild.Renderer
                 for (int id = ItemRegistry.ItemIdBase; id < ItemRegistry.Count; id++)
                 {
                     if (!ItemRegistry.IsInInventory(id)) continue;
+                    if (IsCreativeHiddenItem(id)) continue;
                     var uv = IconUv(id, out IntPtr iconTex);
                     if (iconTex == IntPtr.Zero) continue;
                     // Same real-width wrap as the block loop above.
@@ -1099,11 +1115,13 @@ namespace Cubuild.Renderer
                     _menuBuffersInitialized = false;
                 }
                 ImGui.Dummy(new Vector2(0, 18));
+                ImGui.BeginDisabled();
                 if (ImGui.Button("Multiplayer", new Vector2(200, 34)))
                 {
                     m.Screen = GameScreen.Multiplayer;
                     _menuBuffersInitialized = false;
                 }
+                ImGui.EndDisabled();
                 ImGui.Dummy(new Vector2(0, 18));
                 if (ImGui.Button("Custom Blocks", new Vector2(200, 34)))
                 {
@@ -1133,6 +1151,9 @@ namespace Cubuild.Renderer
             }
             else if (m.Screen == GameScreen.CreateWorld)
             {
+                // Survival is disabled for now; keep the selector on Creative so a stale saved
+                // state can't reopen the screen with Survival highlighted.
+                m.SelectedMode = GameMode.Creative;
                 ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 150f, size.Y / 2f - 135f), ImGuiCond.Always);
                 ImGui.SetNextWindowSize(new Vector2(300, 270), ImGuiCond.Always);
                 ImGui.Begin("##createworld", windowFlags);
@@ -1155,10 +1176,12 @@ namespace Cubuild.Renderer
                     m.SelectedMode = GameMode.Creative;
                 }
                 ImGui.SameLine();
+                ImGui.BeginDisabled();
                 if (ImGui.RadioButton("Survival (UNFINISHED)", m.SelectedMode == GameMode.Survival))
                 {
                     m.SelectedMode = GameMode.Survival;
                 }
+                ImGui.EndDisabled();
                 ImGui.Spacing();
                 if (ImGui.Button("Create World", new Vector2(220, 34)))
                 {

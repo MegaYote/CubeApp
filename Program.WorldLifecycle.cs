@@ -470,7 +470,9 @@ namespace Cubuild
                 // the heavy world construction to UpdateLoading (next call in this frame).
                 _pendingSeed = ParseSeed(menu.SeedInput);
                 _pendingName = menu.WorldName;
-                _pendingMode = menu.SelectedMode;
+                // Survival is currently disabled in the menu; never create one from the
+                // Create World screen even if an old menu state still says Survival.
+                _pendingMode = GameMode.Creative;
                 // With the pack picker removed, Survival is always Minecraft/Classic while
                 // Creative keeps the default Complex pack.
                 _pendingIsMinecraftMode = _pendingMode == GameMode.Survival;
