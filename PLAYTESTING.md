@@ -41,8 +41,9 @@ Chat and chat commands are therefore unavailable. Multiplayer and Survival are a
 
 ## Where data is stored
 
-- World saves: `%LOCALAPPDATA%\Cubuild\saves`
-  Existing worlds from an older build's `saves` folder are copied there automatically on first run.
+- World saves: `%LOCALAPPDATA%\Cubuild\saves`.
+  To bring an older world over, put its `saves` folder next to `Cubuild.exe` before first launch, or copy the `.cubuild` file into `%LOCALAPPDATA%\Cubuild\saves` directly.
+  Replacing `Cubuild.exe` with a newer build keeps both saves and custom blocks.
 - Custom block definitions and textures:
   `%LOCALAPPDATA%\Cubuild\CustomContent\custom_blocks.json`
 - Error logs: `app_error.log` and `save_error.log` next to the executable or in the current working directory.
