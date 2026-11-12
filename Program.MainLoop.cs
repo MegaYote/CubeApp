@@ -61,11 +61,6 @@ namespace Cubuild
                 throw new Exception("No supported graphics backend found on this system");
             }
 
-            if (window != null)
-            {
-                window.Title = selectedBackend.ToString();
-                baseTitle = window.Title;
-            }
             graphicsDevice = gd;
             InitializeGpuRenderer(graphicsDevice, graphicsDevice.MainSwapchain);
             RunMainLoop();
@@ -307,8 +302,7 @@ namespace Cubuild
                     lastRenderMs = (t5 - t4) * 1000f / Stopwatch.Frequency;
                     if (window != null)
                     {
-                        string rd = $"Render: {RenderDistanceName} ({ChunkRenderRadius})";
-                        window.Title = showFps ? $"{baseTitle} - FPS: {lastFps:0.0} - {rd}" : $"{baseTitle} - {rd}";
+                        window.Title = baseTitle;
                     }
                 }
                 catch (Exception ex)
