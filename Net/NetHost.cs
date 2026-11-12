@@ -21,7 +21,7 @@ namespace Cubuild.Net
     /// </summary>
     public sealed class NetHost : IDisposable
     {
-        public const int ProtocolVersion = 5;
+        public const int ProtocolVersion = 8;
         public const int DefaultPort = 26065;
 
         private readonly GameWorld _world;
@@ -175,6 +175,21 @@ namespace Cubuild.Net
                 }
                 hr.TryReadString(out conn.Name);
                 if (string.IsNullOrEmpty(conn.Name)) conn.Name = $"Player{conn.Id}";
+                bool gotMode = hr.TryReadByte(out byte clientModeByte);
+                bool gotCount = hr.TryReadInt(out int clientCustomCount);
+                bool gotSignature = hr.TryReadString(out string clientCustomSignature);
+                if (!gotMode || !gotCount || !gotSignature
+                    || (clientModeByte != 0) != BlockRegistry.IsMinecraftMode
+                    || clientCustomCount != CustomBlockStore.Records.Count
+                    || !string.Equals(clientCustomSignature, CustomBlockStore.Signature, StringComparison.Ordinal))
+                {
+                    const string reason = "Block catalog mismatch: both players must use the same stock pack and exact custom block catalog.";
+                    Log?.Invoke($"Client {conn.Id} {reason}; dropping.");
+                    var error = new NetWriter();
+                    error.WriteString(reason);
+                    try { await conn.Stream.WriteAsync(error.ToFrame(NetMsgType.ProtocolError), _cts.Token); } catch { }
+                    return;
+                }
 
                 // Create the host-side sim state for this client, placed at a spawn point.
                 var state = _world.AddRemotePlayer(conn.Id);

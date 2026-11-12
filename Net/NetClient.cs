@@ -164,6 +164,9 @@ namespace Cubuild.Net
             var hello = new NetWriter();
             hello.WriteInt(ProtocolVersion);
             hello.WriteString(playerName);
+            hello.WriteBool(BlockRegistry.IsMinecraftMode);
+            hello.WriteInt(CustomBlockStore.Records.Count);
+            hello.WriteString(CustomBlockStore.Signature);
             try { _stream.Write(hello.ToFrame(NetMsgType.Hello)); }
             catch (Exception ex) { Log?.Invoke($"Hello failed: {ex.Message}"); return false; }
 

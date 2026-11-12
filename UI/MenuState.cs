@@ -1,5 +1,6 @@
 namespace Cubuild
 {
+    using System.Numerics;
     using System.Collections.Generic;
     // Which top-level screen the game is showing. The title/create/pause screens are rendered by
     // the ImGui overlay; the world sim only runs while Playing.
@@ -14,6 +15,8 @@ namespace Cubuild
         Paused,
         Dead,
         Settings,
+        CustomBlocks,
+        CustomBlockEditor,
     }
 
     /// <summary>Which frustum-culling path the renderer uses. Auto resolves by GPU vendor
@@ -40,6 +43,9 @@ namespace Cubuild
         public GameMode SelectedMode = GameMode.Creative;
 
         public bool CreateWorldClicked;
+        public bool CreateCustomBlockClicked;
+        public bool EditCustomBlockClicked;
+        public int CustomBlockEditIndex = -1;
         public bool ResumeClicked;
         public bool QuitToTitleClicked;
         public bool QuitClicked;
@@ -49,6 +55,28 @@ namespace Cubuild
         public int SelectedWorldIndex = -1;
         /// <summary>Display names of saved worlds (from the saves folder), for the title list.</summary>
         public List<string> SavedWorlds = new();
+        public string CustomBlockId = "";
+        public string CustomBlockDisplayName = "";
+        public byte[] CustomBlockPixels = CreateDefaultCustomPixels();
+        public byte[][] CustomBlockFacePixels = CreateDefaultCustomFaces();
+        public int CustomBlockSelectedFace;
+        public float CustomBlockPreviewYaw = 0.65f;
+        public float CustomBlockPreviewPitch = -0.35f;
+        public int CustomBlockPaletteIndex;
+        public int CustomBlockTool;
+        public float CustomBlockZoom = 16f;
+        public Vector4 CustomBlockBrushColor = new(0.3f, 0.58f, 0.88f, 1f);
+        public bool CustomBlockSolid = true;
+        public bool CustomBlockOpaque = true;
+        public bool CustomBlockGravity;
+        public int CustomBlockLightEmission;
+        public bool CustomBlockInventory = true;
+        public bool CustomBlockPlaceable = true;
+        public float CustomBlockHardness = 1f;
+        public bool CustomBlockAutoMapColor = true;
+        public uint CustomBlockMapColor = 0xFFAAAAAA;
+        public string CustomBlockError = "";
+        public string CustomBlockNotice = "";
 
         // ---- world select screen (rename / delete) ----
         public bool DeleteWorldClicked;
@@ -106,6 +134,8 @@ namespace Cubuild
         public void ResetFlags()
         {
             CreateWorldClicked = false;
+            CreateCustomBlockClicked = false;
+            EditCustomBlockClicked = false;
             ResumeClicked = false;
             QuitToTitleClicked = false;
             QuitClicked = false;
@@ -123,6 +153,26 @@ namespace Cubuild
             MouseSensitivityChanged = false;
             ResolutionScaleChanged = false;
             PixelFilterChanged = false;
+        }
+
+        private static byte[] CreateDefaultCustomPixels()
+        {
+            var pixels = new byte[CustomBlockStore.PixelBytes];
+            for (int i = 0; i < 256; i++)
+            {
+                pixels[i * 4] = 120;
+                pixels[i * 4 + 1] = 170;
+                pixels[i * 4 + 2] = 220;
+                pixels[i * 4 + 3] = 255;
+            }
+            return pixels;
+        }
+
+        private static byte[][] CreateDefaultCustomFaces()
+        {
+            var faces = new byte[CustomBlockStore.FaceCount][];
+            for (int face = 0; face < faces.Length; face++) faces[face] = CreateDefaultCustomPixels();
+            return faces;
         }
     }
 }

@@ -335,7 +335,7 @@ namespace Cubuild.Renderer
                 uint pack3 = shadeByte | (255u << 8)
                     | ((uint)(_miningSkyLightLevel & 0xF) << 19)
                     | ((uint)(_miningBlockLightLevel & 0xF) << 23)
-                    | (cloudFaceDirection << 27); // opaque + lights + exposed-face direction
+                    | (cloudFaceDirection << 27) | ((uint)(def.FaceAtlasPage(faceNormals[face]) & 3) << 30); // opaque + lights + atlas page
 
                 var src = faces[face];
                 // UVs from the SAME axis projection the world mesher uses (TryGetCubuildFaceAxes
@@ -425,7 +425,7 @@ namespace Cubuild.Renderer
                     uint pack3 = shadeByte | (255u << 8)
                         | ((uint)(_miningSkyLightLevel & 0xF) << 19)
                         | ((uint)(_miningBlockLightLevel & 0xF) << 23)
-                        | (cloudFaceDirection << 27); // opaque + lights + exposed-face direction
+                        | (cloudFaceDirection << 27) | ((uint)(ndef.FaceAtlasPage(faceNormals[nFace]) & 3) << 30); // opaque + lights + atlas page
 
                     var src = faces[nFace];
                     // Same axis-projection UV baking as the cube + world mesher: the wall is the

@@ -178,7 +178,9 @@ namespace Cubuild
 
         public Program()
         {
+            CustomBlockStore.Load();
             BlockRegistry.LoadDefault();
+            BlockRegistry.AppendCustomBlocks(CustomBlockStore.Records);
             ItemRegistry.LoadDefault(); // seeds blocks as items + loads items.json
             RecipeRegistry.LoadDefault();
             BiomeRegistry.LoadDefault();
@@ -196,6 +198,7 @@ namespace Cubuild
             if (BlockRegistry.IsMinecraftMode != isMinecraftMode || !BlockRegistry.Loaded)
             {
                 BlockRegistry.LoadFromFolder(folder);
+                BlockRegistry.AppendCustomBlocks(CustomBlockStore.Records);
                 ItemRegistry.LoadFromFolder(folder);
                 RecipeRegistry.LoadFromFolder(folder, useFrontierProgression);
             }
@@ -209,6 +212,24 @@ namespace Cubuild
                 || !RecipeRegistry.Loaded)
             {
                 RecipeRegistry.LoadFromFolder(folder, useFrontierProgression);
+            }
+        }
+
+        private void ReloadCurrentCatalogWithCustomBlocks()
+        {
+            string folder = BlockRegistry.IsMinecraftMode ? "Assets/Data/Minecraft" : "Assets/Data";
+            bool mode = BlockRegistry.IsMinecraftMode;
+            bool frontier = RecipeRegistry.IsFrontierProgression;
+            BlockRegistry.LoadFromFolder(folder);
+            BlockRegistry.AppendCustomBlocks(CustomBlockStore.Records);
+            ItemRegistry.LoadFromFolder(folder);
+            RecipeRegistry.LoadFromFolder(folder, mode && frontier);
+            (gpuRenderer as VeldridRenderer)?.EnsureIconAtlasesCurrent();
+            if (World != null)
+            {
+                foreach (var chunk in World.Chunks.GetLoadedChunks()) chunk.NeedsRemesh = true;
+                needsMeshUpdate = true;
+                _forceChunkStream = true;
             }
         }
 

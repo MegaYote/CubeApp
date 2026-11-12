@@ -403,7 +403,67 @@ namespace Cubuild
             }
             _settingsWasOpen = menu.Screen == GameScreen.Settings;
 
-            if (menu.CreateWorldClicked)
+            if (menu.EditCustomBlockClicked)
+            {
+                var records = CustomBlockStore.Records;
+                int index = menu.CustomBlockEditIndex;
+                if ((uint)index < (uint)records.Count)
+                {
+                    var record = records[index];
+                    menu.CustomBlockId = record.Id;
+                    menu.CustomBlockDisplayName = record.DisplayName;
+                    menu.CustomBlockFacePixels = record.Faces.Select(face => (byte[])face.Clone()).ToArray();
+                    menu.CustomBlockSelectedFace = 0;
+                    menu.CustomBlockPixels = menu.CustomBlockFacePixels[menu.CustomBlockSelectedFace];
+                    menu.CustomBlockSolid = record.Solid;
+                    menu.CustomBlockOpaque = CustomBlockStore.EffectiveOpaque(record);
+                    menu.CustomBlockGravity = record.Gravity;
+                    menu.CustomBlockLightEmission = record.LightEmission;
+                    menu.CustomBlockInventory = record.Inventory;
+                    menu.CustomBlockPlaceable = record.Placeable;
+                    menu.CustomBlockHardness = record.Hardness;
+                    menu.CustomBlockAutoMapColor = !record.MapColorOverride.HasValue;
+                    menu.CustomBlockMapColor = record.MapColorOverride ?? 0xFFAAAAAA;
+                    menu.CustomBlockError = "";
+                    menu.CustomBlockBrushColor = new System.Numerics.Vector4(1f, 1f, 1f, 1f);
+                    menu.CustomBlockTool = 0;
+                    menu.Screen = GameScreen.CustomBlockEditor;
+                }
+            }
+            else if (menu.CreateCustomBlockClicked)
+            {
+                try
+                {
+                    var record = new CustomBlockRecord
+                    {
+                        Id = menu.CustomBlockId.Trim(), DisplayName = menu.CustomBlockDisplayName.Trim(),
+                        Pixels = menu.CustomBlockEditIndex >= 0
+                            ? (byte[])CustomBlockStore.Records[menu.CustomBlockEditIndex].Pixels.Clone()
+                            : (byte[])menu.CustomBlockFacePixels[0].Clone(),
+                        Faces = menu.CustomBlockFacePixels.Select(face => (byte[])face.Clone()).ToArray(),
+                        Solid = menu.CustomBlockSolid,
+                        Opaque = menu.CustomBlockOpaque, Gravity = menu.CustomBlockGravity,
+                        LightEmission = menu.CustomBlockLightEmission, Inventory = menu.CustomBlockInventory,
+                        Placeable = menu.CustomBlockPlaceable, Hardness = menu.CustomBlockHardness,
+                        MapColorOverride = menu.CustomBlockAutoMapColor ? null : menu.CustomBlockMapColor,
+                    };
+                    bool editing = menu.CustomBlockEditIndex >= 0;
+                    if (editing) CustomBlockStore.Update(menu.CustomBlockEditIndex, record);
+                    else CustomBlockStore.Create(record);
+                    ReloadCurrentCatalogWithCustomBlocks();
+                    menu.CustomBlockError = "";
+                    menu.CustomBlockNotice = editing
+                        ? $"Updated '{menu.CustomBlockDisplayName.Trim()}'. Its block ID and position are unchanged."
+                        : $"Created '{menu.CustomBlockDisplayName.Trim()}'. It is now available in inventory.";
+                    menu.CustomBlockEditIndex = -1;
+                    menu.Screen = GameScreen.CustomBlocks;
+                }
+                catch (Exception ex)
+                {
+                    menu.CustomBlockError = ex.Message;
+                }
+            }
+            else if (menu.CreateWorldClicked)
             {
                 menu.WorldLoadError = "";
                 // Show the loading screen immediately so the player sees feedback, then defer

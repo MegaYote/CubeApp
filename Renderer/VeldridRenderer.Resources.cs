@@ -373,6 +373,7 @@ namespace Cubuild.Renderer
         public void EnsureIconAtlasesCurrent()
         {
             if (_gd == null || _imguiRenderer == null) return;
+            if (_customAtlasGeneration != CustomBlockStore.Generation) RebuildCustomAtlasTexture();
             int blockGen = BlockRegistry.LoadGeneration;
             int itemGen = ItemRegistry.LoadGeneration;
             if (blockGen == _iconAtlasBlockGeneration && itemGen == _iconAtlasItemGeneration) return;
@@ -382,6 +383,46 @@ namespace Cubuild.Renderer
             BuildItemIconAtlas();
             _iconAtlasBlockGeneration = blockGen;
             _iconAtlasItemGeneration = itemGen;
+        }
+
+        private void RebuildCustomAtlasTexture()
+        {
+            if (_gd == null) return;
+            _customAtlasRgba = CustomBlockStore.BuildAtlasRgba();
+            byte[] blockAtlasRgba = BlockAtlasComposer.Compose(
+                _atlasRgba, _atlasPixelsW, _atlasPixelsH, _customAtlasRgba);
+            _textureSet?.Dispose(); _textureSet = null;
+            _itemsTextureSet?.Dispose(); _itemsTextureSet = null;
+            _duckTextureSet?.Dispose(); _duckTextureSet = null;
+            _playerTextureSet?.Dispose(); _playerTextureSet = null;
+            _customAtlasView?.Dispose(); _customAtlasTexture?.Dispose();
+            _blockAtlasView?.Dispose(); _blockAtlasTexture?.Dispose();
+            _customAtlasTexture = _gd.ResourceFactory.CreateTexture(TextureDescription.Texture2D(
+                768, 256, 1, 1, PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled));
+            _gd.UpdateTexture(_customAtlasTexture, _customAtlasRgba, 0, 0, 0, 768, 256, 1, 0, 0);
+            _customAtlasView = _gd.ResourceFactory.CreateTextureView(_customAtlasTexture);
+            _blockAtlasTexture = _gd.ResourceFactory.CreateTexture(TextureDescription.Texture2D(
+                BlockAtlasComposer.RuntimeAtlasWidth, BlockAtlasComposer.RuntimeAtlasHeight, 1, 1,
+                PixelFormat.R8_G8_B8_A8_UNorm, TextureUsage.Sampled));
+            _gd.UpdateTexture(_blockAtlasTexture, blockAtlasRgba, 0, 0, 0,
+                BlockAtlasComposer.RuntimeAtlasWidth, BlockAtlasComposer.RuntimeAtlasHeight, 1, 0, 0);
+            _blockAtlasView = _gd.ResourceFactory.CreateTextureView(_blockAtlasTexture);
+            _customAtlasGeneration = CustomBlockStore.Generation;
+            System.Diagnostics.Debug.WriteLine(
+                $"[Atlas] Built {BlockAtlasComposer.RuntimeAtlasWidth}x{BlockAtlasComposer.RuntimeAtlasHeight} block atlas " +
+                $"(stock {_atlasPixelsW}x{_atlasPixelsH}, {CustomBlockStore.Records.Count} custom blocks, generation {_customAtlasGeneration}).");
+            if (_textureLayout != null && _blockAtlasView != null && _atlasSampler != null)
+                _textureSet = _gd.ResourceFactory.CreateResourceSet(new ResourceSetDescription(
+                    _textureLayout, _blockAtlasView, _atlasSampler, _blockAtlasView, _atlasSampler));
+            if (_textureLayout != null && _itemsAtlasView != null && _atlasSampler != null)
+                _itemsTextureSet = _gd.ResourceFactory.CreateResourceSet(new ResourceSetDescription(
+                    _textureLayout, _itemsAtlasView, _atlasSampler, _customAtlasView, _atlasSampler));
+            if (_textureLayout != null && _duckView != null && _duckSampler != null && _atlasSampler != null)
+                _duckTextureSet = _gd.ResourceFactory.CreateResourceSet(new ResourceSetDescription(
+                    _textureLayout, _duckView, _duckSampler, _customAtlasView, _atlasSampler));
+            if (_textureLayout != null && _playerView != null && _playerSampler != null && _atlasSampler != null)
+                _playerTextureSet = _gd.ResourceFactory.CreateResourceSet(new ResourceSetDescription(
+                    _textureLayout, _playerView, _playerSampler, _customAtlasView, _atlasSampler));
         }
 
         /// <summary>
@@ -821,17 +862,19 @@ namespace Cubuild.Renderer
             float shade = FaceIconShade(f.Normal);
             // Cutout = per-pixel sprite alpha (cross plants, glass, and translucent colored glass
             // sentinel -200) so the icon shows the PNG's real transparency.
-            bool cutout = f.Alpha < 0f;
+            bool cutout = f.Alpha < 0f || f.AtlasPage != 0;
             bool transparent = !cutout && f.Alpha < 1f; // water etc.
+            byte[] pixels = f.CustomAtlas ? _customAtlasRgba : _atlasRgba;
+            int sourceAtlasW = f.CustomAtlas ? 768 : _atlasPixelsW;
             int spanU = Math.Max(1, f.TileWidth);
             int spanV = Math.Max(1, f.TileHeight);
             int tileW = Math.Max(1, f.SrcRect.Width);
             int tileH = Math.Max(1, f.SrcRect.Height);
 
             RasterizeTriangle(dst, cellDi, atlasW, proj[0], proj[1], proj[2], verts[0], verts[1], verts[2],
-                hasAxes, uAxis, vAxis, minU, maxU, minV, maxV, spanU, spanV, tileW, tileH, f.SrcRect, shade, cutout, transparent);
+                hasAxes, uAxis, vAxis, minU, maxU, minV, maxV, spanU, spanV, tileW, tileH, f.SrcRect, shade, cutout, transparent, pixels, sourceAtlasW, f.AtlasPage);
             RasterizeTriangle(dst, cellDi, atlasW, proj[0], proj[2], proj[3], verts[0], verts[2], verts[3],
-                hasAxes, uAxis, vAxis, minU, maxU, minV, maxV, spanU, spanV, tileW, tileH, f.SrcRect, shade, cutout, transparent);
+                hasAxes, uAxis, vAxis, minU, maxU, minV, maxV, spanU, spanV, tileW, tileH, f.SrcRect, shade, cutout, transparent, pixels, sourceAtlasW, f.AtlasPage);
         }
 
         private void RasterizeTriangle(byte[] dst, int cellDi, int atlasW,
@@ -840,7 +883,7 @@ namespace Cubuild.Renderer
             bool hasAxes, Point3D uAxis, Point3D vAxis,
             double minU, double maxU, double minV, double maxV,
             int spanU, int spanV,
-            int tileW, int tileH, TextureRect tile, float shade, bool cutout, bool transparent)
+            int tileW, int tileH, TextureRect tile, float shade, bool cutout, bool transparent, byte[] sourcePixels, int sourceAtlasW, int atlasPage)
         {
             float minX = Math.Min(Math.Min(p0.X, p1.X), p2.X);
             float maxX = Math.Max(Math.Max(p0.X, p1.X), p2.X);
@@ -909,15 +952,16 @@ namespace Cubuild.Renderer
 
                     int tx = tile.X + (int)(du * (tileW - 0.001f));
                     int ty = tile.Y + (int)(dv * (tileH - 0.001f));
-                    int si = (ty * _atlasPixelsW + tx) * 4;
+                    int pageOffset = atlasPage > 0 ? (atlasPage - 1) * 256 : 0;
+                    int si = (ty * sourceAtlasW + pageOffset + tx) * 4;
                     int di = cellDi + (py * atlasW + px) * 4;
-                    int alpha = _atlasRgba[si + 3];
+                    int alpha = sourcePixels[si + 3];
                     if (cutout && alpha < 128) continue; // sprite background falls away
 
                     int a = transparent ? 255 : (cutout ? alpha : 255);
-                    dst[di + 0] = (byte)(_atlasRgba[si + 0] * shade);
-                    dst[di + 1] = (byte)(_atlasRgba[si + 1] * shade);
-                    dst[di + 2] = (byte)(_atlasRgba[si + 2] * shade);
+                    dst[di + 0] = (byte)(sourcePixels[si + 0] * shade);
+                    dst[di + 1] = (byte)(sourcePixels[si + 1] * shade);
+                    dst[di + 2] = (byte)(sourcePixels[si + 2] * shade);
                     dst[di + 3] = (byte)a;
                 }
             }

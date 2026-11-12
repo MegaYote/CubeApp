@@ -1091,7 +1091,7 @@ namespace Cubuild.Renderer
 
                 // Buttons hang lower, in the classic vertical column.
                 ImGui.SetNextWindowPos(new Vector2((size.X - 220f) / 2f, size.Y / 4f + 72f), ImGuiCond.Always);
-                ImGui.SetNextWindowSize(new Vector2(220, 250), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(220, 292), ImGuiCond.Always);
                 ImGui.Begin("##title", windowFlags);
                 if (ImGui.Button("Singleplayer", new Vector2(200, 34)))
                 {
@@ -1105,6 +1105,12 @@ namespace Cubuild.Renderer
                     _menuBuffersInitialized = false;
                 }
                 ImGui.Dummy(new Vector2(0, 18));
+                if (ImGui.Button("Custom Blocks", new Vector2(200, 34)))
+                {
+                    m.CustomBlockError = "";
+                    m.Screen = GameScreen.CustomBlocks;
+                }
+                ImGui.Dummy(new Vector2(0, 18));
                 if (ImGui.Button("Settings", new Vector2(200, 34)))
                 {
                     m.Screen = GameScreen.Settings;
@@ -1116,6 +1122,14 @@ namespace Cubuild.Renderer
                 ImGui.Dummy(new Vector2(0, 18));
                 if (ImGui.Button("Quit", new Vector2(200, 34))) m.QuitClicked = true;
                 ImGui.End();
+            }
+            else if (m.Screen == GameScreen.CustomBlocks)
+            {
+                DrawCustomBlocksScreen(m, size, windowFlags);
+            }
+            else if (m.Screen == GameScreen.CustomBlockEditor)
+            {
+                DrawCustomBlockEditor(m, size, windowFlags);
             }
             else if (m.Screen == GameScreen.CreateWorld)
             {
@@ -1160,12 +1174,13 @@ namespace Cubuild.Renderer
                 // plus a "Create New World" button and a Back arrow to the title.
                 int count = m.SavedWorlds.Count;
                 float rowH = 36f;
-                float winW = 420f;
+                float winW = Math.Max(240f, Math.Min(420f, size.X - 24f));
                 float errorH = string.IsNullOrWhiteSpace(m.WorldLoadError) ? 0f : 54f;
-                float winH = Math.Max(140f, 60f + count * rowH + 60f + errorH);
-                ImGui.SetNextWindowPos(new Vector2((size.X - winW) / 2f, size.Y / 4f + 32f), ImGuiCond.Always);
+                float contentH = Math.Max(140f, 60f + count * rowH + 60f + errorH);
+                float winH = Math.Max(120f, Math.Min(contentH, size.Y - 24f));
+                ImGui.SetNextWindowPos(new Vector2((size.X - winW) / 2f, Math.Max(12f, size.Y / 4f)), ImGuiCond.Always);
                 ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
-                ImGui.Begin("##worldselect", windowFlags);
+                ImGui.Begin("##worldselect", windowFlags & ~ImGuiWindowFlags.NoScrollbar & ~ImGuiWindowFlags.NoScrollWithMouse);
                 ImGui.SetWindowFontScale(1.3f);
                 ImGui.Text("Select World");
                 ImGui.SetWindowFontScale(1f);
@@ -1358,9 +1373,11 @@ namespace Cubuild.Renderer
             {
                 // Settings screen: culling mode (player choice), render distance, and mouse
                 // sensitivity. Changes set flags on the MenuState; Program applies them next tick.
-                ImGui.SetNextWindowPos(new Vector2(size.X / 2f - 190f, size.Y / 2f - 290f), ImGuiCond.Always);
-                ImGui.SetNextWindowSize(new Vector2(380, 580), ImGuiCond.Always);
-                ImGui.Begin("##settings", windowFlags);
+                float settingsW = Math.Max(260f, Math.Min(380f, size.X - 24f));
+                float settingsH = Math.Max(180f, Math.Min(580f, size.Y - 24f));
+                ImGui.SetNextWindowPos(new Vector2((size.X - settingsW) / 2f, (size.Y - settingsH) / 2f), ImGuiCond.Always);
+                ImGui.SetNextWindowSize(new Vector2(settingsW, settingsH), ImGuiCond.Always);
+                ImGui.Begin("##settings", windowFlags & ~ImGuiWindowFlags.NoScrollbar & ~ImGuiWindowFlags.NoScrollWithMouse);
                 ImGui.SetWindowFontScale(1.6f);
                 ImGui.TextColored(new Vector4(1f, 1f, 1f, 1f), "Settings");
                 ImGui.SetWindowFontScale(1f);
@@ -1463,6 +1480,507 @@ namespace Cubuild.Renderer
                 if (ImGui.Button("Back", new Vector2(200, 34))) m.SettingsBackClicked = true;
                 ImGui.End();
             }
+        }
+
+        private void DrawCustomBlocksScreen(MenuState m, Vector2 size, ImGuiWindowFlags windowFlags)
+        {
+            float winW = Math.Max(280f, Math.Min(600f, size.X - 24f));
+            float winH = Math.Max(200f, Math.Min(600f, size.Y - 24f));
+            ImGui.SetNextWindowPos(new Vector2((size.X - winW) / 2f, (size.Y - winH) / 2f), ImGuiCond.Always);
+            ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
+            ImGui.Begin("##customblocks", windowFlags & ~ImGuiWindowFlags.NoScrollbar & ~ImGuiWindowFlags.NoScrollWithMouse);
+            ImGui.SetWindowFontScale(1.35f); ImGui.Text("Custom Blocks"); ImGui.SetWindowFontScale(1f);
+            ImGui.TextWrapped("Player-created blocks keep their numeric IDs and creation order. Edits update the existing block in place.");
+            if (!string.IsNullOrWhiteSpace(m.CustomBlockNotice)) ImGui.TextColored(new Vector4(0.35f, 0.9f, 0.45f, 1f), m.CustomBlockNotice);
+            if (!string.IsNullOrWhiteSpace(m.CustomBlockError)) ImGui.TextWrapped(m.CustomBlockError);
+            ImGui.Separator();
+            var records = CustomBlockStore.Records;
+            ImGui.BeginChild("##customblocklist", new Vector2(0, Math.Max(100f, winH - 210f)), true);
+            if (records.Count == 0) ImGui.TextDisabled("No custom blocks yet.");
+            for (int i = 0; i < records.Count; i++)
+            {
+                ImGui.PushID(i);
+                ImGui.Text($"{i + 1}. {records[i].DisplayName}  ({records[i].Id})");
+                ImGui.SameLine();
+                if (ImGui.SmallButton("Edit")) { BeginCustomBlockEdit(); _customBlockBuffersInitialized = false; m.EditCustomBlockClicked = true; m.CustomBlockEditIndex = i; }
+                ImGui.PopID();
+            }
+            ImGui.EndChild();
+            float listButtonWidth = Math.Min(220f, Math.Max(90f, (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) * 0.5f));
+            if (records.Count >= CustomBlockStore.Capacity)
+                ImGui.TextDisabled($"Limit reached ({CustomBlockStore.Capacity}) for this stock pack.");
+            else if (ImGui.Button("Add Block", new Vector2(listButtonWidth, 36)))
+            {
+                m.CustomBlockError = ""; m.CustomBlockId = ""; m.CustomBlockDisplayName = "";
+                m.CustomBlockPixels = CreateEditorDefaultPixels();
+                m.CustomBlockFacePixels = Enumerable.Range(0, CustomBlockStore.FaceCount)
+                    .Select(_ => CreateEditorDefaultPixels()).ToArray();
+                m.CustomBlockSelectedFace = 0; m.CustomBlockPreviewYaw = 0.65f; m.CustomBlockPreviewPitch = -0.35f;
+                m.CustomBlockPixels = m.CustomBlockFacePixels[0];
+                m.CustomBlockEditIndex = -1;
+                m.CustomBlockSolid = true; m.CustomBlockOpaque = true; m.CustomBlockGravity = false;
+                m.CustomBlockLightEmission = 0; m.CustomBlockInventory = true; m.CustomBlockPlaceable = true;
+                m.CustomBlockHardness = 1f; m.CustomBlockAutoMapColor = true; m.CustomBlockMapColor = 0xFFAAAAAA;
+                m.CustomBlockBrushColor = new Vector4(0.3f, 0.58f, 0.88f, 1f);
+                m.CustomBlockTool = 0; BeginCustomBlockEdit();
+                _customBlockBuffersInitialized = false; m.Screen = GameScreen.CustomBlockEditor;
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("Back to Title", new Vector2(listButtonWidth, 36)))
+            { m.CustomBlockError = ""; m.CustomBlockNotice = ""; m.Screen = GameScreen.Title; }
+            ImGui.End();
+        }
+
+        private void DrawCustomBlockEditor(MenuState m, Vector2 size, ImGuiWindowFlags windowFlags)
+        {
+            const float margin = 10f;
+            float winW = Math.Max(1f, size.X - margin * 2f);
+            float winH = Math.Max(1f, size.Y - margin * 2f);
+            ImGui.SetNextWindowPos(new Vector2(margin, margin), ImGuiCond.Always);
+            ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
+            ImGuiWindowFlags editorFlags = windowFlags & ~ImGuiWindowFlags.NoScrollbar & ~ImGuiWindowFlags.NoScrollWithMouse;
+            ImGui.Begin("##customblockeditor", editorFlags);
+            bool editing = m.CustomBlockEditIndex >= 0;
+            var windowDraw = ImGui.GetWindowDrawList();
+            windowDraw.AddRectFilled(ImGui.GetWindowPos(), ImGui.GetWindowPos() + ImGui.GetWindowSize(), 0xF0181D23, 6f);
+            ImGui.SetWindowFontScale(1.2f);
+            ImGui.Text(editing ? "Edit Custom Block" : "Create Custom Block");
+            ImGui.SetWindowFontScale(1f);
+            if (!_customBlockBuffersInitialized)
+            {
+                WriteBuffer(_customBlockIdBuffer, m.CustomBlockId);
+                WriteBuffer(_customBlockNameBuffer, m.CustomBlockDisplayName);
+                _customBlockBuffersInitialized = true;
+            }
+            if (editing) ImGui.TextDisabled($"Internal ID (locked): {m.CustomBlockId}");
+            else
+            {
+                ImGui.SetNextItemWidth(Math.Min(360f, ImGui.GetContentRegionAvail().X));
+                ImGui.InputText("Internal ID", _customBlockIdBuffer, (uint)_customBlockIdBuffer.Length);
+                m.CustomBlockId = ReadBuffer(_customBlockIdBuffer);
+            }
+            ImGui.SetNextItemWidth(Math.Min(360f, ImGui.GetContentRegionAvail().X));
+            ImGui.InputText("Display name", _customBlockNameBuffer, (uint)_customBlockNameBuffer.Length);
+            m.CustomBlockDisplayName = ReadBuffer(_customBlockNameBuffer);
+
+            string[] faceNames = { "Top (+Y)", "Bottom (-Y)", "East (+X)", "West (-X)", "South (+Z)", "North (-Z)" };
+            float gap = ImGui.GetStyle().ItemSpacing.X;
+            float availableWidth = ImGui.GetContentRegionAvail().X;
+            // Sidebars scale with the viewport; they stop shrinking at readable widths, and if
+            // the center preview would get too narrow the whole editor switches to a vertical,
+            // scrollable stack instead of letting the three columns bunch together.
+            float leftWidth = Math.Clamp(availableWidth * 0.26f, 240f, 360f);
+            float rightWidth = Math.Clamp(availableWidth * 0.26f, 250f, 370f);
+            float centerWidth = availableWidth - leftWidth - rightWidth - gap * 2f;
+            bool narrow = centerWidth < 260f;
+            if (!narrow)
+            {
+                // Keep a readable panel height instead of squeezing everything when the window is
+                // short; the outer window scrolls if the total content is taller than the viewport.
+                float mainHeight = Math.Max(380f, ImGui.GetContentRegionAvail().Y - 54f);
+                DrawCustomBlockTexturePanel(m, faceNames, new Vector2(leftWidth, mainHeight));
+                ImGui.SameLine(0f, gap);
+                DrawCustomBlockPreviewPanel(m, faceNames, new Vector2(centerWidth, mainHeight));
+                ImGui.SameLine(0f, gap);
+                DrawCustomBlockPropertiesPanel(m, new Vector2(rightWidth, mainHeight));
+            }
+            else
+            {
+                // Narrow windows get one full-width column per tool group. The editor window
+                // itself is scrollable so nothing is clipped or compressed into a sliver.
+                float panelWidth = Math.Max(1f, ImGui.GetContentRegionAvail().X);
+                float toolHeight = Math.Min(560f, Math.Max(420f, panelWidth * 0.75f));
+                DrawCustomBlockTexturePanel(m, faceNames, new Vector2(panelWidth, toolHeight));
+                float previewHeight = Math.Min(560f, Math.Max(340f, panelWidth * 0.95f));
+                DrawCustomBlockPreviewPanel(m, faceNames, new Vector2(panelWidth, previewHeight));
+                DrawCustomBlockPropertiesPanel(m, new Vector2(panelWidth, 360f));
+                ImGui.Separator();
+            }
+
+            if (!string.IsNullOrWhiteSpace(m.CustomBlockError))
+                ImGui.TextColored(new Vector4(1f, 0.4f, 0.3f, 1f), m.CustomBlockError);
+            float actionWidth = Math.Min(190f, Math.Max(90f, (ImGui.GetContentRegionAvail().X - gap) * 0.5f));
+            if (ImGui.Button(editing ? "Save Changes" : "Create Block", new Vector2(actionWidth, 36f)))
+                m.CreateCustomBlockClicked = true;
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel", new Vector2(actionWidth, 36f)))
+            {
+                m.CustomBlockError = "";
+                m.CustomBlockEditIndex = -1;
+                _customBlockBuffersInitialized = false;
+                m.Screen = GameScreen.CustomBlocks;
+            }
+            ImGui.End();
+        }
+
+        private void DrawCustomBlockTexturePanel(MenuState m, string[] faceNames, Vector2 panelSize)
+        {
+            ImGui.BeginChild("##customblocktexturepanel", panelSize, true);
+            ImGui.Text("Face texture · 16 × 16");
+            ImGui.TextDisabled("Left drag paints · right drag erases");
+            int columns = ImGui.GetContentRegionAvail().X < 310f ? 2 : 3;
+            for (int face = 0; face < faceNames.Length; face++)
+            {
+                if (face > 0 && face % columns != 0) ImGui.SameLine();
+                bool selected = face == m.CustomBlockSelectedFace;
+                if (selected) ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.12f, 0.42f, 0.58f, 1f));
+                if (ImGui.SmallButton($"{faceNames[face]}##customface{face}") && !selected)
+                {
+                    m.CustomBlockSelectedFace = face;
+                    m.CustomBlockPixels = m.CustomBlockFacePixels[face];
+                    _customBlockUndo.Clear(); _customBlockRedo.Clear(); _customBlockStrokeActive = false;
+                }
+                if (selected) ImGui.PopStyleColor();
+            }
+            ImGui.TextDisabled($"Editing: {faceNames[m.CustomBlockSelectedFace]}");
+            if (ImGui.RadioButton("Pencil", m.CustomBlockTool == 0)) m.CustomBlockTool = 0;
+            ImGui.SameLine();
+            if (ImGui.RadioButton("Fill", m.CustomBlockTool == 2)) m.CustomBlockTool = 2;
+            ImGui.SameLine();
+            if (ImGui.RadioButton("Eyedropper", m.CustomBlockTool == 3)) m.CustomBlockTool = 3;
+            ImGui.Text("Brush color");
+            ImGui.PushItemWidth(Math.Min(250f, ImGui.GetContentRegionAvail().X));
+            ImGui.ColorPicker4("##brushcolor", ref m.CustomBlockBrushColor,
+                ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.AlphaPreview
+                | ImGuiColorEditFlags.NoSidePreview | ImGuiColorEditFlags.NoSmallPreview);
+            ImGui.PopItemWidth();
+
+            float maxZoom = Math.Clamp((ImGui.GetContentRegionAvail().X - 16f) / 16f, 8f, 12f);
+            float zoom = Math.Clamp(m.CustomBlockZoom, 8f, maxZoom);
+            ImGui.SetNextItemWidth(Math.Min(220f, ImGui.GetContentRegionAvail().X));
+            if (maxZoom > 8f) ImGui.SliderFloat("Cell size", ref zoom, 8f, maxZoom, "%.0f px");
+            else ImGui.TextDisabled("Cell size: 8 px");
+            m.CustomBlockZoom = zoom;
+            ImGui.Text("Pixel grid");
+            Vector2 canvasPos = ImGui.GetCursorScreenPos();
+            float cellSize = Math.Clamp(m.CustomBlockZoom, 8f, 12f), canvasSize = cellSize * 16f;
+            ImGui.InvisibleButton("##pixelcanvas", new Vector2(canvasSize, canvasSize),
+                ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight);
+            bool hovered = ImGui.IsItemHovered();
+            bool active = ImGui.IsItemActive();
+            Vector2 mouse = ImGui.GetIO().MousePos - canvasPos;
+            int px = (int)(mouse.X / cellSize), py = (int)(mouse.Y / cellSize);
+            bool inside = (uint)px < 16 && (uint)py < 16;
+            if (hovered && inside && ImGui.IsMouseClicked(ImGuiMouseButton.Right))
+            {
+                PushCustomBlockUndo(m.CustomBlockPixels);
+                _customBlockStrokeActive = true;
+                _customBlockLastPaintedPixel = -1;
+                PaintCustomBlockLine(m, py * 16 + px, true);
+            }
+            else if (hovered && inside && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+            {
+                int pixel = py * 16 + px;
+                if (m.CustomBlockTool == 3)
+                    m.CustomBlockBrushColor = ReadPixelColor(m.CustomBlockPixels, pixel);
+                else
+                {
+                    PushCustomBlockUndo(m.CustomBlockPixels);
+                    _customBlockStrokeActive = m.CustomBlockTool == 0;
+                    _customBlockLastPaintedPixel = -1;
+                    if (m.CustomBlockTool == 2) FloodFillCustomBlock(m.CustomBlockPixels, pixel, m.CustomBlockBrushColor);
+                    else PaintCustomBlockLine(m, pixel, false);
+                }
+            }
+            else if (active && hovered && inside && _customBlockStrokeActive)
+            {
+                if (ImGui.IsMouseDown(ImGuiMouseButton.Right)) PaintCustomBlockLine(m, py * 16 + px, true);
+                else if (ImGui.IsMouseDown(ImGuiMouseButton.Left) && m.CustomBlockTool == 0)
+                    PaintCustomBlockLine(m, py * 16 + px, false);
+            }
+            if (!ImGui.IsMouseDown(ImGuiMouseButton.Left) && !ImGui.IsMouseDown(ImGuiMouseButton.Right)
+                && (ImGui.IsMouseReleased(ImGuiMouseButton.Left) || ImGui.IsMouseReleased(ImGuiMouseButton.Right)))
+            {
+                _customBlockStrokeActive = false;
+                _customBlockLastPaintedPixel = -1;
+            }
+
+            var draw = ImGui.GetWindowDrawList();
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++)
+                {
+                    int p = (y * 16 + x) * 4;
+                    Vector2 a = canvasPos + new Vector2(x * cellSize, y * cellSize), b = a + new Vector2(cellSize, cellSize);
+                    uint checker = ((x + y) & 1) == 0 ? 0xFFB7B7B7 : 0xFF777777;
+                    draw.AddRectFilled(a, b, checker);
+                    draw.AddRectFilled(a, b, ImGui.ColorConvertFloat4ToU32(new Vector4(m.CustomBlockPixels[p] / 255f,
+                        m.CustomBlockPixels[p + 1] / 255f, m.CustomBlockPixels[p + 2] / 255f, m.CustomBlockPixels[p + 3] / 255f)));
+                    draw.AddRect(a, b, 0x88333333);
+                }
+            draw.AddRect(canvasPos, canvasPos + new Vector2(canvasSize), 0xFF111820, 0f, 0, 1.5f);
+            if (ImGui.Button("Undo") && _customBlockUndo.Count > 0)
+            { PushCustomBlockSnapshot(_customBlockRedo, m.CustomBlockPixels); RestoreCustomBlockSnapshot(m.CustomBlockPixels, _customBlockUndo); }
+            ImGui.SameLine();
+            if (ImGui.Button("Redo") && _customBlockRedo.Count > 0)
+            { PushCustomBlockSnapshot(_customBlockUndo, m.CustomBlockPixels); RestoreCustomBlockSnapshot(m.CustomBlockPixels, _customBlockRedo); }
+            ImGui.SameLine();
+            if (ImGui.Button("Clear texture"))
+            { PushCustomBlockUndo(m.CustomBlockPixels); Array.Clear(m.CustomBlockPixels); }
+            ImGui.EndChild();
+        }
+
+        private void DrawCustomBlockPreviewPanel(MenuState m, string[] faceNames, Vector2 panelSize)
+        {
+            ImGui.BeginChild("##customblockpreviewpanel", panelSize, true);
+            ImGui.Text("Rotatable block preview");
+            ImGui.TextDisabled("Middle drag rotates · left-click a visible face to edit");
+            float side = Math.Max(1f, Math.Min(ImGui.GetContentRegionAvail().X, ImGui.GetContentRegionAvail().Y - 4f));
+            DrawCustomBlockCubePreview(m, faceNames, side);
+            ImGui.EndChild();
+        }
+
+        private void DrawCustomBlockPropertiesPanel(MenuState m, Vector2 panelSize)
+        {
+            ImGui.BeginChild("##customblockproperties", panelSize, true);
+            ImGui.Text("Block properties");
+            ImGui.Separator();
+            ImGui.Checkbox("Solid / collision", ref m.CustomBlockSolid);
+            ImGui.Checkbox("Blocks light (opaque)", ref m.CustomBlockOpaque);
+            ImGui.Checkbox("Gravity", ref m.CustomBlockGravity);
+            ImGui.Checkbox("Visible in inventory", ref m.CustomBlockInventory);
+            ImGui.Checkbox("Placeable", ref m.CustomBlockPlaceable);
+            ImGui.SetNextItemWidth(Math.Min(260f, ImGui.GetContentRegionAvail().X));
+            ImGui.SliderInt("Light emission", ref m.CustomBlockLightEmission, 0, 15);
+            ImGui.SetNextItemWidth(Math.Min(260f, ImGui.GetContentRegionAvail().X));
+            ImGui.SliderFloat("Hardness", ref m.CustomBlockHardness, 0.1f, 10f, "%.1f");
+            ImGui.Checkbox("Auto map color from texture", ref m.CustomBlockAutoMapColor);
+            if (!m.CustomBlockAutoMapColor)
+            {
+                Vector3 map = new((m.CustomBlockMapColor & 255) / 255f, ((m.CustomBlockMapColor >> 8) & 255) / 255f,
+                    ((m.CustomBlockMapColor >> 16) & 255) / 255f);
+                ImGui.SetNextItemWidth(Math.Min(250f, ImGui.GetContentRegionAvail().X));
+                if (ImGui.ColorEdit3("Map color", ref map))
+                    m.CustomBlockMapColor = 0xFF000000u | ((uint)(map.Z * 255) << 16) | ((uint)(map.Y * 255) << 8) | (uint)(map.X * 255);
+            }
+            ImGui.TextWrapped("Pixels below 50% alpha are cut out. Blocks-light controls lighting separately.");
+            ImGui.EndChild();
+        }
+
+        private void DrawCustomBlockCubePreview(MenuState m, string[] faceNames, float size)
+        {
+            ImGui.BeginGroup();
+            Vector2 origin = ImGui.GetCursorScreenPos();
+            ImGui.InvisibleButton("##customblockcube", new Vector2(size, size),
+                ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonMiddle);
+            bool hovered = ImGui.IsItemHovered(), active = ImGui.IsItemActive();
+            if (active && ImGui.IsMouseDown(ImGuiMouseButton.Middle)
+                && ImGui.IsMouseDragging(ImGuiMouseButton.Middle, 2f))
+            {
+                Vector2 delta = ImGui.GetIO().MouseDelta;
+                // "Grab the cube" orbit: dragging right rotates the near face right, dragging
+                // down tips the near face down. Negating the raw deltas gives that natural feel.
+                m.CustomBlockPreviewYaw -= delta.X * 0.012f;
+                m.CustomBlockPreviewPitch = Math.Clamp(m.CustomBlockPreviewPitch - delta.Y * 0.012f, -1.35f, 1.35f);
+            }
+
+            Vector3[] unitCorners =
+            {
+                new(0,0,0), new(1,0,0), new(1,1,0), new(0,1,0),
+                new(0,0,1), new(1,0,1), new(1,1,1), new(0,1,1),
+            };
+            Vector3 Rotate(Vector3 v)
+            {
+                float cy = MathF.Cos(m.CustomBlockPreviewYaw), sy = MathF.Sin(m.CustomBlockPreviewYaw);
+                float cp = MathF.Cos(m.CustomBlockPreviewPitch), sp = MathF.Sin(m.CustomBlockPreviewPitch);
+                float x = v.X * cy + v.Z * sy;
+                float z = -v.X * sy + v.Z * cy;
+                return new Vector3(x, v.Y * cp - z * sp, v.Y * sp + z * cp);
+            }
+            // A true perspective camera at -Z looking at the cube, matching the world renderer's
+            // orientation. The old oblique shear distorted face proportions and disagreed with
+            // the mesher's per-face UV axes.
+            const float cameraDistance = 3.4f;
+            Vector2 ProjectView(Vector3 p)
+            {
+                Vector3 r = Rotate(p - new Vector3(0.5f));
+                float denom = MathF.Max(0.35f, cameraDistance + r.Z);
+                return new Vector2(r.X / denom, -r.Y / denom);
+            }
+            float maxProjected = 0f;
+            foreach (Vector3 corner in unitCorners)
+            {
+                Vector2 q = ProjectView(corner);
+                maxProjected = MathF.Max(maxProjected, MathF.Max(MathF.Abs(q.X), MathF.Abs(q.Y)));
+            }
+            float projectionScale = size * 0.43f / MathF.Max(maxProjected, 1e-4f);
+            Vector2 Project(Vector3 p)
+            {
+                Vector2 q = ProjectView(p);
+                return origin + new Vector2(size * 0.5f + q.X * projectionScale, size * 0.5f + q.Y * projectionScale);
+            }
+            // These corner orders are the EXACT canonical orders the mesher produces from its
+            // per-face u/v axes (Mesher.TryGetCubuildFaceAxes): corner 0 = (u0,v0), 1 = (u1,v0),
+            // 2 = (u1,v1), 3 = (u0,v1). Copying them keeps every face's texture oriented exactly
+            // as it is on a placed in-game block instead of mirrored/rotated per face.
+            Vector3[][] corners =
+            {
+                new[] { new Vector3(0,1,1), new Vector3(1,1,1), new Vector3(1,1,0), new Vector3(0,1,0) }, // top +Y
+                new[] { new Vector3(0,0,0), new Vector3(1,0,0), new Vector3(1,0,1), new Vector3(0,0,1) }, // bottom -Y
+                new[] { new Vector3(1,1,1), new Vector3(1,1,0), new Vector3(1,0,0), new Vector3(1,0,1) }, // east +X
+                new[] { new Vector3(0,1,0), new Vector3(0,1,1), new Vector3(0,0,1), new Vector3(0,0,0) }, // west -X
+                new[] { new Vector3(0,1,1), new Vector3(1,1,1), new Vector3(1,0,1), new Vector3(0,0,1) }, // south +Z
+                new[] { new Vector3(1,1,0), new Vector3(0,1,0), new Vector3(0,0,0), new Vector3(1,0,0) }, // north -Z
+            };
+            Vector3[] normals = { Vector3.UnitY, -Vector3.UnitY, Vector3.UnitX, -Vector3.UnitX, Vector3.UnitZ, -Vector3.UnitZ };
+            var draw = ImGui.GetWindowDrawList();
+            draw.AddRectFilled(origin, origin + new Vector2(size), 0xFF20262D, 8f);
+            draw.AddRect(origin, origin + new Vector2(size), 0xFF46515D, 8f, 0, 1f);
+            // A low-contrast contact shadow grounds the block without affecting any texture data.
+            draw.AddRectFilled(origin + new Vector2(size * 0.28f, size * 0.76f),
+                origin + new Vector2(size * 0.72f, size * 0.84f), 0x40202A34, size * 0.06f);
+            // Camera at -Z: a face is visible when its rotated normal points toward the camera.
+            // Depth is the average view-space Z; larger is farther, so draw far-to-near.
+            var order = Enumerable.Range(0, 6)
+                .Select(face => (Face: face,
+                    Depth: corners[face].Average(p => Rotate(p - new Vector3(0.5f)).Z),
+                    Facing: -Rotate(normals[face]).Z))
+                .Where(x => x.Facing > 0f).OrderByDescending(x => x.Depth).ToArray();
+            var polygons = new Dictionary<int, Vector2[]>();
+            // These are the same fixed face multipliers used by the block-icon renderer:
+            // top 1.0, bottom 0.5, east/west 0.6, north/south 0.8.
+            float[] faceShade = { 1.0f, 0.5f, 0.6f, 0.6f, 0.8f, 0.8f };
+            foreach (var item in order)
+            {
+                int face = item.Face;
+                Vector2[] poly = corners[face].Select(Project).ToArray();
+                polygons[face] = poly;
+                byte[] pixels = m.CustomBlockFacePixels[face];
+                for (int y = 0; y < 16; y++)
+                    for (int x = 0; x < 16; x++)
+                    {
+                        float u0 = x / 16f, u1 = (x + 1) / 16f, v0 = y / 16f, v1 = (y + 1) / 16f;
+                        Vector2 Bilinear(float u, float v) => Vector2.Lerp(Vector2.Lerp(poly[0], poly[1], u), Vector2.Lerp(poly[3], poly[2], u), v);
+                        Vector2 a = Bilinear(u0, v0), b = Bilinear(u1, v0), c = Bilinear(u1, v1), d = Bilinear(u0, v1);
+                        int p = (y * 16 + x) * 4;
+                        float alpha = pixels[p + 3] / 255f;
+                        Vector4 checker = ((x + y) & 1) == 0 ? new Vector4(0.72f, 0.72f, 0.72f, 1f) : new Vector4(0.38f, 0.38f, 0.38f, 1f);
+                        Vector4 color = Vector4.Lerp(checker,
+                            new Vector4(pixels[p] / 255f, pixels[p + 1] / 255f, pixels[p + 2] / 255f, 1f), alpha);
+                        color.X *= faceShade[face]; color.Y *= faceShade[face]; color.Z *= faceShade[face];
+                        if (face == m.CustomBlockSelectedFace) color = Vector4.Lerp(color, new Vector4(0.25f, 0.8f, 1f, 1f), 0.12f);
+                        draw.AddQuadFilled(a, b, c, d, ImGui.ColorConvertFloat4ToU32(color));
+                    }
+                draw.AddQuad(poly[0], poly[1], poly[2], poly[3], face == m.CustomBlockSelectedFace ? 0xFF38C9FF : 0xFF10151B, face == m.CustomBlockSelectedFace ? 2.5f : 1.4f);
+            }
+
+            if (hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+            {
+                Vector2 mouse = ImGui.GetIO().MousePos;
+                for (int i = order.Length - 1; i >= 0; i--)
+                {
+                    int face = order[i].Face;
+                    if (polygons.TryGetValue(face, out var poly) && PointInPolygon(mouse, poly))
+                    {
+                        m.CustomBlockSelectedFace = face;
+                        m.CustomBlockPixels = m.CustomBlockFacePixels[face];
+                        _customBlockUndo.Clear(); _customBlockRedo.Clear(); _customBlockStrokeActive = false;
+                        break;
+                    }
+                }
+            }
+            draw.AddText(origin + new Vector2(8f, size - 22f), 0xFFE0E7EF, faceNames[m.CustomBlockSelectedFace]);
+            ImGui.EndGroup();
+        }
+
+        private void PaintCustomBlockLine(MenuState m, int pixel, bool forceErase)
+        {
+            int previous = _customBlockLastPaintedPixel;
+            if (previous < 0)
+            {
+                PaintCustomBlockPixel(m, pixel, forceErase);
+                return;
+            }
+
+            int x0 = previous % 16, y0 = previous / 16;
+            int x1 = pixel % 16, y1 = pixel / 16;
+            int dx = Math.Abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+            int dy = -Math.Abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+            int error = dx + dy;
+            while (true)
+            {
+                PaintCustomBlockPixel(m, y0 * 16 + x0, forceErase);
+                if (x0 == x1 && y0 == y1) break;
+                int twiceError = 2 * error;
+                if (twiceError >= dy) { error += dy; x0 += sx; }
+                if (twiceError <= dx) { error += dx; y0 += sy; }
+            }
+        }
+
+        private static bool PointInPolygon(Vector2 point, Vector2[] polygon)
+        {
+            bool inside = false;
+            for (int i = 0, j = polygon.Length - 1; i < polygon.Length; j = i++)
+            {
+                Vector2 a = polygon[i], b = polygon[j];
+                if ((a.Y > point.Y) != (b.Y > point.Y)
+                    && point.X < (b.X - a.X) * (point.Y - a.Y) / (b.Y - a.Y) + a.X) inside = !inside;
+            }
+            return inside;
+        }
+
+        private void BeginCustomBlockEdit() { _customBlockUndo.Clear(); _customBlockRedo.Clear(); _customBlockStrokeActive = false; }
+
+        private void PushCustomBlockUndo(byte[] pixels)
+        {
+            PushCustomBlockSnapshot(_customBlockUndo, pixels);
+            _customBlockRedo.Clear();
+        }
+
+        private static void PushCustomBlockSnapshot(List<byte[]> stack, byte[] pixels)
+        {
+            stack.Add((byte[])pixels.Clone());
+            if (stack.Count > 64) stack.RemoveAt(0);
+        }
+
+        private static void RestoreCustomBlockSnapshot(byte[] target, List<byte[]> stack)
+        {
+            byte[] snapshot = stack[^1]; stack.RemoveAt(stack.Count - 1); Buffer.BlockCopy(snapshot, 0, target, 0, CustomBlockStore.PixelBytes);
+        }
+
+        private void PaintCustomBlockPixel(MenuState m, int pixel, bool forceErase = false)
+        {
+            if (pixel == _customBlockLastPaintedPixel) return;
+            _customBlockLastPaintedPixel = pixel;
+            int p = pixel * 4;
+            if (forceErase) { Array.Clear(m.CustomBlockPixels, p, 4); return; }
+            m.CustomBlockPixels[p] = (byte)Math.Clamp((int)(m.CustomBlockBrushColor.X * 255f + 0.5f), 0, 255);
+            m.CustomBlockPixels[p + 1] = (byte)Math.Clamp((int)(m.CustomBlockBrushColor.Y * 255f + 0.5f), 0, 255);
+            m.CustomBlockPixels[p + 2] = (byte)Math.Clamp((int)(m.CustomBlockBrushColor.Z * 255f + 0.5f), 0, 255);
+            m.CustomBlockPixels[p + 3] = (byte)Math.Clamp((int)(m.CustomBlockBrushColor.W * 255f + 0.5f), 0, 255);
+        }
+
+        private static Vector4 ReadPixelColor(byte[] pixels, int pixel)
+        {
+            int p = pixel * 4; return new Vector4(pixels[p] / 255f, pixels[p + 1] / 255f, pixels[p + 2] / 255f, pixels[p + 3] / 255f);
+        }
+
+        private static void FloodFillCustomBlock(byte[] pixels, int start, Vector4 color)
+        {
+            int startOffset = start * 4;
+            byte r = pixels[startOffset], g = pixels[startOffset + 1], b = pixels[startOffset + 2], a = pixels[startOffset + 3];
+            byte nr = (byte)Math.Clamp((int)(color.X * 255f + 0.5f), 0, 255), ng = (byte)Math.Clamp((int)(color.Y * 255f + 0.5f), 0, 255);
+            byte nb = (byte)Math.Clamp((int)(color.Z * 255f + 0.5f), 0, 255), na = (byte)Math.Clamp((int)(color.W * 255f + 0.5f), 0, 255);
+            if (r == nr && g == ng && b == nb && a == na) return;
+            var queue = new Queue<int>(); var seen = new bool[256]; queue.Enqueue(start); seen[start] = true;
+            while (queue.Count > 0)
+            {
+                int px = queue.Dequeue(), p = px * 4;
+                if (pixels[p] != r || pixels[p + 1] != g || pixels[p + 2] != b || pixels[p + 3] != a) continue;
+                pixels[p] = nr; pixels[p + 1] = ng; pixels[p + 2] = nb; pixels[p + 3] = na;
+                int x = px % 16, y = px / 16;
+                if (x > 0) Enqueue(px - 1); if (x < 15) Enqueue(px + 1); if (y > 0) Enqueue(px - 16); if (y < 15) Enqueue(px + 16);
+            }
+            void Enqueue(int pixel) { if (!seen[pixel]) { seen[pixel] = true; queue.Enqueue(pixel); } }
+        }
+
+        private static byte[] CreateEditorDefaultPixels()
+        {
+            var pixels = new byte[CustomBlockStore.PixelBytes];
+            for (int i = 0; i < 256; i++)
+            {
+                pixels[i * 4] = 120; pixels[i * 4 + 1] = 170; pixels[i * 4 + 2] = 220; pixels[i * 4 + 3] = 255;
+            }
+            return pixels;
         }
 
         private void DrawChatCommandWindow(Vector2 displaySize)

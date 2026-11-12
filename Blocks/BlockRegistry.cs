@@ -53,6 +53,8 @@ namespace Cubuild
         private static int[] _hotbar = Array.Empty<int>();
         public static bool Loaded { get; private set; }
         public static int Count { get; private set; }
+        /// <summary>Number of built-in blocks before the append-only custom suffix.</summary>
+        public static int StockCount { get; private set; }
         public static bool IsMinecraftMode { get; private set; }
 
         // ---- Deserialization DTOs ------------------------------------------------
@@ -301,6 +303,7 @@ namespace Cubuild
 
             _defs = defs;
             Count = defs.Length;
+            StockCount = defs.Length;
             _solid = new bool[Count];
             _opaque = new bool[Count];
             _transparent = new bool[Count];
@@ -381,6 +384,152 @@ namespace Cubuild
 
         /// <summary>Increments each time the registry is (re)loaded. See <see cref="LoadGeneration"/>.</summary>
         public static int LoadGeneration { get; private set; }
+
+        public static bool StockContains(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return false;
+            for (int i = 0; i < StockCount; i++)
+                if (string.Equals(_defs[i].Id, id, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        public static bool StockContainsDisplayName(string displayName)
+        {
+            if (!Loaded || string.IsNullOrWhiteSpace(displayName)) return false;
+            for (int i = 0; i < StockCount; i++)
+                if (string.Equals(_defs[i].DisplayName, displayName, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        /// <summary>Appends player definitions after the unchanged stock catalogue.</summary>
+        public static void AppendCustomBlocks(IReadOnlyList<CustomBlockRecord> records)
+        {
+            if (!Loaded) throw new InvalidOperationException("Load the stock block catalogue before custom blocks.");
+            if (records.Count > CustomBlockStore.MaxBlocks || StockCount + records.Count > 256)
+                throw new InvalidDataException("Custom blocks exceed the byte block-ID limit.");
+            if (Count != StockCount) throw new InvalidOperationException("Custom block suffix was already appended; reload the stock catalogue first.");
+            if (records.Count == 0) return;
+
+            int oldCount = Count, newCount = oldCount + records.Count;
+            Array.Resize(ref _defs, newCount);
+            foreach (var record in records)
+            {
+                if (_byName.ContainsKey(record.Id)) throw new InvalidDataException($"Duplicate block ID '{record.Id}'.");
+                if (StockContainsDisplayName(record.DisplayName)) throw new InvalidDataException($"Duplicate block display name '{record.DisplayName}'.");
+                int id = Count;
+                var textures = CreateCustomFaceTextures(id - StockCount);
+                uint mapColor = AutoMapColor(record.Faces[0]);
+                bool hasTransparentPixels = CustomBlockStore.HasCutoutPixels(record);
+                var def = new BlockDefinition
+                {
+                    Id = record.Id, NumericId = id, DisplayName = record.DisplayName,
+                    AllTexture = textures[0].Rect,
+                    TopTexture = textures[0].Rect, BottomTexture = textures[1].Rect,
+                    EastTexture = textures[2].Rect, WestTexture = textures[3].Rect,
+                    SouthTexture = textures[4].Rect, NorthTexture = textures[5].Rect,
+                    TopAtlasPage = textures[0].Page, BottomAtlasPage = textures[1].Page,
+                    EastAtlasPage = textures[2].Page, WestAtlasPage = textures[3].Page,
+                    SouthAtlasPage = textures[4].Page, NorthAtlasPage = textures[5].Page,
+                    AtlasPage = textures[0].Page,
+                    Solid = record.Solid, Opaque = CustomBlockStore.EffectiveOpaque(record),
+                    Transparent = hasTransparentPixels, Alpha = 1f,
+                    Shape = hasTransparentPixels ? "cutout" : "", Inventory = record.Inventory, Placeable = record.Placeable,
+                    Gravity = record.Gravity, LightEmission = record.LightEmission,
+                    MapColor = record.MapColorOverride ?? mapColor, Hardness = record.Hardness, CustomAtlas = true,
+                };
+                _defs[id] = def;
+                _byName[def.Id] = def;
+                Count++;
+            }
+
+            ResizeAndFillCustomFlags(oldCount, newCount);
+            LoadGeneration++;
+        }
+
+        /// <summary>Replaces custom definitions in place without changing their numeric IDs/order.</summary>
+        public static void RefreshCustomBlocks(IReadOnlyList<CustomBlockRecord> records)
+        {
+            if (!Loaded) throw new InvalidOperationException("Load the stock block catalogue before custom blocks.");
+            if (records.Count != Count - StockCount)
+                throw new InvalidOperationException("Custom block edits cannot add, remove, or reorder records during an update.");
+            for (int i = 0; i < records.Count; i++)
+            {
+                var record = records[i];
+                int id = StockCount + i;
+                if (!string.Equals(_defs[id].Id, record.Id, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Custom block IDs and order are immutable.");
+                var textures = CreateCustomFaceTextures(i);
+                uint mapColor = record.MapColorOverride ?? AutoMapColor(record.Faces[0]);
+                bool hasTransparentPixels = CustomBlockStore.HasCutoutPixels(record);
+                var def = new BlockDefinition
+                {
+                    Id = record.Id, NumericId = id, DisplayName = record.DisplayName,
+                    AllTexture = textures[0].Rect,
+                    TopTexture = textures[0].Rect, BottomTexture = textures[1].Rect,
+                    EastTexture = textures[2].Rect, WestTexture = textures[3].Rect,
+                    SouthTexture = textures[4].Rect, NorthTexture = textures[5].Rect,
+                    TopAtlasPage = textures[0].Page, BottomAtlasPage = textures[1].Page,
+                    EastAtlasPage = textures[2].Page, WestAtlasPage = textures[3].Page,
+                    SouthAtlasPage = textures[4].Page, NorthAtlasPage = textures[5].Page,
+                    AtlasPage = textures[0].Page,
+                    Solid = record.Solid, Opaque = CustomBlockStore.EffectiveOpaque(record),
+                    Transparent = hasTransparentPixels, Alpha = 1f,
+                    Shape = hasTransparentPixels ? "cutout" : "", Inventory = record.Inventory, Placeable = record.Placeable,
+                    Gravity = record.Gravity, LightEmission = record.LightEmission,
+                    MapColor = mapColor, Hardness = record.Hardness, CustomAtlas = true,
+                };
+                _defs[id] = def;
+                _byName[def.Id] = def;
+                _solid[id] = def.Solid; _opaque[id] = def.Opaque; _transparent[id] = def.Transparent;
+                _alpha[id] = def.Alpha; _hardness[id] = def.Hardness; _inventory[id] = def.Inventory;
+                _placeable[id] = def.Placeable; _gravity[id] = def.Gravity; _lightEmission[id] = def.LightEmission;
+                _mapColor[id] = def.MapColor; _cutout[id] = hasTransparentPixels; _cross[id] = _glass[id] = _translucent[id] = false;
+                _slab[id] = _slabTop[id] = _stair[id] = _door[id] = _rail[id] = false;
+            }
+            LoadGeneration++;
+        }
+
+        private static uint AutoMapColor(byte[] pixels)
+        {
+            int p = (8 * 16 + 8) * 4;
+            return 0xFF000000u | ((uint)pixels[p + 2] << 16) | ((uint)pixels[p + 1] << 8) | pixels[p];
+        }
+
+        private static (TextureRect Rect, int Page)[] CreateCustomFaceTextures(int customIndex)
+        {
+            var result = new (TextureRect Rect, int Page)[CustomBlockStore.FaceCount];
+            for (int face = 0; face < result.Length; face++)
+            {
+                var (page, tile) = CustomBlockStore.GetAtlasLocation(customIndex, face);
+                result[face] = (new TextureRect((tile % 16) * 16, (tile / 16) * 16, 16, 16), page);
+            }
+            return result;
+        }
+
+        private static void ResizeAndFillCustomFlags(int start, int end)
+        {
+            Array.Resize(ref _solid, end); Array.Resize(ref _opaque, end); Array.Resize(ref _transparent, end);
+            Array.Resize(ref _cross, end); Array.Resize(ref _cutout, end); Array.Resize(ref _glass, end);
+            Array.Resize(ref _translucent, end); Array.Resize(ref _slab, end); Array.Resize(ref _slabTop, end);
+            Array.Resize(ref _stair, end); Array.Resize(ref _door, end); Array.Resize(ref _rail, end);
+            Array.Resize(ref _inventory, end); Array.Resize(ref _placeable, end); Array.Resize(ref _gravity, end);
+            Array.Resize(ref _lightEmission, end); Array.Resize(ref _alpha, end); Array.Resize(ref _hardness, end);
+            Array.Resize(ref _toolType, end); Array.Resize(ref _material, end); Array.Resize(ref _wrongToolDrop, end);
+            Array.Resize(ref _dropCountMin, end); Array.Resize(ref _dropCountMax, end); Array.Resize(ref _weight, end);
+            Array.Resize(ref _toolRequired, end); Array.Resize(ref _harvestLevel, end); Array.Resize(ref _zombieCanBreak, end);
+            Array.Resize(ref _zombieBreakSpeed, end); Array.Resize(ref _mapColor, end);
+            for (int i = start; i < end; i++)
+            {
+                var d = _defs[i]; _solid[i] = d.Solid; _opaque[i] = d.Opaque; _transparent[i] = d.Transparent;
+                _alpha[i] = d.Alpha; _hardness[i] = d.Hardness; _toolType[i] = ""; _material[i] = "";
+                _wrongToolDrop[i] = ""; _dropCountMin[i] = 0; _dropCountMax[i] = 0; _weight[i] = 0;
+                _toolRequired[i] = false; _harvestLevel[i] = 0; _zombieCanBreak[i] = false;
+                _zombieBreakSpeed[i] = ZombieBreakSpeed.Medium; _mapColor[i] = d.MapColor;
+                _inventory[i] = d.Inventory; _placeable[i] = d.Placeable; _gravity[i] = d.Gravity; _lightEmission[i] = d.LightEmission;
+                _cross[i] = _glass[i] = _translucent[i] = _slab[i] = _slabTop[i] = _stair[i] = _door[i] = _rail[i] = false;
+                _cutout[i] = string.Equals(d.Shape, "cutout", StringComparison.OrdinalIgnoreCase);
+            }
+        }
 
         /// <summary>Loads blocks.json the same way other resources load: embedded resource first
         /// (so the self-contained .exe carries it), then a loose file next to the executable.</summary>
@@ -468,6 +617,7 @@ namespace Cubuild
         public static bool IsPartialShape(int id) => id > 0 && id < Count && (_slab[id] || _slabTop[id] || _stair[id] || _door[id] || _rail[id]);
         public static bool IsInInventory(int id) => id >= 0 && id < Count && _inventory[id];
         public static bool IsPlaceable(int id) => id > 0 && id < Count && _placeable[id];
+        public static bool IsCustom(int id) => id >= StockCount && id < Count && _defs[id].CustomAtlas;
         public static bool IsGravity(int id) => id > 0 && id < Count && _gravity[id];
         public static int LightEmissionOf(int id) => id > 0 && id < Count ? _lightEmission[id] : 0;
         public static float Alpha(int id) => _alpha[id];
@@ -656,6 +806,7 @@ namespace Cubuild
             => id > 0 && id < Count ? _zombieBreakSpeed[id] : ZombieBreakSpeed.Medium;
         public static uint MapColorOf(int id) => _mapColor[id];
         public static TextureRect FaceTexture(int id, Point3D normal) => _defs[id].FaceTexture(normal);
+        public static int FaceAtlasPage(int id, Point3D normal) => _defs[id].FaceAtlasPage(normal);
 
         public static IReadOnlyList<int> Hotbar => _hotbar;
 

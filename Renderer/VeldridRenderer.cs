@@ -69,6 +69,12 @@ namespace Cubuild.Renderer
         private Texture _atlasTexture;
         private TextureView _atlasView;
         private Sampler _atlasSampler;
+        private Texture _customAtlasTexture;
+        private TextureView _customAtlasView;
+        private Texture? _blockAtlasTexture;
+        private TextureView? _blockAtlasView;
+        private int _customAtlasGeneration = -1;
+        private byte[] _customAtlasRgba = Array.Empty<byte>();
         private ResourceSet _textureSet;
         private Pipeline _pipeline;
         // Cutout pass (cross plants / leaves): alpha-test discard + depth-write ON so a nearer
@@ -658,6 +664,13 @@ namespace Cubuild.Renderer
         private const double HealthbeatBumpDur = 0.18; // seconds per thump
         private byte[] _worldNameBuffer = new byte[256];
         private byte[] _seedBuffer = new byte[256];
+        private byte[] _customBlockIdBuffer = new byte[128];
+        private byte[] _customBlockNameBuffer = new byte[192];
+        private bool _customBlockBuffersInitialized;
+        private readonly List<byte[]> _customBlockUndo = new();
+        private readonly List<byte[]> _customBlockRedo = new();
+        private bool _customBlockStrokeActive;
+        private int _customBlockLastPaintedPixel = -1;
         private byte[] _renameBuffer = new byte[256];
         private bool _renameBufferInit;
         private byte[] _hostPortBuffer = new byte[16];
@@ -1007,6 +1020,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                     var image = StbImageSharp.ImageResult.FromMemory(fileBytes, StbImageSharp.ColorComponents.RedGreenBlueAlpha);
                     int w = image.Width;
                     int h = image.Height;
+                    if (w != BlockAtlasComposer.LocalAtlasWidth || h != BlockAtlasComposer.LocalAtlasHeight)
+                        throw new InvalidDataException($"Assets/Textures/terrain.png must be 256x256; found {w}x{h}.");
                     _atlasWidth = w;
                     _atlasHeight = h;
                     _atlasPixelsW = w;
@@ -1065,10 +1080,12 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                         SamplerBorderColor.TransparentBlack));
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // ignore; texture optional
+                System.Diagnostics.Debug.WriteLine($"[Atlas] Failed to load the stock block atlas: {ex}");
             }
+
+            RebuildCustomAtlasTexture();
 
             // Load the items atlas (items.png) the same way - embedded copy first, loose file
             // fallback. Only needed for item-tile drops (flint); harmless if it's missing.
@@ -1240,6 +1257,8 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             _shrinkWallPipeline?.Dispose();
             _duckVertexBuffer?.Dispose();
             _duckIndexBuffer?.Dispose();
+            _textureSet?.Dispose();
+            _itemsTextureSet?.Dispose();
             _duckTextureSet?.Dispose();
             _duckSampler?.Dispose();
             _duckView?.Dispose();
@@ -1265,6 +1284,12 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             if (_iconAtlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_iconAtlasTexture);
             if (_itemsAtlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_itemsAtlasTexture);
             if (_atlasTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_atlasTexture);
+            _atlasView?.Dispose();
+            _atlasTexture?.Dispose();
+            _customAtlasView?.Dispose();
+            _customAtlasTexture?.Dispose();
+            _blockAtlasView?.Dispose();
+            _blockAtlasTexture?.Dispose();
             if (_logoTexture != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_logoTexture);
             _logoView?.Dispose();
             _logoTexture?.Dispose();
@@ -1292,6 +1317,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             if (_itemsAtlasView != null && _imguiRenderer != null) _imguiRenderer.RemoveImGuiBinding(_itemsAtlasView);
             _itemsAtlasView?.Dispose();
             _itemsAtlasTexture?.Dispose();
+            _atlasSampler?.Dispose();
             _sc?.Dispose();
             _gd?.Dispose();
         }
@@ -1582,7 +1608,7 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
                 uint cloudFaceDirection = EncodeCloudShadowFaceDirection(f.Normal);
                 uint pack3 = shadeByte | (alphaByte << 8) | (alphaMode << 16) | biomeHillsGreenTintBit
                     | ((uint)(f.SkyLight & 0xF) << 19) | ((uint)(f.BlockLight & 0xF) << 23)
-                    | (cloudFaceDirection << 27);
+                    | (cloudFaceDirection << 27) | ((uint)(f.AtlasPage & 3) << 30);
 
                 // Face-edge basis for the non-axis (fluid slope) UV fallback.
                 var v0p = vertsSpan[0];
@@ -1948,6 +1974,9 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             {
                 _gd.UpdateTexture(_atlasTexture, handle.AddrOfPinnedObject(), (uint)_waterStrip.Length,
                     (uint)(WaterTileX * 16), (uint)(WaterTileY * 16), 0, 64, 16, 1, 0, 0);
+                if (_blockAtlasTexture != null)
+                    _gd.UpdateTexture(_blockAtlasTexture, handle.AddrOfPinnedObject(), (uint)_waterStrip.Length,
+                        (uint)(WaterTileX * 16), (uint)(WaterTileY * 16), 0, 64, 16, 1, 0, 0);
             }
             finally
             {
@@ -1992,6 +2021,9 @@ private DeviceBuffer? _spriteVertexBuffer; // unit quad: corner(3) + uv(2) + sha
             {
                 _gd.UpdateTexture(_atlasTexture, handle.AddrOfPinnedObject(), (uint)_lavaStrip.Length,
                     (uint)(LavaTileX * 16), (uint)(LavaTileY * 16), 0, 64, 16, 1, 0, 0);
+                if (_blockAtlasTexture != null)
+                    _gd.UpdateTexture(_blockAtlasTexture, handle.AddrOfPinnedObject(), (uint)_lavaStrip.Length,
+                        (uint)(LavaTileX * 16), (uint)(LavaTileY * 16), 0, 64, 16, 1, 0, 0);
             }
             finally
             {

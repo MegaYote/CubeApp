@@ -163,11 +163,12 @@ namespace Cubuild.Renderer
             {
                 var fb = _fallingBlocks[i];
                 var def = BlockRegistry.GetById(fb.BlockId);
-                var tr = def.AllTexture ?? default;
+                var tr = def.FaceTexture(new Point3D(0, 1, 0));
+                int atlasPage = def.FaceAtlasPage(new Point3D(0, 1, 0));
                 _fallingInstanceScratch[vf++] = (float)((double)fb.X - _renderOriginX);
                 _fallingInstanceScratch[vf++] = (float)((double)fb.Y - _renderOriginY);
                 _fallingInstanceScratch[vf++] = (float)((double)fb.Z - _renderOriginZ);
-                _fallingInstanceScratch[vf++] = tr.X / atlasW;
+                _fallingInstanceScratch[vf++] = atlasPage > 0 ? -(atlasPage + tr.X / atlasW) : tr.X / atlasW;
                 _fallingInstanceScratch[vf++] = tr.Y / atlasH;
                 _fallingInstanceScratch[vf++] = tr.Width / atlasW;
                 _fallingInstanceScratch[vf++] = tr.Height / atlasH;
@@ -215,11 +216,12 @@ namespace Cubuild.Renderer
             for (int i = 0; i < n; i++)
             {
                 var cell = cells[i];
-                var texture = BlockRegistry.GetById(cell.BlockId).AllTexture ?? default;
+                var texture = BlockRegistry.FaceTexture(cell.BlockId, new Point3D(0, 1, 0));
+                int atlasPage = BlockRegistry.FaceAtlasPage(cell.BlockId, new Point3D(0, 1, 0));
                 _buildGhostInstanceScratch[at++] = (float)(cell.X - _renderOriginX);
                 _buildGhostInstanceScratch[at++] = (float)(cell.Y - _renderOriginY);
                 _buildGhostInstanceScratch[at++] = (float)(cell.Z - _renderOriginZ);
-                _buildGhostInstanceScratch[at++] = texture.X / atlasW;
+                _buildGhostInstanceScratch[at++] = atlasPage > 0 ? -(atlasPage + texture.X / atlasW) : texture.X / atlasW;
                 _buildGhostInstanceScratch[at++] = texture.Y / atlasH;
                 _buildGhostInstanceScratch[at++] = texture.Width / atlasW;
                 _buildGhostInstanceScratch[at++] = texture.Height / atlasH;
@@ -298,12 +300,18 @@ namespace Cubuild.Renderer
                 {
                     var it = _itemDrops[i];
                     if (DropPassOf(it.ItemId) != pass) continue;
-                    var tr = ItemRegistry.GetTile(it.ItemId, out _);
+                    var tr = BlockRegistry.IsCustom(it.ItemId)
+                        ? BlockRegistry.GetById(it.ItemId).AllTexture ?? BlockRegistry.FaceTexture(it.ItemId, new Point3D(0, 1, 0))
+                        : ItemRegistry.GetTile(it.ItemId, out _);
                     // Rotate around the center, so pass base + half-scale.
                     _itemDropInstanceScratch[vf++] = (float)(it.X + halfScale - _renderOriginX);
                     _itemDropInstanceScratch[vf++] = (float)(it.Y + halfScale - _renderOriginY);
                     _itemDropInstanceScratch[vf++] = (float)(it.Z + halfScale - _renderOriginZ);
-                    _itemDropInstanceScratch[vf++] = tr.X / atlasW;
+                    int customPage = BlockRegistry.IsCustom(it.ItemId)
+                        ? BlockRegistry.FaceAtlasPage(it.ItemId, new Point3D(0, 1, 0)) : 0;
+                    _itemDropInstanceScratch[vf++] = itemsAtlas
+                        ? 4f + tr.X / atlasW
+                        : customPage > 0 ? -(customPage + tr.X / atlasW) : tr.X / atlasW;
                     _itemDropInstanceScratch[vf++] = tr.Y / atlasH;
                     _itemDropInstanceScratch[vf++] = tr.Width / atlasW;
                     _itemDropInstanceScratch[vf++] = tr.Height / atlasH;
@@ -357,7 +365,7 @@ namespace Cubuild.Renderer
                 ResourceSet shadowResourceSet = null;
                 if (_shadowTextureView != null && _atlasSampler != null)
                 {
-                    shadowResourceSet = _gd.ResourceFactory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _shadowTextureView, _atlasSampler));
+                    shadowResourceSet = _gd.ResourceFactory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _shadowTextureView, _atlasSampler, _customAtlasView, _atlasSampler));
                 }
                 if (shadowResourceSet != null)
                 {
@@ -378,6 +386,7 @@ namespace Cubuild.Renderer
         // 2 = crossquad block (terrain sprite), 3 = shadow (all items).
         private static int DropPassOf(int itemId)
         {
+            if (BlockRegistry.IsCustom(itemId)) return 0;
             ItemRegistry.GetTile(itemId, out bool fromItems);
             if (fromItems) return 1;                     // genuine item / block with items.png art
             if (BlockRegistry.IsCross(itemId)) return 2; // crossquad: sprite, never a cube

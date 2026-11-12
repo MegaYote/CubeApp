@@ -90,6 +90,7 @@ namespace Cubuild.Renderer
             if (id <= 0) return;
 
             bool blockDisplay = ItemRegistry.IsBlockItem(id);
+            bool customAtlas = blockDisplay && BlockRegistry.IsCustom(id);
             var tile = ItemRegistry.GetTile(id, out bool fromItems);
             // A block may define only per-face tiles and omit a shared inventory tile. Use its
             // top face as the validity/placeholder tile; cube faces below select their own.
@@ -103,7 +104,7 @@ namespace Cubuild.Renderer
 
             // Genuine items (and blocks that ship their own items.png art) are flat sprites;
             // cross-quad blocks (saplings, torches) are sprites too - a cube would look wrong.
-            bool itemsAtlas = fromItems;
+            bool itemsAtlas = fromItems && !customAtlas;
             bool cross = !fromItems && BlockRegistry.IsCross(id);
             bool sprite = itemsAtlas || cross;
 
@@ -182,7 +183,9 @@ namespace Cubuild.Renderer
                 _heldInstanceScratch[f++] = pos.X;
                 _heldInstanceScratch[f++] = pos.Y;
                 _heldInstanceScratch[f++] = pos.Z;
-                _heldInstanceScratch[f++] = drawTile.X / atlasW;
+                _heldInstanceScratch[f++] = itemsAtlas
+                    ? 4f + drawTile.X / atlasW
+                    : customAtlas ? -(BlockRegistry.FaceAtlasPage(id, FallingFaceNormals[face]) + drawTile.X / atlasW) : drawTile.X / atlasW;
                 _heldInstanceScratch[f++] = drawTile.Y / atlasH;
                 _heldInstanceScratch[f++] = drawTile.Width / atlasW;
                 _heldInstanceScratch[f++] = drawTile.Height / atlasH;

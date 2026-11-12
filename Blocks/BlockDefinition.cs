@@ -27,6 +27,21 @@ namespace Cubuild
         /// <summary>Optional items.png atlas tile used when this id renders as a DROPPED item
         /// (flint, etc). Null = the drop shows AllTexture from the terrain atlas instead.</summary>
         public TextureRect? ItemTile { get; set; }
+        /// <summary>True when texture coordinates address the isolated player-content atlas.</summary>
+        public bool CustomAtlas { get; set; }
+        /// <summary>One of the runtime atlas pages: stock 0, custom 1..3.</summary>
+        public int AtlasPage { get; set; }
+        public TextureRect? EastTexture { get; set; }
+        public TextureRect? WestTexture { get; set; }
+        public TextureRect? SouthTexture { get; set; }
+        public TextureRect? NorthTexture { get; set; }
+        public int TopAtlasPage { get; set; }
+        public int BottomAtlasPage { get; set; }
+        public int SideAtlasPage { get; set; }
+        public int EastAtlasPage { get; set; }
+        public int WestAtlasPage { get; set; }
+        public int SouthAtlasPage { get; set; }
+        public int NorthAtlasPage { get; set; }
 
         /// <summary>Collides with mob/player AABBs. Air and true fluids are non-solid.</summary>
         public bool Solid { get; set; } = true;
@@ -130,8 +145,24 @@ namespace Cubuild
         {
             if (normal.Y > 0.5 && TopTexture.HasValue) return TopTexture.Value;
             if (normal.Y < -0.5 && BottomTexture.HasValue) return BottomTexture.Value;
+            if (normal.X > 0.5 && EastTexture.HasValue) return EastTexture.Value;
+            if (normal.X < -0.5 && WestTexture.HasValue) return WestTexture.Value;
+            if (normal.Z > 0.5 && SouthTexture.HasValue) return SouthTexture.Value;
+            if (normal.Z < -0.5 && NorthTexture.HasValue) return NorthTexture.Value;
             if ((Math.Abs(normal.X) > 0.5 || Math.Abs(normal.Z) > 0.5) && SideTexture.HasValue) return SideTexture.Value;
             return AllTexture ?? default;
+        }
+
+        public int FaceAtlasPage(Point3D normal)
+        {
+            if (normal.Y > 0.5 && TopTexture.HasValue) return TopAtlasPage;
+            if (normal.Y < -0.5 && BottomTexture.HasValue) return BottomAtlasPage;
+            if (normal.X > 0.5 && EastTexture.HasValue) return EastAtlasPage;
+            if (normal.X < -0.5 && WestTexture.HasValue) return WestAtlasPage;
+            if (normal.Z > 0.5 && SouthTexture.HasValue) return SouthAtlasPage;
+            if (normal.Z < -0.5 && NorthTexture.HasValue) return NorthAtlasPage;
+            if ((Math.Abs(normal.X) > 0.5 || Math.Abs(normal.Z) > 0.5) && SideTexture.HasValue) return SideAtlasPage;
+            return AtlasPage;
         }
     }
 

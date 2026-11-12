@@ -34,8 +34,10 @@ namespace Cubuild
         public int TextureRotation { get; }
         /// <summary>When true, green atlas texels on this face receive the Hills-biome tint.</summary>
         public bool BiomeHillsGreenTint { get; }
+        public bool CustomAtlas { get; }
+        public int AtlasPage { get; }
 
-        public MeshFace(Point3D v0, Point3D v1, Point3D v2, Point3D v3, TextureRect srcRect, Point3D normal, Point3D blockPosition, float shade, int tileWidth, int tileHeight, int skyLight, int blockLight, float alpha = 1f, bool anchorVBottom = false, int textureRotation = 0, bool biomeHillsGreenTint = false)
+        public MeshFace(Point3D v0, Point3D v1, Point3D v2, Point3D v3, TextureRect srcRect, Point3D normal, Point3D blockPosition, float shade, int tileWidth, int tileHeight, int skyLight, int blockLight, float alpha = 1f, bool anchorVBottom = false, int textureRotation = 0, bool biomeHillsGreenTint = false, bool customAtlas = false, int atlasPage = 0)
         {
             V0 = v0;
             V1 = v1;
@@ -53,6 +55,8 @@ namespace Cubuild
             AnchorVBottom = anchorVBottom;
             TextureRotation = textureRotation;
             BiomeHillsGreenTint = biomeHillsGreenTint;
+            CustomAtlas = customAtlas;
+            AtlasPage = Math.Clamp(atlasPage, 0, 3);
         }
     }
 }

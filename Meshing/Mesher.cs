@@ -479,7 +479,8 @@ namespace Cubuild
                     faces.Add(new MeshFace(p0, p1, p2, p3, tile, normal, blockPosition,
                         1f, SurfaceLodStep, SurfaceLodStep,
                         lighting.GetSkyLight(lightX, lightY, lightZ), lighting.GetBlockLight(lightX, lightY, lightZ),
-                        biomeHillsGreenTint: biomeHillsGreenTint));
+                        biomeHillsGreenTint: biomeHillsGreenTint, customAtlas: BlockRegistry.IsCustom(id),
+                        atlasPage: BlockRegistry.FaceAtlasPage(id, new Point3D(0, 1, 0))));
                 }
             }
             return faces.Count == 0 ? null : faces;
@@ -1207,7 +1208,8 @@ namespace Cubuild
 
                 var src = texOverride ?? def.FaceTexture(normal);
                 mesh.Add(new MeshFace(p0, p1, p2, p3, src, normal, new Point3D(wx, wy, wz), (float)shade, 1, 1,
-                    skyLight, blockLight, alpha, false, textureRotation));
+                    skyLight, blockLight, alpha, false, textureRotation,
+                    customAtlas: BlockRegistry.IsCustom(blockId), atlasPage: BlockRegistry.FaceAtlasPage(blockId, normal)));
             }
         }
 
@@ -1512,7 +1514,8 @@ namespace Cubuild
                     else if (BlockRegistry.IsCutout(entryType)) alpha = -alpha;
                     mesh.Add(new MeshFace(corners[0], corners[1], corners[2], corners[3], src, axisNormal, blockPos,
                         (float)shade, tileWidth, tileHeight, entrySkyLight, entryBlockLight, alpha,
-                        biomeHillsGreenTint: entryBiomeHillsGreenTint));
+                         biomeHillsGreenTint: entryBiomeHillsGreenTint, customAtlas: BlockRegistry.IsCustom(entryType),
+                         atlasPage: BlockRegistry.FaceAtlasPage(entryType, axisNormal)));
 
                     // zero-out mask
                     for (int aOff = 0; aOff < w; aOff++)

@@ -317,16 +317,20 @@ void main() {
             var factory = _gd.ResourceFactory;
             const string vertexShader = @"#version 450
 layout(location=0) in vec3 aPosition;
+layout(location=3) in uint aPack3;
 layout(location=4) in ivec3 aOrigin;
 layout(location=0) out vec3 vWorldPos;
+layout(location=1) flat out uint vCustomAtlas;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; ivec4 renderOrigin; };
 void main() {
     vec3 relativePos = aPosition + vec3(aOrigin - renderOrigin.xyz);
     vWorldPos = relativePos;
+    vCustomAtlas = (aPack3 >> 30) & 0x3u;
     gl_Position = projView * vec4(relativePos, 1.0);
 }";
             const string fragmentShader = @"#version 450
 layout(location=0) in vec3 vWorldPos;
+layout(location=1) flat in uint vCustomAtlas;
 layout(set=1, binding=0) uniform FogParams {
     vec4 fogColor;
     vec2 fogRange;
@@ -336,6 +340,9 @@ layout(set=1, binding=0) uniform FogParams {
 };
 layout(location=0) out float outDepth;
 void main() {
+    // The HZB pass has no atlas sampler. Fail open for custom faces so transparent custom
+    // pixels can never become false occluders; opaque custom blocks still render in color pass.
+    if (vCustomAtlas != 0u) discard;
     // This is the same inclusive mining-cell discard as the opaque color shader. Mined-away
     // geometry must not become an occluder in the current frame's depth source.
     if (hiddenCell.w > 0.5 &&

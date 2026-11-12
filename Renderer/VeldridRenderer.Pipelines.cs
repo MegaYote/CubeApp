@@ -58,8 +58,6 @@ namespace Cubuild.Renderer
             //                alphaMode 0 = real alpha (opaque/water), 1 = glass frame (-100
             //                sentinel), 2 = translucent glass tint (-200 sentinel).
             // Atlas size is baked in (atlas loads before CreatePipeline) so the texel decode is exact.
-            float atlasW = Math.Max(1f, _atlasWidth);
-            float atlasH = Math.Max(1f, _atlasHeight);
             string vsCode = $@"#version 450
 layout(location=0) in vec3 aPosition;
 layout(location=1) in uint aPack1;
@@ -73,9 +71,10 @@ layout(location=3) out vec3 vWorldPos;
 layout(location=4) flat out uint vBiomeHillsGreenTint;
 layout(location=5) flat out uint vLightPacked;
 layout(location=6) flat out uint vFaceDirection;
+layout(location=7) flat out uint vCustomAtlas;
 layout(set=0, binding=0) uniform ProjectionView {{ mat4 projView; ivec4 renderOrigin; }};
-const float ATLAS_INV_X = 1.0 / {atlasW.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
-const float ATLAS_INV_Y = 1.0 / {atlasH.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
+const float ATLAS_INV_X = 1.0 / 256.0;
+const float ATLAS_INV_Y = 1.0 / 256.0;
 void main() {{
     // localUV: 8.8 fixed point (block units; fract() in the fragment shader tiles it).
     float du = float((aPack1 >> 16) & 0xFFFFu) / 256.0;
@@ -97,6 +96,7 @@ void main() {{
     uint blockLight = (aPack3 >> 23) & 0xFu;
     vLightPacked = skyLight | (blockLight << 4);
     vFaceDirection = (aPack3 >> 27) & 0x7u;
+    vCustomAtlas = (aPack3 >> 30) & 0x3u;
     float alpha = mode == 0u ? float(alphaByte) / 255.0 : (mode == 1u ? -100.0 : -200.0);
     vColor = vec4(shade, shade, shade, alpha);
     vec3 relativePos = aPosition + vec3(aOrigin - renderOrigin.xyz);
@@ -112,6 +112,7 @@ layout(location=3) in vec3 vWorldPos;
 layout(location=4) flat in uint vBiomeHillsGreenTint;
 layout(location=5) flat in uint vLightPacked;
 layout(location=6) flat in uint vFaceDirection;
+layout(location=7) flat in uint vCustomAtlas;
 layout(set=1, binding=0) uniform sampler2D uAtlas;
 layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;   // rgb + pad
@@ -199,7 +200,9 @@ void main() {
     }
     // fract() tiles the same atlas tile regardless of how many blocks the face spans.
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
+    if (vCustomAtlas != 4u) atlasUV.x = (atlasUV.x + float(vCustomAtlas)) * 0.25;
     vec4 tex = texture(uAtlas, atlasUV);
+    if (vCustomAtlas != 0u && tex.a < 0.5) discard;
     vec3 sampledRgb = tex.rgb;
     // The terrain grass tiles have green pixels whose green channel distinctly exceeds red/blue;
     // dirt pixels remain red/brown and therefore retain their exact atlas color.
@@ -240,7 +243,9 @@ void main() {
             // create texture resource layout (set 1)
             _textureLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
                 new ResourceLayoutElementDescription("uAtlas", ResourceKind.TextureReadOnly, ShaderStages.Fragment),
-                new ResourceLayoutElementDescription("uAtlasSampler", ResourceKind.Sampler, ShaderStages.Fragment)));
+                new ResourceLayoutElementDescription("uAtlasSampler", ResourceKind.Sampler, ShaderStages.Fragment),
+                new ResourceLayoutElementDescription("uCustomAtlas", ResourceKind.TextureReadOnly, ShaderStages.Fragment),
+                new ResourceLayoutElementDescription("uCustomAtlasSampler", ResourceKind.Sampler, ShaderStages.Fragment)));
 
             // Distance fog and the packed cloud-shadow mask share set 2 across world pipelines.
             _fogLayout = factory.CreateResourceLayout(new ResourceLayoutDescription(
@@ -277,6 +282,7 @@ layout(location=3) in vec3 vWorldPos;
 layout(location=4) flat in uint vBiomeHillsGreenTint;
 layout(location=5) flat in uint vLightPacked;
 layout(location=6) flat in uint vFaceDirection;
+layout(location=7) flat in uint vCustomAtlas;
 layout(set=1, binding=0) uniform sampler2D uAtlas;
 layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;
@@ -357,6 +363,7 @@ void main() {
         }
     }
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
+    if (vCustomAtlas != 4u) atlasUV.x = (atlasUV.x + float(vCustomAtlas)) * 0.25;
     vec4 tex = texture(uAtlas, atlasUV);
     vec3 sampledRgb = tex.rgb;
     if (vBiomeHillsGreenTint != 0u && tex.g > tex.r * 1.2 && tex.g > tex.b * 1.2) {
@@ -412,6 +419,7 @@ layout(location=2) in vec4 vColor;
 layout(location=3) in vec3 vWorldPos;
 layout(location=5) flat in uint vLightPacked;
 layout(location=6) flat in uint vFaceDirection;
+layout(location=7) flat in uint vCustomAtlas;
 layout(set=1, binding=0) uniform sampler2D uAtlas;
 layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;
@@ -493,6 +501,7 @@ void main() {
     }
     if (vColor.a > -150.0) discard; // only translucent (colored) glass - sentinel ~ -200
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
+    atlasUV.x = (atlasUV.x + float(vCustomAtlas)) * 0.25;
     vec4 tex = texture(uAtlas, atlasUV);
     if (tex.a >= 0.5) discard;      // opaque frame pixels already drawn by the glass pass
     outColor = vec4(tex.rgb * vColor.rgb * worldLight(), tex.a);
@@ -545,11 +554,15 @@ layout(location=3) out vec3 vWorldPos;
 layout(location=4) flat out uint vBiomeHillsGreenTint;
 layout(location=5) flat out uint vLightPacked;
 layout(location=6) flat out uint vFaceDirection;
+layout(location=7) flat out uint vCustomAtlas;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() {
     vec3 worldPos = aCorner + iWorldPos;
     vLocalUV = aLocalUV;
+    vCustomAtlas = iTileRect.x >= 4.0 ? 4u : (iTileRect.x < 0.0 ? uint(floor(-iTileRect.x)) : 0u);
     vTileRect = iTileRect;
+    if (iTileRect.x < 0.0) vTileRect.x = fract(-iTileRect.x);
+    else if (vCustomAtlas == 4u) vTileRect.x = iTileRect.x - 4.0;
     vColor = aShade;
     vWorldPos = worldPos;
     vBiomeHillsGreenTint = 0u;
@@ -601,6 +614,7 @@ layout(location=3) out vec3 vWorldPos;
 layout(location=4) flat out uint vBiomeHillsGreenTint;
 layout(location=5) flat out uint vLightPacked;
 layout(location=6) flat out uint vFaceDirection;
+layout(location=7) flat out uint vCustomAtlas;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() {
     vec3 local = aCorner - vec3(0.15);
@@ -609,7 +623,10 @@ void main() {
     vec3 rotated = local + iRot.w * t + cross(qv, t);
     vec3 worldPos = rotated + iWorldPos;
     vLocalUV = aLocalUV;
+    vCustomAtlas = iTileRect.x >= 4.0 ? 4u : (iTileRect.x < 0.0 ? uint(floor(-iTileRect.x)) : 0u);
     vTileRect = iTileRect;
+    if (iTileRect.x < 0.0) vTileRect.x = fract(-iTileRect.x);
+    else if (vCustomAtlas == 4u) vTileRect.x = iTileRect.x - 4.0;
     vColor = aShade;
     vWorldPos = worldPos;
     vBiomeHillsGreenTint = 0u;
@@ -660,6 +677,7 @@ layout(location=3) out vec3 vWorldPos;
 layout(location=4) flat out uint vBiomeHillsGreenTint;
 layout(location=5) flat out uint vLightPacked;
 layout(location=6) flat out uint vFaceDirection;
+layout(location=7) flat out uint vCustomAtlas;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() {
     // projView's top 3x3 rows are the camera basis scaled by the projection factors;
@@ -675,6 +693,9 @@ void main() {
     vBiomeHillsGreenTint = 0u;
     vLightPacked = 15u;
     vFaceDirection = 0u;
+    vCustomAtlas = iTileRect.x >= 4.0 ? 4u : (iTileRect.x < 0.0 ? uint(floor(-iTileRect.x)) : 0u);
+    if (iTileRect.x < 0.0) vTileRect.x = fract(-iTileRect.x);
+    else if (vCustomAtlas == 4u) vTileRect.x = iTileRect.x - 4.0;
     gl_Position = projView * vec4(worldPos, 1.0);
 }";
                 var spriteVsSpirv = SpirvCompilation.CompileGlslToSpirv(spriteVsCode, "main", ShaderStages.Vertex, GlslCompileOptions.Default);
@@ -950,15 +971,15 @@ _itemDropIndexBuffer = factory.CreateBuffer(new BufferDescription((uint)smallInd
             }
 
             // create texture resource set if atlas loaded
-            if (_atlasView != null && _atlasSampler != null)
+            if (_blockAtlasView != null && _atlasSampler != null)
             {
-                _textureSet = factory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _atlasView, _atlasSampler));
+                _textureSet = factory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _blockAtlasView, _atlasSampler, _blockAtlasView, _atlasSampler));
             }
 
             // Items atlas resource set for item-tile drops (flint, etc).
             if (_itemsAtlasView != null && _atlasSampler != null)
             {
-                _itemsTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _itemsAtlasView, _atlasSampler));
+                _itemsTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _itemsAtlasView, _atlasSampler, _customAtlasView, _atlasSampler));
             }
 
             // Reuse a single command list across frames instead of allocating one per frame.
@@ -1031,7 +1052,7 @@ void main() {
         // fullscreen triangle with multiply blending, no textures or uniforms needed.
         private void CreateVignettePipeline(ResourceFactory factory)
         {
-            string vsCode = @"#version 450
+string vsCode = @"#version 450
 layout(location=0) out vec2 vUV;
 void main() {
     vec2 pos = vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2));
@@ -1380,7 +1401,7 @@ void main() {
             // SILHOUETTE backward: the sliver that peeks out between two copies is the art's
             // edge pixels, so the body follows the shape of the item and looks solid.
             // Perspective spreads the copies apart, and that is what turns the stack into a slab.
-            string heldBlockVsCode = @"#version 450
+string heldBlockVsCode = @"#version 450
 layout(location=0) in vec3 aCorner;
 layout(location=1) in vec2 aLocalUV;
 layout(location=2) in vec4 aShade;
@@ -1392,6 +1413,7 @@ layout(location=0) out vec2 vLocalUV;
 layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
 layout(location=3) out float vSlice;
+layout(location=4) flat out uint vCustomAtlas;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() {
     // The cube mesh spans 0..0.3 - center it on the origin, then apply the held size.
@@ -1401,12 +1423,15 @@ void main() {
     vec3 rotated = local + iRot.w * t + cross(qv, t);
     vec3 pos = rotated + iPos;
     vLocalUV = aLocalUV;
+    vCustomAtlas = iTileRect.x >= 4.0 ? 4u : (iTileRect.x < 0.0 ? uint(floor(-iTileRect.x)) : 0u);
     vTileRect = iTileRect;
+    if (iTileRect.x < 0.0) vTileRect.x = fract(-iTileRect.x);
+    else if (vCustomAtlas == 4u) vTileRect.x = iTileRect.x - 4.0;
     vColor = aShade;
     vSlice = 1.0;
     gl_Position = projView * vec4(pos, 1.0);
 }";
-            string heldCardVsCode = @"#version 450
+string heldCardVsCode = @"#version 450
 layout(location=0) in vec3 aCorner;
 layout(location=1) in vec2 aLocalUV;
 layout(location=2) in vec4 aShade;
@@ -1419,6 +1444,7 @@ layout(location=0) out vec2 vLocalUV;
 layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
 layout(location=3) out float vSlice;
+layout(location=4) flat out uint vCustomAtlas;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() {
     // One slice of the slab. The instance index walks the stack from the BACK of the slab
@@ -1436,7 +1462,10 @@ void main() {
     vec3 rotated = local + iRot.w * tq + cross(qv, tq);
     vec3 pos = rotated + iPos;
     vLocalUV = aLocalUV;
+    vCustomAtlas = iTileRect.x >= 4.0 ? 4u : (iTileRect.x < 0.0 ? uint(floor(-iTileRect.x)) : 0u);
     vTileRect = iTileRect;
+    if (iTileRect.x < 0.0) vTileRect.x = fract(-iTileRect.x);
+    else if (vCustomAtlas == 4u) vTileRect.x = iTileRect.x - 4.0;
     vColor = aShade;
     vSlice = t;
     gl_Position = projView * vec4(pos, 1.0);
@@ -1450,10 +1479,12 @@ layout(location=0) in vec2 vLocalUV;
 layout(location=1) in vec4 vTileRect;
 layout(location=2) in vec4 vColor;
 layout(location=3) in float vSlice;
+layout(location=4) flat in uint vCustomAtlas;
 layout(set=1, binding=0) uniform sampler2D uTex;
 layout(location=0) out vec4 outColor;
 void main() {
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
+    if (vCustomAtlas != 4u) atlasUV.x = (atlasUV.x + float(vCustomAtlas)) * 0.25;
     vec4 tex = texture(uTex, atlasUV);
     if (tex.a < 0.5) discard;
     outColor = tex * vColor * mix(0.45, 1.0, vSlice);
@@ -1541,12 +1572,12 @@ void main() {
 
             if (_duckView != null && _duckSampler != null)
             {
-                _duckTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _duckView, _duckSampler));
+                _duckTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _duckView, _duckSampler, _customAtlasView, _atlasSampler));
             }
 
             if (_playerView != null && _playerSampler != null)
             {
-                _playerTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _playerView, _playerSampler));
+                _playerTextureSet = factory.CreateResourceSet(new ResourceSetDescription(_textureLayout, _playerView, _playerSampler, _customAtlasView, _atlasSampler));
             }
         }
 
@@ -1565,11 +1596,14 @@ layout(location=4) in vec4 iTileRect;
 layout(location=0) out vec2 vLocalUV;
 layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
+layout(location=3) flat out uint vCustomAtlas;
 layout(set=0, binding=0) uniform ProjectionView { mat4 projView; };
 void main() {
     vec3 worldPos = aCorner + iWorldPos;
     vLocalUV = aLocalUV;
+    vCustomAtlas = iTileRect.x < 0.0 ? uint(floor(-iTileRect.x)) : 0u;
     vTileRect = iTileRect;
+    if (iTileRect.x < 0.0) vTileRect.x = fract(-iTileRect.x);
     vColor = aShade;
     gl_Position = projView * vec4(worldPos, 1.0);
 }";
@@ -1577,10 +1611,12 @@ void main() {
 layout(location=0) in vec2 vLocalUV;
 layout(location=1) in vec4 vTileRect;
 layout(location=2) in vec4 vColor;
+layout(location=3) flat in uint vCustomAtlas;
 layout(set=1, binding=0) uniform sampler2D uAtlas;
 layout(location=0) out vec4 outColor;
 void main() {
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
+    atlasUV.x = (atlasUV.x + float(vCustomAtlas)) * 0.25;
     vec4 tex = texture(uAtlas, atlasUV);
     if (tex.a < 0.05) discard;
     vec3 base = tex.rgb * vColor.rgb;
@@ -1687,8 +1723,6 @@ void main() { outColor = vec4(1.0, 1.0, 1.0, 0.35); }";
                 new VertexElementDescription("aPack2", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1),
                 new VertexElementDescription("aPack3", VertexElementSemantic.TextureCoordinate, VertexElementFormat.UInt1),
                 new VertexElementDescription("aOrigin", VertexElementSemantic.TextureCoordinate, VertexElementFormat.Int3));
-            float shrinkAtlasW = Math.Max(1f, _atlasWidth);
-            float shrinkAtlasH = Math.Max(1f, _atlasHeight);
             // Build the shared vertex shader with a configurable clip-space depth bias: the CUBE
             // uses a STRONGER bias so it always wins its faces at the cell boundary; the WALLS use
             // a weaker bias so they show through only where the cube has shrunk away. This is the
@@ -1703,11 +1737,12 @@ layout(location=0) out vec2 vLocalUV;
 layout(location=1) out vec4 vTileRect;
 layout(location=2) out vec4 vColor;
 layout(location=3) out vec3 vWorldPos;
+layout(location=7) flat out uint vCustomAtlas;
 layout(location=5) flat out uint vLightPacked;
 layout(location=6) flat out uint vFaceDirection;
 layout(set=0, binding=0) uniform ProjectionView {{ mat4 projView; ivec4 renderOrigin; }};
-const float ATLAS_INV_X = 1.0 / {shrinkAtlasW.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
-const float ATLAS_INV_Y = 1.0 / {shrinkAtlasH.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}.0;
+const float ATLAS_INV_X = 1.0 / 256.0;
+const float ATLAS_INV_Y = 1.0 / 256.0;
 void main() {{
     float du = float((aPack1 >> 16) & 0xFFFFu) / 256.0;
     float dv = float(aPack1 & 0xFFFFu) / 256.0;
@@ -1725,6 +1760,7 @@ void main() {{
     uint blockLight = (aPack3 >> 23) & 0xFu;
     vLightPacked = skyLight | (blockLight << 4);
     vFaceDirection = (aPack3 >> 27) & 0x7u;
+    vCustomAtlas = (aPack3 >> 30) & 0x3u;
     vColor = vec4(shade, shade, shade, alpha);
     vec3 relativePos = aPosition + vec3(aOrigin - renderOrigin.xyz);
     vWorldPos = relativePos;
@@ -1742,6 +1778,7 @@ layout(location=2) in vec4 vColor;
 layout(location=3) in vec3 vWorldPos;
 layout(location=5) flat in uint vLightPacked;
 layout(location=6) flat in uint vFaceDirection;
+layout(location=7) flat in uint vCustomAtlas;
 layout(set=1, binding=0) uniform sampler2D uAtlas;
 layout(set=2, binding=0) uniform FogParams {
     vec4 fogColor;
@@ -1813,6 +1850,7 @@ float worldLight() {
 void main() {
     // No hidden-cell discard here - the shrink cube must draw inside the mined cell.
     vec2 atlasUV = fract(vLocalUV) * vTileRect.zw + vTileRect.xy;
+    atlasUV.x = (atlasUV.x + float(vCustomAtlas)) * 0.25;
     vec4 tex = texture(uAtlas, atlasUV);
     outColor = vec4(tex.rgb * vColor.rgb * worldLight(), 1.0);
     float dist = length(vWorldPos - cameraPos.xyz);

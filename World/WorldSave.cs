@@ -96,9 +96,14 @@ namespace Cubuild
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 20;
+        public const int Version = 23;
         /// <summary>Binary version read from disk; new/in-memory saves use the current version.</summary>
         public int FileVersion = Version;
+        /// <summary>v21-v23 custom-content manifest fields, checked before block bytes are applied.</summary>
+        public int CustomContentVersion = 3;
+        public int CustomBlockCount;
+        public string CustomBlockSignature = "";
+        public string CustomBlockIdentitySignature = "";
 
         public string Name = "World 1";
         /// <summary>Runtime-only save-file key (the path may differ from Name after a rename).</summary>
@@ -337,6 +342,12 @@ namespace Cubuild
                     w.Write(mob.SteveHomeRefugeY);
                     w.Write(mob.SteveHomeRefugeZ);
                 }
+                // v21 manifest remains byte-for-byte in place; v22 adds immutable ID identity;
+                // v23 records the six-face content signature schema.
+                w.Write(3);
+                w.Write(CustomBlockStore.Records.Count);
+                w.Write(CustomBlockStore.Signature);
+                w.Write(CustomBlockStore.IdentitySignatureForCount(CustomBlockStore.Records.Count));
                 w.Flush();
             }
         }
@@ -606,6 +617,23 @@ namespace Cubuild
                         mob.SteveHomeRefugeX = reader.ReadInt32();
                         mob.SteveHomeRefugeY = reader.ReadInt32();
                         mob.SteveHomeRefugeZ = reader.ReadInt32();
+                    }
+                }
+                if (version >= 21)
+                {
+                    save.CustomContentVersion = reader.ReadInt32();
+                    save.CustomBlockCount = reader.ReadInt32();
+                    save.CustomBlockSignature = reader.ReadString();
+                    int expectedManifestVersion = version >= 23 ? 3 : version >= 22 ? 2 : 1;
+                    if (save.CustomContentVersion != expectedManifestVersion || save.CustomBlockCount < 0
+                        || save.CustomBlockCount > CustomBlockStore.MaxBlocks
+                        || string.IsNullOrWhiteSpace(save.CustomBlockSignature))
+                        throw new InvalidDataException("Invalid custom-content manifest in world save.");
+                    if (version >= 22)
+                    {
+                        save.CustomBlockIdentitySignature = reader.ReadString();
+                        if (string.IsNullOrWhiteSpace(save.CustomBlockIdentitySignature))
+                            throw new InvalidDataException("Invalid custom block ID identity in world save.");
                     }
                 }
                 return save;

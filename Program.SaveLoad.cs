@@ -104,6 +104,10 @@ namespace Cubuild
                 GenVersion = world.WorldGenVersion,
                 Mode = (int)world.Mode,
                 IsMinecraftMode = world.IsMinecraftMode,
+                CustomContentVersion = 3,
+                CustomBlockCount = CustomBlockStore.Records.Count,
+                CustomBlockSignature = CustomBlockStore.Signature,
+                CustomBlockIdentitySignature = CustomBlockStore.IdentitySignatureForCount(CustomBlockStore.Records.Count),
                 FrontierProgression = world.FrontierProgression,
                 PlayerX = world.PlayerPosition.X,
                 PlayerY = world.PlayerPosition.Y,
@@ -198,6 +202,10 @@ namespace Cubuild
             if (expected.Name != actual.Name || expected.Seed != actual.Seed
                 || expected.GenVersion != actual.GenVersion
                 || expected.Mode != actual.Mode || expected.IsMinecraftMode != actual.IsMinecraftMode
+                || expected.CustomContentVersion != actual.CustomContentVersion
+                || expected.CustomBlockCount != actual.CustomBlockCount
+                || !string.Equals(expected.CustomBlockSignature, actual.CustomBlockSignature, StringComparison.Ordinal)
+                || !string.Equals(expected.CustomBlockIdentitySignature, actual.CustomBlockIdentitySignature, StringComparison.Ordinal)
                 || expected.FrontierProgression != actual.FrontierProgression
                 || expected.PlayerX != actual.PlayerX || expected.PlayerY != actual.PlayerY
                 || expected.PlayerZ != actual.PlayerZ || expected.Yaw != actual.Yaw || expected.Pitch != actual.Pitch
@@ -336,6 +344,34 @@ namespace Cubuild
 
         private void ApplyWorldSave(GameWorld world, WorldSave save)
         {
+            if (save.FileVersion >= 22)
+            {
+                if (save.CustomBlockCount > CustomBlockStore.Records.Count
+                    || !string.Equals(save.CustomBlockIdentitySignature,
+                        CustomBlockStore.IdentitySignatureForCount(save.CustomBlockCount), StringComparison.Ordinal))
+                    throw new IOException($"This world requires the same ordered custom block IDs for its first {save.CustomBlockCount} custom blocks. Restore the matching CustomContent/custom_blocks.json; block IDs cannot be remapped.");
+                int additionalCustomBlocks = CustomBlockStore.Records.Count - save.CustomBlockCount;
+                if (additionalCustomBlocks > 0)
+                    ShiftSavedItemIdsFromBase(save, BlockRegistry.StockCount + save.CustomBlockCount, additionalCustomBlocks);
+            }
+            else if (save.FileVersion >= 21)
+            {
+                if (save.CustomBlockCount > CustomBlockStore.Records.Count)
+                    throw new IOException($"This world requires {save.CustomBlockCount} custom blocks, but only {CustomBlockStore.Records.Count} are installed.");
+                string currentLegacy = CustomBlockStore.LegacySignatureForCount(save.CustomBlockCount);
+                bool exact = string.Equals(save.CustomBlockSignature, currentLegacy, StringComparison.OrdinalIgnoreCase);
+                bool migrated = CustomBlockStore.V21SignatureMapsToCurrentIdentity(save.CustomBlockCount, save.CustomBlockSignature);
+                if (!exact && !migrated)
+                    throw new IOException($"This v21 world requires a matching custom block catalog. Its saved block contents do not match the current ordered IDs or the persisted edit history.");
+                int additionalCustomBlocks = CustomBlockStore.Records.Count - save.CustomBlockCount;
+                if (additionalCustomBlocks > 0)
+                    ShiftSavedItemIdsFromBase(save, BlockRegistry.StockCount + save.CustomBlockCount, additionalCustomBlocks);
+            }
+            else if (CustomBlockStore.Records.Count > 0)
+            {
+                ValidateLegacyStockBlockIds(save);
+                ShiftSavedItemIdsFromBase(save, BlockRegistry.StockCount, CustomBlockStore.Records.Count);
+            }
             if (save.Chunks.Exists(c => c.IsDelta))
             {
                 // Version 27 changed only sky generation, so its deep/ground sparse deltas
@@ -383,6 +419,46 @@ namespace Cubuild
             world.LinkedPositiveZWorld = save.LinkedPositiveZWorld ?? "";
             world.LinkedNegativeZWorld = save.LinkedNegativeZWorld ?? "";
             world.Mesher.NeedsMeshUpdate = true;
+        }
+
+        private static void ValidateLegacyStockBlockIds(WorldSave save)
+        {
+            int stockCount = BlockRegistry.StockCount;
+            foreach (var chunk in save.Chunks)
+            {
+                if (chunk.IsDelta)
+                {
+                    foreach (var cell in chunk.DeltaCells)
+                        if (cell.Block >= stockCount)
+                            throw new IOException("This pre-v21 world contains block IDs outside its stock catalog and cannot be safely mapped to the installed custom catalog.");
+                }
+                else
+                {
+                    foreach (byte block in chunk.Blocks)
+                        if (block >= stockCount)
+                            throw new IOException("This pre-v21 world contains block IDs outside its stock catalog and cannot be safely mapped to the installed custom catalog.");
+                }
+            }
+        }
+
+        private static void ShiftSavedItemIdsFromBase(WorldSave save, int firstShiftedId, int amount)
+        {
+            int added = Math.Max(0, amount);
+            if (added <= 0) return;
+            static int Shift(int id, int baseId, int amount) => id >= baseId ? id + amount : id;
+            for (int i = 0; i < save.Hotbar.Length; i++) save.Hotbar[i] = Shift(save.Hotbar[i], firstShiftedId, added);
+            for (int i = 0; i < save.Bag.Length; i++)
+                save.Bag[i] = new InventorySlot { ItemId = Shift(save.Bag[i].ItemId, firstShiftedId, added), Count = save.Bag[i].Count };
+            if (save.HasHeldStack) save.HeldItemId = Shift(save.HeldItemId, firstShiftedId, added);
+            foreach (var mob in save.Mobs)
+            {
+                for (int i = 0; i < mob.CargoSlots.Length; i++)
+                    mob.CargoSlots[i] = new InventorySlot { ItemId = Shift(mob.CargoSlots[i].ItemId, firstShiftedId, added), Count = mob.CargoSlots[i].Count };
+                for (int i = 0; i < mob.SteveInventory.Length; i++)
+                    mob.SteveInventory[i] = new InventorySlot { ItemId = Shift(mob.SteveInventory[i].ItemId, firstShiftedId, added), Count = mob.SteveInventory[i].Count };
+                mob.SteveMaterialItemId = Shift(mob.SteveMaterialItemId, firstShiftedId, added);
+                mob.StevePlanMaterialItemId = Shift(mob.StevePlanMaterialItemId, firstShiftedId, added);
+            }
         }
 
         private void RefreshSavedWorlds()
