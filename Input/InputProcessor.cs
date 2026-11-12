@@ -164,8 +164,6 @@ namespace Cubuild
         private const int SDL_SCANCODE_LSHIFT = 225;
         private const int SDL_SCANCODE_LCTRL = 224;
         private const int SDL_SCANCODE_RCTRL = 228;
-        private const int SDL_SCANCODE_SLASH = 56; // forward slash /
-        private const int SDL_SCANCODE_L = 15;
         private const long SpaceDoubleTapWindowMs = 300;
 
         private bool moveForward;
@@ -210,7 +208,6 @@ namespace Cubuild
         private bool hasLastMousePosition;
         private bool chatOpen;
         private bool spaceWasDown;
-        private bool fastForwardKeyWasDown;
         private long lastSpaceTapMs = -1;
 
         public void BeginFrame()
@@ -271,7 +268,6 @@ namespace Cubuild
             // reads the hardware state and always reflects reality.
             IntPtr keyStatePtr = SDL_GetKeyboardState(out int numkeys);
             bool spaceDown;
-            bool fastForwardDown;
             unsafe
             {
                 byte* keyState = (byte*)keyStatePtr;
@@ -287,13 +283,7 @@ namespace Cubuild
                 // jumpPressed is consumed each tick (one-shot).  Set it whenever Space is
                 // physically held so StepPlayer can trigger a jump each time the player lands.
                 jumpPressed = keyState[SDL_SCANCODE_SPACE] != 0;
-                fastForwardDown = keyState[SDL_SCANCODE_L] != 0;
             }
-
-            // Poll the physical key state so OS key-repeat events cannot toggle this more than
-            // once per press. Like other frame actions, the resulting edge is consumed once.
-            if (fastForwardDown && !fastForwardKeyWasDown) toggleFastForwardPressed = true;
-            fastForwardKeyWasDown = fastForwardDown;
 
             if (!mouseCaptured || chatOpen)
             {
@@ -323,35 +313,11 @@ namespace Cubuild
                     case Key.Escape:
                         toggleMouseCapturePressed = true;
                         break;
-                    case Key.F3:
-                        toggleDebugPressed = true;
-                        break;
                     case Key.E:
                         toggleInventoryPressed = true;
                         break;
-                    case Key.B:
-                        toggleBiomeMenuPressed = true;
-                        break;
-                    case Key.F8:
-                        toggleHandEditorPressed = true;
-                        break;
                     case Key.F:
                         cycleRenderDistancePressed = true;
-                        break;
-                    case Key.G:
-                        spawnMobPressed = true;
-                        break;
-                    case Key.H:
-                        spawnCoyotePressed = true;
-                        break;
-                    case Key.P:
-                        spawnStevePressed = true;
-                        break;
-                    case Key.J:
-                        spawnZombiePressed = true;
-                        break;
-                    case Key.O:
-                        damageSelfPressed = true;
                         break;
                     case Key.Q:
                         dropItemPressed = true;
@@ -359,27 +325,11 @@ namespace Cubuild
                     case Key.F5:
                         toggleThirdPersonPressed = true;
                         break;
-                    case Key.F6:
-                        toggleFullbrightPressed = true;
-                        break;
                     case Key.T:
                         advanceTimePressed = true;
                         break;
-                    case Key.F7:
-                        toggleGpuCullPressed = true;
-                        break;
                     case Key.F11:
                         toggleFullscreenPressed = true;
-                        break;
-                    case Key.Enter:
-                        if (keyEvent.Modifiers.HasFlag(ModifierKeys.Alt)) toggleFullscreenPressed = true;
-                        else if (!chatOpen) openChatPressed = true;
-                        break;
-                    case Key.Slash:
-                        toggleCreativePressed = true;
-                        break;
-                    case Key.F2:
-                        toggleNoclipPressed = true;
                         break;
                     case Key.Number1:
                         selectedSlot = 0;

@@ -30,17 +30,6 @@ namespace Cubuild
                 return;
             }
 
-            if (frameInput.OpenChatPressed && screen == GameScreen.Playing && World != null
-                && !inventoryOpen && !craftingOpen && !smeltOpen && !oreCartOpen
-                && !biomeMenuOpen && !handEditorOpen)
-            {
-                chatOpen = true;
-                _chatJustOpened = true;
-                input.SetChatOpen(true);
-                DisableMouseLook();
-                return;
-            }
-
             if (frameInput.ToggleMouseCapturePressed)
             {
                 if (screen == GameScreen.Playing)
@@ -89,39 +78,13 @@ namespace Cubuild
                 EnableMouseLook();
                 return;
             }
-            if (frameInput.ToggleDebugPressed) showFps = !showFps;
             if (frameInput.ToggleFullscreenPressed) ToggleFullscreen();
-            if (frameInput.ToggleCreativePressed && World != null && !oreCartOpen)
-            {
-                World.Mode = World.Mode == GameMode.Creative ? GameMode.Survival : GameMode.Creative;
-            }
             if (_ignoreInteractFrames > 0) _ignoreInteractFrames--;
             if (screen == GameScreen.Playing && World != null)
             {
-                // Flight is a creative privilege.
-                if (frameInput.ToggleNoclipPressed && World.IsCreative && !oreCartOpen)
-                    World.NoclipMode = !World.NoclipMode;
                 if (frameInput.ToggleCreativeFlightPressed && World.IsCreative && !oreCartOpen)
                     World.CreativeFlightMode = !World.CreativeFlightMode;
                 if (frameInput.AdvanceTimePressed && !oreCartOpen) World.AdvanceTime();
-                if (frameInput.ToggleGpuCullPressed)
-                {
-                    gpuRenderer?.ToggleGpuCulling();
-                    // A cull-mode switch changes which per-pass command buffer is authoritative, so
-                    // every loaded chunk is re-meshed and re-uploaded - this rebuilds the draw
-                    // commands and flushes the GPU cull data fresh, avoiding stale-args glitches.
-                    _forceChunkStream = true;
-                    foreach (var c in World.Chunks.GetLoadedChunks())
-                    {
-                        c.NeedsRemesh = true;
-                    }
-                }
-                if (frameInput.ToggleFullbrightPressed)
-                {
-                    ChunkLighting.Fullbright = !ChunkLighting.Fullbright;
-                    // Fullbright is a renderer light uniform now; the mesh and its light channels
-                    // remain stable, so toggling it does not require a chunk remesh.
-                }
                 if (frameInput.ToggleInventoryPressed)
                 {
                     if (oreCartOpen)
@@ -152,32 +115,8 @@ namespace Cubuild
                         }
                     }
                 }
-                // Teleport menu is a creative sandbox convenience.
-                if (frameInput.ToggleBiomeMenuPressed && World.IsCreative && !oreCartOpen)
-                {
-                    biomeMenuOpen = !biomeMenuOpen;
-                    if (biomeMenuOpen) DisableMouseLook();
-                    else EnableMouseLook();
-                }
-                // Hand Editor (F8): frees the mouse so sliders can be dragged without looking around.
-                if (frameInput.ToggleHandEditorPressed && !oreCartOpen)
-                {
-                    handEditorOpen = !handEditorOpen;
-                    if (handEditorOpen) DisableMouseLook();
-                    else EnableMouseLook();
-                }
             }
             if (frameInput.CycleRenderDistancePressed) CycleRenderDistance();
-            if (screen == GameScreen.Playing && World != null && !oreCartOpen)
-            {
-                // Debug spawn + damage-test keys are creative-only toys.
-                if (frameInput.SpawnMobPressed && World.IsCreative) World.Entities.SpawnDuck(World.PlayerPosition, World.PlayerYaw);
-                if (frameInput.SpawnCoyotePressed && World.IsCreative) World.Entities.SpawnCoyote(World.PlayerPosition, World.PlayerYaw);
-                if (frameInput.SpawnStevePressed && World.IsCreative) World.Entities.SpawnSteve(World.PlayerPosition, World.PlayerYaw);
-                if (frameInput.SpawnZombiePressed && World.IsCreative) World.Entities.SpawnMobById("zombie", World.PlayerPosition, World.PlayerYaw);
-                // O = take 1 point of damage (healthbar slice test).
-                if (frameInput.DamageSelfPressed && World.IsCreative) World.DamagePlayer(1, DeathCause.DebugSelf);
-            }
             if (frameInput.ToggleThirdPersonPressed) thirdPersonView = !thirdPersonView;
             // Number keys, like the scroll wheel, must not silently change the selected slot while a
             // menu is open - otherwise pressing 3 to dismiss nothing just swaps your hotbar
@@ -188,8 +127,6 @@ namespace Cubuild
             {
                 World.SetSelectedSlot(frameInput.SelectedSlot.Value);
             }
-            if (frameInput.ToggleFastForwardPressed && CanToggleFastForward())
-                _fastForwardEnabled = !_fastForwardEnabled;
             // Q: throw one item - from the hovered inventory slot, else the cursor, else the
             // selected hotbar stack (MC survival behavior).
             if (frameInput.DropItemPressed && World != null && screen == GameScreen.Playing && !oreCartOpen)
