@@ -263,9 +263,9 @@ namespace Cubuild
         private const double CreativeFlightAcceleration = 42.0;
         private const double CreativeFlightHorizontalDrag = 0.78;
         private const double CreativeFlightVerticalDrag = 0.60;
-        // Vertical flight felt sluggish compared to horizontal movement; this doubles the
+        // Vertical flight felt sluggish compared to horizontal movement; this scales the
         // upward and downward target speed without touching horizontal flight.
-        private const double CreativeFlightVerticalSpeedMultiplier = 2.0;
+        private const double CreativeFlightVerticalSpeedMultiplier = 3.0;
 
         private void StepCreativeFlight(PlayerState p, TickInputState tickInput, float deltaSeconds)
         {
