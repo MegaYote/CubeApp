@@ -262,52 +262,63 @@ namespace Cubuild
         private const double CreativeFlightSpeed = 5.6;
         private const double CreativeFlightAcceleration = 42.0;
         private const double CreativeFlightHorizontalDrag = 0.78;
-        private const double CreativeFlightVerticalDrag = 0.60;
         // Vertical flight felt sluggish compared to horizontal movement; this scales the
         // upward and downward target speed without touching horizontal flight.
         private const double CreativeFlightVerticalSpeedMultiplier = 3.0;
+        // Vertical input drives velocity directly toward its target instead of sharing the
+        // horizontal collision/acceleration budget. This keeps diagonals from diluting the
+        // climb/descent speed and avoids the old vertical drag limiting the top speed.
+        private const double CreativeFlightVerticalResponse = 16.0;
 
         private void StepCreativeFlight(PlayerState p, TickInputState tickInput, float deltaSeconds)
         {
             double yaw = p.Yaw * Math.PI / 180.0;
             var forward = new Point3D(Math.Sin(yaw), 0, Math.Cos(yaw));
             var right = GameWorld.GetCameraRight(p.Yaw);
-            var direction = Point3D.Zero;
-            if (tickInput.MoveForward) direction += forward;
-            if (tickInput.MoveBackward) direction -= forward;
-            if (tickInput.MoveLeft) direction += right;
-            if (tickInput.MoveRight) direction -= right;
-            if (tickInput.MoveUp) direction += new Point3D(0, 1, 0);
-            if (tickInput.MoveDown) direction += new Point3D(0, -1, 0);
+            var horizontal = Point3D.Zero;
+            if (tickInput.MoveForward) horizontal += forward;
+            if (tickInput.MoveBackward) horizontal -= forward;
+            if (tickInput.MoveLeft) horizontal += right;
+            if (tickInput.MoveRight) horizontal -= right;
+            bool hasHorizontal = horizontal.X != 0 || horizontal.Z != 0;
+            if (hasHorizontal) horizontal = horizontal.Normalized();
 
-            bool hasInput = direction.X != 0 || direction.Y != 0 || direction.Z != 0;
-            if (hasInput) direction = direction.Normalized();
-
+            int verticalInput = (tickInput.MoveUp ? 1 : 0) - (tickInput.MoveDown ? 1 : 0);
             double dt = Math.Max(0, deltaSeconds);
-            double vx = p.Velocity.X * Math.Pow(CreativeFlightHorizontalDrag, dt * 20.0);
-            double vy = p.Velocity.Y * Math.Pow(CreativeFlightVerticalDrag, dt * 20.0);
-            double vz = p.Velocity.Z * Math.Pow(CreativeFlightHorizontalDrag, dt * 20.0);
-            if (hasInput)
+            double baseSpeed = CreativeFlightSpeed * (tickInput.MoveFast ? 10.0 : 1.0);
+            double targetVx = horizontal.X * baseSpeed;
+            double targetVz = horizontal.Z * baseSpeed;
+            // Keep vertical independent: diagonal travel gets the full horizontal speed AND the
+            // full vertical speed instead of having both reduced by a shared 3D normalization.
+            double verticalSpeed = CreativeFlightSpeed * CreativeFlightVerticalSpeedMultiplier
+                * (verticalInput > 0 ? 1.2 : 1.0);
+            double targetVy = verticalInput * verticalSpeed;
+
+            double drag = Math.Pow(CreativeFlightHorizontalDrag, dt * 20.0);
+            double vx = p.Velocity.X * drag;
+            double vz = p.Velocity.Z * drag;
+            if (hasHorizontal)
             {
-                double speedMultiplier = tickInput.MoveFast ? 10.0 : 1.0;
-                double targetSpeed = CreativeFlightSpeed * speedMultiplier;
-                var target = new Point3D(
-                    direction.X * targetSpeed,
-                    direction.Y * targetSpeed * (direction.Y > 0 ? 1.2 : 1.0) * CreativeFlightVerticalSpeedMultiplier,
-                    direction.Z * targetSpeed);
-                double dx = target.X - vx, dy = target.Y - vy, dz = target.Z - vz;
-                double distance = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                double dx = targetVx - vx, dz = targetVz - vz;
+                double distance = Math.Sqrt(dx * dx + dz * dz);
                 double maxStep = CreativeFlightAcceleration * dt;
                 if (distance <= maxStep)
                 {
-                    vx = target.X; vy = target.Y; vz = target.Z;
+                    vx = targetVx;
+                    vz = targetVz;
                 }
                 else if (distance > 0)
                 {
                     double ratio = maxStep / distance;
-                    vx += dx * ratio; vy += dy * ratio; vz += dz * ratio;
+                    vx += dx * ratio;
+                    vz += dz * ratio;
                 }
             }
+
+            // Direct vertical response: reaches the requested climb/descent speed quickly and
+            // decays smoothly to a hover when Space/Shift are released.
+            double verticalResponse = 1.0 - Math.Exp(-CreativeFlightVerticalResponse * dt);
+            double vy = p.Velocity.Y + (targetVy - p.Velocity.Y) * verticalResponse;
 
             p.Velocity = new Point3D(vx, vy, vz);
             MovePlayerWithCollisions(p, p.Velocity * dt);
