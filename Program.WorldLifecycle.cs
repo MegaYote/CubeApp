@@ -410,7 +410,6 @@ namespace Cubuild
                 if ((uint)index < (uint)records.Count)
                 {
                     var record = records[index];
-                    menu.CustomBlockId = record.Id;
                     menu.CustomBlockDisplayName = record.DisplayName;
                     menu.CustomBlockFacePixels = record.Faces.Select(face => (byte[])face.Clone()).ToArray();
                     menu.CustomBlockSelectedFace = 0;
@@ -434,11 +433,17 @@ namespace Cubuild
             {
                 try
                 {
+                    bool editing = menu.CustomBlockEditIndex >= 0;
+                    var previous = editing ? CustomBlockStore.Records[menu.CustomBlockEditIndex] : null;
                     var record = new CustomBlockRecord
                     {
-                        Id = menu.CustomBlockId.Trim(), DisplayName = menu.CustomBlockDisplayName.Trim(),
-                        Pixels = menu.CustomBlockEditIndex >= 0
-                            ? (byte[])CustomBlockStore.Records[menu.CustomBlockEditIndex].Pixels.Clone()
+                        // New blocks auto-generate both identities in the store. Editing always
+                        // carries the existing immutable UID and hidden legacy ID forward.
+                        Uid = previous?.Uid ?? "",
+                        Id = previous?.Id ?? "",
+                        DisplayName = menu.CustomBlockDisplayName.Trim(),
+                        Pixels = previous != null
+                            ? (byte[])previous.Pixels.Clone()
                             : (byte[])menu.CustomBlockFacePixels[0].Clone(),
                         Faces = menu.CustomBlockFacePixels.Select(face => (byte[])face.Clone()).ToArray(),
                         Solid = menu.CustomBlockSolid,
@@ -446,14 +451,14 @@ namespace Cubuild
                         LightEmission = menu.CustomBlockLightEmission, Inventory = menu.CustomBlockInventory,
                         Placeable = menu.CustomBlockPlaceable, Hardness = menu.CustomBlockHardness,
                         MapColorOverride = menu.CustomBlockAutoMapColor ? null : menu.CustomBlockMapColor,
+                        Aliases = previous?.Aliases != null ? new List<string>(previous.Aliases) : new List<string>(),
                     };
-                    bool editing = menu.CustomBlockEditIndex >= 0;
                     if (editing) CustomBlockStore.Update(menu.CustomBlockEditIndex, record);
                     else CustomBlockStore.Create(record);
                     ReloadCurrentCatalogWithCustomBlocks();
                     menu.CustomBlockError = "";
                     menu.CustomBlockNotice = editing
-                        ? $"Updated '{menu.CustomBlockDisplayName.Trim()}'. Its block ID and position are unchanged."
+                        ? $"Updated '{menu.CustomBlockDisplayName.Trim()}'. Its identity and position are unchanged."
                         : $"Created '{menu.CustomBlockDisplayName.Trim()}'. It is now available in inventory.";
                     menu.CustomBlockEditIndex = -1;
                     menu.Screen = GameScreen.CustomBlocks;

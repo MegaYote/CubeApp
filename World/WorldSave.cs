@@ -96,14 +96,21 @@ namespace Cubuild
     public sealed class WorldSave
     {
         public const string Magic = "CUBW";
-        public const int Version = 23;
+        public const int Version = 24;
         /// <summary>Binary version read from disk; new/in-memory saves use the current version.</summary>
         public int FileVersion = Version;
-        /// <summary>v21-v23 custom-content manifest fields, checked before block bytes are applied.</summary>
-        public int CustomContentVersion = 3;
+        /// <summary>v24 custom-content manifest version (v21-v23 used 1, 2, or 3).</summary>
+        public int CustomContentVersion = CustomBlockStore.SaveManifestVersion;
+        /// <summary>v24: stock block count the saved numeric IDs were written against.</summary>
+        public int CustomBaseStockCount;
+        /// <summary>v21-v23 manifest fields; retained for reading historical saves.</summary>
         public int CustomBlockCount;
         public string CustomBlockSignature = "";
         public string CustomBlockIdentitySignature = "";
+        /// <summary>v24: complete ordered embedded palette, including immutable UID and content hash.</summary>
+        public List<CustomBlockRecord> CustomBlocks = new();
+        /// <summary>Ordered UID + content-hash signature for staged-save verification.</summary>
+        public string CustomPaletteSignature => CustomBlockStore.PaletteSignatureForRecords(CustomBlocks, CustomBlocks.Count);
 
         public string Name = "World 1";
         /// <summary>Runtime-only save-file key (the path may differ from Name after a rename).</summary>
@@ -152,8 +159,22 @@ namespace Cubuild
         public string LinkedPositiveZWorld = "";
         public string LinkedNegativeZWorld = "";
 
+        /// <summary>Attaches the currently installed custom palette to this snapshot. Used when a
+        /// save captured by an older format is rewritten (for example a boundary-link repair).</summary>
+        public void CaptureCurrentCustomPalette()
+        {
+            CustomContentVersion = CustomBlockStore.SaveManifestVersion;
+            CustomBaseStockCount = BlockRegistry.StockCount;
+            CustomBlocks = CustomBlockStore.SnapshotRecords().ToList();
+            CustomBlockCount = CustomBlocks.Count;
+        }
+
         public void Save(string path)
         {
+            // A WorldSave read from an older format has no embedded v24 palette. Its block/item
+            // IDs have already been normalized to the installed catalog by ApplyWorldSave, so a
+            // rewrite must embed the current installed palette rather than an empty/default one.
+            if (FileVersion < Version) CaptureCurrentCustomPalette();
             // Stream through Deflate directly. Large full-array fallbacks should not require a
             // second, uncompressed copy of the entire world in memory.
             using var file = File.Create(path);
@@ -342,12 +363,41 @@ namespace Cubuild
                     w.Write(mob.SteveHomeRefugeY);
                     w.Write(mob.SteveHomeRefugeZ);
                 }
-                // v21 manifest remains byte-for-byte in place; v22 adds immutable ID identity;
-                // v23 records the six-face content signature schema.
-                w.Write(3);
-                w.Write(CustomBlockStore.Records.Count);
-                w.Write(CustomBlockStore.Signature);
-                w.Write(CustomBlockStore.IdentitySignatureForCount(CustomBlockStore.Records.Count));
+                // v24 replaces the v21-v23 manifest with a fully embedded ordered palette.
+                // The saved base stock count lets load reject incompatible stock packs before
+                // any numeric block/item ID is remapped.
+                w.Write(CustomBlockStore.SaveManifestVersion);
+                w.Write(CustomBaseStockCount);
+                w.Write(CustomBlocks.Count);
+                foreach (var block in CustomBlocks)
+                {
+                    w.Write(block.Uid ?? "");
+                    w.Write(block.ContentHash ?? "");
+                    w.Write(block.Id ?? "");
+                    w.Write(block.DisplayName ?? "");
+                    for (int face = 0; face < CustomBlockStore.FaceCount; face++)
+                    {
+                        byte[] pixels = block.Faces[face];
+                        w.Write(pixels.Length);
+                        w.Write(pixels);
+                    }
+                    w.Write(block.Solid);
+                    w.Write(block.Opaque.HasValue);
+                    if (block.Opaque.HasValue) w.Write(block.Opaque.Value);
+                    w.Write(block.Gravity);
+                    w.Write(block.LightEmission);
+                    w.Write(block.Inventory);
+                    w.Write(block.Placeable);
+                    w.Write(block.Hardness);
+                    w.Write(block.MapColorOverride.HasValue);
+                    if (block.MapColorOverride.HasValue) w.Write(block.MapColorOverride.Value);
+                    var aliases = block.Aliases ?? new List<string>();
+                    w.Write(aliases.Count);
+                    foreach (var alias in aliases) w.Write(alias ?? "");
+                }
+                // Palette identity over the ordered embedded (UID, content hash) pairs. This is
+                // verified on read and compared by staged-save semantic verification.
+                w.Write(CustomPaletteSignature);
                 w.Flush();
             }
         }
@@ -619,7 +669,69 @@ namespace Cubuild
                         mob.SteveHomeRefugeZ = reader.ReadInt32();
                     }
                 }
-                if (version >= 21)
+                if (version >= 24)
+                {
+                    save.CustomContentVersion = reader.ReadInt32();
+                    save.CustomBaseStockCount = reader.ReadInt32();
+                    save.CustomBlockCount = reader.ReadInt32();
+                    if (save.CustomContentVersion != CustomBlockStore.SaveManifestVersion
+                        || save.CustomBaseStockCount < 0 || save.CustomBaseStockCount > 256
+                        || save.CustomBlockCount < 0 || save.CustomBlockCount > CustomBlockStore.MaxBlocks
+                        || save.CustomBaseStockCount + save.CustomBlockCount > 256)
+                        throw new InvalidDataException("Invalid v24 custom-content manifest in world save.");
+                    for (int i = 0; i < save.CustomBlockCount; i++)
+                    {
+                        var block = new CustomBlockRecord
+                        {
+                            Uid = reader.ReadString(),
+                            ContentHash = reader.ReadString(),
+                            Id = reader.ReadString(),
+                            DisplayName = reader.ReadString(),
+                        };
+                        if (!CustomBlockStore.IsValidUid(block.Uid)
+                            || string.IsNullOrWhiteSpace(block.ContentHash)
+                            || string.IsNullOrWhiteSpace(block.Id) || block.Id.Length > 64
+                            || string.IsNullOrWhiteSpace(block.DisplayName) || block.DisplayName.Length > 48)
+                            throw new InvalidDataException("Invalid custom block identity in v24 world save.");
+                        block.Faces = new byte[CustomBlockStore.FaceCount][];
+                        for (int face = 0; face < CustomBlockStore.FaceCount; face++)
+                        {
+                            int length = reader.ReadInt32();
+                            if (length != CustomBlockStore.PixelBytes)
+                                throw new InvalidDataException("Invalid custom block face texture in v24 world save.");
+                            block.Faces[face] = reader.ReadBytes(length);
+                        }
+                        block.Pixels = (byte[])block.Faces[0].Clone();
+                        block.Solid = reader.ReadBoolean();
+                        block.Opaque = reader.ReadBoolean() ? reader.ReadBoolean() : null;
+                        block.Gravity = reader.ReadBoolean();
+                        block.LightEmission = reader.ReadInt32();
+                        block.Inventory = reader.ReadBoolean();
+                        block.Placeable = reader.ReadBoolean();
+                        block.Hardness = reader.ReadSingle();
+                        block.MapColorOverride = reader.ReadBoolean() ? reader.ReadUInt32() : null;
+                        int aliasCount = reader.ReadInt32();
+                        if (aliasCount < 0 || aliasCount > 256)
+                            throw new InvalidDataException("Invalid custom block alias count in v24 world save.");
+                        block.Aliases = new List<string>(aliasCount);
+                        for (int alias = 0; alias < aliasCount; alias++)
+                        {
+                            string value = reader.ReadString();
+                            if (string.IsNullOrWhiteSpace(value) || value.Length > 64)
+                                throw new InvalidDataException("Invalid custom block alias in v24 world save.");
+                            block.Aliases.Add(value);
+                        }
+                        string computedHash = CustomBlockStore.ComputeContentHash(block);
+                        if (!string.Equals(block.ContentHash, computedHash, StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidDataException("Custom block content hash does not match its embedded definition.");
+                        save.CustomBlocks.Add(block);
+                    }
+                    string paletteSignature = reader.ReadString();
+                    if (string.IsNullOrWhiteSpace(paletteSignature)
+                        || !string.Equals(paletteSignature, save.CustomPaletteSignature, StringComparison.Ordinal))
+                        throw new InvalidDataException("Custom block palette signature does not match the embedded palette.");
+                }
+                else if (version >= 21)
                 {
                     save.CustomContentVersion = reader.ReadInt32();
                     save.CustomBlockCount = reader.ReadInt32();

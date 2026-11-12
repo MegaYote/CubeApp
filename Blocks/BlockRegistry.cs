@@ -415,7 +415,8 @@ namespace Cubuild
             foreach (var record in records)
             {
                 if (_byName.ContainsKey(record.Id)) throw new InvalidDataException($"Duplicate block ID '{record.Id}'.");
-                if (StockContainsDisplayName(record.DisplayName)) throw new InvalidDataException($"Duplicate block display name '{record.DisplayName}'.");
+                // Display names are player-facing only and may repeat across imported packs;
+                // immutable UIDs are the identity, and numeric IDs remain append-only.
                 int id = Count;
                 var textures = CreateCustomFaceTextures(id - StockCount);
                 uint mapColor = AutoMapColor(record.Faces[0]);

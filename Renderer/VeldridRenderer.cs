@@ -664,7 +664,7 @@ namespace Cubuild.Renderer
         private const double HealthbeatBumpDur = 0.18; // seconds per thump
         private byte[] _worldNameBuffer = new byte[256];
         private byte[] _seedBuffer = new byte[256];
-        private byte[] _customBlockIdBuffer = new byte[128];
+
         private byte[] _customBlockNameBuffer = new byte[192];
         private bool _customBlockBuffersInitialized;
         private readonly List<byte[]> _customBlockUndo = new();

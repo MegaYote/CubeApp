@@ -104,10 +104,6 @@ namespace Cubuild
                 GenVersion = world.WorldGenVersion,
                 Mode = (int)world.Mode,
                 IsMinecraftMode = world.IsMinecraftMode,
-                CustomContentVersion = 3,
-                CustomBlockCount = CustomBlockStore.Records.Count,
-                CustomBlockSignature = CustomBlockStore.Signature,
-                CustomBlockIdentitySignature = CustomBlockStore.IdentitySignatureForCount(CustomBlockStore.Records.Count),
                 FrontierProgression = world.FrontierProgression,
                 PlayerX = world.PlayerPosition.X,
                 PlayerY = world.PlayerPosition.Y,
@@ -128,6 +124,7 @@ namespace Cubuild
                 LinkedPositiveZWorld = world.LinkedPositiveZWorld,
                 LinkedNegativeZWorld = world.LinkedNegativeZWorld,
             };
+            save.CaptureCurrentCustomPalette();
             for (int i = 0; i < save.Bag.Length && i < world.BagSlots.Count; i++)
                 save.Bag[i] = world.BagSlots[i];
             if (world.HeldStack is var held && held.HasValue)
@@ -199,13 +196,10 @@ namespace Cubuild
 
         private static bool SaveSnapshotMatches(WorldSave expected, WorldSave actual)
         {
+            if (!CustomManifestMatches(expected, actual)) return false;
             if (expected.Name != actual.Name || expected.Seed != actual.Seed
                 || expected.GenVersion != actual.GenVersion
                 || expected.Mode != actual.Mode || expected.IsMinecraftMode != actual.IsMinecraftMode
-                || expected.CustomContentVersion != actual.CustomContentVersion
-                || expected.CustomBlockCount != actual.CustomBlockCount
-                || !string.Equals(expected.CustomBlockSignature, actual.CustomBlockSignature, StringComparison.Ordinal)
-                || !string.Equals(expected.CustomBlockIdentitySignature, actual.CustomBlockIdentitySignature, StringComparison.Ordinal)
                 || expected.FrontierProgression != actual.FrontierProgression
                 || expected.PlayerX != actual.PlayerX || expected.PlayerY != actual.PlayerY
                 || expected.PlayerZ != actual.PlayerZ || expected.Yaw != actual.Yaw || expected.Pitch != actual.Pitch
@@ -317,6 +311,45 @@ namespace Cubuild
             return true;
         }
 
+        private static bool CustomManifestMatches(WorldSave expected, WorldSave actual)
+        {
+            if (expected.FileVersion >= 24 || actual.FileVersion >= 24)
+            {
+                if (expected.CustomContentVersion != actual.CustomContentVersion
+                    || expected.CustomBaseStockCount != actual.CustomBaseStockCount
+                    || expected.CustomBlockCount != actual.CustomBlockCount
+                    || expected.CustomBlocks.Count != actual.CustomBlocks.Count
+                    || expected.CustomBlockCount != expected.CustomBlocks.Count
+                    || !string.Equals(expected.CustomPaletteSignature, actual.CustomPaletteSignature, StringComparison.Ordinal))
+                    return false;
+                for (int i = 0; i < expected.CustomBlocks.Count; i++)
+                    if (!CustomBlockDefinitionMatches(expected.CustomBlocks[i], actual.CustomBlocks[i])) return false;
+                return true;
+            }
+            return expected.CustomContentVersion == actual.CustomContentVersion
+                && expected.CustomBlockCount == actual.CustomBlockCount
+                && string.Equals(expected.CustomBlockSignature, actual.CustomBlockSignature, StringComparison.Ordinal)
+                && string.Equals(expected.CustomBlockIdentitySignature, actual.CustomBlockIdentitySignature, StringComparison.Ordinal);
+        }
+
+        private static bool CustomBlockDefinitionMatches(CustomBlockRecord a, CustomBlockRecord b)
+        {
+            if (!string.Equals(a.Uid, b.Uid, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(a.ContentHash, b.ContentHash, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(a.Id, b.Id, StringComparison.Ordinal)
+                || !string.Equals(a.DisplayName, b.DisplayName, StringComparison.Ordinal)
+                || a.Solid != b.Solid || a.Opaque != b.Opaque || a.Gravity != b.Gravity
+                || a.LightEmission != b.LightEmission || a.Inventory != b.Inventory
+                || a.Placeable != b.Placeable || a.Hardness != b.Hardness
+                || a.MapColorOverride != b.MapColorOverride
+                || a.Faces.Length != b.Faces.Length || a.Aliases.Count != b.Aliases.Count) return false;
+            for (int face = 0; face < a.Faces.Length; face++)
+                if (!a.Faces[face].AsSpan().SequenceEqual(b.Faces[face])) return false;
+            for (int alias = 0; alias < a.Aliases.Count; alias++)
+                if (!string.Equals(a.Aliases[alias], b.Aliases[alias], StringComparison.OrdinalIgnoreCase)) return false;
+            return true;
+        }
+
         private static void TryLogSaveError(Exception ex)
         {
             try { System.IO.File.AppendAllText("save_error.log", DateTime.Now + " Save failed: " + ex + Environment.NewLine); } catch { }
@@ -344,7 +377,11 @@ namespace Cubuild
 
         private void ApplyWorldSave(GameWorld world, WorldSave save)
         {
-            if (save.FileVersion >= 22)
+            if (save.FileVersion >= 24)
+            {
+                ApplyV24CustomManifest(save, world);
+            }
+            else if (save.FileVersion >= 22)
             {
                 if (save.CustomBlockCount > CustomBlockStore.Records.Count
                     || !string.Equals(save.CustomBlockIdentitySignature,
@@ -419,6 +456,139 @@ namespace Cubuild
             world.LinkedPositiveZWorld = save.LinkedPositiveZWorld ?? "";
             world.LinkedNegativeZWorld = save.LinkedNegativeZWorld ?? "";
             world.Mesher.NeedsMeshUpdate = true;
+            // The in-memory save now refers to installed numeric IDs. If a boundary handoff
+            // repairs metadata and rewrites this save, it must embed the installed palette.
+            save.CaptureCurrentCustomPalette();
+        }
+
+        private void ApplyV24CustomManifest(WorldSave save, GameWorld world)
+        {
+            if (save.CustomContentVersion != CustomBlockStore.SaveManifestVersion)
+                throw new IOException($"Unsupported custom-content manifest version {save.CustomContentVersion} in this world.");
+            if (save.IsMinecraftMode != BlockRegistry.IsMinecraftMode || save.IsMinecraftMode != world.IsMinecraftMode)
+                throw new IOException("This world's saved block pack does not match the installed pack.");
+            if (save.CustomBaseStockCount != BlockRegistry.StockCount)
+                throw new IOException($"This world was saved with {save.CustomBaseStockCount} stock blocks, but the installed pack has {BlockRegistry.StockCount}. Block IDs cannot be safely remapped.");
+            if (save.CustomBlockCount != save.CustomBlocks.Count)
+                throw new IOException("This world's embedded custom-block palette is incomplete.");
+
+            // The installed catalog is the single source of truth. This imports missing/conflicting
+            // definitions and persists them once; the player's pack is never mutated merely by saving.
+            var uidMap = CustomBlockStore.ImportWorldBlocks(save.CustomBlocks);
+            ReloadCurrentCatalogWithCustomBlocks();
+            if (save.CustomBaseStockCount != BlockRegistry.StockCount)
+                throw new IOException("The installed stock pack changed while importing this world's custom blocks.");
+
+            int[] indexMap = BuildV24CustomIndexMap(save.CustomBlocks, uidMap);
+            RemapSavedBlockIds(save, save.CustomBaseStockCount, indexMap);
+            RemapSavedItemIdsV24(save, save.CustomBaseStockCount, indexMap);
+        }
+
+        private static int[] BuildV24CustomIndexMap(
+            IReadOnlyList<CustomBlockRecord> savedBlocks,
+            IReadOnlyDictionary<string, string> uidMap)
+        {
+            var installed = CustomBlockStore.Records;
+            var installedIndexByUid = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < installed.Count; i++) installedIndexByUid[installed[i].Uid] = i;
+
+            var map = new int[savedBlocks.Count];
+            for (int i = 0; i < savedBlocks.Count; i++)
+            {
+                var saved = savedBlocks[i];
+                if (!uidMap.TryGetValue(saved.Uid, out string? installedUid)
+                    || !installedIndexByUid.TryGetValue(installedUid, out int installedIndex))
+                    throw new IOException($"Could not resolve saved custom block '{saved.DisplayName}' to an installed block.");
+                if (installedIndex < 0 || installedIndex >= installed.Count)
+                    throw new IOException($"Saved custom block '{saved.DisplayName}' mapped outside the installed custom catalog.");
+                if (!string.Equals(saved.ContentHash, installed[installedIndex].ContentHash, StringComparison.OrdinalIgnoreCase))
+                    throw new IOException($"Saved custom block '{saved.DisplayName}' resolved to different content. Refusing to use the wrong block.");
+                map[i] = installedIndex;
+            }
+            return map;
+        }
+
+        private static void RemapSavedBlockIds(WorldSave save, int savedStockCount, IReadOnlyList<int> customIndexMap)
+        {
+            int installedStockCount = BlockRegistry.StockCount;
+            int installedBlockCount = BlockRegistry.Count;
+            int savedCustomCount = customIndexMap.Count;
+
+            byte Remap(byte block)
+            {
+                if (block < savedStockCount) return block;
+                int savedCustomIndex = block - savedStockCount;
+                if ((uint)savedCustomIndex >= (uint)savedCustomCount)
+                    throw new IOException($"This world contains block ID {block}, which is outside its saved custom palette.");
+                int installedIndex = customIndexMap[savedCustomIndex];
+                int installedId = installedStockCount + installedIndex;
+                if (installedIndex < 0 || (uint)installedId >= (uint)installedBlockCount || installedId > byte.MaxValue)
+                    throw new IOException($"Saved custom block {savedCustomIndex + 1} mapped outside the installed block catalog.");
+                return (byte)installedId;
+            }
+
+            foreach (var chunk in save.Chunks)
+            {
+                if (chunk.IsDelta)
+                {
+                    for (int i = 0; i < chunk.DeltaCells.Length; i++)
+                    {
+                        var cell = chunk.DeltaCells[i];
+                        byte mapped = Remap(cell.Block);
+                        if (mapped != cell.Block)
+                            chunk.DeltaCells[i] = new SavedChunkDeltaCell(cell.Index, mapped, cell.Meta);
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < chunk.Blocks.Length; i++)
+                        chunk.Blocks[i] = Remap(chunk.Blocks[i]);
+                }
+            }
+        }
+
+        private static void RemapSavedItemIdsV24(WorldSave save, int savedStockCount, IReadOnlyList<int> customIndexMap)
+        {
+            int installedStockCount = BlockRegistry.StockCount;
+            int installedBlockCount = BlockRegistry.Count;
+            int savedBlockCount = savedStockCount + customIndexMap.Count;
+            int shift = installedBlockCount - savedBlockCount;
+
+            int Remap(int id)
+            {
+                if (id <= 0) return id;
+                if (id < savedStockCount) return id;
+                int savedCustomIndex = id - savedStockCount;
+                if ((uint)savedCustomIndex < (uint)customIndexMap.Count)
+                {
+                    int installedIndex = customIndexMap[savedCustomIndex];
+                    int installedId = installedStockCount + installedIndex;
+                    if (installedIndex < 0 || (uint)installedId >= (uint)installedBlockCount)
+                        throw new IOException($"Saved custom block item {id} mapped outside the installed item catalog.");
+                    return installedId;
+                }
+
+                int shifted = id + shift;
+                if (shifted < installedBlockCount || shifted >= ItemRegistry.Count)
+                    throw new IOException($"This world contains item ID {id}, which is outside the installed item catalog.");
+                return shifted;
+            }
+
+            if (save.Hotbar != null)
+                for (int i = 0; i < save.Hotbar.Length; i++) save.Hotbar[i] = Remap(save.Hotbar[i]);
+            if (save.Bag != null)
+                for (int i = 0; i < save.Bag.Length; i++)
+                    save.Bag[i] = new InventorySlot { ItemId = Remap(save.Bag[i].ItemId), Count = save.Bag[i].Count };
+            if (save.HasHeldStack) save.HeldItemId = Remap(save.HeldItemId);
+            foreach (var mob in save.Mobs)
+            {
+                for (int i = 0; i < mob.CargoSlots.Length; i++)
+                    mob.CargoSlots[i] = new InventorySlot { ItemId = Remap(mob.CargoSlots[i].ItemId), Count = mob.CargoSlots[i].Count };
+                for (int i = 0; i < mob.SteveInventory.Length; i++)
+                    mob.SteveInventory[i] = new InventorySlot { ItemId = Remap(mob.SteveInventory[i].ItemId), Count = mob.SteveInventory[i].Count };
+                mob.SteveMaterialItemId = Remap(mob.SteveMaterialItemId);
+                mob.StevePlanMaterialItemId = Remap(mob.StevePlanMaterialItemId);
+            }
         }
 
         private static void ValidateLegacyStockBlockIds(WorldSave save)

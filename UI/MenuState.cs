@@ -55,7 +55,6 @@ namespace Cubuild
         public int SelectedWorldIndex = -1;
         /// <summary>Display names of saved worlds (from the saves folder), for the title list.</summary>
         public List<string> SavedWorlds = new();
-        public string CustomBlockId = "";
         public string CustomBlockDisplayName = "";
         public byte[] CustomBlockPixels = CreateDefaultCustomPixels();
         public byte[][] CustomBlockFacePixels = CreateDefaultCustomFaces();

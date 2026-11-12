@@ -1516,7 +1516,7 @@ namespace Cubuild.Renderer
             ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
             ImGui.Begin("##customblocks", windowFlags & ~ImGuiWindowFlags.NoScrollbar & ~ImGuiWindowFlags.NoScrollWithMouse);
             ImGui.SetWindowFontScale(1.35f); ImGui.Text("Custom Blocks"); ImGui.SetWindowFontScale(1f);
-            ImGui.TextWrapped("Player-created blocks keep their numeric IDs and creation order. Edits update the existing block in place.");
+            ImGui.TextWrapped("Player-created blocks keep a hidden permanent identity and creation order. Edits update the existing block in place; names may repeat across imported packs.");
             if (!string.IsNullOrWhiteSpace(m.CustomBlockNotice)) ImGui.TextColored(new Vector4(0.35f, 0.9f, 0.45f, 1f), m.CustomBlockNotice);
             if (!string.IsNullOrWhiteSpace(m.CustomBlockError)) ImGui.TextWrapped(m.CustomBlockError);
             ImGui.Separator();
@@ -1526,7 +1526,7 @@ namespace Cubuild.Renderer
             for (int i = 0; i < records.Count; i++)
             {
                 ImGui.PushID(i);
-                ImGui.Text($"{i + 1}. {records[i].DisplayName}  ({records[i].Id})");
+                ImGui.Text($"{i + 1}. {records[i].DisplayName}");
                 ImGui.SameLine();
                 if (ImGui.SmallButton("Edit")) { BeginCustomBlockEdit(); _customBlockBuffersInitialized = false; m.EditCustomBlockClicked = true; m.CustomBlockEditIndex = i; }
                 ImGui.PopID();
@@ -1537,7 +1537,7 @@ namespace Cubuild.Renderer
                 ImGui.TextDisabled($"Limit reached ({CustomBlockStore.Capacity}) for this stock pack.");
             else if (ImGui.Button("Add Block", new Vector2(listButtonWidth, 36)))
             {
-                m.CustomBlockError = ""; m.CustomBlockId = ""; m.CustomBlockDisplayName = "";
+                m.CustomBlockError = ""; m.CustomBlockDisplayName = "";
                 m.CustomBlockPixels = CreateEditorDefaultPixels();
                 m.CustomBlockFacePixels = Enumerable.Range(0, CustomBlockStore.FaceCount)
                     .Select(_ => CreateEditorDefaultPixels()).ToArray();
@@ -1574,16 +1574,8 @@ namespace Cubuild.Renderer
             ImGui.SetWindowFontScale(1f);
             if (!_customBlockBuffersInitialized)
             {
-                WriteBuffer(_customBlockIdBuffer, m.CustomBlockId);
                 WriteBuffer(_customBlockNameBuffer, m.CustomBlockDisplayName);
                 _customBlockBuffersInitialized = true;
-            }
-            if (editing) ImGui.TextDisabled($"Internal ID (locked): {m.CustomBlockId}");
-            else
-            {
-                ImGui.SetNextItemWidth(Math.Min(360f, ImGui.GetContentRegionAvail().X));
-                ImGui.InputText("Internal ID", _customBlockIdBuffer, (uint)_customBlockIdBuffer.Length);
-                m.CustomBlockId = ReadBuffer(_customBlockIdBuffer);
             }
             ImGui.SetNextItemWidth(Math.Min(360f, ImGui.GetContentRegionAvail().X));
             ImGui.InputText("Display name", _customBlockNameBuffer, (uint)_customBlockNameBuffer.Length);

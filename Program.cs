@@ -178,8 +178,8 @@ namespace Cubuild
 
         public Program()
         {
-            CustomBlockStore.Load();
             BlockRegistry.LoadDefault();
+            CustomBlockStore.Load();
             BlockRegistry.AppendCustomBlocks(CustomBlockStore.Records);
             ItemRegistry.LoadDefault(); // seeds blocks as items + loads items.json
             RecipeRegistry.LoadDefault();
