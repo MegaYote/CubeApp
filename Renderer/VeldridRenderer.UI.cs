@@ -131,9 +131,10 @@ namespace Cubuild.Renderer
                 ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
             }
             ImGui.Begin("##inventory", flags);
-            ImGui.Text(survival
-                ? "Left: pick/place   Right: half/drop 1   Shift: move   Outside: throw"
-                : "Creative - click a block to hold it, then click a hotbar slot");
+            if (survival)
+                ImGui.Text("Left: pick/place   Right: half/drop 1   Shift: move   Outside: throw");
+            else
+                ImGui.TextColored(new Vector4(0f, 0f, 0f, 0f), "Creative - click a block to hold it, then click a hotbar slot");
 
             if (textured)
             {
@@ -242,7 +243,9 @@ namespace Cubuild.Renderer
                     {
                         if (drawn > 0) ImGui.NewLine();
                         lastCategory = cat;
-                        ImGui.TextUnformatted(cat);
+                        // Keep the category row's exact height so the items stay in place, but
+                        // don't draw the category name.
+                        ImGui.TextColored(new Vector4(0f, 0f, 0f, 0f), cat);
                         ImGui.NewLine();
                     }
                     // Wrap on the REAL remaining width instead of a precomputed column count. The
@@ -292,7 +295,7 @@ namespace Cubuild.Renderer
                 }
                 ImGui.EndChild();
 
-                ImGui.TextUnformatted("Hotbar - click a slot to place the held stack");
+                ImGui.TextColored(new Vector4(0f, 0f, 0f, 0f), "Hotbar - click a slot to place the held stack");
                 // Just the 10 hotbar slots, so a cursor-held stack has somewhere to land.
                 for (int i = 0; i < 10; i++)
                 {
@@ -2269,14 +2272,7 @@ namespace Cubuild.Renderer
                 }
             }
 
-            // Mode label above the hotbar so you always know which world you're in.
-            string modeLabel = survival ? "SURVIVAL" : "CREATIVE";
-            uint modeColor = survival
-                ? ImGui.ColorConvertFloat4ToU32(new Vector4(0.9f, 0.35f, 0.35f, 1f))
-                : ImGui.ColorConvertFloat4ToU32(new Vector4(0.35f, 0.8f, 0.45f, 1f));
-            drawList.AddText(new Vector2(startX, hotbarY - 20f), modeColor, modeLabel);
-
-            // Encumbrance readout next to the mode label: how much ore is being carried and how
+            // Encumbrance readout above the hotbar: how much ore is being carried and how
             // much that load is costing the player. Only shown once something is actually
             // weighing them down, so an empty inventory stays clean.
             if (_hud.WeightLevel > 0)
@@ -2285,8 +2281,7 @@ namespace Cubuild.Renderer
                 uint weightColor = _hud.WeightLevel >= GameWorld.MaxWeightLevel
                     ? ImGui.ColorConvertFloat4ToU32(new Vector4(0.95f, 0.35f, 0.25f, 1f))
                     : ImGui.ColorConvertFloat4ToU32(new Vector4(0.95f, 0.78f, 0.35f, 1f));
-                var modeSize = ImGui.CalcTextSize(modeLabel);
-                drawList.AddText(new Vector2(startX + modeSize.X + 14f, hotbarY - 20f), weightColor, weightLabel);
+                drawList.AddText(new Vector2(startX, hotbarY - 20f), weightColor, weightLabel);
             }
 
             // Healthbar: one heart centered directly above the hotbar. Health 10..1 maps to the ten
@@ -2401,16 +2396,7 @@ namespace Cubuild.Renderer
                 DrawChatCommandWindow(displaySize);
             }
 
-            // Selected block label
-            string label = string.IsNullOrEmpty(_hud.SelectedBlockText) ? string.Empty : _hud.SelectedBlockText;
-            if (label.Length > 0)
-            {
-                var labelPos = new Vector2(12, 12);
-                var textSize = ImGui.CalcTextSize(label);
-                uint bg = ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.47f));
-                drawList.AddRectFilled(labelPos - new Vector2(6, 3), labelPos + textSize + new Vector2(6, 3), bg);
-                drawList.AddText(labelPos, textColor, label);
-            }
+            // Selected block label (removed from the HUD).
 
             // Construction progress is normal-play HUD feedback, not a debug-only diagnostic.
             if (!string.IsNullOrWhiteSpace(_hud.SteveBuilderStatus))

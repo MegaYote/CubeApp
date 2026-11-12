@@ -263,6 +263,9 @@ namespace Cubuild
         private const double CreativeFlightAcceleration = 42.0;
         private const double CreativeFlightHorizontalDrag = 0.78;
         private const double CreativeFlightVerticalDrag = 0.60;
+        // Vertical flight felt sluggish compared to horizontal movement; this doubles the
+        // upward and downward target speed without touching horizontal flight.
+        private const double CreativeFlightVerticalSpeedMultiplier = 2.0;
 
         private void StepCreativeFlight(PlayerState p, TickInputState tickInput, float deltaSeconds)
         {
@@ -290,7 +293,7 @@ namespace Cubuild
                 double targetSpeed = CreativeFlightSpeed * speedMultiplier;
                 var target = new Point3D(
                     direction.X * targetSpeed,
-                    direction.Y * targetSpeed * (direction.Y > 0 ? 1.2 : 1.0),
+                    direction.Y * targetSpeed * (direction.Y > 0 ? 1.2 : 1.0) * CreativeFlightVerticalSpeedMultiplier,
                     direction.Z * targetSpeed);
                 double dx = target.X - vx, dy = target.Y - vy, dz = target.Z - vz;
                 double distance = Math.Sqrt(dx * dx + dy * dy + dz * dz);

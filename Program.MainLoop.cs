@@ -228,14 +228,14 @@ namespace Cubuild
 
                             if (World.IsCreative)
                             {
-                                // Creative palette: the pick goes on the CURSOR, not straight into
-                                // a hotbar slot - you then click whichever bag/hotbar cell you
-                                // want it in, exactly like Minecraft's creative screen. Picking a
-                                // second thing while holding one returns the held stack first so
-                                // the previous one isn't orphaned.
-                                if (World.HeldStack.HasValue) World.ReturnHeldStackToInventory();
-                                World.HeldStack = (invBlock,
-                                    Math.Min(GameWorld.MaxStackSize, ItemRegistry.StackSizeOf(invBlock)));
+                                // Creative palette: the pick goes on the CURSOR. Blocks come out
+                                // as a single unit; stackable non-block items keep their normal
+                                // stack size. If something is already on the cursor, replace it
+                                // (creative is infinite - don't shuffle the old pick into a slot).
+                                int pickCount = invBlock < BlockRegistry.Count
+                                    ? 1
+                                    : Math.Min(GameWorld.MaxStackSize, ItemRegistry.StackSizeOf(invBlock));
+                                World.HeldStack = (invBlock, pickCount);
                             }
                             else
                             {
