@@ -1124,6 +1124,8 @@ namespace Cubuild.Renderer
                     m.Screen = GameScreen.Multiplayer;
                     _menuBuffersInitialized = false;
                 }
+                if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                    ImGui.SetTooltip("Multiplayer is temporarily unavailable in this build.");
                 ImGui.EndDisabled();
                 ImGui.Dummy(new Vector2(0, 18));
                 if (ImGui.Button("Custom Blocks", new Vector2(200, 34)))
@@ -1184,6 +1186,8 @@ namespace Cubuild.Renderer
                 {
                     m.SelectedMode = GameMode.Survival;
                 }
+                if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                    ImGui.SetTooltip("Survival is temporarily unavailable in this build.");
                 ImGui.EndDisabled();
                 ImGui.Spacing();
                 if (ImGui.Button("Create World", new Vector2(220, 34)))
@@ -1516,7 +1520,7 @@ namespace Cubuild.Renderer
             ImGui.SetNextWindowSize(new Vector2(winW, winH), ImGuiCond.Always);
             ImGui.Begin("##customblocks", windowFlags & ~ImGuiWindowFlags.NoScrollbar & ~ImGuiWindowFlags.NoScrollWithMouse);
             ImGui.SetWindowFontScale(1.35f); ImGui.Text("Custom Blocks"); ImGui.SetWindowFontScale(1f);
-            ImGui.TextWrapped("Player-created blocks keep a hidden permanent identity and creation order. Edits update the existing block in place; names may repeat across imported packs.");
+            ImGui.TextWrapped("Create your own blocks and edit them in place. Click a block below to open it.");
             if (!string.IsNullOrWhiteSpace(m.CustomBlockNotice)) ImGui.TextColored(new Vector4(0.35f, 0.9f, 0.45f, 1f), m.CustomBlockNotice);
             if (!string.IsNullOrWhiteSpace(m.CustomBlockError)) ImGui.TextWrapped(m.CustomBlockError);
             ImGui.Separator();
